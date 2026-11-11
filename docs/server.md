@@ -195,7 +195,7 @@ to the connection that started it: closing the window (EVAnalyzer asks
 first), a dropped network or a laptop going to sleep don't stop it. The
 next time the user connects, the GUI follows it again silently and reports
 analyses that ended in the meantime; on the command line `evanalyzer cli
-jobs` lists them and `evanalyzer cli attach` follows the running one. Each
+jobs list` lists them and `evanalyzer cli jobs attach` follows the running one. Each
 user runs one analysis at a time - a second one is refused until the first
 has finished. A classifier training survives a disconnect too: the worker
 saves the model into the project's `models` folder itself. Previews and
@@ -208,7 +208,7 @@ worker runs. Open images and results carry on.
 
 **Incomplete results.** The results database records how its analysis
 ended. One that was cancelled, failed or interrupted (crash, killed worker)
-shows a warning in the results window and in `evanalyzer cli view`.
+shows a warning in the results window and in `evanalyzer cli results view`.
 
 ## Limits
 

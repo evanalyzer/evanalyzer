@@ -34,7 +34,7 @@ saved on another computer don't matter. The results database lands in
 
 ```sh
 docker run --rm -v "$PWD":/data joda001/evanalyzer \
-    cli export csv --db /data/results/<run>/<run>.evadb --out /data/run1.csv
+    cli results export csv --db /data/results/<run>/<run>.evadb --out /data/run1.csv
 ```
 
 `cli --help` lists every command. The container runs as uid 65532: the

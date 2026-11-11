@@ -1,6 +1,6 @@
 //! # jobs
 //!
-//! `jobs` and `attach`: the analyses on a `--remote` server, which keep
+//! `jobs list` and `jobs attach`: the analyses on a `--remote` server, which keep
 //! running when the client disconnects.
 //!
 //! **Author:** Joachim Danmayr
@@ -68,7 +68,7 @@ fn no_jobs(backend: &dyn Backend) -> String {
 
 fn no_running(backend: &dyn Backend) -> String {
     if backend.is_remote() {
-        "No analysis is running on the server (`cli jobs` lists the finished ones).".into()
+        "No analysis is running on the server (`cli jobs list` lists the finished ones).".into()
     } else {
         "Nothing to attach to: only a server (--remote) runs analyses in the background.".into()
     }

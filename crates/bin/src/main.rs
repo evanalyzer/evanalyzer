@@ -441,7 +441,13 @@ mod tests {
     fn a_cli_command_that_succeeds_returns_ok() {
         let backend: Arc<dyn Backend> = Arc::new(LocalBackend::default());
 
-        assert!(start_cli(&backend, CliCommand::Jobs).is_ok());
+        assert!(
+            start_cli(
+                &backend,
+                CliCommand::Jobs(evanalyzer_cli::JobsSubCommand::List)
+            )
+            .is_ok()
+        );
     }
 
     #[test]

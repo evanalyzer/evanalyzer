@@ -18,21 +18,23 @@ pub struct Args {
     #[arg(long)]
     pub project: Option<std::path::PathBuf>,
 
-    /// What to log, in env_logger filter syntax: a level (`error`, `warn`,
-    /// `info`, `debug`, `trace`, `off`) or per module, e.g.
-    /// `info,evanalyzer_core=debug`. Default `info`, or for `server` the
-    /// config file's `log_level`.
+    /// What to log: a level or per module
+    ///
+    /// env_logger filter syntax: a level (`error`, `warn`, `info`, `debug`,
+    /// `trace`, `off`) or per module, e.g. `info,evanalyzer_core=debug`.
+    /// Default `info`, or for `server` the config file's `log_level`.
     #[arg(long, global = true, value_name = "FILTER")]
     pub log_level: Option<String>,
 
-    /// EVAnalyzer server to work on instead of this machine, e.g.
-    /// `wss://workstation:7400` (`ws://` if the server runs without TLS).
-    /// Projects, images and results are then read and written there; all
-    /// paths refer to that machine.
+    /// EVAnalyzer server to work on instead of this machine
+    ///
+    /// E.g. `wss://workstation:7400` (`ws://` if the server runs without
+    /// TLS). Projects, images and results are then read and written there;
+    /// all paths refer to that machine.
     #[arg(long, global = true, value_name = "URL", help_heading = "Remote")]
     pub remote: Option<String>,
 
-    /// User to log in as on the `--remote` server.
+    /// User to log in as on the `--remote` server
     #[arg(
         long,
         global = true,
@@ -42,8 +44,9 @@ pub struct Args {
     )]
     pub user: Option<String>,
 
-    /// Password for `--user`. Asked for (hidden) if not given. Note that
-    /// command-line arguments are visible to other local users.
+    /// Password for `--user`; asked for (hidden) if not given
+    ///
+    /// Note that command-line arguments are visible to other local users.
     #[arg(
         long,
         global = true,
@@ -53,9 +56,11 @@ pub struct Args {
     )]
     pub password: Option<String>,
 
-    /// SHA-256 fingerprint of the server's TLS certificate, as `evanalyzer
-    /// server` logs it at startup. Needed for the server's own self-signed
-    /// certificate (the default); not for one signed by a public authority.
+    /// SHA-256 fingerprint of the server's TLS certificate
+    ///
+    /// As `evanalyzer server` logs it at startup. Needed for the server's
+    /// own self-signed certificate (the default); not for one signed by a
+    /// public authority.
     #[arg(
         long,
         global = true,
@@ -65,7 +70,8 @@ pub struct Args {
     )]
     pub remote_fingerprint: Option<String>,
 
-    /// Accept any TLS certificate from the server, without checking it.
+    /// Accept any TLS certificate from the server, without checking it
+    ///
     /// The connection is still encrypted, but anyone in between could pose
     /// as the server and read your password - only for tests and networks
     /// you trust. Prefer `--remote-fingerprint`.
@@ -78,8 +84,10 @@ pub struct Args {
     )]
     pub no_tls_verification: bool,
 
-    /// Connect to an `evanalyzer worker` directly, without server login,
-    /// using the token it printed (instead of `--user`).
+    /// Token of an `evanalyzer worker` to connect to directly
+    ///
+    /// Connects without server login (instead of `--user`), using the token
+    /// the worker printed.
     #[arg(
         long,
         global = true,
@@ -90,35 +98,45 @@ pub struct Args {
     )]
     pub remote_token: Option<String>,
 
-    /// Where AI models (Cellpose, StarDist, U-Net, YOLOv5) run: `auto`
-    /// (every GPU, else the CPU), `cpu`, or GPU numbers like `0,2`. Applies
-    /// where the analysis runs - this machine, or the workers of a `server`
-    /// started with it; ignored with `--remote`. Default `auto`.
+    /// Where AI models run: `auto`, `cpu` or GPU numbers like `0,2`
+    ///
+    /// For Cellpose, StarDist, U-Net and YOLOv5. `auto` uses every GPU, else
+    /// the CPU. Applies where the analysis runs - this machine, or the
+    /// workers of a `server` started with it; ignored with `--remote`.
+    /// Default `auto`.
     #[arg(long, global = true, value_name = "DEVICES", help_heading = "AI")]
     pub ai_devices: Option<AiDeviceSelection>,
 
-    /// Parallel AI inferences per GPU. Raise it for GPUs with memory to
-    /// spare, so one tile's transfers overlap another's computation; a GPU
-    /// that runs out of memory goes back down by itself. Default 1.
+    /// Parallel AI inferences per GPU (default 1)
+    ///
+    /// Raise it for GPUs with memory to spare, so one tile's transfers
+    /// overlap another's computation; a GPU that runs out of memory goes
+    /// back down by itself.
     #[arg(long, global = true, value_name = "N", value_parser = parse_gpu_slots, help_heading = "AI")]
     pub gpu_slots: Option<usize>,
 
-    /// The AI plugin library to try first (`libevanalyzer_ai.so`,
-    /// `evanalyzer_ai.dll`, `libevanalyzer_ai.dylib`) - for development and
-    /// tests; a package finds its own next to the program.
+    /// AI plugin library to try first (development and tests)
+    ///
+    /// `libevanalyzer_ai.so`, `evanalyzer_ai.dll` or
+    /// `libevanalyzer_ai.dylib`. A package finds its own next to the
+    /// program.
     #[arg(long, global = true, value_name = "FILE", help_heading = "AI")]
     pub ai_plugin: Option<std::path::PathBuf>,
 
-    /// Most CPU cores EVAnalyzer uses - the analysis, AI models, the results
-    /// database and everything else - e.g. to keep a computer usable during
-    /// a long analysis. Default: Settings › Performance, else all of them.
+    /// Most CPU cores EVAnalyzer uses
+    ///
+    /// For the analysis, AI models, the results database and everything
+    /// else - e.g. to keep a computer usable during a long analysis.
+    /// Default: Settings › Performance, else all of them.
     #[arg(long, global = true, value_name = "N", value_parser = parse_at_least_one::<usize>, help_heading = "Resources")]
     pub max_threads: Option<usize>,
 
-    /// Most RAM in MB EVAnalyzer plans with - caches, threads and the
-    /// results database are sized as if the computer had no more. Not a
-    /// hard limit on every allocation (a container's limit is). Default:
-    /// Settings › Performance, else the computer's RAM.
+    /// Most RAM in MB EVAnalyzer plans with
+    ///
+    /// Caches, threads and the results database are sized as if the
+    /// computer had no more. Not a hard limit on every allocation (a
+    /// container's limit is). Default: Settings › Performance, else the
+    /// computer's RAM.
     #[arg(long, global = true, value_name = "MB", value_parser = parse_at_least_one::<u64>, help_heading = "Resources")]
     pub max_ram: Option<u64>,
 
@@ -138,31 +156,38 @@ pub enum TopCommand {
     /// Settings come from the built-in defaults, then the `--config` file,
     /// then these arguments. `docs/server.toml` documents every setting.
     Server {
-        /// Configuration file (TOML): users, allowed folders, and the
-        /// settings below. See `docs/server.md`.
+        /// Configuration file (TOML)
+        ///
+        /// Users, allowed folders, and the settings below. See
+        /// `docs/server.md`.
         #[arg(long, value_name = "FILE")]
         config: Option<std::path::PathBuf>,
 
-        /// Address and port to accept clients on. Default `127.0.0.1:7400`.
+        /// Address and port to accept clients on (default `127.0.0.1:7400`)
         #[arg(long, value_name = "ADDRESS")]
         listen: Option<String>,
 
-        /// Folder the server keeps its state in (certificate, sessions, the
-        /// single user's home). Default: `/var/lib/evanalyzer` for a system
-        /// service, otherwise `~/.evanalyzer/server` (Linux) or
-        /// `~/evanalyzer/server` (macOS, Windows).
+        /// Folder the server keeps its state in
+        ///
+        /// Its certificate, sessions and the single user's home. Default:
+        /// `/var/lib/evanalyzer` for a system service, otherwise
+        /// `~/.evanalyzer/server` (Linux) or `~/evanalyzer/server` (macOS,
+        /// Windows).
         #[arg(long, value_name = "DIR")]
         data_dir: Option<std::path::PathBuf>,
     },
-    /// Print an Argon2id hash of a password, for `password = "..."` in the
-    /// server's config or users file. Asks for the password twice (hidden),
-    /// or reads one line from stdin when it is not a terminal:
+    /// Print a password hash for the server's config or users file
+    ///
+    /// An Argon2id hash, for `password = "..."`. Asks for the password twice
+    /// (hidden), or reads one line from stdin when it is not a terminal:
     /// `echo 'secret' | evanalyzer hash-password`.
     HashPassword,
-    /// Run one compute instance. Started by `evanalyzer server` for each
-    /// logged-in user, or by hand for a direct `--remote-token` connection.
+    /// Run one compute instance
+    ///
+    /// Started by `evanalyzer server` for each logged-in user, or by hand
+    /// for a direct `--remote-token` connection.
     Worker {
-        /// Address to listen on.
+        /// Address to listen on
         #[arg(long, default_value = "127.0.0.1:7400")]
         listen: String,
 
@@ -174,17 +199,22 @@ pub enum TopCommand {
         #[arg(long = "root", value_name = "FOLDER")]
         roots: Vec<std::path::PathBuf>,
 
-        /// Home folder of the user this worker serves: its user folder
-        /// (templates) lives below it. Default: this account's.
+        /// Home folder of the user this worker serves
+        ///
+        /// Its user folder (templates) lives below it. Default: this
+        /// account's.
         #[arg(long, value_name = "FOLDER")]
         home: Option<std::path::PathBuf>,
 
-        /// Stop once no client has been connected and no analysis has run
-        /// for this many minutes. Default: run until stopped.
+        /// Stop after this many idle minutes
+        ///
+        /// Idle: no client connected and no analysis running. Default: run
+        /// until stopped.
         #[arg(long, value_name = "MINUTES")]
         idle_timeout: Option<u64>,
 
-        /// Cancel an analysis that runs longer than this many minutes.
+        /// Cancel an analysis that runs longer than this many minutes
+        ///
         /// Default: no limit.
         #[arg(long, value_name = "MINUTES", value_parser = parse_at_least_one::<u64>)]
         max_job_minutes: Option<u64>,
@@ -364,7 +394,8 @@ mod tests {
             "alice",
             "--password",
             "secret",
-            "project-info",
+            "project",
+            "info",
             "--project",
             "p.evaproj",
         ])
@@ -393,19 +424,21 @@ mod tests {
         let args = Args::try_parse_from([
             "evanalyzer",
             "cli",
-            "project-info",
+            "project",
+            "info",
             "--project",
             "p.evaproj",
         ])
         .unwrap();
         match args.command {
             Some(TopCommand::Cli {
-                command: evanalyzer_cli::CliCommand::ProjectInfo(a),
+                command:
+                    evanalyzer_cli::CliCommand::Project(evanalyzer_cli::ProjectSubCommand::Info(a)),
             }) => {
                 assert_eq!(a.project, std::path::PathBuf::from("p.evaproj"));
             }
             other => panic!(
-                "expected Cli(ProjectInfo), got a different command tree: {}",
+                "expected Cli(Project(Info)), got a different command tree: {}",
                 other.is_some()
             ),
         }
@@ -420,7 +453,8 @@ mod tests {
             "ws://workstation:7400",
             "--remote-token",
             "secret",
-            "project-info",
+            "project",
+            "info",
             "--project",
             "p.evaproj",
         ])

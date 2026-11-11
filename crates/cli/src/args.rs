@@ -12,31 +12,60 @@ use std::path::PathBuf;
 
 #[derive(Subcommand)]
 pub enum CliCommand {
-    /// Run the project's enabled pipelines over its images and write a new results database
+    /// Run a project's pipelines over its images into a new results database
     Analyze(AnalyzeArgs),
-    /// Print a project's images, classes and pipelines without running anything
-    ProjectInfo(ProjectInfoArgs),
-    /// Check a project as a run would: its images on disk, its pipelines and modules
+    /// Create, inspect, check and cite project files
+    #[command(subcommand)]
+    Project(ProjectSubCommand),
+    /// View and export results databases
+    #[command(subcommand)]
+    Results(ResultsSubCommand),
+    /// Analyses on the --remote server
+    #[command(subcommand)]
+    Jobs(JobsSubCommand),
+    /// Train a pixel or object classifier from a project's labeled objects
+    ///
+    /// The model is saved under the project's `models/` folder.
+    TrainClassifier(TrainClassifierArgs),
+}
+
+#[derive(Subcommand)]
+pub enum ProjectSubCommand {
+    /// Create a new empty project
+    New(ProjectNewArgs),
+    /// Print a project's images, classes and pipelines
+    Info(ProjectInfoArgs),
+    /// Check a project as a run would
+    ///
+    /// Its images on disk, its pipelines and modules as the editor checks
+    /// them, and the channels the pipelines read against the images'.
+    /// Warnings are printed; errors and missing images fail.
     Validate(ValidateArgs),
-    /// Write a project's methods paragraph and the citations of its steps (Markdown)
+    /// Write a project's methods paragraph and citations (Markdown)
     Cite(CiteArgs),
+}
+
+#[derive(Subcommand)]
+pub enum ResultsSubCommand {
     /// Export a results database to CSV or XLSX
     Export(ExportArgs),
-    /// Print a quick summary and a page of rows from a results database
+    /// Print a summary and a page of rows of a results database
     View(ViewArgs),
-    /// List the column ids available for --group-by in a results database
+    /// List a results database's column ids (for --group-by)
     Columns(ColumnsArgs),
-    /// Train a pixel or object classifier from a project's labeled objects and save it under models/
-    TrainClassifier(TrainClassifierArgs),
-    /// List the analyses on the --remote server: the running one, and recently finished ones
-    Jobs,
-    /// Follow an analysis on the --remote server again, e.g. after the connection dropped
+}
+
+#[derive(Subcommand)]
+pub enum JobsSubCommand {
+    /// List the running and recently finished analyses
+    List,
+    /// Follow an analysis again, e.g. after the connection dropped
     Attach(AttachArgs),
 }
 
 #[derive(Args)]
 pub struct AttachArgs {
-    /// Id of the analysis, as `jobs` lists it. Default: the running one.
+    /// Id of the analysis, as `jobs list` shows it (default: the running one)
     #[arg(long)]
     pub job: Option<String>,
 }
@@ -47,8 +76,9 @@ pub struct AnalyzeArgs {
     #[arg(long)]
     pub project: PathBuf,
 
-    /// Directory of images to scan and use as the project's image root before running.
-    /// If omitted, the project's already-saved image list is used as-is.
+    /// Image folder to scan and use as the project's image root
+    ///
+    /// If omitted, the project's saved image list is used as it is.
     #[arg(long)]
     pub images: Option<PathBuf>,
 
@@ -56,29 +86,33 @@ pub struct AnalyzeArgs {
     #[arg(long)]
     pub threads: Option<usize>,
 
-    /// Name for this analysis run, used for the results subfolder and the
-    /// .evadb filename. If omitted, a random two-word name is generated.
+    /// Name of the run: its results folder and .evadb file
+    ///
+    /// If omitted, a random two-word name is generated.
     #[arg(long)]
     pub job_name: Option<String>,
 }
 
 #[derive(Args)]
 pub struct TrainClassifierArgs {
-    /// Project file (.evaproj) to train from - every object with an assigned
-    /// class, across every image already in the project, is used as training
-    /// data (no per-run selection, matching how `analyze` runs over every
-    /// image in the project by default)
+    /// Project file (.evaproj) to train from
+    ///
+    /// Every object with an assigned class, in every image of the project,
+    /// is training data - like `analyze`, which runs over every image.
     #[arg(long)]
     pub project: PathBuf,
 
-    /// Path to a JSON file describing the model: metadata, backend
-    /// hyperparameters (Random Forest / KNN / MLP), and the feature
-    /// spec + class labels to train (an `AiLearningSettings` document)
+    /// JSON file describing the model
+    ///
+    /// An `AiLearningSettings` document: metadata, backend hyperparameters
+    /// (Random Forest / KNN / MLP), the features and the class labels to
+    /// train.
     #[arg(long)]
     pub settings: PathBuf,
 
-    /// Name for the saved model file, under <project-dir>/models/. If
-    /// omitted, uses the name from --settings's metadata.
+    /// Name of the saved model file under <project-dir>/models/
+    ///
+    /// If omitted, the name from --settings's metadata.
     #[arg(long)]
     pub model_name: Option<String>,
 
@@ -86,9 +120,10 @@ pub struct TrainClassifierArgs {
     #[arg(long, default_value_t = 0)]
     pub channel: i32,
 
-    /// How the analyses using the model handle z-stacks: each annotation is
-    /// trained on its own plane (single-/all-stacks) or on the projection
-    /// of its time frame
+    /// How the analyses using the model handle z-stacks
+    ///
+    /// Each annotation is trained on its own plane (single-/all-stacks) or
+    /// on the projection of its time frame.
     #[arg(long, value_enum, default_value = "single-stack")]
     pub z_stack_handling: ZStackHandlingArg,
 }
@@ -116,6 +151,13 @@ pub struct ProjectInfoArgs {
 }
 
 #[derive(Args)]
+pub struct ProjectNewArgs {
+    /// Project file (.evaproj) to create
+    #[arg(long)]
+    pub project: PathBuf,
+}
+
+#[derive(Args)]
 pub struct ValidateArgs {
     /// Project file (.evaproj) to validate
     #[arg(long)]
@@ -128,7 +170,7 @@ pub struct CiteArgs {
     #[arg(long)]
     pub project: PathBuf,
 
-    /// Markdown file to write. Default: `citation.md` next to the project file.
+    /// Markdown file to write (default: `citation.md` next to the project)
     #[arg(long)]
     pub out: Option<PathBuf>,
 }
@@ -183,10 +225,11 @@ pub struct TableExportArgs {
     #[command(flatten)]
     pub tracks: TrackArgs,
 
-    /// One row per measurement value (image, plane, object or region, step,
-    /// measurement, value) - the measurement steps' values, like the
-    /// results' `measurements` table; --columns picks measurements by key
-    /// (`measurement:<key>`), none: all
+    /// One row per measurement value
+    ///
+    /// Image, plane, object or region, step, measurement, value - the
+    /// measurement steps' values, like the results' `measurements` table.
+    /// --columns picks measurements by key (`measurement:<key>`), none: all.
     #[arg(long, conflicts_with = "tracks")]
     pub measurements: bool,
 
@@ -194,10 +237,11 @@ pub struct TableExportArgs {
     #[arg(long, requires = "view")]
     pub project: Option<PathBuf>,
 
-    /// Export as this List view of --project shows the results: its
-    /// columns, classes, images and rows (a row per object, or per image
-    /// with its aggregations). --images, --classes and --group-by win over
-    /// it
+    /// Export as this List view of --project shows the results
+    ///
+    /// Its columns, classes, images and rows (a row per object, or per
+    /// image with its aggregations). --images, --classes and --group-by win
+    /// over it.
     #[arg(long, requires = "project", conflicts_with_all = ["tracks", "measurements"])]
     pub view: Option<String>,
 }
@@ -205,9 +249,11 @@ pub struct TableExportArgs {
 /// `--tracks`: a row per track instead of per object.
 #[derive(Args, Default)]
 pub struct TrackArgs {
-    /// A row per track: when it was seen, how far, fast and straight it
-    /// moved, the --agg statistics (default avg) of every numeric column
-    /// over its time points
+    /// A row per track instead of per object
+    ///
+    /// When it was seen, how far, fast and straight it moved, and the --agg
+    /// statistics (default avg) of every numeric column over its time
+    /// points.
     #[arg(long)]
     pub tracks: bool,
 
@@ -223,8 +269,9 @@ pub struct TrackArgs {
     #[arg(long, requires = "tracks")]
     pub no_edge: bool,
 
-    /// --tracks: the speed's unit (px-frame without a pixel size or frame
-    /// interval)
+    /// --tracks: the speed's unit
+    ///
+    /// px-frame for results without a pixel size or frame interval.
     #[arg(long, value_enum, default_value = "um-min", requires = "tracks")]
     pub speed_unit: SpeedUnitKind,
 }
@@ -258,17 +305,19 @@ pub struct FilterArgs {
     #[arg(long = "class")]
     pub classes: Vec<String>,
 
-    /// Transponod output table
+    /// Transpose the output table
     #[arg(long)]
     pub transpond: Option<bool>,
 
-    /// Only these time points: one ("3") or a range ("2-5"), 0-based.
-    /// Default: all
+    /// Only these time points: one ("3") or a range ("2-5"), 0-based
+    ///
+    /// Default: all.
     #[arg(long = "t", value_parser = parse_plane_range)]
     pub t_stacks: Option<std::range::Range<u32>>,
 
-    /// Only these z-planes: one ("0") or a range ("0-4"), 0-based.
-    /// Default: all
+    /// Only these z-planes: one ("0") or a range ("0-4"), 0-based
+    ///
+    /// Default: all.
     #[arg(long = "z", value_parser = parse_plane_range)]
     pub z_stacks: Option<std::range::Range<u32>>,
 }
@@ -298,32 +347,38 @@ pub struct GroupArgs {
     #[arg(long, value_enum)]
     pub group_by: Option<GroupByKind>,
 
-    /// Regex on the image name for --group-by group / regex: its first
-    /// capture group is the group
+    /// Regex on the image name for --group-by group / regex
+    ///
+    /// Its first capture group is the group.
     #[arg(long)]
     pub group_regex: Option<String>,
 
-    /// Statistic(s) of every numeric column when grouping (comma-separated,
-    /// e.g. "avg,stdev,median"). Default: avg; for a time course (class,
-    /// well, group, folder, regex, track) avg,stdev. q1/q3 only for a time
-    /// course
+    /// Statistics of every numeric column when grouping, e.g. avg,stdev
+    ///
+    /// Comma-separated. Default: avg; for a time course (class, well,
+    /// group, folder, regex, track) avg,stdev. q1/q3 only for a time
+    /// course.
     #[arg(long, value_enum, value_delimiter = ',')]
     pub agg: Vec<AggKind>,
 
-    /// Time course values relative to each line's first time point (t0: in
-    /// % of it)
+    /// Time course values relative to each line's first time point
+    ///
+    /// t0: in % of it.
     #[arg(long, value_enum)]
     pub normalize: Option<NormalizeKind>,
 
-    /// Time course tables: long (a row per time point × line), wide (per
-    /// value and statistic: a row per time point, a column per line; CSV:
-    /// one file each, next to --out as <name>_<value>.csv) or both
+    /// Time course table layout
+    ///
+    /// long: a row per time point × line. wide: per value and statistic, a
+    /// row per time point and a column per line (CSV: one file each, next
+    /// to --out as <name>_<value>.csv).
     #[arg(long, value_enum, default_value = "long")]
     pub layout: LayoutKind,
 
-    /// Time course per track: each track with its parents' history - a
-    /// daughter's line starts with its mother's track, a fused track has a
-    /// line per parent (results with divisions or fusions)
+    /// Time course per track, with each track's parents' history
+    ///
+    /// A daughter's line starts with its mother's track, a fused track has
+    /// a line per parent (results with divisions or fusions).
     #[arg(long)]
     pub with_parents: bool,
 

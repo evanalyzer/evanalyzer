@@ -418,7 +418,7 @@ fn encode_reply(id: u64, reply: Reply, blobs: &[Vec<u8>]) -> Option<Vec<u8>> {
         .ok()
 }
 
-/// A random id, short enough to type (`evanalyzer cli attach <id>`).
+/// A random id, short enough to type (`evanalyzer cli jobs attach --job <id>`).
 fn new_id() -> Result<String, InternalErrors> {
     let mut bytes = [0u8; 8];
     getrandom::fill(&mut bytes)

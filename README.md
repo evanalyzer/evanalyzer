@@ -111,7 +111,7 @@ If you use EVAnalyzer in your research, please cite the software and the
 methods of the steps you used:
 
 1. **Write the methods text:** *Cite project* in the top bar (or
-   `evanalyzer cli cite --project my.evaproj`) writes a Markdown file with a
+   `evanalyzer cli project cite --project my.evaproj`) writes a Markdown file with a
    ready-to-paste methods paragraph - EVAnalyzer with its version, then each
    pipeline's steps with their citations - and the full reference list.
 2. **Cite EVAnalyzer itself:**

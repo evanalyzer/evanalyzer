@@ -7,14 +7,16 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use crate::args::{CiteArgs, ProjectInfoArgs, ValidateArgs};
+use crate::args::{CiteArgs, ProjectInfoArgs, ProjectNewArgs, ValidateArgs};
 use evanalyzer_app::analysis::check_pipeline_channels;
 use evanalyzer_app::backends::Backend;
 use evanalyzer_app::exporter::cite_project;
 use evanalyzer_app::modules::{ModuleProblem, Severity, check_project};
-use evanalyzer_app::project::ImageListExt;
+use evanalyzer_app::project::{ImageListExt, ProjectWithRuntime};
 use evanalyzer_app::project::{ProjectExt, load_project};
+use evanalyzer_cfg::PROJECT_FILE_EXTENSIONS;
 use evanalyzer_cfg::core_types::{InternalErrors, StepId};
+use evanalyzer_cfg::settings::meta_data::AuthorInformation;
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 use serde_json::json;
 
@@ -219,6 +221,44 @@ pub fn run_cite(args: CiteArgs, backend: &dyn Backend) -> Result<(), InternalErr
     Ok(())
 }
 
+/// Creates a new empty project file through `backend` (on the `--remote`
+/// server's disk with `--remote`, as every project command), with the
+/// author of `user` (this computer's user settings) if one is set. Refuses
+/// to overwrite an existing file.
+pub fn new_project(
+    args: ProjectNewArgs,
+    backend: &dyn Backend,
+    user: &dyn Backend,
+) -> Result<(), InternalErrors> {
+    let mut path = args.project;
+    if path.extension().and_then(|e| e.to_str()) != Some(PROJECT_FILE_EXTENSIONS) {
+        path.set_extension(PROJECT_FILE_EXTENSIONS);
+    }
+    if backend.files().stat(&path)?.is_some() {
+        return Err(InternalErrors::InvalidArgument(format!(
+            "{} already exists - choose another name or delete it first",
+            path.display()
+        )));
+    }
+
+    let mut project = ProjectWithRuntime::default();
+    project.meta.creation_time = chrono::Utc::now();
+    if let Some(author) = user
+        .load_app_settings()?
+        .author
+        .filter(|a| !a.full_name.trim().is_empty())
+    {
+        project.meta.authors.push(AuthorInformation {
+            full_name: author.full_name,
+            organization: author.organization,
+        });
+    }
+
+    project.save_project_as(backend.files(), &path)?;
+    println!("Project written to {}", path.display());
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,5 +394,89 @@ mod tests {
             result.is_err(),
             "validate passed a project whose measurement ID is invalid"
         );
+    }
+
+    /// A backend whose user folder (settings) is in `home`, with `author`
+    /// saved in its settings.
+    fn user_with(home: &std::path::Path, author: Option<(&str, &str)>) -> LocalBackend {
+        use evanalyzer_app::global::{AppSettings, UserInformation};
+        let backend = LocalBackend::default().with_home(home).unwrap();
+        let mut settings = AppSettings::default();
+        settings.author = author.map(|(full_name, organization)| UserInformation {
+            full_name: full_name.into(),
+            organization: organization.into(),
+        });
+        backend.save_app_settings(&settings).unwrap();
+        backend
+    }
+
+    /// `project new` writes a project that loads, at the path with
+    /// `.evaproj` added, created now, with the user's author.
+    #[test]
+    fn new_project_writes_a_loadable_project_with_the_users_author() {
+        let dir = tempfile::tempdir().unwrap();
+        let user = user_with(dir.path(), Some(("Ada Lovelace", "Analytical Engines")));
+        let before = chrono::Utc::now();
+
+        new_project(
+            ProjectNewArgs {
+                project: dir.path().join("varroa"),
+            },
+            &user,
+            &user,
+        )
+        .unwrap();
+
+        let path = dir.path().join("varroa.evaproj");
+        let project = load_project(user.files(), &path).unwrap();
+        assert!(project.pipelines.is_empty() && project.images.list.is_empty());
+        assert!(project.meta.creation_time >= before);
+        let [author] = &project.meta.authors[..] else {
+            panic!("one author expected, got {:?}", project.meta.authors);
+        };
+        assert_eq!(
+            (author.full_name.as_str(), author.organization.as_str()),
+            ("Ada Lovelace", "Analytical Engines")
+        );
+    }
+
+    /// Without an author in the user settings (or with an empty name) the
+    /// project has none.
+    #[test]
+    fn new_project_without_an_author_in_the_settings_has_none() {
+        for author in [None, Some(("  ", "Org"))] {
+            let dir = tempfile::tempdir().unwrap();
+            let user = user_with(dir.path(), author);
+            let path = dir.path().join("p.evaproj");
+
+            new_project(
+                ProjectNewArgs {
+                    project: path.clone(),
+                },
+                &user,
+                &user,
+            )
+            .unwrap();
+
+            let project = load_project(user.files(), &path).unwrap();
+            assert!(project.meta.authors.is_empty(), "{author:?}");
+        }
+    }
+
+    /// An existing file is never overwritten - also when the extension is
+    /// left out of the argument.
+    #[test]
+    fn new_project_refuses_to_overwrite_an_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let user = user_with(dir.path(), None);
+        let path = dir.path().join("p.evaproj");
+        std::fs::write(&path, "keep me").unwrap();
+
+        for given in [path.clone(), dir.path().join("p")] {
+            let err = new_project(ProjectNewArgs { project: given }, &user, &user)
+                .expect_err("an existing project must not be overwritten");
+            assert!(err.to_string().contains("already exists"), "{err}");
+        }
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "keep me");
     }
 }

@@ -93,7 +93,7 @@ pub(crate) fn follow(
             return Err(match id {
                 Some(id) => InternalErrors::Io(format!(
                     "Lost the connection to the server - the analysis keeps running there. \
-                     Follow it again with `cli attach --job {id}` (same --remote and --user)."
+                     Follow it again with `cli jobs attach --job {id}` (same --remote and --user)."
                 )),
                 None => e,
             });
@@ -354,7 +354,7 @@ mod tests {
     /// integration test) pipeline against two real fixture images, then the
     /// resulting `.evadb` is exported via the CLI's own `export csv`/
     /// `export xlsx` commands (`crate::commands::export::run`, the exact
-    /// function `evanalyzer_cli export csv/xlsx` invokes) and the produced
+    /// function `evanalyzer cli results export csv/xlsx` invokes) and the produced
     /// files are checked for real content, not just "didn't error".
     #[test]
     fn run_then_export_csv_and_xlsx_via_the_cli_end_to_end() {

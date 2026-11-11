@@ -282,6 +282,7 @@
         { "name": "once_cell_polyfill", "version": "1.70.2" },
         { "name": "quick-error", "version": "2.0.1" },
         { "name": "serde_spanned", "version": "1.1.1" },
+        { "name": "terminal_size", "version": "0.4.4" },
         { "name": "toml", "version": "1.1.6+spec-1.1.0" },
         { "name": "toml_datetime", "version": "1.1.1+spec-1.1.0" },
         { "name": "toml_edit", "version": "0.25.13+spec-1.1.0" },
