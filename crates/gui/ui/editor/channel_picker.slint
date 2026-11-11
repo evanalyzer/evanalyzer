@@ -14,16 +14,42 @@ import { Ink } from "../ink/palette.slint";
 import { InkPickerField, InkPickerRow, InkSwatchName } from "../ink/ink.slint";
 
 // Color swatch + name of channel `idx`; collapses to nothing for a channel
-// the open image doesn't define.
+// the open image doesn't define. A colour (RGB) image is one channel in an
+// analysis - channel 0, read as its brightness - so it isn't listed as red,
+// green and blue: channel 0 is "RGB · brightness", the others aren't there.
 component ChannelLabel inherits Rectangle {
     in property <int> idx;
     in property <length> font-size: Ink.fs-body;
 
-    for ch in ChannelState.channels: InkSwatchName {
-        visible: ch.idx == root.idx;
-        color: ch.color;
-        name: ch.name;
-        font-size: root.font-size;
+    if !ImageMetaData.is-rgb: Rectangle {
+        for ch in ChannelState.channels: InkSwatchName {
+            visible: ch.idx == root.idx;
+            color: ch.color;
+            name: ch.name;
+            font-size: root.font-size;
+        }
+    }
+
+    if ImageMetaData.is-rgb: HorizontalLayout {
+        spacing: 6px;
+        padding-left: 8px;
+        if root.idx == 0: VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 9px;
+                height: 9px;
+                border-radius: 2px;
+                background: @linear-gradient(90deg, #E8231E 0%, #22C02A 50%, #1E3BE8 100%);
+            }
+        }
+        Text {
+            text: root.idx == 0 ? "RGB · brightness" : "not in this image";
+            font-size: root.font-size;
+            color: root.idx == 0 ? Ink.text : Ink.text-faint;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
     }
 }
 
@@ -47,7 +73,7 @@ export component ChannelPicker inherits Rectangle {
     height: Ink.control-h;
 
     InkPickerField {
-        label: root.compact ? "\{root.value}" : "Channel " + root.value;
+        label: root.compact ? "\{root.value}" : ImageMetaData.is-rgb && root.value == 0 ? "Image" : "Channel " + root.value;
         font-size: root.font-size;
         clicked => {
             popup.show();
@@ -83,7 +109,7 @@ export component ChannelPicker inherits Rectangle {
                     spacing: 0px;
                     for index in root.channel-count: InkPickerRow {
                         height: root.row-height;
-                        label: "Channel " + index;
+                        label: ImageMetaData.is-rgb && index == 0 ? "Image" : "Channel " + index;
                         selected: index == root.value;
                         clicked => {
                             root.value = index;

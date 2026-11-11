@@ -303,7 +303,7 @@ export component ImageControlPanel inherits Rectangle {
 
         InkPanelHead {
             title: "Image";
-            count: ChannelState.channels.length > 0 ? ChannelState.channels.length + (ChannelState.channels.length == 1 ? " channel" : " channels") : "";
+            count: ChannelState.channels.length > 0 ? (ImageMetaData.is-rgb ? "RGB · " : "") + ChannelState.channels.length + (ChannelState.channels.length == 1 ? " channel" : " channels") : "";
             subtitle: ImageMetaData.nr_series > 1 ? "Series \{ChannelState.selected_series + 1} of \{ImageMetaData.nr_series}" : "";
             // Over the image the title folds it; in the results' split
             // view (a drawer) ✕ closes the drawer.
@@ -387,6 +387,19 @@ export component ImageControlPanel inherits Rectangle {
                 }
             }
 
+            // A colour image: one range for red, green and blue keeps the
+            // colours true; unlinked, each colour has its own.
+            if ImageMetaData.is-rgb: HorizontalLayout {
+                InkSwitch {
+                    text: "Colours linked";
+                    checked: ChannelState.rgb-linked;
+                    toggled(on) => {
+                        ChannelState.rgb-linked = on;
+                        ChannelState.rgb_linked_toggled(on);
+                    }
+                }
+            }
+
             InkDivider { }
 
             // -- Histogram --
@@ -394,7 +407,7 @@ export component ImageControlPanel inherits Rectangle {
                 spacing: 6px;
                 InkCaption {
                     horizontal-stretch: 1;
-                    text: "HISTOGRAM" + (HistogramState.side == 1 ? " · breakpoint" : root.channel-name != "" ? " · " + root.channel-name : "");
+                    text: "HISTOGRAM" + (HistogramState.side == 1 ? " · breakpoint" : ImageMetaData.is-rgb && ChannelState.rgb-linked ? " · RGB" : root.channel-name != "" ? " · " + root.channel-name : "");
                     overflow: elide;
                 }
 

@@ -196,6 +196,9 @@ export struct PipelineCommand {
         problems: [ProblemItem],
         // How many of `problems` are errors.
         problem-errors: int,
+        // A Color Filter step: its range (min/max hue, saturation,
+        // brightness) for the colour range editor; empty for other steps.
+        hsv: [float],
     }
 
 export struct Pipeline {
@@ -424,6 +427,12 @@ export global PipelinesPanelState {
         callback toggle-exposed(int, string);
         callback insert-step(int, int);          // pipeline-id, after-idx
     callback param-changed(int, string, string);
+        // A Color Filter step picking its colours on the image (the step's
+        // `id`; -1: none) and how many it has picked.
+        in-out property <int> color-pick-step: -1;
+        in-out property <int> color-picks: 0;
+        callback color-pick-toggled(int);
+        callback color-picks-reset();
     // The pinned settings of the shown pipeline, in step order.
     in-out property <[TunedSetting]> tuned-settings: [];
     // Pins / unpins a setting (step position, setting name).

@@ -120,6 +120,10 @@ impl ImageMetaController {
             ui.global::<ChannelState>()
                 .on_grayscale_toggled(move |grayscale| manager.set_grayscale(grayscale));
 
+            let manager = Arc::clone(self);
+            ui.global::<ChannelState>()
+                .on_rgb_linked_toggled(move |linked| manager.set_rgb_linked(linked));
+
             // Frame interval: set for the project, or back to the image's own.
             let manager = Arc::clone(self);
             ui.global::<ImageMetaData>()
@@ -184,6 +188,15 @@ impl ImageMetaController {
             .and_then(|path| self.app_state.get_image_meta(&path).ok())
             .and_then(|meta| meta.series.get(&series).and_then(|s| s.frame_interval));
         frame_interval_shown(project_value, image_value)
+    }
+
+    /// Links or unlinks a colour image's red, green and blue display ranges
+    /// (linking gives all three the selected one's range - the handles stay
+    /// where they are), then redraws.
+    pub(crate) fn set_rgb_linked(&self, linked: bool) {
+        self.app_state.get_project_write().set_rgb_linked(linked);
+        self.app_state.mark_dirty();
+        self.viewport_controller.trigger_image_redraw();
     }
 
     /// Switches grayscale mode (all channels white, one visible at a time),
@@ -298,6 +311,7 @@ impl ImageMetaController {
                 grayscale,
             )
         }; // ← lock dropped here
+        let rgb_linked = !self.app_state.get_project().images.settings.rgb_unlinked;
 
         let Some(path) = image_path else {
             // No image (e.g. another project): nothing of the last one.
@@ -329,9 +343,17 @@ impl ImageMetaController {
         let image_meta = self.app_state.get_image_meta(&path)?;
         // The shown plane stays within this image's planes and frames.
         if let Some(series) = image_meta.series.get(&selected_series) {
-            self.app_state
-                .get_project_write()
-                .set_current_image_planes(series.nr_z_stacks, series.nr_t_stacks);
+            let mut project = self.app_state.get_project_write();
+            project.set_current_image_planes(series.nr_z_stacks, series.nr_t_stacks);
+            // Whether it's a colour image, for the checks before a run (an
+            // analysis reads it as one channel) - projects from before the
+            // flag get it here, once the image is opened.
+            let rgb = series.resolutions.get(&0).is_some_and(|r| r.is_rgb);
+            if let Some(settings) = project.get_selected_image_series_mut()
+                && settings.rgb != rgb
+            {
+                settings.rgb = rgb;
+            }
         }
         // Whether the project has chosen its series - else an image with
         // several asks once which (see `ImageMetaData.series-chosen`).
@@ -496,6 +518,7 @@ impl ImageMetaController {
             ui.global::<crate::AiLearningState>()
                 .invoke_project_changed();
             ch_state.set_grayscale(grayscale);
+            ch_state.set_rgb_linked(rgb_linked);
 
             // --- Image meta ---
             let image_meta_ui = ui.global::<ImageMetaData>();

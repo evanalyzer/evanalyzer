@@ -119,7 +119,9 @@ fn models() -> &'static Models {
 fn needs_rgb(command: &PipelineCommand) -> bool {
     matches!(
         command,
-        PipelineCommand::ColorDeconvolution(_) | PipelineCommand::ColorFilterCommand(_)
+        PipelineCommand::ColorDeconvolution(_)
+            | PipelineCommand::ColorFilterCommand(_)
+            | PipelineCommand::ColorToGrayscale(_)
     )
 }
 

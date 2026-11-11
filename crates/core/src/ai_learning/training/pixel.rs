@@ -34,7 +34,7 @@ use evanalyzer_cfg::settings::ai_learning_settings::{
 use evanalyzer_cfg::settings::images_settings::ZStackHandling;
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 use kornia_image::{Image, ImageSize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -338,6 +338,12 @@ impl PixelTrainingJob {
 
         let mut rows: Vec<Vec<f32>> = Vec::new();
         let mut labels: Vec<usize> = Vec::new();
+        // Channels the recipe wants that an annotated image doesn't have
+        // (its tiles are skipped), and whether one of those images is a
+        // colour image - for an error naming the problem instead of "zero
+        // samples" when nothing else could be trained on.
+        let mut missing_channels: BTreeSet<i32> = BTreeSet::new();
+        let mut missing_on_rgb = false;
 
         for (image_index, training_image) in self.images.iter().enumerate() {
             if cancel.load(Ordering::Relaxed) {
@@ -447,6 +453,10 @@ impl PixelTrainingJob {
                         })
                         .collect::<Option<Vec<_>>>()
                     else {
+                        missing_channels.extend(wanted_channels.iter().filter(|c| {
+                            !loaded_channels.iter().any(|loaded| loaded.c_stack == **c)
+                        }));
+                        missing_on_rgb |= is_rgb;
                         continue;
                     };
 
@@ -493,6 +503,10 @@ impl PixelTrainingJob {
                 index: image_index,
                 total: self.images.len(),
             });
+        }
+
+        if rows.is_empty() && !missing_channels.is_empty() {
+            return Err(missing_channels_error(&missing_channels, missing_on_rgb));
         }
 
         let _ = progress.send(TrainingProgressEvent::Training);
@@ -580,6 +594,29 @@ impl PixelTrainingJob {
     ) {
         training_job::spawn_training_job(self, Self::run)
     }
+}
+
+/// Training found no samples because the annotated images lack the image
+/// channels the features are computed on - `on_rgb`: one of them is a colour
+/// image, which an analysis reads as a single channel (0).
+fn missing_channels_error(missing: &BTreeSet<i32>, on_rgb: bool) -> InternalErrors {
+    let list = missing
+        .iter()
+        .map(|c| c.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let plural = if missing.len() == 1 { "" } else { "s" };
+    InternalErrors::InvalidArgument(if on_rgb {
+        format!(
+            "The annotated images have no image channel {list}: a colour (RGB) image is one \
+             channel (0) whose red, green and blue are all used - choose \"Image (RGB)\""
+        )
+    } else {
+        format!(
+            "The annotated images have no image channel{plural} {list} - choose channels the \
+             images have"
+        )
+    })
 }
 
 fn resolve_label(class_labels: &[PixelClassLabel], class: SegmentationClass) -> Option<usize> {
@@ -1349,6 +1386,60 @@ mod tests {
             .unwrap();
 
         assert_eq!(trained_input_color(&saved), PixelInputColor::Rgb);
+    }
+
+    /// The image channels a training job is restricted to.
+    fn with_image_channels(mut job: PixelTrainingJob, channels: Vec<i32>) -> PixelTrainingJob {
+        if let AiLearningClassifierSettings::Pixel { feature_spec, .. } =
+            &mut job.settings.classifier
+        {
+            feature_spec.image_channels = channels;
+        }
+        job
+    }
+
+    /// A colour image is channel 0 alone in an analysis: training on its
+    /// "green" or "blue" channel (as a dialog listing R, G, B offered)
+    /// names that, instead of failing with "zero samples" (bug 2026-11-11,
+    /// tests/rgb/butterfly).
+    #[test]
+    fn run_on_a_colour_image_names_the_missing_colour_channel() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("colour.tif");
+        write_rgb_tiff(&path);
+
+        for channels in [vec![1], vec![0, 1, 2]] {
+            let job = with_image_channels(two_class_job(std::slice::from_ref(&path)), channels);
+            let (tx, _rx) = std::sync::mpsc::channel();
+            let err = job.run(tx, Arc::new(AtomicBool::new(false))).err().unwrap();
+
+            let InternalErrors::InvalidArgument(message) = err else {
+                panic!("expected InvalidArgument, got {err:?}");
+            };
+            assert!(message.contains("Image (RGB)"), "{message}");
+        }
+
+        // Channel 0 - the whole colour image - trains.
+        let job = with_image_channels(two_class_job(&[path]), vec![0]);
+        let (tx, _rx) = std::sync::mpsc::channel();
+        assert!(job.run(tx, Arc::new(AtomicBool::new(false))).is_ok());
+    }
+
+    #[test]
+    fn run_on_a_gray_image_names_the_missing_channels() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gray.tif");
+        write_gray_tiff(&path);
+        let job = with_image_channels(two_class_job(&[path]), vec![2, 3]);
+        let (tx, _rx) = std::sync::mpsc::channel();
+
+        let err = job.run(tx, Arc::new(AtomicBool::new(false))).err().unwrap();
+
+        let InternalErrors::InvalidArgument(message) = err else {
+            panic!("expected InvalidArgument, got {err:?}");
+        };
+        assert!(message.contains("no image channels 2, 3"), "{message}");
+        assert!(!message.contains("RGB"), "{message}");
     }
 
     #[test]

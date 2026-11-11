@@ -1,0 +1,295 @@
+// Copyright 2026 Joachim Danmayr.
+// Licensed under the PolyForm Noncommercial License 1.0.0.
+
+// editor/hsv_range_editor.slint
+// The Color Filter step's colour range, shown instead of only its numbers:
+// a hue bar with two handles (wrapping past 360°: min > max), a saturation
+// × brightness square with the kept box, and "Pick from image" - clicks on
+// the image set the range round the picked colours (Rust). Drags change a
+// local copy; the six values are committed once, on release (`changed`).
+// The numbers stay editable in the step's settings below.
+import { Ink, InkButton, InkButtonKind } from "../ink/ink.slint";
+
+export component HsvRangeEditor inherits VerticalLayout {
+    in property <float> min-h;
+    in property <float> max-h: 360;
+    in property <float> min-s;
+    in property <float> max-s: 1;
+    in property <float> min-v;
+    in property <float> max-v: 1;
+    // Clicks on the image pick colours for this step.
+    in property <bool> picking;
+    // Colours picked so far in this pick session.
+    in property <int> picks;
+    callback changed(float, float, float, float, float, float);
+    callback pick-toggled();
+    callback picks-reset();
+
+    // The values while dragging; follow the step's values otherwise.
+    property <float> h0: root.min-h;
+    property <float> h1: root.max-h;
+    property <float> s0: root.min-s;
+    property <float> s1: root.max-s;
+    property <float> v0: root.min-v;
+    property <float> v1: root.max-v;
+    changed min-h => { self.h0 = self.min-h; }
+    changed max-h => { self.h1 = self.max-h; }
+    changed min-s => { self.s0 = self.min-s; }
+    changed max-s => { self.s1 = self.max-s; }
+    changed min-v => { self.v0 = self.min-v; }
+    changed max-v => { self.v1 = self.max-v; }
+
+    property <bool> wraps: root.h0 > root.h1;
+    // The middle of the kept hues - the colour of the square.
+    property <float> mid-hue: root.wraps ? mod((root.h0 + root.h1 + 360) / 2, 360) : (root.h0 + root.h1) / 2;
+
+    function commit() {
+        root.changed(round(root.h0), round(root.h1), round(root.s0 * 100) / 100, round(root.s1 * 100) / 100, round(root.v0 * 100) / 100, round(root.v1 * 100) / 100);
+    }
+
+    spacing: 10px;
+
+    HorizontalLayout {
+        spacing: 8px;
+        alignment: start;
+        InkButton {
+            small: true;
+            kind: root.picking ? InkButtonKind.primary : InkButtonKind.secondary;
+            text: root.picking ? "Picking - click the image" : "Pick from image";
+            tip: "Click colours on the image to keep: the range grows to hold each one";
+            clicked => {
+                root.pick-toggled();
+            }
+        }
+
+        if root.picks > 0: Text {
+            text: root.picks == 1 ? "1 pick" : "\{root.picks} picks";
+            font-size: Ink.fs-secondary;
+            color: Ink.text-dim;
+            vertical-alignment: center;
+        }
+        if root.picks > 0: InkButton {
+            small: true;
+            kind: InkButtonKind.quiet;
+            text: "Start over";
+            tip: "Forget the picks; the next click starts a new range";
+            clicked => {
+                root.picks-reset();
+            }
+        }
+    }
+
+    // -- Hue --
+    HorizontalLayout {
+        Text {
+            text: "Hue";
+            font-size: Ink.fs-secondary;
+            color: Ink.text;
+            horizontal-stretch: 1;
+        }
+        Text {
+            text: "\{round(root.h0)}° – \{round(root.h1)}°";
+            font-size: Ink.fs-secondary;
+            font-family: Ink.font-mono;
+            color: Ink.text-dim;
+        }
+    }
+
+    hue-bar := Rectangle {
+        height: 22px;
+        border-radius: Ink.radius-sm;
+        background: @linear-gradient(90deg, #ff0000 0%, #ffff00 16.66%, #00ff00 33.33%, #00ffff 50%, #0000ff 66.66%, #ff00ff 83.33%, #ff0000 100%);
+
+        // Left out: dimmed.
+        if !root.wraps: Rectangle {
+            x: 0;
+            width: parent.width * root.h0 / 360;
+            background: Ink.panel.with-alpha(0.75);
+        }
+        if !root.wraps: Rectangle {
+            x: parent.width * root.h1 / 360;
+            width: parent.width * (1 - root.h1 / 360);
+            background: Ink.panel.with-alpha(0.75);
+        }
+        if root.wraps: Rectangle {
+            x: parent.width * root.h1 / 360;
+            width: parent.width * (root.h0 - root.h1) / 360;
+            background: Ink.panel.with-alpha(0.75);
+        }
+
+        for at in [root.h0, root.h1]: Rectangle {
+            x: parent.width * at / 360 - 3px;
+            y: -3px;
+            width: 6px;
+            height: parent.height + 6px;
+            border-radius: 3px;
+            background: #ffffff;
+            border-width: 1px;
+            border-color: Ink.text;
+        }
+
+        // Drag the nearer handle.
+        property <int> dragging: 0;
+        TouchArea {
+            mouse-cursor: ew-resize;
+            pointer-event(e) => {
+                if e.kind == PointerEventKind.down {
+                    let at = clamp(self.mouse-x / self.width * 360, 0, 360);
+                    parent.dragging = abs(at - root.h0) <= abs(at - root.h1) ? 1 : 2;
+                } else if e.kind == PointerEventKind.up {
+                    if parent.dragging != 0 {
+                        parent.dragging = 0;
+                        root.commit();
+                    }
+                }
+            }
+            moved => {
+                let at = clamp(self.mouse-x / self.width * 360, 0, 360);
+                if parent.dragging == 1 {
+                    root.h0 = at;
+                } else if parent.dragging == 2 {
+                    root.h1 = at;
+                }
+            }
+        }
+    }
+
+    Text {
+        text: "A handle past the other wraps round 360° (e.g. 340° – 20° for red).";
+        font-size: 11px;
+        color: Ink.text-mute;
+        wrap: word-wrap;
+    }
+
+    // -- Saturation × brightness --
+    HorizontalLayout {
+        spacing: 14px;
+        alignment: start;
+
+        VerticalLayout {
+            spacing: 4px;
+            square := Rectangle {
+                width: 120px;
+                height: 120px;
+                border-radius: Ink.radius-sm;
+                clip: true;
+                background: @linear-gradient(90deg, #ffffff 0%, hsv(root.mid-hue, 1, 1) 100%);
+                Rectangle {
+                    background: @linear-gradient(0deg, #000000 0%, #00000000 100%);
+                }
+                // The kept saturations (left - right) and brightnesses
+                // (bottom - top).
+                Rectangle {
+                    x: parent.width * root.s0;
+                    y: parent.height * (1 - root.v1);
+                    width: parent.width * (root.s1 - root.s0);
+                    height: parent.height * (root.v1 - root.v0);
+                    border-width: 1px;
+                    border-color: #000000;
+                    Rectangle {
+                        x: 1px;
+                        y: 1px;
+                        width: parent.width - 2px;
+                        height: parent.height - 2px;
+                        border-width: 2px;
+                        border-color: #ffffff;
+                    }
+                }
+                // Drag a new box.
+                property <float> anchor-s;
+                property <float> anchor-v;
+                TouchArea {
+                    mouse-cursor: crosshair;
+                    pointer-event(e) => {
+                        if e.kind == PointerEventKind.down {
+                            parent.anchor-s = clamp(self.mouse-x / self.width, 0, 1);
+                            parent.anchor-v = clamp(1 - self.mouse-y / self.height, 0, 1);
+                        } else if e.kind == PointerEventKind.up {
+                            root.commit();
+                        }
+                    }
+                    moved => {
+                        let s = clamp(self.mouse-x / self.width, 0, 1);
+                        let v = clamp(1 - self.mouse-y / self.height, 0, 1);
+                        root.s0 = min(s, parent.anchor-s);
+                        root.s1 = max(s, parent.anchor-s);
+                        root.v0 = min(v, parent.anchor-v);
+                        root.v1 = max(v, parent.anchor-v);
+                    }
+                }
+            }
+            HorizontalLayout {
+                width: 120px;
+                Text {
+                    text: "gray";
+                    font-size: 10px;
+                    color: Ink.text-mute;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: "saturated";
+                    font-size: 10px;
+                    color: Ink.text-mute;
+                }
+            }
+        }
+
+        VerticalLayout {
+            spacing: 10px;
+            alignment: start;
+            horizontal-stretch: 1;
+            VerticalLayout {
+                spacing: 2px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: "Saturation";
+                        font-size: Ink.fs-secondary;
+                        color: Ink.text;
+                        horizontal-stretch: 1;
+                    }
+                    Text {
+                        text: "\{round(root.s0 * 100) / 100} – \{round(root.s1 * 100) / 100}";
+                        font-size: Ink.fs-secondary;
+                        font-family: Ink.font-mono;
+                        color: Ink.text-dim;
+                    }
+                }
+                Text {
+                    text: "Square: left to right";
+                    font-size: 11px;
+                    color: Ink.text-mute;
+                }
+            }
+            VerticalLayout {
+                spacing: 2px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: "Brightness";
+                        font-size: Ink.fs-secondary;
+                        color: Ink.text;
+                        horizontal-stretch: 1;
+                    }
+                    Text {
+                        text: "\{round(root.v0 * 100) / 100} – \{round(root.v1 * 100) / 100}";
+                        font-size: Ink.fs-secondary;
+                        font-family: Ink.font-mono;
+                        color: Ink.text-dim;
+                    }
+                }
+                Text {
+                    text: "Square: bottom to top";
+                    font-size: 11px;
+                    color: Ink.text-mute;
+                }
+            }
+            Text {
+                text: "Drag a box in the square.";
+                font-size: 11px;
+                color: Ink.text-mute;
+                wrap: word-wrap;
+            }
+        }
+    }
+}

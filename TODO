@@ -789,6 +789,17 @@ Comparison in `docs/feature_comparison.md`. Clean room: ilastik, QuPath and Trac
 - [x] Check the DAB values against a reference on a real H-DAB slide (QuPath/ImageJ's numbers only, no code - both GPL). - tested 2026-10-27: works.
 - [ ] Later: estimate stain vectors from the image (Macenko).
 
+### Colour (RGB) images (2026-11-11, design canvas https://claude.ai/artifact/HkZTSpLKYUih3YAatE8eug)
+An analysis reads a colour image as one channel (0, packed RGB); the viewer lists its red, green and blue.
+- [x] Image panel: red, green and blue linked by default (one range, the three curves in one histogram, Auto-scale one window for all three) - "Colours linked" off: a range each, as before (`images.settings.rgb_unlinked`, project-wide like Grayscale). A colour image still opens in true colour (0-255).
+- [x] Step channel picker on a colour image: channel 0 "Image · RGB · brightness", 1-9 "not in this image" (board B1). The checks before a run count a colour image as one channel (`SeriesSettings.rgb`, set when the image is added or opened - older projects once an image is opened).
+- [x] Bug: training a pixel classifier on a colour image found "zero samples" when Green or Blue was ticked (tests/rgb/butterfly) - the training dialog lists a colour image as one channel "Image (RGB)" (each feature on red, green and blue), and training names missing channels instead of "zero samples".
+- [x] Command "Color to Grayscale" (`filters/color_to_grayscale.rs`): Brightness (BT.709, as colour images are measured), Red, Green, Blue, Average, Maximum, Darkness (1 − brightness); a gray image passes through.
+- [x] Color Filter: colour range editor on its card (hue bar with two handles, wrapping past 360°; saturation × brightness square) and "Pick from image" - each click on the image widens the range round the picked colours (`hsv_range_around`); only the six numbers are stored. Named "Color Filter" (was "ColorFilterCommand").
+- [ ] Later: Color Filter output "Mask" - kept pixels white (1) instead of their brightness, a region to use directly (e.g. tissue area) without a Threshold.
+- [ ] Later, if needed (board B2): colour components (Red / Green / Blue) as channels of a step - e.g. colocalization of an RGB fluorescence export; needs the analysis to read single colours.
+- [ ] Not wanted (2026-11-11): white balance by clicking the background; a Threshold hint "Add Color to Grayscale".
+
 ### Annotation tools (QuPath level)
 EVA has rectangle, ellipse, polygon, brush, eraser, marker - and now the wand. Covered by the pipeline (decided 2026-10-26): analysing inside an annotation (load annotated objects as the region), boolean operations (object commands), hierarchy (Relate: parent/child, counts per parent).
 - [x] Wand (`editor/wand.rs`, 2026-10-26, own method - QuPath's code not read): a brush that keeps to edges. Tool bar after Brush, key W, brush size shared. On release, per circle along the stroke (a third of the radius apart): the visible channels of the view (each scaled to its 1-99 % range, 3 × 3 mean, RGB as 3 colors) → color distance to the cursor's pixel → Otsu splits the circle; the cursor's side, 4-connected to it. No edge (the halves < 0.1 apart): the whole circle, like the brush. Paints like the brush (into the selected hand-drawn object, else a new one). Works on the view's pixels (the pyramid level shown), mapped to full resolution. Not yet tried in the real app.

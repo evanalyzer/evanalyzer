@@ -177,9 +177,21 @@ impl HistogramController {
         min_limit: f32,
         max_limit: f32,
     ) {
-        self.app_state
-            .get_project_write()
-            .set_image_histogram_settings_for_active_channel(min, max, min_limit, max_limit);
+        let mut project = self.app_state.get_project_write();
+        if rgb_linked(&project, self.shows_rgb()) {
+            project.set_image_histogram_settings_for_all_channels(min, max, min_limit, max_limit);
+        } else {
+            project.set_image_histogram_settings_for_active_channel(min, max, min_limit, max_limit);
+        }
+    }
+
+    /// Whether the open image is a colour (RGB) image - set with the image's
+    /// channels (`ImageMetaData.is-rgb`); false off the UI thread (where
+    /// the window can't be upgraded).
+    fn shows_rgb(&self) -> bool {
+        self.ui
+            .upgrade()
+            .is_some_and(|ui| ui.global::<crate::ImageMetaData>().get_is_rgb())
     }
 
     pub fn sync_histogram_settings_to_slint(self: &Arc<Self>) {
@@ -228,6 +240,15 @@ impl HistogramController {
             warn!("Failed to sync histogram settings to Slint: {}", e);
         }
     }
+}
+
+/// Whether one display range moves red, green and blue together: a colour
+/// image (`is_rgb`) whose colours aren't unlinked.
+pub(crate) fn rgb_linked(
+    project: &evanalyzer_cfg::settings::project_settings::ProjectSettings,
+    is_rgb: bool,
+) -> bool {
+    is_rgb && !project.images.settings.rgb_unlinked
 }
 
 #[cfg(test)]

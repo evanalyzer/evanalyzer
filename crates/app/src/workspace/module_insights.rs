@@ -435,6 +435,9 @@ impl ImageChannels {
     }
 }
 
+/// How a colour (RGB) image's one channel is named.
+const RGB_CHANNEL_NAME: &str = "Image (RGB)";
+
 /// The channels of `project`'s images - of the series a run reads - or
 /// `None` without images whose channels are known.
 pub fn image_channels(project: &ProjectSettings) -> Option<ImageChannels> {
@@ -449,6 +452,11 @@ pub fn image_channels(project: &ProjectSettings) -> Option<ImageChannels> {
                 .selected_series
                 .unwrap_or(entry.selected_series);
             let series = entry.series.get(&series)?;
+            // A colour image: one channel (0) in an analysis, though its
+            // red, green and blue are listed.
+            if series.rgb {
+                return Some((1, vec![RGB_CHANNEL_NAME.to_string()]));
+            }
             Some((
                 series.channels.len(),
                 series.channels.values().map(|c| c.name.clone()).collect(),
@@ -879,6 +887,39 @@ mod tests {
         assert_eq!(
             classes_in(&ParamValue::List(vec![ParamValue::Int(4)])),
             [ObjectClass::Global(4)]
+        );
+    }
+
+    /// A colour image lists red, green and blue but is one channel in an
+    /// analysis: a step on channel 1 or 2 is found before the run.
+    #[test]
+    fn a_colour_image_has_one_channel() {
+        let mut project = project();
+        let mut series = SeriesSettings {
+            rgb: true,
+            ..Default::default()
+        };
+        for (i, name) in ["Red", "Green", "Blue"].iter().enumerate() {
+            series.channels.insert(
+                i as i32,
+                evanalyzer_cfg::settings::images_settings::ChannelSettings {
+                    name: name.to_string(),
+                    ..Default::default()
+                },
+            );
+        }
+        project.images.list.insert(
+            "colour.tif".into(),
+            ImageEntry {
+                series: [(0, series)].into(),
+                ..Default::default()
+            },
+        );
+        let channels = image_channels(&project).unwrap();
+        assert_eq!(channels.fewest, 1);
+        assert_eq!(
+            channels.describe(),
+            "the images have only channel 0 (Image (RGB))"
         );
     }
 

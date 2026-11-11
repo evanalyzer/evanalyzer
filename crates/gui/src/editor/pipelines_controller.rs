@@ -2532,6 +2532,13 @@ impl PipelinesController {
                         .get_always_show_advanced()
                         || cmd.show_advanced;
                     cmd.advanced_changed = advanced_stats(&params_now).1 as i32;
+                    // A Color Filter's range editor follows its values.
+                    if cmd.hsv.row_count() > 0 {
+                        cmd.hsv = ModelRc::new(VecModel::from(color_filter_range(
+                            &cmd.name,
+                            &params_now,
+                        )));
+                    }
                     let params_now = filter_for_display(params_now, show_advanced);
 
                     if let Some((group_name, idx, field_name)) = nested_path {
@@ -5725,6 +5732,7 @@ impl PipelinesController {
                                 ..Default::default()
                             })
                             .collect();
+                        let hsv = color_filter_range(&d.name, &d.parameters);
                         let (advanced_defs, basic_defs): (Vec<ParameterDef>, Vec<ParameterDef>) =
                             filter_for_display(d.parameters, show_advanced)
                                 .into_iter()
@@ -5936,6 +5944,7 @@ impl PipelinesController {
                             help: d.help.into(),
                             sections: ModelRc::new(VecModel::from(sections)),
                             pinned: step_pinned,
+                            hsv: ModelRc::new(VecModel::from(hsv)),
                             problem_errors: d.problems.iter().filter(|p| p.error).count() as i32,
                             problems: ModelRc::new(VecModel::from(
                                 d.problems.into_iter().map(problem_item).collect::<Vec<_>>(),
@@ -6887,6 +6896,34 @@ fn map_cfg_param_type(t: CfgParamType) -> ParamType {
 /// button and the `segmentation_mapping` row labels, since neither fits the
 /// otherwise fully generic, codegen-driven parameter rendering.
 const PIXEL_CLASSIFIER_COMMAND_NAME: &str = "AI Pixel Classifier";
+const COLOR_FILTER_COMMAND_NAME: &str = "Color Filter";
+/// A Color Filter step's settings, in the colour range editor's order.
+const COLOR_FILTER_RANGE: [&str; 6] = [
+    "range.min_h",
+    "range.max_h",
+    "range.min_s",
+    "range.max_s",
+    "range.min_v",
+    "range.max_v",
+];
+
+/// A Color Filter step's colour range (`COLOR_FILTER_RANGE`'s values) for
+/// its editor - empty for any other step.
+fn color_filter_range(step_name: &str, parameters: &[ParameterDef]) -> Vec<f32> {
+    if step_name != COLOR_FILTER_COMMAND_NAME {
+        return Vec::new();
+    }
+    COLOR_FILTER_RANGE
+        .iter()
+        .map(|name| {
+            parameters
+                .iter()
+                .find(|p| p.name == *name)
+                .and_then(|p| p.value.parse::<f32>().ok())
+        })
+        .collect::<Option<Vec<f32>>>()
+        .unwrap_or_default()
+}
 
 /// Display name `AiObjectClassifier` commands report via `CommandsMeta`'s
 /// `display_name` - the `AiObjectClassifier` analog of `PIXEL_CLASSIFIER_COMMAND_NAME`.
@@ -13295,5 +13332,46 @@ fn describe_end(state: &evanalyzer_app::analysis::JobState) -> String {
         JobState::Cancelled => "cancelled".into(),
         JobState::Failed(message) => format!("failed ({message})"),
         JobState::Running { .. } => "running".into(),
+    }
+}
+
+#[cfg(test)]
+mod color_filter_range_tests {
+    use super::*;
+
+    fn def(name: &str, value: &str) -> ParameterDef {
+        ParameterDef {
+            name: name.into(),
+            display_name: name.into(),
+            description: String::new(),
+            value: value.into(),
+            param_type: evanalyzer_cfg::settings::parameter_def::ParamType::Spinner,
+            options: Vec::new(),
+            min: 0.0,
+            max: 360.0,
+            step: 1.0,
+            groups: Vec::new(),
+            default_value: String::new(),
+            advanced: false,
+            option_advanced: Vec::new(),
+            section: String::new(),
+        }
+    }
+
+    /// A Color Filter card gets its six values for the range editor, any
+    /// other step none.
+    #[test]
+    fn a_color_filter_card_gets_its_range() {
+        let defs: Vec<ParameterDef> = COLOR_FILTER_RANGE
+            .iter()
+            .zip(["340", "20", "0.2", "1", "0.1", "0.9"])
+            .map(|(n, v)| def(n, v))
+            .collect();
+        assert_eq!(
+            color_filter_range(COLOR_FILTER_COMMAND_NAME, &defs),
+            [340.0, 20.0, 0.2, 1.0, 0.1, 0.9]
+        );
+        assert!(color_filter_range("Threshold", &defs).is_empty());
+        assert!(color_filter_range(COLOR_FILTER_COMMAND_NAME, &defs[..5]).is_empty());
     }
 }

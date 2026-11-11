@@ -169,6 +169,22 @@ impl From<MeasureExcludeImageExcludeWhenSettings> for ExcludeWhen {
     }
 }
 
+impl From<FiltersColorToGrayscaleGrayscaleMethodSettings> for GrayscaleMethod {
+    fn from(_s: FiltersColorToGrayscaleGrayscaleMethodSettings) -> Self {
+        match _s {
+            FiltersColorToGrayscaleGrayscaleMethodSettings::Brightness => {
+                GrayscaleMethod::Brightness
+            }
+            FiltersColorToGrayscaleGrayscaleMethodSettings::Red => GrayscaleMethod::Red,
+            FiltersColorToGrayscaleGrayscaleMethodSettings::Green => GrayscaleMethod::Green,
+            FiltersColorToGrayscaleGrayscaleMethodSettings::Blue => GrayscaleMethod::Blue,
+            FiltersColorToGrayscaleGrayscaleMethodSettings::Average => GrayscaleMethod::Average,
+            FiltersColorToGrayscaleGrayscaleMethodSettings::Maximum => GrayscaleMethod::Maximum,
+            FiltersColorToGrayscaleGrayscaleMethodSettings::Darkness => GrayscaleMethod::Darkness,
+        }
+    }
+}
+
 impl From<FiltersHessianHessianModeSettings> for HessianMode {
     fn from(_s: FiltersHessianHessianModeSettings) -> Self {
         match _s {
@@ -721,6 +737,14 @@ impl From<ColorFilterCommandSettings> for ColorFilterCommand {
     fn from(_s: ColorFilterCommandSettings) -> Self {
         ColorFilterCommand {
             range: HsvRange::from(_s.range),
+        }
+    }
+}
+
+impl From<ColorToGrayscaleSettings> for ColorToGrayscale {
+    fn from(_s: ColorToGrayscaleSettings) -> Self {
+        ColorToGrayscale {
+            method: GrayscaleMethod::from(_s.method),
         }
     }
 }
@@ -1492,6 +1516,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         ))),
         PipelineCommand::ColorFilterCommand(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::ColorFilterCommand::from(settings),
+        ))),
+        PipelineCommand::ColorToGrayscale(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::ColorToGrayscale::from(settings),
         ))),
         PipelineCommand::ConnectedComponents(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::ConnectedComponents::from(settings),

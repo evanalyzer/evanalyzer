@@ -126,7 +126,7 @@ fn classify_objects_shows_its_basic_settings() {
 
 #[test]
 fn the_color_filter_shows_only_the_hue() {
-    let (basic, advanced) = basic_and_advanced("ColorFilterCommand");
+    let (basic, advanced) = basic_and_advanced("Color Filter");
     assert_eq!(basic, ["range.min_h", "range.max_h"]);
     assert_eq!(advanced.len(), 4);
 }

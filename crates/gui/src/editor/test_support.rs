@@ -133,6 +133,7 @@ pub(crate) fn project_with_one_image() -> ProjectWithRuntime {
         z_stack: None,
         t_stack: None,
         objects: Vec::new(),
+        rgb: false,
     };
     project.images.list.insert(
         rel_path.clone(),

@@ -9,6 +9,7 @@
 
 use crate::AppWindow;
 use crate::MarkerData;
+use crate::PipelinesPanelState;
 use crate::PointSlint;
 use crate::ToolState;
 use crate::UiState;
@@ -59,6 +60,10 @@ pub struct ViewPortObjectController {
     pub(crate) annotation_controller: Arc<AnnotationController>,
     /// The brush or eraser stroke being drawn, in viewport coordinates.
     stroke: std::sync::Mutex<Vec<(f32, f32)>>,
+    /// Colours picked on the image for a Color Filter step (red, green,
+    /// blue 0-1), and the pipeline that step is in - this session only,
+    /// the step keeps just its six values.
+    color_picks: std::sync::Mutex<(i32, Vec<[f32; 3]>)>,
 }
 
 impl ViewPortObjectController {
@@ -82,6 +87,7 @@ impl ViewPortObjectController {
             classification_controller,
             annotation_controller,
             stroke: std::sync::Mutex::new(Vec::new()),
+            color_picks: std::sync::Mutex::new((-1, Vec::new())),
         }
     }
 
@@ -155,11 +161,39 @@ impl ViewPortObjectController {
             let manager = self.clone();
             ui.global::<ViewportObjectState>()
                 .on_viewport_clicked(move |clicked_x, clicked_y| {
+                    // Picking colours for a Color Filter: not a selection.
+                    if manager.pick_color_at(clicked_x, clicked_y) {
+                        return;
+                    }
                     manager.find_object_from_clicked_coordinates(clicked_x, clicked_y);
                     manager
                         .object_list_controller
                         .sync_selected_object_to_slint(true);
                     manager.viewport_controller.trigger_image_redraw_objects();
+                });
+
+            // A Color Filter step's "Pick from image": on (for that step)
+            // or off; "Start over" forgets the picks.
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_color_pick_toggled(move |step| {
+                    let Some(ui) = manager.ui.upgrade() else {
+                        return;
+                    };
+                    let state = ui.global::<PipelinesPanelState>();
+                    let on = state.get_color_pick_step() != step;
+                    *manager.color_picks.lock().expect("Poisoned") =
+                        (state.get_active_pipeline_id(), Vec::new());
+                    state.set_color_pick_step(if on { step } else { -1 });
+                    state.set_color_picks(0);
+                });
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_color_picks_reset(move || {
+                    manager.color_picks.lock().expect("Poisoned").1.clear();
+                    if let Some(ui) = manager.ui.upgrade() {
+                        ui.global::<PipelinesPanelState>().set_color_picks(0);
+                    }
                 });
 
             // object transparency
@@ -307,6 +341,73 @@ impl ViewPortObjectController {
             }
         }
         values.join(" | ")
+    }
+
+    /// While a Color Filter step picks colours: the shown image's red,
+    /// green and blue at the click (viewport coordinates) join the picks and
+    /// the step's range becomes the one round all of them. Whether the click
+    /// was taken for that (else it selects an object as usual). Picking
+    /// stops if another pipeline is shown or the image isn't a colour one.
+    fn pick_color_at(&self, click_x: f32, click_y: f32) -> bool {
+        let Some(ui) = self.ui.upgrade() else {
+            return false;
+        };
+        let state = ui.global::<PipelinesPanelState>();
+        let step = state.get_color_pick_step();
+        if step < 0 {
+            return false;
+        }
+        let mut picks = self.color_picks.lock().expect("Poisoned");
+        if picks.0 != state.get_active_pipeline_id() {
+            state.set_color_pick_step(-1);
+            state.set_color_picks(0);
+            return false;
+        }
+        let Some(rgb) = self.shown_rgb_at(click_x, click_y) else {
+            // Off the image, or not a colour image: nothing picked.
+            return true;
+        };
+        picks.1.push(rgb);
+        state.set_color_picks(picks.1.len() as i32);
+        let Some(range) = evanalyzer_app::settings_of::hsv_range_around(&picks.1) else {
+            return true;
+        };
+        drop(picks);
+        for (name, value) in [
+            ("range.min_h", range.min_h.round()),
+            ("range.max_h", range.max_h.round()),
+            ("range.min_s", (range.min_s * 100.0).round() / 100.0),
+            ("range.max_s", (range.max_s * 100.0).round() / 100.0),
+            ("range.min_v", (range.min_v * 100.0).round() / 100.0),
+            ("range.max_v", (range.max_v * 100.0).round() / 100.0),
+        ] {
+            state.invoke_param_changed(step, name.into(), value.to_string().into());
+        }
+        true
+    }
+
+    /// The shown colour image's red, green and blue (0-1) at a point of the
+    /// viewport - `None` off the image or for a gray one.
+    fn shown_rgb_at(&self, x: f32, y: f32) -> Option<[f32; 3]> {
+        let data = self.viewport_cache.active_high_res_data.read().ok()?;
+        let (channels, ctx) = data.as_ref()?;
+        let local_x = (x - ctx.draw_x) / (ctx.zoomed_w / ctx.image_w as f32);
+        let local_y = (y - ctx.draw_y) / (ctx.zoomed_h / ctx.image_h as f32);
+        if local_x < 0.0
+            || local_y < 0.0
+            || local_x >= ctx.image_w as f32
+            || local_y >= ctx.image_h as f32
+        {
+            return None;
+        }
+        let idx = local_y as usize * ctx.image_w as usize + local_x as usize;
+        let colour = |c: i32| {
+            channels
+                .iter()
+                .find(|channel| channel.is_rgb && channel.c_stack == c)
+                .and_then(|channel| channel.value_at(idx))
+        };
+        Some([colour(0)?, colour(1)?, colour(2)?])
     }
 
     pub fn find_object_from_clicked_coordinates(&self, click_x: f32, click_y: f32) {

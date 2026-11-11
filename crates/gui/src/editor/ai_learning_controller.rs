@@ -40,6 +40,10 @@ use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 use log::{info, warn};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
+
+/// How a colour (RGB) image's single channel is listed: an analysis reads it
+/// as one image, channel 0.
+const RGB_CHANNEL_NAME: &str = "Image (RGB)";
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -329,13 +333,18 @@ impl AiLearningController {
                 return;
             };
             let state = ui.global::<AiLearningState>();
-            // The chips get the channels' colors.
-            let colors: Vec<slint::Color> = ui
-                .global::<ChannelState>()
-                .get_channels()
-                .iter()
-                .map(|c| c.color)
-                .collect();
+            // The chips get the channels' colors - a colour image's one
+            // channel none (it is red, green and blue).
+            let rgb = ui.global::<crate::ImageMetaData>().get_is_rgb();
+            let colors: Vec<slint::Color> = if rgb {
+                Vec::new()
+            } else {
+                ui.global::<ChannelState>()
+                    .get_channels()
+                    .iter()
+                    .map(|c| c.color)
+                    .collect()
+            };
             let chips: Vec<ChannelChipSlint> = channels
                 .iter()
                 .enumerate()
@@ -387,7 +396,10 @@ impl AiLearningController {
                 .collect();
             let selected = channels.iter().filter(|c| c.1).count();
             let per_channel = pixel.count();
-            let count = if state.get_settings().mode == 0 {
+            let count = if state.get_settings().mode == 0 && rgb && selected == 1 {
+                // Each feature on red, green and blue.
+                format!("{per_channel} × 3 colours = {}", per_channel * 3)
+            } else if state.get_settings().mode == 0 {
                 format!("{per_channel} × {selected} ch = {}", per_channel * selected)
             } else {
                 object.count().to_string()
@@ -412,7 +424,8 @@ impl AiLearningController {
         }
     }
 
-    /// The image's channels into the feature tables; `keep`: the channels
+    /// The image's channels into the feature tables (a colour image as its
+    /// one channel, [`RGB_CHANNEL_NAME`]); `keep`: the channels
     /// the pixel classifier reads stay (by name), else the channel shown.
     fn sync_features_to_slint(self: &Arc<Self>, keep: bool) {
         let ui_weak = self.ui.clone();
@@ -422,11 +435,17 @@ impl AiLearningController {
                 return;
             };
             let channel_state = ui.global::<ChannelState>();
-            let names: Vec<String> = channel_state
-                .get_channels()
-                .iter()
-                .map(|c| c.name.to_string())
-                .collect();
+            // A colour image is one channel (0) in an analysis, its red,
+            // green and blue all used: training on "Green" found no samples.
+            let names: Vec<String> = if ui.global::<crate::ImageMetaData>().get_is_rgb() {
+                vec![RGB_CHANNEL_NAME.to_string()]
+            } else {
+                channel_state
+                    .get_channels()
+                    .iter()
+                    .map(|c| c.name.to_string())
+                    .collect()
+            };
             let shown = channel_state.get_selected_channel_index().max(0) as usize;
             {
                 let mut f = manager.features.lock().expect("Poisoned");

@@ -582,6 +582,17 @@
         "range"
       ]
     },
+    "ColorToGrayscaleSettings": {
+      "description": "Turns a colour (RGB) image into a gray image - e.g. before Threshold,\nwhich needs one value per pixel. A gray image passes through unchanged.\n\nFor stains (Hematoxylin, DAB, Eosin) use Color Deconvolution instead; for\none colour range, Color Filter.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "description": "How the red, green and blue of a pixel become one gray value.",
+          "$ref": "#/$defs/FiltersColorToGrayscaleGrayscaleMethodSettings",
+          "default": "BRIGHTNESS"
+        }
+      }
+    },
     "ConnectedComponentsSettings": {
       "description": "Identifies and labels discrete objects within a binary or multi-class image.\n\n[Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]",
       "type": "object",
@@ -910,6 +921,46 @@
             "stain3Green",
             "stain3Blue"
           ]
+        }
+      ]
+    },
+    "FiltersColorToGrayscaleGrayscaleMethodSettings": {
+      "description": "How the red, green and blue of a pixel become one gray value.",
+      "oneOf": [
+        {
+          "description": "The brightness as the eye sees it: 0.2126 R + 0.7152 G + 0.0722 B\n(ITU-R BT.709) - the same value intensities of a colour image are\nmeasured with.",
+          "type": "string",
+          "const": "BRIGHTNESS"
+        },
+        {
+          "description": "The red channel alone.",
+          "type": "string",
+          "const": "RED"
+        },
+        {
+          "description": "The green channel alone - often the best contrast in H&E.",
+          "type": "string",
+          "const": "GREEN"
+        },
+        {
+          "description": "The blue channel alone.",
+          "type": "string",
+          "const": "BLUE"
+        },
+        {
+          "description": "(R + G + B) / 3.",
+          "type": "string",
+          "const": "AVERAGE"
+        },
+        {
+          "description": "The brightest of R, G and B per pixel (HSV value, as Color Filter\nuses).",
+          "type": "string",
+          "const": "MAXIMUM"
+        },
+        {
+          "description": "1 − brightness: stained tissue bright on a dark background, as\nThreshold expects objects - for brightfield slides.",
+          "type": "string",
+          "const": "DARKNESS"
         }
       ]
     },
@@ -3075,6 +3126,19 @@
             }
           },
           "$ref": "#/$defs/ColorFilterCommandSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "COLOR_TO_GRAYSCALE"
+            }
+          },
+          "$ref": "#/$defs/ColorToGrayscaleSettings",
           "required": [
             "type"
           ]

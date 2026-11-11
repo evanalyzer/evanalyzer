@@ -1,6 +1,7 @@
 // Copyright 2026 Joachim Danmayr.
 // Licensed under the PolyForm Noncommercial License 1.0.0.
 
+import { HsvRangeEditor } from "hsv_range_editor.slint";
 import { ViewportObjectState } from "../api/viewport.slint";
 import { LayoutState, Places } from "../api/layout.slint";
 import { PipelineRunningState } from "../api/pipeline_running.slint";
@@ -2425,6 +2426,33 @@ component StepRow inherits Rectangle {
                     for item in step.problems: ProblemRow {
                         item: item;
                         show-where: false;
+                    }
+                }
+
+                // A Color Filter: its colour range to see and pick; only
+                // the values that changed are set.
+                if step.hsv.length == 6: HsvRangeEditor {
+                    min-h: step.hsv[0];
+                    max-h: step.hsv[1];
+                    min-s: step.hsv[2];
+                    max-s: step.hsv[3];
+                    min-v: step.hsv[4];
+                    max-v: step.hsv[5];
+                    picking: PipelinesPanelState.color-pick-step == step.id;
+                    picks: PipelinesPanelState.color-pick-step == step.id ? PipelinesPanelState.color-picks : 0;
+                    changed(h0, h1, s0, s1, v0, v1) => {
+                        if abs(h0 - step.hsv[0]) > 0.001 { root.param-changed("range.min_h", "\{h0}"); }
+                        if abs(h1 - step.hsv[1]) > 0.001 { root.param-changed("range.max_h", "\{h1}"); }
+                        if abs(s0 - step.hsv[2]) > 0.001 { root.param-changed("range.min_s", "\{s0}"); }
+                        if abs(s1 - step.hsv[3]) > 0.001 { root.param-changed("range.max_s", "\{s1}"); }
+                        if abs(v0 - step.hsv[4]) > 0.001 { root.param-changed("range.min_v", "\{v0}"); }
+                        if abs(v1 - step.hsv[5]) > 0.001 { root.param-changed("range.max_v", "\{v1}"); }
+                    }
+                    pick-toggled => {
+                        PipelinesPanelState.color-pick-toggled(step.id);
+                    }
+                    picks-reset => {
+                        PipelinesPanelState.color-picks-reset();
                     }
                 }
 

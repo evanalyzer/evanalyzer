@@ -75,6 +75,7 @@ pub use crate::pipeline::pipeline_cache::{AnalysedPlane, GlobalPipelineCache};
 pub use crate::pipeline::pipeline_cache::{channel_pixel_slice, sample_channel_pixel};
 
 // Job execution
+pub use crate::algos::{HsvBounds, hsv_range_around};
 pub use crate::algos::{
     ParamDecl, ParamKind, ScriptValue, apply_command_param, command_parameters,
     declared_script_params, script_syntax_error,

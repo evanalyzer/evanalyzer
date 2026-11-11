@@ -288,6 +288,38 @@ pub enum MeasureExcludeImageExcludeWhenSettings {
     AllRules,
 }
 
+/// How the red, green and blue of a pixel become one gray value.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum FiltersColorToGrayscaleGrayscaleMethodSettings {
+    /// The brightness as the eye sees it: 0.2126 R + 0.7152 G + 0.0722 B
+    /// (ITU-R BT.709) - the same value intensities of a colour image are
+    /// measured with.
+    #[default]
+    #[serde(alias = "brightness")]
+    Brightness,
+    /// The red channel alone.
+    #[serde(alias = "red")]
+    Red,
+    /// The green channel alone - often the best contrast in H&E.
+    #[serde(alias = "green")]
+    Green,
+    /// The blue channel alone.
+    #[serde(alias = "blue")]
+    Blue,
+    /// (R + G + B) / 3.
+    #[serde(alias = "average")]
+    Average,
+    /// The brightest of R, G and B per pixel (HSV value, as Color Filter
+    /// uses).
+    #[serde(alias = "maximum")]
+    Maximum,
+    /// 1 − brightness: stained tissue bright on a dark background, as
+    /// Threshold expects objects - for brightfield slides.
+    #[serde(alias = "darkness")]
+    Darkness,
+}
+
 /// Specifies the feature extraction method for the Hessian matrix.
 ///
 /// The Hessian matrix describes the local second-order structure of an image,
@@ -1211,6 +1243,27 @@ impl Default for ColorDeconvolutionSettings {
 pub struct ColorFilterCommandSettings {
     /// The HSV color bounds to be preserved by the filter.
     pub range: HsvRangeSettings,
+}
+
+/// Turns a colour (RGB) image into a gray image - e.g. before Threshold,
+/// which needs one value per pixel. A gray image passes through unchanged.
+///
+/// For stains (Hematoxylin, DAB, Eosin) use Color Deconvolution instead; for
+/// one colour range, Color Filter.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct ColorToGrayscaleSettings {
+    /// How the red, green and blue of a pixel become one gray value.
+    pub method: FiltersColorToGrayscaleGrayscaleMethodSettings,
+}
+
+impl Default for ColorToGrayscaleSettings {
+    fn default() -> Self {
+        Self {
+            method: FiltersColorToGrayscaleGrayscaleMethodSettings::Brightness,
+        }
+    }
 }
 
 /// A command that calculates the Euclidean Distance Map (EDM) of an f32 image.

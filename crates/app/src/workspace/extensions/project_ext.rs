@@ -148,6 +148,19 @@ pub trait ProjectExt {
     fn get_channel_display_colors(&self) -> BTreeMap<i32, [f32; 3]>;
     fn channel_display_colors(&self, channels: &[(i32, f32)]) -> BTreeMap<i32, [f32; 3]>;
     fn set_grayscale(&mut self, grayscale: bool);
+    /// Links (one range for all three) or unlinks a colour image's red,
+    /// green and blue display ranges; linking gives all channels of the
+    /// open image the selected channel's range.
+    fn set_rgb_linked(&mut self, linked: bool);
+    /// The open image's display range for every channel - a colour image's
+    /// red, green and blue while they are linked.
+    fn set_image_histogram_settings_for_all_channels(
+        &mut self,
+        min: f32,
+        max: f32,
+        min_limit: f32,
+        max_limit: f32,
+    );
     /// Channels without a wavelength (`channels`: channel, the image's
     /// wavelength, `<= 1.0` none) get one of [`ASSIGNED_WAVELENGTHS`] for
     /// the project - not one a channel already shows. Not for a single
@@ -795,6 +808,32 @@ impl ProjectExt for ProjectWithRuntime {
         }
     }
 
+    fn set_rgb_linked(&mut self, linked: bool) {
+        self.images.settings.rgb_unlinked = !linked;
+        if let (true, Some(window)) = (linked, self.get_histograms_from_selected_channel().cloned())
+        {
+            self.set_image_histogram_settings_for_all_channels(
+                window.min,
+                window.max,
+                window.min_limit,
+                window.max_limit,
+            );
+        }
+    }
+
+    fn set_image_histogram_settings_for_all_channels(
+        &mut self,
+        min: f32,
+        max: f32,
+        min_limit: f32,
+        max_limit: f32,
+    ) {
+        let channels: Vec<i32> = self.get_image_channel_histograms().into_keys().collect();
+        for channel in channels {
+            self.set_image_histogram_settings_for_channel(channel, min, max, min_limit, max_limit);
+        }
+    }
+
     fn set_grayscale(&mut self, grayscale: bool) {
         self.images.settings.grayscale = grayscale;
         if !grayscale {
@@ -1416,9 +1455,9 @@ impl ProjectExt for ProjectWithRuntime {
                     })
                     .collect();
 
-                let (image_width, image_height, nr_bits) = match data.resolutions.get(&0) {
-                    Some(res) => (res.width, res.height, res.nr_bits),
-                    None => (0, 0, 0), // Fallback if resolution 0 is missing
+                let (image_width, image_height, nr_bits, rgb) = match data.resolutions.get(&0) {
+                    Some(res) => (res.width, res.height, res.nr_bits, res.is_rgb),
+                    None => (0, 0, 0, false), // Fallback if resolution 0 is missing
                 };
 
                 let pixel_sizes = data.pixel_sizes.clone();
@@ -1436,6 +1475,7 @@ impl ProjectExt for ProjectWithRuntime {
                     z_stack: None,
                     t_stack: None,
                     objects: Vec::new(),
+                    rgb,
                 };
 
                 file_size_approx_bytes += image_width * image_height * nr_bits as u64;
@@ -2137,6 +2177,7 @@ mod tests {
             z_stack: None,
             t_stack: None,
             objects: Vec::new(),
+            rgb: false,
         };
         project.images.list.insert(
             rel_path.clone(),
@@ -3076,6 +3117,41 @@ mod tests {
     }
 
     // -- Histogram settings -------------------------------------------------
+
+    /// Linking a colour image's colours gives every channel the selected
+    /// one's range; unlinking keeps the ranges as they are.
+    #[test]
+    fn linking_the_colours_gives_all_channels_one_range() {
+        let mut project = project_with_one_image();
+        project.set_image_histogram_settings_for_channel(0, 0.1, 0.9, 0.0, 1.0);
+        project.set_image_histogram_settings_for_channel(1, 0.3, 0.5, 0.0, 1.0);
+        project.set_rgb_linked(false);
+        assert!(project.images.settings.rgb_unlinked);
+        assert_eq!(
+            project.get_image_channel_histograms()[&1]
+                .as_ref()
+                .unwrap()
+                .max,
+            0.5
+        );
+
+        project.set_rgb_linked(true);
+        assert!(!project.images.settings.rgb_unlinked);
+        let selected = project
+            .get_histograms_from_selected_channel()
+            .unwrap()
+            .clone();
+        for window in project.get_image_channel_histograms().values() {
+            let window = window.as_ref().unwrap();
+            assert_eq!((window.min, window.max), (selected.min, selected.max));
+        }
+
+        project.set_image_histogram_settings_for_all_channels(0.2, 0.7, 0.0, 1.0);
+        for window in project.get_image_channel_histograms().values() {
+            let window = window.as_ref().unwrap();
+            assert_eq!((window.min, window.max), (0.2, 0.7));
+        }
+    }
 
     #[test]
     fn set_image_histogram_settings_for_channel_updates_only_that_channel() {

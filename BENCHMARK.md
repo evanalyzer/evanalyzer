@@ -1969,7 +1969,7 @@ threads and caches follow. `tests/tile_ram.rs` measures every tile command
 (+0.25 B tolerance): Canny, Hessian 28; Structure Tensor 24; Rolling Ball,
 Sobel, Weighted Deviation 12; Fill Holes, Watershed 9; Blur, Laplacian,
 Morphological Transform 8; Gaussian Blur, Median Subtract, Rank Filter,
-Illumination Correction, Color Deconvolution, Color Filter 4; Save Image 1;
+Illumination Correction, Color Deconvolution, Color Filter, Color to Grayscale 4; Save Image 1;
 the rest 0. Not measured: the AI models (need libtorch and a model). A
 Hessian pipeline on 4096² tiles: +470 MB per worker the plan didn't know
 (21 workers: ~10 GB).
@@ -2221,6 +2221,21 @@ column list reads anyway - now cached per opened file. Worst case: the
 objects, release, 7 runs: the columns 69-89 ms (as before, they read the
 relations), has_tracks 0.8-1.1 ms, has_trees 1-2 µs. First tries: a grouped
 query 29-41 ms, an EXISTS with list_has_any 45-67 ms - both dropped.
+
+## Color to Grayscale (2026-11-11)
+
+New command, one pass per pixel (rayon), output plane 4 B per tile pixel
+(measured by `tests::tile_ram`). A 2048² colour tile, median of 15 (release,
+22 cores), Color Deconvolution for comparison:
+
+| | 22 threads | 1 thread |
+|---|---|---|
+| Color to Grayscale (Brightness) | 2.1 ms | 12.2 ms |
+| Color Deconvolution (H-DAB) | 9.6 ms | 108.5 ms |
+
+Nothing else in an analysis changed. The viewer shows a colour image's three
+curves only while its colours are linked (one more path per curve on that
+image; gray images unchanged).
 
 ## Peak RAM overview - for the system requirements
 

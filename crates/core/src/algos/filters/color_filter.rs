@@ -95,7 +95,7 @@ pub struct HsvRange {
 /// Pixels falling outside the HSV range are masked
 /// out by setting to black.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "Preprocessing")]
+#[cmdsmeta(category = "Preprocessing", display_name = "Color Filter")]
 pub struct ColorFilterCommand {
     /// The HSV color bounds to be preserved by the filter.
     pub range: HsvRange,
@@ -207,6 +207,90 @@ impl ImageAlgorithm for ColorFilterCommand {
     fn execution_scope(&self) -> ExecutionScope {
         ExecutionScope::Tile
     }
+}
+
+/// Hue, saturation and brightness bounds - [`HsvRange`]'s six values.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HsvBounds {
+    pub min_h: f32,
+    pub max_h: f32,
+    pub min_s: f32,
+    pub max_s: f32,
+    pub min_v: f32,
+    pub max_v: f32,
+}
+
+/// Room added around picked colours: hue in degrees, saturation and
+/// brightness in 0-1.
+const PICK_MARGIN_HUE: f32 = 10.0;
+const PICK_MARGIN_SV: f32 = 0.05;
+/// Below this saturation a pixel is (nearly) gray: its hue says nothing and
+/// doesn't widen the hue range.
+const PICK_GRAY_SATURATION: f32 = 0.08;
+
+/// The smallest range around the picked colours (`picks`: red, green, blue
+/// 0-1, e.g. clicked on the image), with a little room: hue as the shortest
+/// arc of the colour circle holding every picked hue (wrapping round 360°
+/// gives min > max, as the filter reads it), saturation and brightness from
+/// the lowest to the highest picked. Gray picks leave the hue open. `None`
+/// without picks.
+pub fn hsv_range_around(picks: &[[f32; 3]]) -> Option<HsvBounds> {
+    if picks.is_empty() {
+        return None;
+    }
+    let hsv: Vec<(f32, f32, f32)> = picks
+        .iter()
+        .map(|p| {
+            rgb_to_hsv(
+                p[0].clamp(0.0, 1.0),
+                p[1].clamp(0.0, 1.0),
+                p[2].clamp(0.0, 1.0),
+            )
+        })
+        .collect();
+    let lowest = |values: &mut dyn Iterator<Item = f32>| values.fold(f32::INFINITY, f32::min);
+    let highest = |values: &mut dyn Iterator<Item = f32>| values.fold(f32::NEG_INFINITY, f32::max);
+    let min_s = (lowest(&mut hsv.iter().map(|c| c.1)) - PICK_MARGIN_SV).max(0.0);
+    let max_s = (highest(&mut hsv.iter().map(|c| c.1)) + PICK_MARGIN_SV).min(1.0);
+    let min_v = (lowest(&mut hsv.iter().map(|c| c.2)) - PICK_MARGIN_SV).max(0.0);
+    let max_v = (highest(&mut hsv.iter().map(|c| c.2)) + PICK_MARGIN_SV).min(1.0);
+
+    let mut hues: Vec<f32> = hsv
+        .iter()
+        .filter(|c| c.1 >= PICK_GRAY_SATURATION)
+        .map(|c| c.0)
+        .collect();
+    hues.sort_by(f32::total_cmp);
+    let (min_h, max_h) = match hues.as_slice() {
+        [] => (0.0, 360.0),
+        [first, ..] => {
+            // The biggest gap between neighbouring hues (round the circle)
+            // is what the range leaves out.
+            let last = *hues.last().unwrap_or(first);
+            let (mut gap, mut start, mut end) = (first + 360.0 - last, *first, last);
+            for pair in hues.windows(2) {
+                if pair[1] - pair[0] > gap {
+                    (gap, start, end) = (pair[1] - pair[0], pair[1], pair[0]);
+                }
+            }
+            if 360.0 - gap + 2.0 * PICK_MARGIN_HUE >= 360.0 {
+                (0.0, 360.0)
+            } else {
+                (
+                    (start - PICK_MARGIN_HUE).rem_euclid(360.0),
+                    (end + PICK_MARGIN_HUE).rem_euclid(360.0),
+                )
+            }
+        }
+    };
+    Some(HsvBounds {
+        min_h,
+        max_h,
+        min_s,
+        max_s,
+        min_v,
+        max_v,
+    })
 }
 
 fn rgb_to_hsv(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
@@ -534,5 +618,50 @@ mod tests {
         assert_eq!(name, "HsvColorFilter");
         assert_eq!(extractor.cite()[0].cite_key, "danmayr2026");
         assert!(matches!(extractor.execution_scope(), ExecutionScope::Tile));
+    }
+
+    #[test]
+    fn picks_give_the_smallest_range_around_them() {
+        // Purple and violet: hue 270 and 300.
+        let bounds = hsv_range_around(&[[0.5, 0.0, 1.0], [1.0, 0.0, 1.0]]).unwrap();
+        assert!((bounds.min_h - 260.0).abs() < 1e-3, "{bounds:?}");
+        assert!((bounds.max_h - 310.0).abs() < 1e-3, "{bounds:?}");
+        assert!((bounds.min_s - 0.95).abs() < 1e-3 && bounds.max_s == 1.0);
+        assert!((bounds.min_v - 0.95).abs() < 1e-3 && bounds.max_v == 1.0);
+        assert_eq!(hsv_range_around(&[]), None);
+    }
+
+    /// Reds either side of 0°: the short way round, min > max.
+    #[test]
+    fn picks_round_red_wrap_past_360() {
+        let bounds = hsv_range_around(&[[1.0, 0.0, 0.17], [1.0, 0.17, 0.0]]).unwrap();
+        assert!(bounds.min_h > bounds.max_h, "{bounds:?}");
+        assert!(bounds.min_h > 335.0 && bounds.max_h < 25.0, "{bounds:?}");
+    }
+
+    /// A gray pick leaves the hue open but widens saturation and brightness.
+    #[test]
+    fn a_gray_pick_leaves_the_hue_open() {
+        let bounds = hsv_range_around(&[[0.5, 0.5, 0.5]]).unwrap();
+        assert_eq!((bounds.min_h, bounds.max_h), (0.0, 360.0));
+        let bounds = hsv_range_around(&[[0.5, 0.5, 0.5], [0.0, 0.0, 1.0]]).unwrap();
+        assert!((bounds.min_h - 230.0).abs() < 1e-3 && (bounds.max_h - 250.0).abs() < 1e-3);
+        assert_eq!(bounds.min_s, 0.0);
+    }
+
+    /// The range keeps what was picked: each pick passes the filter.
+    #[test]
+    fn every_pick_passes_the_filter_of_its_range() {
+        let picks = [[0.8, 0.3, 0.6], [0.6, 0.2, 0.7], [0.9, 0.5, 0.8]];
+        let b = hsv_range_around(&picks).unwrap();
+        for p in picks {
+            let (h, s, v) = rgb_to_hsv(p[0], p[1], p[2]);
+            let hue = if b.min_h <= b.max_h {
+                h >= b.min_h && h <= b.max_h
+            } else {
+                h >= b.min_h || h <= b.max_h
+            };
+            assert!(hue && s >= b.min_s && s <= b.max_s && v >= b.min_v && v <= b.max_v);
+        }
     }
 }

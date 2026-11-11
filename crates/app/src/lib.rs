@@ -37,7 +37,8 @@ pub mod settings_of {
         MeasurementChoice, measurement_choices, measurement_setting_text, show_measurement_choices,
     };
     pub use evanalyzer_core::{
-        apply_command_param, command_parameters, declared_script_params, script_syntax_error,
+        HsvBounds, apply_command_param, command_parameters, declared_script_params,
+        hsv_range_around, script_syntax_error,
     };
 }
 

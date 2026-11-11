@@ -272,6 +272,10 @@ export global ChannelState {
         // All channels in gray, one visible at a time.
         in-out property <bool> grayscale: false;
         callback grayscale_toggled(bool);
+        // A colour (RGB) image: one display range for red, green and blue
+        // (true colours), or one each.
+        in-out property <bool> rgb-linked: true;
+        callback rgb_linked_toggled(bool);
 
         // Callback sends the updated array to Rust
     callback channel_state_changed([ChannelInfo], int, int, int, IntensityProjection, int, int);

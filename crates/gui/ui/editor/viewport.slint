@@ -500,13 +500,21 @@ export component Viewport inherits Rectangle {
         y: 0;
         width: root.xy-w;
         height: root.xy-h;
-        mouse-cursor: root.brush-tool || ViewportObjectState.act_tool_state == ToolState.Ruler ? MouseCursor.crosshair : MouseCursor.default;
+        mouse-cursor: root.brush-tool || ViewportObjectState.act_tool_state == ToolState.Ruler || (PipelinesPanelState.color-pick-step >= 0 && !root.split-mode) ? MouseCursor.crosshair : MouseCursor.default;
         pointer-event(evt) => {
             if (evt.kind == PointerEventKind.down) {
                 root.last_mouse_x = self.mouse-x;
                 root.last_mouse_y = self.mouse-y;
                 root.press-x = self.mouse-x;
                 root.press-y = self.mouse-y;
+            }
+            // A Color Filter step picking colours: a left click picks,
+            // whatever the tool.
+            if !root.split-mode && PipelinesPanelState.color-pick-step >= 0 && evt.button == PointerEventButton.left {
+                if evt.kind == PointerEventKind.down {
+                    ViewportObjectState.viewport_clicked(self.mouse-x, self.mouse-y);
+                }
+                return;
             }
             if (root.split-mode) {
                 if (evt.kind == PointerEventKind.up && evt.button == PointerEventButton.left && abs(self.mouse-x - root.press-x) < 4px && abs(self.mouse-y - root.press-y) < 4px) {

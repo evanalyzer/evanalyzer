@@ -156,6 +156,7 @@ impl ViewportWorker {
             hist_settings,
             selected_channel,
             auto_scale_off,
+            rgb_unlinked,
         ) = {
             let project = self.app_state.get_project();
             (
@@ -171,6 +172,7 @@ impl ViewportWorker {
                     .viewport_controller
                     .memory_settings()
                     .auto_scale_new_images,
+                project.images.settings.rgb_unlinked,
             )
         };
 
@@ -264,11 +266,19 @@ impl ViewportWorker {
                 // STEP 1.
                 if task.auto_adjust_if_not_set || task.auto_adjust_selected || task.auto_adjust_all
                 {
+                    // Auto-scale clicked: a colour image's red, green and
+                    // blue are stretched too (a new one opens in true
+                    // colour, the full range) - linked, all three to one
+                    // window, so the colours stay true.
+                    let clicked = task.auto_adjust_selected || task.auto_adjust_all;
+                    let linked = !rgb_unlinked && render_src.iter().any(|c| c.is_rgb);
+                    let common = (clicked && linked).then(|| linked_rgb_range(&render_src));
                     for channel in render_src.iter() {
                         let idx = channel.c_stack;
                         if let Some(ch) = hist_settings.get(&idx) {
                             if (!ch.is_some() && task.auto_adjust_if_not_set)
-                                || (task.auto_adjust_selected && idx == selected_channel)
+                                || (task.auto_adjust_selected
+                                    && (idx == selected_channel || common.is_some()))
                                 || task.auto_adjust_all
                             {
                                 // Auto-scale off: a channel without any
@@ -279,8 +289,10 @@ impl ViewportWorker {
                                     && !task.auto_adjust_all
                                 {
                                     (0.0, 1.0, 0.0, 1.0)
+                                } else if let Some(common) = common {
+                                    common
                                 } else {
-                                    auto_adjust_range(channel.slice(), channel.is_rgb)
+                                    auto_adjust_range(channel.slice(), channel.is_rgb && !clicked)
                                 };
                                 debug!(
                                     "Auto-adjusting channel {} min={} max={} range=({},{})",
@@ -439,12 +451,14 @@ impl ViewportWorker {
 
             if !is_low_res {
                 // The selected channel's only: the panel's black and white
-                // lines are on its axis (each channel counts on its own).
+                // lines are on its axis (each channel counts on its own) -
+                // a colour image's three while linked (one axis for all).
+                let all_curves = is_rgb && !rgb_unlinked;
                 svg_hists_to_send = histogram_to_svg_fast(
                     &all_hists
                         .into_iter()
                         .zip(channel_contexts.iter())
-                        .filter(|(_, c)| c.channel_idx == selected_channel)
+                        .filter(|(_, c)| all_curves || c.channel_idx == selected_channel)
                         .map(|(h, c)| (h, c.color))
                         .collect(),
                     NUM_BINS,
@@ -1037,6 +1051,19 @@ where
 
 /// Applies auto-adjustment to an image using partial sorting (O(N) average).
 ///
+/// One display window for a colour image's red, green and blue (`channels`,
+/// the colour ones counted): from the lowest of their auto-adjusted lower
+/// ends to the highest upper end - the same window for all three keeps the
+/// colours true.
+fn linked_rgb_range(channels: &[ViewChannel]) -> (f32, f32, f32, f32) {
+    channels
+        .iter()
+        .filter(|c| c.is_rgb)
+        .map(|c| auto_adjust_range(c.slice(), false))
+        .reduce(|a, b| (a.0.min(b.0), a.1.max(b.1), a.2.min(b.2), a.3.max(b.3)))
+        .unwrap_or((0.0, 1.0, 0.0, 1.0))
+}
+
 /// Samples every 10th pixel and finds the 0.5th and 99.5th percentile values
 /// to use as the display range, clipping extreme outliers.
 ///
