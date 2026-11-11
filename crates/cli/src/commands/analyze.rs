@@ -27,6 +27,10 @@ pub fn run(args: AnalyzeArgs, backend: &dyn Backend) -> Result<(), InternalError
         project.scan_image_folder_and_add(backend);
     }
 
+    for line in crate::overrides::apply_overrides(&mut project, &args.set)? {
+        println!("Set:       {line}");
+    }
+
     let image_count = project.images.list.len();
     if image_count == 0 {
         return Err(InternalErrors::InvalidArgument(
@@ -166,6 +170,7 @@ mod tests {
             images: None,
             threads: None,
             job_name: None,
+            set: Vec::new(),
         });
 
         let err = result.expect_err("expected an empty project to be rejected before any job runs");
@@ -182,6 +187,7 @@ mod tests {
             images: None,
             threads: None,
             job_name: None,
+            set: Vec::new(),
         });
 
         assert!(result.is_err());
@@ -202,6 +208,7 @@ mod tests {
             images: Some(images_dir),
             threads: None,
             job_name: None,
+            set: Vec::new(),
         });
 
         let err = result
@@ -222,6 +229,7 @@ mod tests {
             images: Some(missing_dir),
             threads: None,
             job_name: None,
+            set: Vec::new(),
         });
 
         let err = result.expect_err("scanning a nonexistent images dir must still yield 0 images");
@@ -253,6 +261,7 @@ mod tests {
             images: Some(images_dir),
             threads: Some(1),
             job_name: Some("cli_test".into()),
+            set: Vec::new(),
         });
 
         result.expect("a real image with zero enabled pipelines should still run to completion");
@@ -433,6 +442,7 @@ mod tests {
             images: Some(images_dir),
             threads: Some(1),
             job_name: Some("e2e".into()),
+            set: Vec::new(),
         })
         .expect("analyze should succeed against real fixture images with a working pipeline");
 
@@ -636,6 +646,103 @@ mod tests {
     /// writes its results database under a timestamped subdirectory of
     /// `<project_dir>/results/`, so the exact path isn't predictable ahead
     /// of time.
+    /// `--set` reaches the run: the run's copy of the project next to its
+    /// results holds the overridden value, the project file the old one;
+    /// an override that doesn't apply stops before anything runs.
+    #[test]
+    fn run_with_set_runs_with_the_overridden_value_and_keeps_the_project_file() {
+        use evanalyzer_cfg::core_types::{ImageAddress, PipelineId, SegmentationClass, StepId};
+        use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+        use evanalyzer_cfg::settings::pipeline_command_settings::{
+            ConnectedComponentsSettings, ExtractObjectsSettings, ThresholdEntrySettings,
+            ThresholdSettings,
+        };
+        use evanalyzer_cfg::settings::pipeline_settings::{
+            PipelineSettings, PipelineStepSettings, StepContent,
+        };
+
+        let step = |id, command| PipelineStepSettings {
+            id: StepId(id),
+            enabled: true,
+            content: StepContent::Command(command),
+        };
+        let mut settings = ProjectSettings::default();
+        settings.pipelines = vec![PipelineSettings {
+            id: PipelineId(1),
+            name: "Varroa detection".to_string(),
+            description: None,
+            image_source: ImageAddress::Channel(0),
+            enabled: true,
+            steps: vec![
+                step(
+                    1,
+                    PipelineCommand::Threshold(ThresholdSettings {
+                        thresholds: vec![ThresholdEntrySettings {
+                            segmentation_class: SegmentationClass(1),
+                            ..Default::default()
+                        }],
+                    }),
+                ),
+                step(
+                    2,
+                    PipelineCommand::ConnectedComponents(ConnectedComponentsSettings::default()),
+                ),
+                step(
+                    3,
+                    PipelineCommand::ExtractObjects(ExtractObjectsSettings::default()),
+                ),
+            ],
+        }];
+        let file = TempProjectFile::new(&settings);
+        let images_dir = file.path.parent().unwrap().join("images");
+        std::fs::create_dir_all(&images_dir).unwrap();
+        std::fs::copy(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../core/tests/slice_Z0_C0_T0.tif"),
+            images_dir.join("a.tif"),
+        )
+        .expect("copy fixture");
+        let min_threshold = |project: &serde_json::Value| {
+            project["pipelines"][0]["steps"][0]["command"]["thresholds"][0]["minThreshold"].as_f64()
+        };
+        let read = |path: &std::path::Path| -> serde_json::Value {
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+        };
+
+        let err = run(AnalyzeArgs {
+            project: file.path.clone(),
+            images: Some(images_dir.clone()),
+            threads: Some(1),
+            job_name: Some("wrong".into()),
+            set: vec!["Varroa detection.1.thresholds.0.minThreshold=low".into()],
+        })
+        .expect_err("a value the setting doesn't take must stop the run");
+        assert!(err.to_string().contains("it takes a number"), "{err}");
+        let results_root = file.path.parent().unwrap().join("results");
+        assert!(find_evadb(&results_root).is_none(), "nothing may have run");
+
+        run(AnalyzeArgs {
+            project: file.path.clone(),
+            images: Some(images_dir),
+            threads: Some(1),
+            job_name: Some("set".into()),
+            set: vec!["Varroa detection.1.thresholds.0.minThreshold=123".into()],
+        })
+        .expect("analyze with --set should succeed");
+
+        let evadb = find_evadb(&results_root).expect("analyze should have produced a .evadb file");
+        let snapshot = evadb.with_extension("evaproj");
+        assert_eq!(
+            min_threshold(&read(&snapshot)),
+            Some(123.0),
+            "the run's copy"
+        );
+        assert_eq!(
+            min_threshold(&read(&file.path)),
+            Some(0.0),
+            "the project file"
+        );
+    }
+
     fn find_evadb(dir: &std::path::Path) -> Option<PathBuf> {
         for entry in std::fs::read_dir(dir).ok()? {
             let entry = entry.ok()?;

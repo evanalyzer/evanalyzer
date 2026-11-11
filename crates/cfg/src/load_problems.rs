@@ -254,8 +254,9 @@ fn shorten(message: &str) -> String {
 }
 
 /// The name closest to `typed` (case aside) if it is near enough to be a
-/// typo of it: at most a third of its letters off.
-fn closest<'a>(typed: &str, names: impl Iterator<Item = &'a str>) -> Option<&'a str> {
+/// typo of it: at most a third of its letters off - for "did you mean"
+/// suggestions.
+pub fn closest<'a>(typed: &str, names: impl Iterator<Item = &'a str>) -> Option<&'a str> {
     let typed = typed.to_lowercase();
     let limit = (typed.chars().count() / 3).max(1);
     names

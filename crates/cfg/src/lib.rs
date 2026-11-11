@@ -17,6 +17,7 @@ mod utils;
 pub use load_config::{
     load_ai_learning_settings, load_project_settings, load_project_settings_from_str,
 };
+pub use load_problems::closest as closest_name;
 
 // Constants
 pub const PROJECT_FILE_EXTENSIONS: &str = &"evaproj";

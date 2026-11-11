@@ -100,7 +100,8 @@ pub fn run(args: ProjectInfoArgs, backend: &dyn Backend) -> Result<(), InternalE
 /// editor checks them, and the channels the pipelines read against the
 /// images'. Warnings are printed; errors (and missing images) fail.
 pub fn run_validate(args: ValidateArgs, backend: &dyn Backend) -> Result<(), InternalErrors> {
-    let project = load_project(backend.files(), &args.project)?;
+    let mut project = load_project(backend.files(), &args.project)?;
+    let changes = crate::overrides::apply_overrides(&mut project, &args.set)?;
     let settings = &project.settings;
     let root = settings.images.root.clone();
 
@@ -117,6 +118,9 @@ pub fn run_validate(args: ValidateArgs, backend: &dyn Backend) -> Result<(), Int
 
     let total = settings.images.list.len();
     println!("Project:    {}", args.project.display());
+    for change in &changes {
+        println!("Set:        {change}");
+    }
     println!(
         "Image root: {}",
         root.map(|p| p.display().to_string())
@@ -334,6 +338,7 @@ mod tests {
 
         let result = run_validate(ValidateArgs {
             project: file.path.clone(),
+            set: Vec::new(),
         });
 
         assert!(result.is_ok());
@@ -350,6 +355,7 @@ mod tests {
 
         let result = run_validate(ValidateArgs {
             project: file.path.clone(),
+            set: Vec::new(),
         });
 
         let err = result.expect_err("expected the missing image to be reported as an error");
@@ -359,10 +365,9 @@ mod tests {
         assert!(msg.contains("1 of 1"));
     }
 
-    /// `validate` checks the pipelines too, not only the images: a
-    /// measurement ID with a space is an error the GUI editor shows.
-    #[test]
-    fn run_validate_fails_on_a_pipeline_problem() {
+    /// A project whose pipeline "Nuclei" measures as step 1, the
+    /// measurement named `id`.
+    fn measuring_project(id: &str) -> ProjectSettings {
         use evanalyzer_cfg::core_types::{ImageAddress, PipelineId, StepId};
         use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
         use evanalyzer_cfg::settings::pipeline_settings::{
@@ -370,7 +375,7 @@ mod tests {
         };
 
         let mut command = PipelineCommand::default_for_key("measure_image_colocalization").unwrap();
-        *command.measurement_id_mut().unwrap() = "bad name".into();
+        *command.measurement_id_mut().unwrap() = id.into();
         let mut settings = ProjectSettings::default();
         settings.pipelines.push(PipelineSettings {
             id: PipelineId(1),
@@ -384,16 +389,53 @@ mod tests {
                 content: StepContent::Command(command),
             }],
         });
-        let file = TempProjectFile::new(&settings);
+        settings
+    }
 
-        let result = run_validate(ValidateArgs {
+    fn validate_with(file: &TempProjectFile, set: &[&str]) -> Result<(), InternalErrors> {
+        run_validate(ValidateArgs {
             project: file.path.clone(),
-        });
+            set: set.iter().map(|s| s.to_string()).collect(),
+        })
+    }
+
+    /// `validate` checks the pipelines too, not only the images: a
+    /// measurement ID with a space is an error the GUI editor shows.
+    #[test]
+    fn run_validate_fails_on_a_pipeline_problem() {
+        let file = TempProjectFile::new(&measuring_project("bad name"));
 
         assert!(
-            result.is_err(),
+            validate_with(&file, &[]).is_err(),
             "validate passed a project whose measurement ID is invalid"
         );
+    }
+
+    /// `validate --set` checks the project as `analyze --set` would run it:
+    /// an override can make a problem or fix one; the file stays as it is.
+    #[test]
+    fn run_validate_checks_the_project_with_its_overrides() {
+        let good = TempProjectFile::new(&measuring_project("coloc"));
+        assert!(validate_with(&good, &[]).is_ok());
+        assert!(
+            validate_with(&good, &["Nuclei.1.id=bad name"]).is_err(),
+            "the override's problem must be found"
+        );
+
+        let bad = TempProjectFile::new(&measuring_project("bad name"));
+        let before = std::fs::read_to_string(&bad.path).unwrap();
+        validate_with(&bad, &["Nuclei.1.id=coloc"]).expect("the override fixes the problem");
+        assert_eq!(std::fs::read_to_string(&bad.path).unwrap(), before);
+    }
+
+    /// An override that doesn't apply is reported like in `analyze`.
+    #[test]
+    fn run_validate_reports_an_override_that_does_not_apply() {
+        let file = TempProjectFile::new(&measuring_project("coloc"));
+
+        let err = validate_with(&file, &["Nuclei.7.id=x"]).unwrap_err();
+
+        assert!(err.to_string().contains("has no step 7"), "{err}");
     }
 
     /// A backend whose user folder (settings) is in `home`, with `author`

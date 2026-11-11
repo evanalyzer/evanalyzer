@@ -13,6 +13,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 mod args;
 mod commands;
+mod overrides;
 mod table;
 
 pub use args::{CliCommand, JobsSubCommand, ProjectSubCommand, ResultsSubCommand};

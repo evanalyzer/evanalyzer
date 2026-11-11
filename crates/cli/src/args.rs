@@ -91,6 +91,16 @@ pub struct AnalyzeArgs {
     /// If omitted, a random two-word name is generated.
     #[arg(long)]
     pub job_name: Option<String>,
+
+    /// Change a step's setting for this run (repeatable)
+    ///
+    /// E.g. `--set "Varroa detection.9.minSize=100"`: the pipeline's name,
+    /// the step's `id` in the project file, the setting's name there (or as
+    /// in the editor, `min_size`) and the value. The project file stays as
+    /// it is; the run's copy of it next to the results records the values
+    /// it ran with.
+    #[arg(long = "set", value_name = "SETTING=VALUE")]
+    pub set: Vec<String>,
 }
 
 #[derive(Args)]
@@ -162,6 +172,14 @@ pub struct ValidateArgs {
     /// Project file (.evaproj) to validate
     #[arg(long)]
     pub project: PathBuf,
+
+    /// Check the project with a step's setting changed (repeatable)
+    ///
+    /// As `analyze --set`, e.g. `--set "Varroa detection.9.minSize=100"`:
+    /// checks the project as `analyze` with these overrides would run it.
+    /// The project file stays as it is.
+    #[arg(long = "set", value_name = "SETTING=VALUE")]
+    pub set: Vec<String>,
 }
 
 #[derive(Args)]
