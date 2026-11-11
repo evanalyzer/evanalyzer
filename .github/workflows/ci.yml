@@ -64,11 +64,13 @@ jobs:
       - name: Run tests with coverage instrumentation
         env:
           LD_LIBRARY_PATH: ${{ github.workspace }}/libs/libtorch/lib
-          # The instrumented build got OOM-killed (exit 137) on the runner.
-          # Coverage needs no debug info, and fewer parallel rustc/linker
-          # processes keep the peak below the runner's RAM.
+          # The instrumented build got OOM-killed (exit 137 / SIGKILL) on the
+          # runner. Coverage needs no debug info. One rustc at a time: the
+          # generated UI code (evanalyzer_gui_slint) alone peaks at ~10.8 GB
+          # (measured 2026-11-11, 10.4 GB without coverage), so any second
+          # rustc next to it passes the runner's 16 GB.
           CARGO_PROFILE_DEV_DEBUG: "0"
-          CARGO_BUILD_JOBS: "2"
+          CARGO_BUILD_JOBS: "1"
         # `libtorch-in-process`: the AI model steps' tests run libtorch in
         # the test process; `libtorch`: the plugin loader, whose test builds
         # and loads the real plugin.
