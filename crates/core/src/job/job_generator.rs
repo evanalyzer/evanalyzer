@@ -1844,6 +1844,7 @@ mod tests {
                 ObjectId(id),
                 Object::new(ObjectInit {
                     id: ObjectId(id),
+                    object_class: [evanalyzer_cfg::core_types::ObjectClass::Global(1)].into(),
                     area: 1,
                     bbox: [0, 0, 1, 1],
                     ..Default::default()

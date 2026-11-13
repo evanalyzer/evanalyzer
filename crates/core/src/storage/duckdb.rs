@@ -9,6 +9,7 @@
 
 use crate::ImageDimensionality;
 use crate::object::{Intensity, Object};
+use crate::pipeline::object_cache::ObjectCache;
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::pipeline::pipeline_measure::{Measurement, MeasurementRegion, MeasurementValues};
 use crate::storage::stored_object::{ObjectFilter, StoredObject, TrackAssignment};
@@ -852,6 +853,22 @@ fn intensity_stats(v: &Intensity) -> [f64; INTENSITY_COLUMNS.len()] {
 /// `coloc_partner_ids` / `parent_ids` key for a class without a number.
 const UNSET_CLASS_KEY: i32 = -1;
 
+/// Whether `object` is stored: only an object with a project class is a
+/// result. One without (none left, or only `Unset`) gets no row, no
+/// measurement rows, and no stored object refers to it.
+fn is_stored(object: &Object) -> bool {
+    object
+        .object_classes()
+        .iter()
+        .any(|c| matches!(c, ObjectClass::Global(_)))
+}
+
+/// Whether `id` is an object of `objects` that isn't stored - a reference
+/// to it is left out. An object not in `objects` (another plane's) stays.
+fn refers_to_unstored(objects: &ObjectCache, id: &ObjectId) -> bool {
+    objects.get(id).is_some_and(|object| !is_stored(object))
+}
+
 /// A class as a `coloc_partner_ids` / `parent_ids` key.
 fn class_key(class: &ObjectClass) -> i32 {
     match class {
@@ -945,12 +962,17 @@ impl ObjectColumns {
         }
     }
 
-    /// One row of `parent_ids`: parent class -> parent object id.
+    /// One row of `parent_ids`: parent class -> parent object id, without
+    /// the parents that aren't stored.
     fn append_parents(
         &mut self,
         parents: &IndexMap<ObjectClass, ObjectId>,
+        objects: &ObjectCache,
     ) -> Result<(), InternalErrors> {
         for (class, id) in parents {
+            if refers_to_unstored(objects, id) {
+                continue;
+            }
             self.parent_ids.keys().append_value(class_key(class));
             self.parent_ids
                 .values()
@@ -962,15 +984,22 @@ impl ObjectColumns {
             .map_err(|e| InternalErrors::Io(e.to_string()))
     }
 
-    /// One row of `coloc_partner_ids`: partner class -> partner object ids.
+    /// One row of `coloc_partner_ids`: partner class -> partner object ids,
+    /// without the partners that aren't stored (a class left without any
+    /// is left out).
     fn append_coloc(
         &mut self,
         colocalized_with: &IndexMap<ObjectClass, Vec<ObjectId>>,
+        objects: &ObjectCache,
     ) -> Result<(), InternalErrors> {
         for (class, ids) in colocalized_with {
+            let stored = |id: &&ObjectId| !refers_to_unstored(objects, id);
+            if !ids.is_empty() && !ids.iter().any(|id| stored(&id)) {
+                continue;
+            }
             self.coloc_partner_ids.keys().append_value(class_key(class));
             let partners = self.coloc_partner_ids.values();
-            for id in ids {
+            for id in ids.iter().filter(stored) {
                 partners
                     .values()
                     .append_value(uuid_bytes(id))
@@ -1303,8 +1332,15 @@ impl<'a> MeasurementRows<'a> {
     }
 
     /// Adds a row; a value that isn't a number (NaN, infinite) is NULL.
-    /// `position`: where on a profile the value is (else `None`).
-    fn push(&mut self, row: MeasurementRow<'_>, value: f64, position: Option<f64>) {
+    /// `position`: where on a profile the value is (else `None`). Nothing
+    /// for an object that isn't stored; a related object that isn't stored
+    /// is NULL.
+    fn push(&mut self, mut row: MeasurementRow<'_>, value: f64, position: Option<f64>) {
+        if let Some(id) = row.related
+            && refers_to_unstored(&self.cache.object_cache, id)
+        {
+            row.related = None;
+        }
         // An object's classes are cached by id - referenced here, not copied
         // per row.
         if let (RowRegion::Object, Some(id)) = (&row.region, row.object)
@@ -1324,6 +1360,11 @@ impl<'a> MeasurementRows<'a> {
             }
             RowRegion::Object => row.object.and_then(|id| self.object_classes.get(id)),
         };
+        // An object without a project class (no class id) isn't stored.
+        if matches!(row.region, RowRegion::Object) && classes.is_some_and(|(_, ids)| ids.is_empty())
+        {
+            return;
+        }
         let c = &mut self.columns;
         c.image_name.append_value(&self.image_name);
         c.image_rel_path.append_value(&self.image_rel_path);
@@ -1753,7 +1794,7 @@ impl DuckDbExporter {
                 }
             }
             c.object_class_id.append(true);
-            c.append_parents(object.parents())?;
+            c.append_parents(object.parents(), &cache.object_cache)?;
             c.track_id.append_value(object.track.id.0);
             c.f64(F64::CentroidXPx, centroid_x_px);
             c.f64(F64::CentroidYPx, centroid_y_px);
@@ -1801,7 +1842,7 @@ impl DuckDbExporter {
             c.f64_opt(F64::PixelSizeZNm, pxz);
             c.image_bit_depth.append_value(nr_of_bits as u8);
             c.append_intensities(&object.intensities, bit_max);
-            c.append_coloc(&object.colocalized_with)?;
+            c.append_coloc(&object.colocalized_with, &cache.object_cache)?;
             c.append_measurement_values(measurement_values.get(&object.id));
             if self.store_masks {
                 c.mask
@@ -1852,8 +1893,13 @@ impl PipelineResultExporter for DuckDbExporter {
 
     fn export(&self, cache: &GlobalPipelineCache) -> Result<(), InternalErrors> {
         let start = Instant::now();
-        let object_count = cache.object_cache.len();
-        let mut objects = cache.object_cache.values().peekable();
+        // Objects without a project class aren't results (see `is_stored`).
+        let mut objects = cache
+            .object_cache
+            .values()
+            .filter(|object| is_stored(object))
+            .peekable();
+        let mut object_count = 0usize;
 
         // The first batch - for typical images every object - is built
         // before taking the connection lock: building the Arrow columns is
@@ -1889,11 +1935,13 @@ impl PipelineResultExporter for DuckDbExporter {
             let mut app = tx
                 .appender("objects")
                 .map_err(|e| InternalErrors::Io(e.to_string()))?;
+            object_count += batch.num_rows();
             app.append_record_batch(batch)
                 .map_err(|e| InternalErrors::Io(e.to_string()))?;
             while let Some(batch) =
                 self.next_object_batch(cache, &mut objects, &measurement_values)?
             {
+                object_count += batch.num_rows();
                 app.append_record_batch(batch)
                     .map_err(|e| InternalErrors::Io(e.to_string()))?;
             }
@@ -2486,6 +2534,7 @@ mod tests {
         cache
             .object_cache
             .insert(ObjectId(2), object_in_classes(2, &[1, 3]));
+        // Without a class: not stored (`an_object_without_a_class_is_not_stored`).
         cache
             .object_cache
             .insert(ObjectId(3), object_in_classes(3, &[]));
@@ -2512,7 +2561,7 @@ mod tests {
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap();
-        assert_eq!(classes, ["[]", "[4]", "[1, 3]"]);
+        assert_eq!(classes, ["[4]", "[1, 3]"]);
     }
 
     fn cache_with_objects(image: &str, count: u128) -> GlobalPipelineCache {
@@ -3567,6 +3616,7 @@ mod tests {
         };
         let flat = Object::new(crate::object::ObjectInit {
             id: ObjectId(1),
+            object_class: [ObjectClass::Global(1)].into(),
             bbox: [0, 0, 1, 0],
             mask_data: one(&[true, true]),
             area: 2,
@@ -3576,6 +3626,7 @@ mod tests {
         // A 2 × 1 box over 3 planes: plane 1 (z 5) full, plane 2 (z 6) its first.
         let volume = Object::new(crate::object::ObjectInit {
             id: ObjectId(2),
+            object_class: [ObjectClass::Global(1)].into(),
             bbox: [0, 0, 1, 0],
             mask_data: one(&[false, false, true, true, true, false]),
             area: 3,
@@ -4206,20 +4257,31 @@ mod tests {
         assert_eq!(parent, ObjectId(2).to_string());
     }
 
-    /// A measurement value of an object in no global class has an empty
-    /// class list (names and ids) - `Unset` is no class to group by.
+    /// An object without a project class (none, or only `Unset`) isn't a
+    /// result: no row, no measurement values, and the stored objects and
+    /// values don't refer to it - its parent and partner entries are left
+    /// out, a value related to it has no related object.
     #[test]
-    fn a_measurement_of_an_unclassified_object_has_no_classes() {
+    fn an_object_without_a_class_is_not_stored() {
         use crate::pipeline::pipeline_measure::PipelineMeasurements;
         use evanalyzer_cfg::core_types::{MeasurementInfo, MeasurementTarget, MeasurementUnit};
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("results.evadb");
         let exporter = test_exporter(&path);
         let mut cache = cache_with_objects("a.tif", 0);
+        // 1 and 3 in class 1, 2 without a class (and 4 not even `Unset`).
+        let mut one = object_in_classes(1, &[1]);
+        one.set_parent(ObjectClass::Unset, Some(ObjectId(2)));
+        one.set_parent(ObjectClass::Global(1), Some(ObjectId(3)));
+        one.colocalized_with
+            .insert(ObjectClass::Global(1), vec![ObjectId(2), ObjectId(3)]);
+        one.colocalized_with
+            .insert(ObjectClass::Unset, vec![ObjectId(2)]);
+        cache.object_cache.insert(ObjectId(1), one);
         cache.object_cache.insert(
-            ObjectId(1),
+            ObjectId(2),
             Object::new(ObjectInit {
-                id: ObjectId(1),
+                id: ObjectId(2),
                 object_class: [ObjectClass::Unset].into(),
                 bbox: [0, 0, 1, 1],
                 mask_data: BitVec::<u64, Lsb0>::repeat(true, 4),
@@ -4227,6 +4289,12 @@ mod tests {
                 ..Default::default()
             }),
         );
+        cache
+            .object_cache
+            .insert(ObjectId(3), object_in_classes(3, &[1]));
+        cache
+            .object_cache
+            .insert(ObjectId(4), object_in_classes(4, &[]));
         let info = MeasurementInfo {
             key: "area_01/area".into(),
             name: "Area".into(),
@@ -4238,26 +4306,22 @@ mod tests {
             related_objects: false,
             profile: false,
         };
+        let value = |object: u128, related: Option<u128>, value: f64| ObjectValue {
+            object: ObjectId(object),
+            value,
+            related: related.map(ObjectId),
+            position: None,
+        };
         cache.measurements = PipelineMeasurements {
-            measurements: vec![
-                Measurement {
-                    info: info.clone(),
-                    values: MeasurementValues::Objects(vec![ObjectValue {
-                        object: ObjectId(1),
-                        value: 4.0,
-                        related: None,
-                        position: None,
-                    }]),
-                },
-                // No values at all: described, no rows.
-                Measurement {
-                    info: MeasurementInfo {
-                        key: "area_01/empty".into(),
-                        ..info
-                    },
-                    values: MeasurementValues::Objects(vec![]),
-                },
-            ],
+            measurements: vec![Measurement {
+                info,
+                values: MeasurementValues::Objects(vec![
+                    value(1, None, 1.0),
+                    value(2, None, 2.0),
+                    value(3, Some(2), 3.0),
+                    value(4, None, 4.0),
+                ]),
+            }],
             z_stack: 0,
             t_stack: 0,
             excluded: None,
@@ -4266,24 +4330,39 @@ mod tests {
         exporter.export(&cache).unwrap();
 
         let conn = shared_connection(&path).unwrap();
-        let rows: Vec<(String, String, String, f64)> = conn
+        let objects: Vec<(String, String, String)> = conn
             .prepare(
-                "SELECT key, object_class_name, CAST(object_class_id AS VARCHAR), value \
-                 FROM measurements",
+                "SELECT CAST(object_id AS VARCHAR), CAST(parent_ids AS VARCHAR), \
+                 CAST(coloc_partner_ids AS VARCHAR) FROM objects ORDER BY object_id",
             )
             .unwrap()
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap();
+        let (one, three) = (ObjectId(1).to_string(), ObjectId(3).to_string());
         assert_eq!(
-            rows,
-            [("area_01/area".into(), "[]".into(), "[]".into(), 4.0)]
+            objects,
+            [
+                (
+                    one.clone(),
+                    format!("{{1={three}}}"),
+                    format!("{{1=[{three}]}}")
+                ),
+                (three.clone(), "{}".into(), "{}".into()),
+            ]
         );
-        let described: i64 = conn
-            .query_row("SELECT count(*) FROM measurement_info", [], |r| r.get(0))
+        let values: Vec<(String, Option<String>, f64)> = conn
+            .prepare(
+                "SELECT CAST(object_id AS VARCHAR), CAST(related_object_id AS VARCHAR), value \
+                 FROM measurements ORDER BY value",
+            )
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
             .unwrap();
-        assert_eq!(described, 2);
+        assert_eq!(values, [(one, None, 1.0), (three, None, 3.0)]);
     }
 
     /// The highest track id outside a class: objects of that class are left
