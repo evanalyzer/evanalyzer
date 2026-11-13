@@ -426,7 +426,7 @@ export component ResultsTracksAllView inherits Rectangle {
                             accessible-label: "Tracks";
                             for track[index] in ResultsState.tracks-all-rows: Rectangle {
                                 height: root.row-h;
-                                background: index == ResultsState.tracks-all-selected ? Ink.selection : row-ta.has-hover ? Ink.hover : transparent;
+                                background: index == ResultsState.tracks-all-selected ? Ink.selection-row : row-ta.has-hover ? Ink.hover : transparent;
                                 accessible-role: list-item;
                                 accessible-label: "Track " + track.id + ", " + track.class-name + ", " + track.image;
                                 accessible-item-selected: index == ResultsState.tracks-all-selected;

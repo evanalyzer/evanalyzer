@@ -24,7 +24,7 @@ component PaletteRow inherits Rectangle {
 
     face := Rectangle {
         border-radius: Ink.radius-md;
-        background: root.selected ? Ink.selection : transparent;
+        background: root.selected ? Ink.selection-row : transparent;
 
         HorizontalLayout {
             padding-left: 10px;
@@ -63,6 +63,14 @@ component PaletteRow inherits Rectangle {
                 color: Ink.text-mute;
                 vertical-alignment: center;
             }
+        }
+        // Selected: the focus color's edge.
+        if root.selected: Rectangle {
+            x: 0px;
+            width: 3px;
+            height: parent.height - 14px;
+            border-radius: 1.5px;
+            background: Ink.focus;
         }
     }
 

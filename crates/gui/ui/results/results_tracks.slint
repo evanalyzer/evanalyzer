@@ -194,7 +194,7 @@ export component ResultsTracksView inherits Rectangle {
                         property <bool> open: index == ResultsState.track-selected && ResultsState.track-card.active;
                         property <bool> family: ResultsState.track-card.from != "" || ResultsState.track-card.into != "";
                         height: !self.open ? root.row-h : root.row-h + root.detail-h + (self.family ? root.family-h : 0);
-                        background: index == ResultsState.track-selected ? Ink.selection : row-ta.has-hover ? Ink.hover : transparent;
+                        background: index == ResultsState.track-selected ? Ink.selection-row : row-ta.has-hover ? Ink.hover : transparent;
                         accessible-role: list-item;
                         accessible-label: "Track " + track.id + ", " + track.frames + " time points, speed " + track.speed;
                         accessible-item-selected: index == ResultsState.track-selected;

@@ -23,7 +23,7 @@ component PlaceRow inherits Rectangle {
 
     height: 32px;
     border-radius: Ink.radius-md;
-    background: root.current ? Ink.selection : ta.has-hover ? Ink.hover : transparent;
+    background: root.current ? Ink.selection-row : ta.has-hover ? Ink.hover : transparent;
     animate background { duration: 80ms; }
 
     HorizontalLayout {
@@ -53,6 +53,14 @@ component PlaceRow inherits Rectangle {
         }
     }
 
+    // Selected: the focus color's edge.
+    if root.current: Rectangle {
+        x: 0px;
+        width: 3px;
+        height: parent.height - 14px;
+        border-radius: 1.5px;
+        background: Ink.focus;
+    }
     ta := TouchArea {
         mouse-cursor: pointer;
         clicked => { root.clicked(); }
@@ -78,7 +86,7 @@ component EntryRow inherits Rectangle {
     callback clicked;
     callback double-clicked;
 
-    background: root.selected ? Ink.selection
+    background: root.selected ? Ink.selection-row
               : ta.has-hover ? Ink.hover
               : root.zebra ? Ink.field : transparent;
     border-radius: Ink.radius-sm;
@@ -128,6 +136,14 @@ component EntryRow inherits Rectangle {
         }
     }
 
+    // Selected: the focus color's edge.
+    if root.selected: Rectangle {
+        x: 0px;
+        width: 3px;
+        height: parent.height - 10px;
+        border-radius: 1.5px;
+        background: Ink.focus;
+    }
     ta := TouchArea {
         clicked => { root.clicked(); }
         double-clicked => { root.double-clicked(); }

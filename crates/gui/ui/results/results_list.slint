@@ -474,7 +474,7 @@ export component ResultsListView inherits Rectangle {
                                 height: 30px;
                                 width: header-layout.width;
 
-                                background: index == ResultsState.list-selected-row ? Ink.selection : ta.has-hover ? Ink.hover : (ResultsState.list-with-coloc-details && row.alternating ? Ink.field : transparent);
+                                background: index == ResultsState.list-selected-row ? Ink.selection-row : ta.has-hover ? Ink.hover : (ResultsState.list-with-coloc-details && row.alternating ? Ink.field : transparent);
                                 opacity: row.disabled ? 0.55 : 1.0;
 
                                 property <bool> row-visible: self.y + self.height >= -body-list.content-y - 3 * self.height
@@ -487,8 +487,8 @@ export component ResultsListView inherits Rectangle {
                                     height: 1px;
                                     x: 0;
                                 }
-                                // Split: the selected row's accent edge.
-                                if ResultsState.split && index == ResultsState.list-selected-row: Rectangle {
+                                // The selected row's accent edge.
+                                if index == ResultsState.list-selected-row: Rectangle {
                                     x: -body-list.content-x;
                                     width: 3px;
                                     background: Ink.focus;

@@ -18,7 +18,7 @@ component SeriesRow inherits Rectangle {
 
     height: 36px;
     border-radius: Ink.radius-md;
-    background: root.current ? Ink.selection : ta.has-hover ? Ink.hover : transparent;
+    background: root.current ? Ink.selection-row : ta.has-hover ? Ink.hover : transparent;
     accessible-role: button;
     accessible-label: root.title;
 
@@ -41,6 +41,14 @@ component SeriesRow inherits Rectangle {
             color: Ink.text-dim;
             vertical-alignment: center;
         }
+    }
+    // Selected: the focus color's edge.
+    if root.current: Rectangle {
+        x: 0px;
+        width: 3px;
+        height: parent.height - 16px;
+        border-radius: 1.5px;
+        background: Ink.focus;
     }
     ta := TouchArea {
         mouse-cursor: pointer;

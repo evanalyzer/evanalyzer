@@ -33,12 +33,20 @@ component ChannelRow inherits Rectangle {
 
     face := Rectangle {
         border-radius: Ink.radius-sm;
-        background: root.selected ? Ink.selection : ta.has-hover ? Ink.hover : transparent;
+        background: root.selected ? Ink.selection-row : ta.has-hover ? Ink.hover : transparent;
 
         ta := TouchArea {
             clicked => {
                 root.select();
             }
+        }
+        // Selected: the focus color's edge.
+        if root.selected: Rectangle {
+            x: 0px;
+            width: 3px;
+            height: parent.height - 8px;
+            border-radius: 1.5px;
+            background: Ink.focus;
         }
 
         HorizontalLayout {

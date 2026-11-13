@@ -373,7 +373,7 @@ component ParamListRow inherits Rectangle {
     callback clicked;
 
     height: 28px;
-    background: root.selected ? Ink.selection : ta.has-hover ? Ink.hover : transparent;
+    background: root.selected ? Ink.selection-row : ta.has-hover ? Ink.hover : transparent;
     accessible-role: list-item;
     accessible-label: root.param.label;
     accessible-item-selected: root.selected;
@@ -381,6 +381,14 @@ component ParamListRow inherits Rectangle {
         root.clicked();
     }
 
+    // Selected: the focus color's edge.
+    if root.selected: Rectangle {
+        x: 0px;
+        width: 3px;
+        height: parent.height - 10px;
+        border-radius: 1.5px;
+        background: Ink.focus;
+    }
     ta := TouchArea {
         mouse-cursor: pointer;
         clicked => {

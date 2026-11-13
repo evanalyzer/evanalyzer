@@ -51,6 +51,9 @@ export global Ink {
     out property <color> hover: root.pick(#F4F4F5, #232327, #34343B);
     /// The selected row, the active tab or chip.
     out property <color> selection: root.pick(#F1F1F3, #26262B, #3A3A42);
+    /// The selected row of a list (images, steps, objects, tables): a
+    /// tint of `focus`, with a `focus` edge at its left.
+    out property <color> selection-row: root.pick(#E5EDFB, #2D2D41, #3E3E5A);
     // -- Lines --
     out property <color> border: root.pick(#E4E4E7, #2E2E33, #3E3E46);
     out property <color> border-soft: root.pick(#F0F0F2, #232327, #34343B);

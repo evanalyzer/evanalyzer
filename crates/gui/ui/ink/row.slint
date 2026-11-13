@@ -64,7 +64,7 @@ export component InkListRow inherits Rectangle {
 
     face := Rectangle {
         border-radius: Ink.radius-sm;
-        background: root.selected ? Ink.selection : ta.has-hover ? Ink.hover : transparent;
+        background: root.selected ? Ink.selection-row : ta.has-hover ? Ink.hover : transparent;
         // The keyboard's ring (a click doesn't focus it).
         border-width: row-keys.has-focus ? 2px : 0px;
         border-color: Ink.focus;
@@ -72,9 +72,9 @@ export component InkListRow inherits Rectangle {
         edge := Rectangle {
             visible: root.selected;
             x: 0px;
-            width: 2px;
+            width: 3px;
             height: parent.height - 10px;
-            border-radius: 1px;
+            border-radius: 1.5px;
             background: Ink.focus;
         }
 

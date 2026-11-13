@@ -156,10 +156,18 @@ component PipelineTab inherits Rectangle {
     face := Rectangle {
         y: root.drag-dy;
         border-radius: Ink.radius-sm;
-        background: root.drag-dy != 0px ? Ink.raised : root.active ? Ink.selection : ta.has-hover ? Ink.hover : transparent;
+        background: root.drag-dy != 0px ? Ink.raised : root.active ? Ink.selection-row : ta.has-hover ? Ink.hover : transparent;
         drop-shadow-blur: root.drag-dy != 0px ? 12px : 0px;
         drop-shadow-color: Ink.shadow;
 
+        // Selected: the focus color's edge.
+        if root.active: Rectangle {
+            x: 0px;
+            width: 3px;
+            height: parent.height - 16px;
+            border-radius: 1.5px;
+            background: Ink.focus;
+        }
         ta := TouchArea {
             mouse-cursor: pointer;
             clicked => {
@@ -2135,7 +2143,7 @@ component StepRow inherits Rectangle {
     // or while open; hidden they keep no room - the values get it.
     property <bool> controls-shown: root.hovered || step.expanded;
     // What's under them, so the values fade out beneath.
-    property <color> line-bg: step.expanded ? Ink.panel : root.selected ? Ink.selection : root.hovered ? Ink.hover : Ink.panel;
+    property <color> line-bg: step.expanded ? Ink.panel : root.selected ? Ink.selection-row : root.hovered ? Ink.hover : Ink.panel;
     // EVA › View › "Step values on a second line": the values under the name.
     property <bool> values-below: LayoutState.step-values-below && step.summary != "";
     property <bool> editable: !PipelinesPanelState.steps-read-only;
@@ -2143,7 +2151,7 @@ component StepRow inherits Rectangle {
         property <int> bp-state: (PipelinesPanelState.breakpoint-pipeline-id == root.pipeline-id && PipelinesPanelState.breakpoint-step-id == root.step.step-id) ? PipelinesPanelState.breakpoint-mode : 0;
 
     property <bool> selected: PipelinesPanelState.selected-step-id == root.idx;
-    background: step.expanded ? Ink.panel : root.selected ? Ink.selection : head-ta.has-hover ? Ink.hover : transparent;
+    background: step.expanded ? Ink.panel : root.selected ? Ink.selection-row : head-ta.has-hover ? Ink.hover : transparent;
     border-width: step.expanded ? 1px : 0px;
     border-color: root.selected ? Ink.text-faint : Ink.border;
     border-radius: Ink.radius-md;
@@ -2160,6 +2168,14 @@ component StepRow inherits Rectangle {
                 border-radius: Ink.radius-md;
             border-width: line-keys.has-focus ? 2px : 0px;
             border-color: Ink.focus;
+            // Selected: the focus color's edge.
+            if root.selected && !step.expanded: Rectangle {
+                x: 0px;
+                width: 3px;
+                height: parent.height - 14px;
+                border-radius: 1.5px;
+                background: Ink.focus;
+            }
                 // Tab reaches it: focused, it's the selected step (the step
                 // shortcuts act on it); Space / Enter opens or closes it.
                 line-keys := FocusScope {

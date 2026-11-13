@@ -23,7 +23,7 @@ component ImageRow inherits Rectangle {
     accessible-label: root.data.name;
     accessible-item-selected: root.selected;
 
-    background: root.selected ? Ink.selection : ta.has-hover ? Ink.hover : transparent;
+    background: root.selected ? Ink.selection-row : ta.has-hover ? Ink.hover : transparent;
     border-radius: Ink.radius-md;
 
     ta := TouchArea {
@@ -31,6 +31,14 @@ component ImageRow inherits Rectangle {
         clicked => {
             root.clicked();
         }
+    }
+    // Selected: the focus color's edge.
+    if root.selected: Rectangle {
+        x: 0px;
+        width: 3px;
+        height: parent.height - 16px;
+        border-radius: 1.5px;
+        background: Ink.focus;
     }
 
     HorizontalLayout {
@@ -203,17 +211,34 @@ export component ImagesListPanel inherits Rectangle {
             }
         }
 
-        if !root.plate: Rectangle {
+        if !root.plate: list-box := Rectangle {
             vertical-stretch: 1;
 
+            // A row clicked here is in view: the list stays where it is.
+            // Chosen elsewhere (the image chip's picker, results, a scan),
+            // the row is centred - only when it is not fully in view.
+            property <int> clicked-index: -1;
             property <int> scroll-index: ImagesListState.scroll_to_image_index;
             changed scroll-index => {
-                if ImagesListState.scroll_to_image_index >= 0 {
-                    list.content-y = clamp(
-                        -(ImagesListState.scroll_to_image_index * root.row-h) + list.visible-height / 2 - root.row-h / 2,
-                        list.visible-height - list.content-height,
-                        0px);
+                let index = ImagesListState.scroll_to_image_index;
+                if index < 0 {
+                    return;
                 }
+                // Consumed, so the same row can be asked for again.
+                ImagesListState.scroll_to_image_index = -1;
+                if index == self.clicked-index {
+                    self.clicked-index = -1;
+                    return;
+                }
+                self.clicked-index = -1;
+                let top = index * root.row-h + list.content-y;
+                if top >= 0px && top + root.row-h <= list.visible-height {
+                    return;
+                }
+                list.content-y = clamp(
+                    -(index * root.row-h) + list.visible-height / 2 - root.row-h / 2,
+                    list.visible-height - list.content-height,
+                    0px);
             }
 
             list := ListView {
@@ -224,6 +249,7 @@ export component ImagesListPanel inherits Rectangle {
                     data: data;
                     selected: ImagesListState.selected_image_index == index;
                     clicked => {
+                        list-box.clicked-index = index;
                         ImagesListState.selected_image_index = index;
                         ImagesListState.image_selected(data.path);
                     }
