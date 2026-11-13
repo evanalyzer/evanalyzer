@@ -214,6 +214,12 @@ export component ImagesListPanel inherits Rectangle {
             property <int> clicked-index: -1;
             property <int> scroll-index: ImagesListState.scroll_to_image_index;
             changed scroll-index => {
+                self.reveal-requested();
+            }
+
+            // Brings the requested row into view (centred) unless it is
+            // already fully shown, and consumes the request.
+            function reveal-requested() {
                 let index = ImagesListState.scroll_to_image_index;
                 if index < 0 {
                     return;
@@ -231,7 +237,9 @@ export component ImagesListPanel inherits Rectangle {
                 }
                 list.content-y = clamp(
                     -(index * root.row-h) + list.visible-height / 2 - root.row-h / 2,
-                    list.visible-height - list.content-height,
+                    // From the rows, not `content-height`: right after the
+                    // panel is built the rows are not made yet.
+                    min(0px, list.visible-height - ImagesListState.images_list.length * root.row-h),
                     0px);
             }
 
@@ -245,6 +253,9 @@ export component ImagesListPanel inherits Rectangle {
                         ImagesListState.list-scroll-y,
                         min(0px, -(ImagesListState.images_list.length * root.row-h)),
                         0px);
+                    // An image picked while the panel was away (e.g. from the
+                    // image chip in Pipelines): its row is shown now.
+                    list-box.reveal-requested();
                 }
                 changed content-y => {
                     ImagesListState.list-scroll-y = self.content-y;

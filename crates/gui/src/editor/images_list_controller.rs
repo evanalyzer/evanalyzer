@@ -1079,6 +1079,55 @@ mod tests {
         assert_eq!(top_row_y("img100"), Some(shown));
     }
 
+    /// Images, then Pipelines, an image picked there (the image chip), then
+    /// Images again: the list shows the picked image's row, not the rows it
+    /// showed before.
+    #[test]
+    fn an_image_picked_in_pipelines_is_in_view_back_in_images() {
+        use crate::{LayoutState, StartState, WorkspaceMode};
+        use i_slint_backend_testing::ElementHandle;
+
+        let ui = crate::editor::test_support::test_ui_window();
+        ui.window().set_size(slint::LogicalSize::new(1500.0, 900.0));
+        ui.global::<StartState>().set_active(false);
+        let layout = ui.global::<LayoutState>();
+        layout.set_steps_open(true);
+        layout.set_panels_hidden(false);
+        layout.set_mode(WorkspaceMode::Images);
+        let rows: Vec<ImageItemData> = (0..300)
+            .map(|i| ImageItemData {
+                name: format!("img{i:03}").into(),
+                path: format!("/data/img{i:03}.tif").into(),
+                ..Default::default()
+            })
+            .collect();
+        let state = ui.global::<ImagesListState>();
+        state.set_images_list(std::rc::Rc::new(slint::VecModel::from(rows)).into());
+        let shown = |name: &str| {
+            ElementHandle::find_by_accessible_label(&ui, name)
+                .next()
+                .is_some()
+        };
+        assert!(shown("img000"), "the list at its top");
+
+        layout.set_mode(WorkspaceMode::Pipelines);
+        assert!(!shown("img000"), "the images panel is away");
+        // What `set_selected_image_index_in_slint_images_list` sets.
+        state.set_selected_image_index(200);
+        state.set_scroll_to_image_index(200);
+        slint::platform::update_timers_and_animations();
+        layout.set_mode(WorkspaceMode::Images);
+        slint::platform::update_timers_and_animations();
+
+        assert!(shown("img200"), "the picked image's row is in view");
+        assert!(!shown("img000"), "not the rows from before");
+        assert_eq!(
+            state.get_scroll_to_image_index(),
+            -1,
+            "the request is consumed"
+        );
+    }
+
     fn make_controller() -> ImagesListController {
         let ui_state = test_ui_state();
         let viewport_controller = Arc::new(ViewportController::new(
