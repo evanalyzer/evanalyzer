@@ -12779,12 +12779,23 @@ mod tests {
 
         ui_state.image_opened();
         drain_ui_queue();
-        assert!(!panel.get_has_breakpoint_image(), "the last image's is gone");
         assert!(
-            controller.viewport_controller.breakpoint_tiles.read().unwrap().is_empty(),
+            !panel.get_has_breakpoint_image(),
+            "the last image's is gone"
+        );
+        assert!(
+            controller
+                .viewport_controller
+                .breakpoint_tiles
+                .read()
+                .unwrap()
+                .is_empty(),
             "and its RAM"
         );
-        assert!(ui.global::<crate::ViewportObjectState>().get_compare(), "compare stays on");
+        assert!(
+            ui.global::<crate::ViewportObjectState>().get_compare(),
+            "compare stays on"
+        );
 
         // Another frame or z-slice: the same.
         controller.viewport_controller.set_breakpoint_channel(
@@ -12802,8 +12813,14 @@ mod tests {
         assert!(panel.get_has_breakpoint_image());
         ui_state.analyzed_plane_changed();
         drain_ui_queue();
-        assert!(!panel.get_has_breakpoint_image(), "the last plane's is gone");
-        assert!(ui.global::<crate::ViewportObjectState>().get_compare(), "compare stays on");
+        assert!(
+            !panel.get_has_breakpoint_image(),
+            "the last plane's is gone"
+        );
+        assert!(
+            ui.global::<crate::ViewportObjectState>().get_compare(),
+            "compare stays on"
+        );
     }
 
     /// A pinned setting is marked on its card and listed in the Tuning
