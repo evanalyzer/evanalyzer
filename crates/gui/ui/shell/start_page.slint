@@ -212,9 +212,12 @@ component RecentRow inherits Rectangle {
             }
 
             Rectangle {
-                width: 72px;
+                // "Locate…" and the ×: a project not found can be
+                // located or taken off the list.
+                width: 88px;
                 if root.project.missing: Text {
-                    x: parent.width - self.width;
+                    // Left of the ×'s room, so it doesn't move on hover.
+                    x: parent.width - 32px - self.width;
                     text: "Locate…";
                     font-size: Ink.fs-body;
                     color: Ink.focus;
@@ -222,7 +225,7 @@ component RecentRow inherits Rectangle {
                     height: parent.height;
                 }
                 // On hover (inside the row's touch area: no flicker).
-                if !root.project.missing && ta.has-hover: InkIconButton {
+                if ta.has-hover: InkIconButton {
                     x: parent.width - self.width;
                     y: (parent.height - self.height) / 2;
                     icon: InkIcons.close;
