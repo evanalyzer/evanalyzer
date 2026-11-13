@@ -565,6 +565,23 @@ impl ProjectExt for ProjectWithRuntime {
                 };
             }
         }
+        // Grayscale mode shows one channel at a time - also over a focus
+        // naming several, or the user's own settings after one: the selected
+        // channel if visible, else the first visible (as `set_grayscale`).
+        if self.images.settings.grayscale {
+            let selected = self.get_selected_image_channel_idx();
+            let keep = if visibilities.get(&selected) == Some(&true) {
+                Some(selected)
+            } else {
+                visibilities
+                    .iter()
+                    .find(|(_, visible)| **visible)
+                    .map(|(id, _)| *id)
+            };
+            for (id, visible) in visibilities.iter_mut() {
+                *visible = Some(*id) == keep;
+            }
+        }
         visibilities
     }
 
@@ -3547,6 +3564,41 @@ mod tests {
         assert_eq!(project.get_image_channel_visibilities(), channels_before);
         assert!(!project.is_class_visible(&ObjectClass::Global(7)));
         assert!(project.is_class_visible(&ObjectClass::Global(3)));
+    }
+
+    /// The channels shown, as indices.
+    fn shown_channels(project: &ProjectWithRuntime) -> Vec<i32> {
+        project.get_image_channel_visibilities_vec()
+    }
+
+    /// Grayscale mode shows one channel at a time, also when a focused
+    /// pipeline reads several - here every channel (a scratchpad pipeline):
+    /// the selected one if the focus shows it.
+    #[test]
+    fn in_grayscale_a_focus_on_several_channels_shows_one() {
+        let mut project = project_with_focus_pipelines();
+        project.set_global_selected_channel(&1);
+        project.set_grayscale(true);
+        project.focus_pipeline(PipelineId(2));
+        assert_eq!(shown_channels(&project), [1]);
+        // A selected channel the focus doesn't show: its first one.
+        project.focus_pipeline(PipelineId(1));
+        project.set_global_selected_channel(&0);
+        assert_eq!(shown_channels(&project), [1]);
+    }
+
+    /// Grayscale switched on while focused, then the focus left: the user's
+    /// own channels come back one at a time, too.
+    #[test]
+    fn grayscale_switched_on_while_focused_stays_one_channel_after_the_focus() {
+        let mut project = project_with_focus_pipelines();
+        project.set_global_preferences(&BTreeMap::from([(0, true), (1, true)]));
+        project.set_global_selected_channel(&0);
+        project.focus_pipeline(PipelineId(2));
+        project.set_grayscale(true);
+        assert_eq!(shown_channels(&project), [0]);
+        project.clear_pipeline_focus();
+        assert_eq!(shown_channels(&project), [0]);
     }
 
     #[test]
