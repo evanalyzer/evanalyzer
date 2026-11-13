@@ -1313,23 +1313,6 @@ dependencies = [
 
 [[package]]
 name = "calamine"
-version = "0.36.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fa68281b1a76b54a62156474adb06bb380a67e07dd60656e3217152b42183f3"
-dependencies = [
- "atoi_simd",
- "byteorder",
- "codepage",
- "encoding_rs",
- "fast-float2",
- "log",
- "quick-xml 0.41.0",
- "serde",
- "zip 8.6.0",
-]
-
-[[package]]
-name = "calamine"
 version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f431b67cba6122a1f7d26b7adafc71bbdf07026095fe811f5efc025d8748e1d8"
@@ -2536,7 +2519,7 @@ name = "evanalyzer_app"
 version = "0.0.0-dev"
 dependencies = [
  "bitvec",
- "calamine 0.36.1",
+ "calamine",
  "chrono",
  "dirs",
  "duckdb",
@@ -2604,7 +2587,7 @@ dependencies = [
 name = "evanalyzer_cli"
 version = "0.0.0-dev"
 dependencies = [
- "calamine 0.38.0",
+ "calamine",
  "chrono",
  "clap",
  "ctrlc",
@@ -6025,7 +6008,6 @@ version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
 dependencies = [
- "encoding_rs",
  "memchr",
 ]
 
@@ -7892,12 +7874,6 @@ dependencies = [
 
 [[package]]
 name = "typed-path"
-version = "0.12.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e28f89b80c87b8fb0cf04ab448d5dd0dd0ade2f8891bae878de66a75a28600e"
-
-[[package]]
-name = "typed-path"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ce898823d8cd0f028662d2f349694b1af0a5cc9be83f1d213a00d3147445e1e"
@@ -9395,20 +9371,6 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "8.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
-dependencies = [
- "crc32fast",
- "flate2",
- "indexmap",
- "memchr",
- "typed-path 0.12.3",
- "zopfli",
-]
-
-[[package]]
-name = "zip"
 version = "9.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec2e3161de27091f18a831d9494e9c53378a34833af5c1dda35ad85849da18d6"
@@ -9419,7 +9381,7 @@ dependencies = [
  "indexmap",
  "memchr",
  "nix",
- "typed-path 0.13.0",
+ "typed-path",
  "windows-sys 0.61.2",
  "zopfli",
 ]

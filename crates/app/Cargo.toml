@@ -43,8 +43,8 @@ libtorch = ["evanalyzer_core/libtorch"]
 tempfile = { workspace = true }
 serde-reflection = { workspace = true }
 rcgen = { workspace = true }
-duckdb = { workspace = true, features = ["bundled", "parquet", "json"] }
-calamine = "0.36.1"
+duckdb = { workspace = true, features = ["bundled", "parquet"] }
+calamine = "0.38.0"
 kornia-image = { workspace = true }
 
 [lib]

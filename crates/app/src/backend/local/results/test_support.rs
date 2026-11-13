@@ -35,25 +35,66 @@ const JSON_DERIVED_COLUMNS: &str = "intensity_sum_gray, intensity_mean_gray, \
 /// colocalization JSON (`{"<class id>": ["<partner uuid>", ...]}`) that
 /// `ObjectSpec`s are written with - keeps the fixtures short to write while
 /// the table has the real per-channel lists and partner map: the JSON's
-/// `<stat>_<kind>` fills `intensity_<stat>_<kind>`. `intensities` and
-/// `coloc` are SQL expressions of type JSON.
+/// `<stat>_<kind>` fills `intensity_<stat>_<kind>`. Each list runs from
+/// channel 0 to the highest channel in the JSON, a missing channel or
+/// stat is NULL. `intensities` and `coloc` are the JSON texts; the result
+/// is SQL literals, parsed here in Rust so the tests need no DuckDB JSON
+/// extension (it would compile DuckDB a second time for this crate's
+/// tests only).
 fn json_columns_sql(intensities: &str, coloc: &str) -> String {
+    let intensities: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(intensities).expect("intensities JSON is an object");
+    let coloc: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(coloc).expect("coloc JSON is an object");
+    let channel_count = intensities
+        .keys()
+        .map(|k| {
+            k.parse::<usize>()
+                .expect("intensities key is a channel number")
+                + 1
+        })
+        .max()
+        .unwrap_or(0);
     let mut columns = Vec::new();
     for stat in ["sum", "mean", "min", "max"] {
         for kind in ["gray"] {
-            columns.push(format!(
-                "list_transform(\
-                     range(0, COALESCE(list_max(list_transform(json_keys({intensities}), \
-                         k -> CAST(k AS INTEGER))) + 1, 0)), \
-                     c -> CAST({intensities} -> CAST(c AS VARCHAR) ->> '{stat}_{kind}' AS DOUBLE))"
-            ));
+            let values: Vec<String> = (0..channel_count)
+                .map(|c| {
+                    match intensities
+                        .get(&c.to_string())
+                        .and_then(|ch| ch.get(format!("{stat}_{kind}")))
+                    {
+                        None | Some(serde_json::Value::Null) => "NULL".to_string(),
+                        Some(v) => format!("{:?}", v.as_f64().expect("intensity is a number")),
+                    }
+                })
+                .collect();
+            columns.push(format!("CAST([{}] AS DOUBLE[])", values.join(", ")));
         }
     }
+    let entries: Vec<String> = coloc
+        .iter()
+        .map(|(class, partners)| {
+            let class: i32 = class.parse().expect("coloc key is a class id");
+            let partners: Vec<String> = partners
+                .as_array()
+                .expect("coloc value is a list of partner ids")
+                .iter()
+                .map(|p| {
+                    format!(
+                        "'{}'",
+                        p.as_str()
+                            .expect("partner id is a string")
+                            .replace('\'', "''")
+                    )
+                })
+                .collect();
+            format!("{class}: [{}]", partners.join(", "))
+        })
+        .collect();
     columns.push(format!(
-        "CAST(map_from_entries(list_transform(json_keys({coloc}), \
-             k -> {{'key': CAST(k AS INTEGER), \
-                   'value': CAST(CAST({coloc} -> k AS VARCHAR[]) AS UUID[])}})) \
-         AS MAP(INTEGER, UUID[]))"
+        "CAST(MAP {{{}}} AS MAP(INTEGER, UUID[]))",
+        entries.join(", ")
     ));
     columns.join(", ")
 }
@@ -275,11 +316,10 @@ pub(super) fn seed_db(path: &Path, objects: &[ObjectSpec]) {
         conn.execute(
             &format!(
                 "UPDATE objects SET ({JSON_DERIVED_COLUMNS}) = ({}) \
-                 FROM (SELECT CAST(? AS JSON) AS ij, CAST(? AS JSON) AS cj) AS j \
                  WHERE object_id = CAST(? AS UUID)",
-                json_columns_sql("j.ij", "j.cj")
+                json_columns_sql(&spec.intensities_json, &spec.coloc_json)
             ),
-            duckdb::params![spec.intensities_json, spec.coloc_json, object_id],
+            duckdb::params![object_id],
         )
         .unwrap_or_else(|e| panic!("intensities/coloc of object {idx}: {e}"));
 
@@ -337,10 +377,7 @@ pub(super) fn seed_db(path: &Path, objects: &[ObjectSpec]) {
 pub(super) fn seed_synthetic_db(path: &Path, images: u32, classes: u32, per_class: u32) {
     let conn = Connection::open(path).expect("open bench db");
     create_schema(&conn);
-    let json_derived = json_columns_sql(
-        &format!("CAST('{CH0_INTENSITIES_JSON}' AS JSON)"),
-        "CAST('{}' AS JSON)",
-    );
+    let json_derived = json_columns_sql(CH0_INTENSITIES_JSON, "{}");
     conn.execute_batch(&format!(
         "INSERT INTO objects (
             image_name, image_rel_path, c_stack, z_stack, t_stack, object_id,
