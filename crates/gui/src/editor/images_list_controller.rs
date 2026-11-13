@@ -1033,6 +1033,52 @@ mod tests {
     }
     use crate::editor::test_support::test_ui_state;
 
+    /// Images, then Pipelines, then Images again: the list shows the rows
+    /// it showed (the panel is rebuilt, its scroll position kept).
+    #[test]
+    fn the_images_list_keeps_its_scroll_position_across_panel_switches() {
+        use crate::{LayoutState, StartState, WorkspaceMode};
+        use i_slint_backend_testing::ElementHandle;
+
+        let ui = crate::editor::test_support::test_ui_window();
+        ui.window().set_size(slint::LogicalSize::new(1500.0, 900.0));
+        ui.global::<StartState>().set_active(false);
+        let layout = ui.global::<LayoutState>();
+        layout.set_steps_open(true);
+        layout.set_panels_hidden(false);
+        layout.set_mode(WorkspaceMode::Images);
+        let rows: Vec<ImageItemData> = (0..300)
+            .map(|i| ImageItemData {
+                name: format!("img{i:03}").into(),
+                path: format!("/data/img{i:03}.tif").into(),
+                ..Default::default()
+            })
+            .collect();
+        let state = ui.global::<ImagesListState>();
+        state.set_images_list(std::rc::Rc::new(slint::VecModel::from(rows)).into());
+        // The top of the panel (y = 0 at the window's top).
+        let top_row_y = |name: &str| {
+            ElementHandle::find_by_accessible_label(&ui, name)
+                .next()
+                .map(|row| row.absolute_position().y)
+        };
+        assert!(top_row_y("img000").is_some(), "the list at its top");
+
+        // Scrolled down by 100 rows (44 px each).
+        state.set_list_scroll_y(-4400.0);
+        layout.set_mode(WorkspaceMode::Pipelines);
+        assert!(top_row_y("img100").is_none(), "the images panel is away");
+        layout.set_mode(WorkspaceMode::Images);
+        let shown = top_row_y("img100").expect("row 100 shown again");
+        assert!(top_row_y("img000").is_none(), "not back at the top");
+        assert_eq!(state.get_list_scroll_y(), -4400.0, "nothing reset it");
+
+        // Shown once more: the very same place.
+        layout.set_mode(WorkspaceMode::Pipelines);
+        layout.set_mode(WorkspaceMode::Images);
+        assert_eq!(top_row_y("img100"), Some(shown));
+    }
+
     fn make_controller() -> ImagesListController {
         let ui_state = test_ui_state();
         let viewport_controller = Arc::new(ViewportController::new(

@@ -238,6 +238,17 @@ export component ImagesListPanel inherits Rectangle {
             list := ListView {
                 x: 4px;
                 width: parent.width - 8px;
+                // Shown again: scrolled as it was (within the rows there are
+                // now, if the list changed meanwhile).
+                init => {
+                    self.content-y = clamp(
+                        ImagesListState.list-scroll-y,
+                        min(0px, -(ImagesListState.images_list.length * root.row-h)),
+                        0px);
+                }
+                changed content-y => {
+                    ImagesListState.list-scroll-y = self.content-y;
+                }
                 for data[index] in ImagesListState.images_list: ImageRow {
                     height: root.row-h;
                     data: data;

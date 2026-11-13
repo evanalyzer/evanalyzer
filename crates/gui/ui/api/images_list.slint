@@ -52,6 +52,9 @@ export global ImagesListState {
     // Index to scroll into view (e.g. when an image is opened from the results
     // table or after a folder scan); -1 means "no scroll request".
     in-out property <int> scroll_to_image_index: -1;
+    // Where the list is scrolled to: the panel is rebuilt when it is shown
+    // again (Pipelines and back), and shows the same rows. UI only.
+    in-out property <length> list-scroll-y: 0px;
     in property <[ImageItemData]> images_list: [];
 
     // -- The plate view (not filled by Rust yet) --
