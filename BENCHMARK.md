@@ -2315,6 +2315,31 @@ covered most of the slide. `tests::whole_image_ram` (now seeded from the
 cells, the tissue-sized one among them): 0.57 bytes per pixel of a larger
 slide (limit 1).
 
+### Grow Regions - optional Gaussian smoothing (2026-11-13)
+
+Setting `smoothing` (None / Gaussian σ): each window is read with a margin of
+the kernel's radius and convolved there (identical to smoothing the whole
+image first). Old build (HEAD) and new build (HEAD + this change only),
+alternated, 10 s apart, 21 threads; other sessions were compiling at times,
+so single runs scatter. Smoothing off gave the old rows hash in every run.
+
+| Benchmark | Old | New, smoothing off | New, σ = 1 px |
+|---|---|---|---|
+| Spots 200 × 2048² (`--spots 5000 --spot-size grow`), wall | 28.6-35.6 s | 29.3-32.6 s | 29.5-34.8 s |
+| same, CPU | 243-286 s | 241-266 s | 253-273 s |
+| same, peak RSS | 4.38-4.62 GB | 4.39-4.63 GB | 4.40-4.57 GB |
+| Spots 200 × 1024² (`--spots 1250`), wall | 7.63-7.76 s | 7.60-7.86 s | 7.64-9.82 s |
+| same, CPU | 52.8-54.1 s | 54.0-54.9 s | 54.3-65.7 s |
+| same, peak RSS | 2.34-2.53 GB | 2.49-2.54 GB | 2.41-2.60 GB |
+| Whole slide `tests/haut --cells grow`, wall | 20.4-23.1 s | 20.2-21.0 s (one 28.7 s) | 21.0-21.9 s (one 30.5 s) |
+| same, CPU | 162-190 s | 167-170 s (one 221 s) | 170-174 s (one 199 s) |
+| same, peak RSS | 7.36-7.52 GB | 7.40-7.45 GB | 7.59-7.76 GB |
+
+Smoothing on costs up to ~25 % on the small spot images (each seed group's
+window is convolved, overlapping margins included) and ~0.25 GB more peak on
+the slide (raw values + row pass per window, 16 bytes per window pixel, up to
+1024² windows on 21 workers) - only when it is switched on.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers

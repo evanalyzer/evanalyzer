@@ -28,7 +28,8 @@
 // `--spot-size circle|grow`: a spot pipeline instead of the threshold -
 // blur, Find Maxima (radius 4, 5 × noise), Extract Objects, then each spot's
 // area from Transform Objects › Draw Circle (10 px) or Grow Regions (half
-// maximum, `--grow-reach` px (default 15), separate).
+// maximum, `--grow-reach` px (default 15), separate; `--grow-sigma N`
+// smooths the channel with a Gaussian of N px first).
 
 use evanalyzer_cfg::core_types::{ImageAddress, SegmentationClass};
 use evanalyzer_cfg::core_types::{ObjectClass, SizeUnits};
@@ -374,6 +375,14 @@ fn spot_steps(how: &str) -> Vec<PipelineCommand> {
             seeds: ObjectClass::Global(1),
             max_distance: arg("--grow-reach", 15) as f32,
             output_class: ObjectClass::Global(2),
+            // `--grow-sigma N`: smoothed with a Gaussian of N px (0: off).
+            smoothing: match arg("--grow-sigma", 0) {
+                0 => ObjectGrowRegionsSmoothingSettings::None,
+                sigma => ObjectGrowRegionsSmoothingSettings::Gaussian {
+                    sigma: sigma as f32,
+                    unit: SizeUnits::Pixels,
+                },
+            },
             ..Default::default()
         }),
         other => panic!("--spot-size circle|grow, not {other}"),

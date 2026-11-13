@@ -449,6 +449,18 @@ impl From<SegmentationWatershedSeedSourceSettings> for SeedSource {
     }
 }
 
+impl From<ObjectGrowRegionsSmoothingSettings> for Smoothing {
+    fn from(_s: ObjectGrowRegionsSmoothingSettings) -> Self {
+        match _s {
+            ObjectGrowRegionsSmoothingSettings::None => Smoothing::None,
+            ObjectGrowRegionsSmoothingSettings::Gaussian { sigma, unit } => Smoothing::Gaussian {
+                sigma: sigma.clamp(0.1, 100.0),
+                unit: unit,
+            },
+        }
+    }
+}
+
 impl From<FiltersIlluminationCorrectionSmoothingMethodSettings> for SmoothingMethod {
     fn from(_s: FiltersIlluminationCorrectionSmoothingMethodSettings) -> Self {
         match _s {
@@ -949,6 +961,7 @@ impl From<GrowRegionsSettings> for GrowRegions {
         GrowRegions {
             seeds: _s.seeds,
             growth_channel: _s.growth_channel,
+            smoothing: Smoothing::from(_s.smoothing),
             objects_are: Polarity::from(_s.objects_are),
             order: GrowthOrder::from(_s.order),
             stop: StopRule::from(_s.stop),

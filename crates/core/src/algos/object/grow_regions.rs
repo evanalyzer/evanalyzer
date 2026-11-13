@@ -30,11 +30,21 @@
 //! depend on how the image is split up: seeds whose reach doesn't meet are
 //! grown apart, a large group of them in blocks with a margin, and a whole
 //! slide never needs a buffer per pixel of the image.
+//!
+//! ## Smoothing
+//! Optionally the growth channel is smoothed with the discrete Gaussian
+//! (Lindeberg 1998) before growing: each window is read with a margin of the
+//! kernel's radius and convolved there (mirrored at the image's border), so
+//! every pixel gets the value it would get from smoothing the whole image -
+//! no image-sized buffer, the same result however the image is split.
 
 use crate::algos::libs::channel_window::{ChannelWindow, Rect};
 use crate::algos::libs::feature_transform::{NearestFeatures, nearest_features};
 use crate::algos::libs::robust_stats::{background_and_noise_in_place, median_in_place};
 use crate::algos::libs::row_runs::{Run, RunRegion, push_row_runs, regions_from_runs};
+use crate::algos::libs::scale_space::{
+    LINDEBERG_1998, Tap, convolve_separable, discrete_gaussian, scale_of_sigma,
+};
 use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
 use crate::object::{Object, ObjectInit};
 use bitvec::prelude::*;
@@ -69,6 +79,12 @@ pub struct GrowRegions {
     /// stain).
     #[cmdsmeta(summary = true)]
     pub growth_channel: ImageChannelIdx,
+
+    /// Smooths the growth channel before growing (noisy images): the
+    /// growth order, stop level, background and noise then come from the
+    /// smoothed pixels. The regions' intensities are still measured on the
+    /// raw channel.
+    pub smoothing: Smoothing,
 
     /// Bright: objects brighter than their background (fluorescence).
     /// Dark: objects darker than their background (brightfield, stains) -
@@ -128,6 +144,25 @@ pub enum Polarity {
     Bright,
     /// Darker than the background (brightfield, stains).
     Dark,
+}
+
+/// How [`GrowRegions`] smooths its growth channel before growing.
+#[derive(Clone, Copy, PartialEq, Debug, CommandsMeta)]
+pub enum Smoothing {
+    /// The raw channel.
+    None,
+    /// A Gaussian of standard deviation `sigma`: noise smaller than σ no
+    /// longer stops or splits a region. As a guide, σ ≈ 1 - 2 px for noisy
+    /// spots, at most about a quarter of the smallest object's radius
+    /// (larger blurs the regions' outlines).
+    Gaussian {
+        /// The standard deviation of the Gaussian.
+        #[cmdsmeta(default = 1.0, min = 0.1, max = 100.0, step = 0.1)]
+        sigma: f32,
+        /// Unit of `sigma`.
+        #[cmdsmeta(default = SizeUnits::Pixels)]
+        unit: SizeUnits,
+    },
 }
 
 /// Which neighbouring pixel joins a [`GrowRegions`] region next.
@@ -236,6 +271,9 @@ const BLOCK: usize = if cfg!(test) { 24 } else { 1024 };
 const SMALL_UNIT_PIXELS: usize = 512 * 512;
 /// RAM per pixel of a unit's window: values, mask, score, distance, label.
 const UNIT_BYTES_PER_PIXEL: u64 = 17;
+/// Extra RAM per window pixel while smoothing: the raw values and the
+/// convolution's row pass (and, with NaNs, the weights' two).
+const SMOOTHING_BYTES_PER_PIXEL: u64 = 16;
 
 impl ImageAlgorithm for GrowRegions {
     fn execute(
@@ -322,6 +360,9 @@ impl ImageAlgorithm for GrowRegions {
     /// scaled median absolute deviation (Hampel 1974).
     fn cite(&self) -> Vec<&'static CitationMetadata> {
         let mut papers = vec![&ADAMS_1994];
+        if matches!(self.smoothing, Smoothing::Gaussian { .. }) {
+            papers.push(&LINDEBERG_1998);
+        }
         if self.order == GrowthOrder::Intensity {
             papers.push(&VINCENT_SOILLE_1991);
         }
@@ -409,8 +450,17 @@ impl GrowRegions {
             }
             StopRule::Noise { noise_factor } => Rule::Noise(noise_factor.max(0.0)),
         };
+        let smoothing = match self.smoothing {
+            Smoothing::None => None,
+            Smoothing::Gaussian { sigma, unit } => {
+                let t = scale_of_sigma(sigma, unit, pixel_size_nm);
+                // t = 0 is the identity: nothing to smooth.
+                (t > 0.0).then(|| discrete_gaussian(t))
+            }
+        };
         Params {
             dark,
+            smoothing,
             similarity: self.order == GrowthOrder::Similarity,
             rule,
             reach,
@@ -428,10 +478,12 @@ enum Rule {
     Noise(f32),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct Params {
     /// Values are turned (1 - v): dark objects become bright.
     dark: bool,
+    /// The taps of the Gaussian the values are smoothed with (`None`: raw).
+    smoothing: Option<Vec<Tap>>,
     similarity: bool,
     rule: Rule,
     /// `max_distance` in pixels.
@@ -440,6 +492,14 @@ struct Params {
 }
 
 impl Params {
+    /// How far (px) smoothing reads beyond a window: the kernel's radius.
+    fn smoothing_margin(&self) -> usize {
+        self.smoothing
+            .as_ref()
+            .and_then(|taps| taps.iter().map(|&(offset, _)| offset).max())
+            .unwrap_or(0)
+    }
+
     /// Whether the background is needed (measured in the ring).
     fn needs_background(&self) -> bool {
         matches!(self.rule, Rule::Relative(_) | Rule::Noise(_))
@@ -765,7 +825,13 @@ impl<'a> Grower<'a> {
             .collect::<Result<_, _>>()?;
         if let Some(largest) = large.iter().map(|u| area(u.window)).max() {
             let available = crate::memory::available_memory_bytes();
-            let bytes = largest as u64 * UNIT_BYTES_PER_PIXEL;
+            let per_pixel = UNIT_BYTES_PER_PIXEL
+                + if self.params.smoothing.is_some() {
+                    SMOOTHING_BYTES_PER_PIXEL
+                } else {
+                    0
+                };
+            let bytes = largest as u64 * per_pixel;
             let at_once =
                 ((available / 4 / bytes.max(1)) as usize).clamp(1, rayon::current_num_threads());
             for batch in large.chunks(at_once) {
@@ -980,7 +1046,10 @@ impl<'a> Grower<'a> {
     /// Reads a unit's window: the values (turned for dark objects) and
     /// which pixels the mask allows.
     fn window(&self, rect: Rect) -> Result<Window, InternalErrors> {
-        let mut values = self.channel.read(self.cache, rect)?;
+        let mut values = match &self.params.smoothing {
+            None => self.channel.read(self.cache, rect)?,
+            Some(taps) => self.smoothed(rect, taps)?,
+        };
         if self.params.dark {
             for v in &mut values {
                 *v = 1.0 - *v;
@@ -1001,6 +1070,56 @@ impl<'a> Grower<'a> {
             values,
             allowed,
         })
+    }
+
+    /// The values of `rect` smoothed with `taps`: read with a margin of the
+    /// kernel's radius (inside the image), convolved, cut back to `rect`.
+    /// A pixel of `rect` then only sees real pixels, or pixels mirrored at
+    /// the image's border - the value smoothing the whole image gives it.
+    /// NaNs (no tile there) stay NaN and are left out of their neighbours'
+    /// sums (the weights of the others scaled back to 1).
+    fn smoothed(&self, rect: Rect, taps: &[Tap]) -> Result<Vec<f32>, InternalErrors> {
+        let margin = self.params.smoothing_margin();
+        let outer = grow_rect(rect, margin, self.channel.extent);
+        let raw = self.channel.read(self.cache, outer)?;
+        let (width, height) = (outer[2] - outer[0], outer[3] - outer[1]);
+        let mut tmp = vec![0.0f32; raw.len()];
+        let mut smooth = vec![0.0f32; raw.len()];
+        let has_nan = raw.iter().any(|v| v.is_nan());
+        if !has_nan {
+            convolve_separable(&raw, &mut smooth, &mut tmp, width, height, taps);
+        } else {
+            // Normalized convolution: Σ w·v over the numbers / Σ w over them.
+            let filled: Vec<f32> = raw
+                .iter()
+                .map(|&v| if v.is_nan() { 0.0 } else { v })
+                .collect();
+            convolve_separable(&filled, &mut smooth, &mut tmp, width, height, taps);
+            let weights: Vec<f32> = raw
+                .iter()
+                .map(|&v| if v.is_nan() { 0.0 } else { 1.0 })
+                .collect();
+            let mut weight = filled;
+            convolve_separable(&weights, &mut weight, &mut tmp, width, height, taps);
+            for ((s, &w), &v) in smooth.iter_mut().zip(&weight).zip(&raw) {
+                *s = if v.is_nan() || w <= 0.0 {
+                    f32::NAN
+                } else {
+                    *s / w
+                };
+            }
+        }
+        drop(tmp);
+        if outer == rect {
+            return Ok(smooth);
+        }
+        let rw = rect[2] - rect[0];
+        let mut values = Vec::with_capacity(area(rect));
+        for y in rect[1]..rect[3] {
+            let start = (y - outer[1]) * width + (rect[0] - outer[0]);
+            values.extend_from_slice(&smooth[start..start + rw]);
+        }
+        Ok(values)
     }
 
     /// Grows one unit.
@@ -1414,6 +1533,7 @@ mod tests {
         GrowRegions {
             seeds: SEED,
             growth_channel: ImageChannelIdx(0),
+            smoothing: Smoothing::None,
             objects_are: Polarity::Bright,
             order: GrowthOrder::Intensity,
             stop: StopRule::Relative { fraction: 0.5 },
@@ -1782,5 +1902,155 @@ mod tests {
             }
             assert!(whole.iter().flatten().count() >= centres.len() / 2);
         }
+    }
+
+    /// `pixel` smoothed over the whole `SIDE × SIDE` image with the
+    /// discrete Gaussian of `sigma` px, mirrored at the border, NaNs left
+    /// out (normalized convolution) - the reference for windowed smoothing.
+    fn smoothed_whole(pixel: impl Fn(usize, usize) -> f32, sigma: f32) -> Vec<f32> {
+        let taps = discrete_gaussian((sigma * sigma) as f64);
+        let raw: Vec<f32> = (0..SIDE * SIDE)
+            .map(|p| pixel(p % SIDE, p / SIDE))
+            .collect();
+        let mut tmp = vec![0.0; raw.len()];
+        let mut out = vec![0.0; raw.len()];
+        if !raw.iter().any(|v| v.is_nan()) {
+            convolve_separable(&raw, &mut out, &mut tmp, SIDE, SIDE, &taps);
+            return out;
+        }
+        let filled: Vec<f32> = raw
+            .iter()
+            .map(|&v| if v.is_nan() { 0.0 } else { v })
+            .collect();
+        let weights: Vec<f32> = raw
+            .iter()
+            .map(|&v| if v.is_nan() { 0.0 } else { 1.0 })
+            .collect();
+        let mut weight = vec![0.0; raw.len()];
+        convolve_separable(&filled, &mut out, &mut tmp, SIDE, SIDE, &taps);
+        convolve_separable(&weights, &mut weight, &mut tmp, SIDE, SIDE, &taps);
+        for ((o, &w), &v) in out.iter_mut().zip(&weight).zip(&raw) {
+            *o = if v.is_nan() || w <= 0.0 {
+                f32::NAN
+            } else {
+                *o / w
+            };
+        }
+        out
+    }
+
+    /// Smoothing inside Grow Regions gives exactly the regions of growing
+    /// through the whole image smoothed beforehand: for every meeting rule,
+    /// small tiles, units split into blocks, seeds at the image's border and
+    /// pixels without a value.
+    #[test]
+    fn smoothing_matches_smoothing_the_whole_image() {
+        let centres: Vec<(u32, u32)> = (0..7)
+            .flat_map(|j| (0..7).map(move |i| (i * 10 + (j % 2) * 3, j * 10 + 1)))
+            .filter(|&(x, y)| x < SIDE as u32 && y < SIDE as u32)
+            .collect();
+        let image = |x: usize, y: usize| {
+            // A block without values (no tile there).
+            if (40..44).contains(&x) && (20..30).contains(&y) {
+                return f32::NAN;
+            }
+            // Pixel noise, so smoothing changes the regions.
+            let mut v = 0.05 + 0.08 * (((x * 7 + y * 13) % 5) as f32);
+            for (k, &(cx, cy)) in centres.iter().enumerate() {
+                let h = 0.3 + 0.1 * (k % 5) as f32;
+                v += spot(x, y, (cx as f32, cy as f32), h, 2.0);
+            }
+            v
+        };
+        let sigma = 1.5;
+        let reference = smoothed_whole(image, sigma);
+        let seeds: Vec<Object> = centres
+            .iter()
+            .enumerate()
+            .map(|(k, &(x, y))| point(k as u128 + 1, x, y))
+            .collect();
+        for meeting in [
+            Meeting::Separate,
+            Meeting::Merge { max_valley: 0.3 },
+            Meeting::Overlap,
+        ] {
+            let make = |smoothing| GrowRegions {
+                stop: StopRule::Relative { fraction: 0.3 },
+                max_distance: 6.0,
+                when_regions_meet: meeting,
+                smoothing,
+                ..command()
+            };
+            let plain = make(Smoothing::None);
+            let smoothing = make(Smoothing::Gaussian {
+                sigma,
+                unit: SizeUnits::Pixels,
+            });
+            let mut pre = cache_with(|x, y| reference[y * SIDE + x], SIDE, seeds.clone());
+            let expected: Vec<_> = run(&plain, &mut pre)
+                .iter()
+                .map(|r| (r.bbox, r.area, r.mask_data.clone()))
+                .collect();
+            let mut raw = cache_with(image, SIDE, seeds.clone());
+            let without: Vec<_> = run(&plain, &mut raw)
+                .iter()
+                .map(|r| (r.bbox, r.area, r.mask_data.clone()))
+                .collect();
+            assert!(
+                expected != without,
+                "{meeting:?}: smoothing changes nothing"
+            );
+            for tile in [SIDE, 20, 7] {
+                let mut cache = cache_with(image, tile, seeds.clone());
+                let got: Vec<_> = run(&smoothing, &mut cache)
+                    .iter()
+                    .map(|r| (r.bbox, r.area, r.mask_data.clone()))
+                    .collect();
+                assert!(got == expected, "{meeting:?}, tiles of {tile}");
+            }
+            assert!(expected.len() >= centres.len() / 2);
+        }
+    }
+
+    /// A one-pixel dark line through a spot (noise, a dead column) stops
+    /// the flood at it; smoothed, the region grows across.
+    #[test]
+    fn smoothing_lets_a_region_cross_a_noise_line() {
+        let image = |x: usize, y: usize| {
+            let v = 0.1 + spot(x, y, (32.0, 32.0), 0.5, 3.0);
+            if x == 34 { 0.1 } else { v }
+        };
+        let make = |smoothing| GrowRegions {
+            stop: StopRule::Relative { fraction: 0.3 },
+            smoothing,
+            ..command()
+        };
+        let mut cache = cache_with(image, SIDE, vec![point(1, 32, 32)]);
+        let raw = run(&make(Smoothing::None), &mut cache);
+        assert!(!contains(&raw[0], 35, 32));
+        let smoothing = make(Smoothing::Gaussian {
+            sigma: 1.0,
+            unit: SizeUnits::Pixels,
+        });
+        let mut cache = cache_with(image, SIDE, vec![point(1, 32, 32)]);
+        let smooth = run(&smoothing, &mut cache);
+        assert!(contains(&smooth[0], 34, 32) && contains(&smooth[0], 35, 32));
+    }
+
+    #[test]
+    fn smoothing_cites_the_discrete_gaussian() {
+        let cites = |command: &GrowRegions| {
+            command
+                .cite()
+                .iter()
+                .any(|c| c.cite_key == LINDEBERG_1998.cite_key)
+        };
+        let mut command = command();
+        assert!(!cites(&command));
+        command.smoothing = Smoothing::Gaussian {
+            sigma: 1.0,
+            unit: SizeUnits::Pixels,
+        };
+        assert!(cites(&command));
     }
 }

@@ -26,7 +26,8 @@
 // `--cells propagation` grows the cells with Propagation (growth channel
 // `--channel`, regularization 0.05, no mask) instead of Voronoi.
 // `--cells grow` with Grow Regions (growth channel `--channel`, Intensity,
-// half maximum, separate, reach `--voronoi-radius`).
+// half maximum, separate, reach `--voronoi-radius`; `--grow-sigma N`
+// smooths the channel with a Gaussian of N px first).
 // `--image-coloc 1` / `--image-texture 1` add Measure Image Colocalization
 // (channels 0 and 1) / Measure Image Texture (channel `--channel`).
 //
@@ -47,7 +48,7 @@ use evanalyzer_cfg::settings::pipeline_command_settings::{
     ExtractObjectsSettings, GaussianBlurSettings, GrowRegionsSettings, LoadChannelSettings,
     MathLoadChannelChannelZProjectionSettings, MeasureColocalizationCostesMethodSettings,
     MeasureImageColocalizationSettings, MeasureImageTextureSettings,
-    MeasureObjectColocalizationSettings, PropagationSettings,
+    MeasureObjectColocalizationSettings, ObjectGrowRegionsSmoothingSettings, PropagationSettings,
     SegmentationThresholdThresholdMethodSettings, ThresholdEntrySettings, ThresholdSettings,
     VoronoiSettings,
 };
@@ -220,6 +221,14 @@ fn main() {
                     growth_channel: ImageChannelIdx(channel),
                     max_distance: voronoi_radius.max(1.0),
                     output_class: ObjectClass::Global(2),
+                    // `--grow-sigma N`: smoothed with a Gaussian of N px (0: off).
+                    smoothing: match arg("--grow-sigma", 0) {
+                        0 => ObjectGrowRegionsSmoothingSettings::None,
+                        sigma => ObjectGrowRegionsSmoothingSettings::Gaussian {
+                            sigma: sigma as f32,
+                            unit: SizeUnits::Pixels,
+                        },
+                    },
                     ..Default::default()
                 }))
             } else if propagation {

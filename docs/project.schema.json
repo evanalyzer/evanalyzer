@@ -1567,6 +1567,13 @@
           "$ref": "#/$defs/ObjectClass",
           "default": "UNSET"
         },
+        "smoothing": {
+          "description": "Smooths the growth channel before growing (noisy images): the\ngrowth order, stop level, background and noise then come from the\nsmoothed pixels. The regions' intensities are still measured on the\nraw channel.",
+          "$ref": "#/$defs/ObjectGrowRegionsSmoothingSettings",
+          "default": {
+            "type": "NONE"
+          }
+        },
         "stop": {
           "description": "Which pixels may join a region (the seed's own pixels always\nbelong to it).\n\nRelative, Noise: the background is the median of the pixels just\nbeyond `max_distance` around the seed (2 px wide ring), the noise\ntheir median absolute deviation × 1.4826.",
           "$ref": "#/$defs/ObjectGrowRegionsStopRuleSettings",
@@ -3283,6 +3290,50 @@
           "description": "Darker than the background (brightfield, stains).",
           "type": "string",
           "const": "DARK"
+        }
+      ]
+    },
+    "ObjectGrowRegionsSmoothingSettings": {
+      "description": "How [`GrowRegions`] smooths its growth channel before growing.",
+      "oneOf": [
+        {
+          "description": "The raw channel.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "NONE"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "A Gaussian of standard deviation `sigma`: noise smaller than σ no\nlonger stops or splits a region. As a guide, σ ≈ 1 - 2 px for noisy\nspots, at most about a quarter of the smallest object's radius\n(larger blurs the regions' outlines).",
+          "type": "object",
+          "properties": {
+            "sigma": {
+              "description": "The standard deviation of the Gaussian.",
+              "type": "number",
+              "format": "float",
+              "maximum": 100,
+              "minimum": 0.1
+            },
+            "type": {
+              "type": "string",
+              "const": "GAUSSIAN"
+            },
+            "unit": {
+              "description": "Unit of `sigma`.",
+              "$ref": "#/$defs/SizeUnits"
+            }
+          },
+          "required": [
+            "type",
+            "sigma",
+            "unit"
+          ]
         }
       ]
     },

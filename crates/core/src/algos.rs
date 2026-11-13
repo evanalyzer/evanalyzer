@@ -106,7 +106,9 @@ pub use self::object::classify_objects::IntensityMetric;
 pub use self::object::coloc_objects::ColocMultiplicity;
 pub use self::object::coloc_objects::ColocalizeObjects;
 pub use self::object::extract_objects::{ExtractClassMapping, ExtractObjects};
-pub use self::object::grow_regions::{GrowRegions, GrowthOrder, Meeting, Polarity, StopRule};
+pub use self::object::grow_regions::{
+    GrowRegions, GrowthOrder, Meeting, Polarity, Smoothing, StopRule,
+};
 pub use self::object::load_annotaed_objects::{AnnotationUse, LoadAnnotatedObjects};
 pub use self::object::object_math::ObjectMath;
 pub use self::object::object_math::ObjectSetOperation;

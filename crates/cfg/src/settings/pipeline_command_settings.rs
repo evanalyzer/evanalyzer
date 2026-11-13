@@ -848,6 +848,34 @@ pub enum SegmentationWatershedSeedSourceSettings {
     Intensity,
 }
 
+/// How [`GrowRegions`] smooths its growth channel before growing.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ObjectGrowRegionsSmoothingSettings {
+    /// The raw channel.
+    #[serde(alias = "none")]
+    None,
+    /// A Gaussian of standard deviation `sigma`: noise smaller than σ no
+    /// longer stops or splits a region. As a guide, σ ≈ 1 - 2 px for noisy
+    /// spots, at most about a quarter of the smallest object's radius
+    /// (larger blurs the regions' outlines).
+    #[serde(rename_all = "camelCase")]
+    #[serde(alias = "gaussian")]
+    Gaussian {
+        /// The standard deviation of the Gaussian.
+        #[schemars(range(min = 0.1, max = 100))]
+        sigma: f32,
+        /// Unit of `sigma`.
+        unit: SizeUnits,
+    },
+}
+
+impl Default for ObjectGrowRegionsSmoothingSettings {
+    fn default() -> Self {
+        Self::None {}
+    }
+}
+
 /// Smoothing applied to the block-reduced field to remove blockiness before
 /// it is used as the correction field.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
@@ -3231,6 +3259,11 @@ pub struct GrowRegionsSettings {
     /// The channel the regions grow through (the raw spot or nucleus
     /// stain).
     pub growth_channel: ImageChannelIdx,
+    /// Smooths the growth channel before growing (noisy images): the
+    /// growth order, stop level, background and noise then come from the
+    /// smoothed pixels. The regions' intensities are still measured on the
+    /// raw channel.
+    pub smoothing: ObjectGrowRegionsSmoothingSettings,
     /// Bright: objects brighter than their background (fluorescence).
     /// Dark: objects darker than their background (brightfield, stains) -
     /// everything below then counts the other way round.
@@ -3274,6 +3307,7 @@ impl Default for GrowRegionsSettings {
         Self {
             seeds: ObjectClass::default(),
             growth_channel: ImageChannelIdx::default(),
+            smoothing: ObjectGrowRegionsSmoothingSettings::default(),
             objects_are: ObjectGrowRegionsPolaritySettings::Bright,
             order: ObjectGrowRegionsGrowthOrderSettings::Intensity,
             stop: ObjectGrowRegionsStopRuleSettings::default(),
