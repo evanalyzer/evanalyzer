@@ -172,7 +172,9 @@ component ObjectRow inherits Rectangle {
     }
 
     if root.table: Rectangle {
-        background: root.selected ? Ink.selection-row : line-ta.has-hover ? Ink.hover : transparent;
+        background: root.selected ? Ink.row-lift : line-ta.has-hover ? Ink.hover : transparent;
+        border-width: root.selected ? 1px : 0px;
+        border-color: Ink.row-lift-ring;
 
         line-ta := TouchArea {
             clicked => {

@@ -51,13 +51,20 @@ export global Ink {
     out property <color> hover: root.pick(#F4F4F5, #232327, #34343B);
     /// The selected row, the active tab or chip.
     out property <color> selection: root.pick(#F1F1F3, #26262B, #3A3A42);
-    /// The selected row of a list (images, steps, objects, tables): a
-    /// tint of `focus` (no edge: blue alone means insert here or the
-    /// keyboard's focus). A selected step has no fill, only a semibold name.
+    /// A tint of `focus` - no longer the list selection (see `row-lift`;
+    /// a selected step has only a semibold name).
     out property <color> selection-row: root.pick(#E5EDFB, #2D2D41, #3E3E5A);
+    /// The selected (in use) row of a list - the open image, the picked
+    /// class or channel, the shown pipeline: a row lifted above the panel
+    /// (white in light, one step lighter in dim / dark) with a thin ring;
+    /// on the pipelines area the ring is `tray-lift-ring`. Hover keeps
+    /// its tone without a ring, so the two never look alike.
+    out property <color> row-lift: root.pick(#FFFFFF, #2A2A2F, #3C3C44);
+    out property <color> row-lift-ring: root.pick(#D4D4D8, #3F3F46, #50505A);
+    out property <color> tray-lift-ring: root.pick(#C9C9CF, #3F3F46, #50505A);
     /// The pipelines area above the steps: a tone darker than `panel`,
     /// so where the pipelines end and the steps begin shows without a line
-    /// of its own; `tray-edge` is its bottom line and the shown row's ring,
+    /// of its own; `tray-edge` is its bottom line and the switcher's outline,
     /// `tray-hover` a hovered row on it. Muted text on it is `text-dim`
     /// (`text-mute` is below 4.5:1 there).
     out property <color> tray: root.pick(#E4E4E7, #111114, #222227);

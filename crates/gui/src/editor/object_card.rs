@@ -224,6 +224,31 @@ fn number(value: f64) -> String {
     }
 }
 
+/// Each channel's own colour (from its wavelength: the project's, else the
+/// image's), whether or not the image is shown in grayscale - as the
+/// Image panel's channel list picks it.
+fn channel_colors(project: &ProjectWithRuntime) -> std::collections::BTreeMap<i32, [f32; 3]> {
+    let channels: Vec<(i32, f32)> = project
+        .get_current_image_channel_settings()
+        .map(|(_, series)| {
+            series
+                .channels
+                .iter()
+                .map(|(id, channel)| {
+                    let project_nm = project.get_emission_wave_length(*id);
+                    let nm = if project_nm > 0.0 {
+                        project_nm
+                    } else {
+                        channel.emission_wave_length.unwrap_or(0.0)
+                    };
+                    (*id, nm)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    evanalyzer_app::prelude::utils::wavelength_colors(&channels)
+}
+
 /// The intensity per channel, in the image's gray values: a colour image
 /// one row (its brightness, as it is measured), else one per channel.
 fn intensity_rows(
@@ -235,7 +260,10 @@ fn intensity_rows(
     let Some(bit_max) = nr_of_bits.and_then(max_gray_value) else {
         return Vec::new();
     };
-    let colors = project.get_channel_display_colors();
+    // The channel's own colour (its wavelength's), also in grayscale mode:
+    // the swatch says which channel a row is, as in the Image panel - not
+    // how it is drawn.
+    let colors = channel_colors(project);
     let names: std::collections::BTreeMap<i32, String> = project
         .get_selected_image_series()
         .map(|series| {
@@ -406,6 +434,39 @@ mod tests {
             mask_data: bitvec::bitvec![u64, bitvec::order::Lsb0; 1; n as usize],
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn the_channel_colours_stay_in_grayscale_mode() {
+        use evanalyzer_app::backends::Backend;
+        let path = crate::editor::test_support::fixture_image_path();
+        let meta = evanalyzer_app::backends::local::LocalBackend::default()
+            .read_image_meta(&path)
+            .unwrap();
+        let mut project = ProjectWithRuntime::default();
+        project.images.root = Some(path.parent().unwrap().to_path_buf());
+        project.add_image_to_list(
+            std::path::Path::new(path.file_name().unwrap()),
+            &path,
+            &meta,
+        );
+        project.set_current_image_path(&path);
+        // As the Image panel does on opening: channels without a wavelength
+        // get one for the project.
+        let ids: Vec<(i32, f32)> = project
+            .get_current_image_channel_settings()
+            .map(|(_, series)| series.channels.keys().map(|id| (*id, 0.0)).collect())
+            .unwrap_or_default();
+        project.assign_missing_wavelengths(&ids);
+        let colored = channel_colors(&project);
+        assert!(colored.len() > 1, "the fixture has several channels");
+        assert!(
+            colored.values().any(|c| c != &[1.0, 1.0, 1.0]),
+            "the channels have colours"
+        );
+
+        project.set_grayscale(true);
+        assert_eq!(channel_colors(&project), colored, "grayscale keeps them");
     }
 
     #[test]

@@ -564,9 +564,10 @@ impl PipelinesController {
             // New pipeline at a place in the order (the insert line, New
             // above / below)
             let manager = self.clone();
-            ui.global::<PipelinesPanelState>().on_insert_pipeline(move |index| {
-                manager.new_pipeline_at(Some(index.max(0) as usize));
-            });
+            ui.global::<PipelinesPanelState>()
+                .on_insert_pipeline(move |index| {
+                    manager.new_pipeline_at(Some(index.max(0) as usize));
+                });
 
             // Move a pipeline to a place in the order (Move to top / bottom)
             let manager = self.clone();
@@ -593,7 +594,8 @@ impl PipelinesController {
                     let state = ui.global::<PipelinesPanelState>();
                     let pipelines = state.get_pipelines();
                     let ids: Vec<i32> = pipelines.iter().map(|p| p.id).collect();
-                    let Some(next) = neighbour_pipeline(&ids, state.get_active_pipeline_id(), delta)
+                    let Some(next) =
+                        neighbour_pipeline(&ids, state.get_active_pipeline_id(), delta)
                     else {
                         return;
                     };
@@ -4602,7 +4604,9 @@ impl PipelinesController {
         let (next_id, at) = {
             let project = self.app_state.get_project();
             let next_id = project.pipelines.iter().map(|p| p.id.0).max().unwrap_or(0) + 1;
-            let at = index.unwrap_or(project.pipelines.len()).min(project.pipelines.len());
+            let at = index
+                .unwrap_or(project.pipelines.len())
+                .min(project.pipelines.len());
             (next_id, at)
         };
         let ui_weak = self.ui.clone();
@@ -7438,7 +7442,10 @@ fn switcher_items(pipelines: &[Pipeline], query: &str) -> Vec<crate::SwitcherIte
         .iter()
         .enumerate()
         .filter(|(_, p)| query.is_empty() || p.name.to_lowercase().contains(&query))
-        .map(|(i, p)| crate::SwitcherItem { pipeline: p.clone(), number: i as i32 + 1 })
+        .map(|(i, p)| crate::SwitcherItem {
+            pipeline: p.clone(),
+            number: i as i32 + 1,
+        })
         .collect()
 }
 
@@ -7500,12 +7507,20 @@ mod pipeline_list_tests {
     fn the_switcher_finds_pipelines_by_name_and_keeps_their_place() {
         let pipelines: Vec<Pipeline> = ["Cell", "Nuclei", "Cell spots"]
             .iter()
-            .map(|name| Pipeline { name: (*name).into(), ..Default::default() })
+            .map(|name| Pipeline {
+                name: (*name).into(),
+                ..Default::default()
+            })
             .collect();
         let found = switcher_items(&pipelines, " cell ");
-        let got: Vec<(String, i32)> =
-            found.iter().map(|it| (it.pipeline.name.to_string(), it.number)).collect();
-        assert_eq!(got, [("Cell".to_string(), 1), ("Cell spots".to_string(), 3)]);
+        let got: Vec<(String, i32)> = found
+            .iter()
+            .map(|it| (it.pipeline.name.to_string(), it.number))
+            .collect();
+        assert_eq!(
+            got,
+            [("Cell".to_string(), 1), ("Cell spots".to_string(), 3)]
+        );
         assert_eq!(switcher_items(&pipelines, "").len(), 3);
         assert!(switcher_items(&pipelines, "xyz").is_empty());
     }
@@ -9061,7 +9076,11 @@ mod tests {
         assert_eq!(edit.get_pipeline_name(), "Pipeline 2");
         assert_eq!(edit.get_source_type(), 2, "channel source");
         assert_eq!(active_dialog(&ui), DialogType::PipelineEdit);
-        assert_eq!(ui_state.get_project().pipelines.len(), 1, "not made before Add");
+        assert_eq!(
+            ui_state.get_project().pipelines.len(),
+            1,
+            "not made before Add"
+        );
 
         edit.invoke_confirm();
         drain_ui_queue();

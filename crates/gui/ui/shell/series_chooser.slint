@@ -18,7 +18,9 @@ component SeriesRow inherits Rectangle {
 
     height: 36px;
     border-radius: Ink.radius-md;
-    background: root.current ? Ink.selection-row : ta.has-hover ? Ink.hover : transparent;
+    background: root.current ? Ink.row-lift : ta.has-hover ? Ink.hover : transparent;
+    border-width: root.current ? 1px : 0px;
+    border-color: Ink.row-lift-ring;
     accessible-role: button;
     accessible-label: root.title;
 

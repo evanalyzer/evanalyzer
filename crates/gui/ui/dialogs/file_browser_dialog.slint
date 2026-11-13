@@ -23,7 +23,9 @@ component PlaceRow inherits Rectangle {
 
     height: 32px;
     border-radius: Ink.radius-md;
-    background: root.current ? Ink.selection-row : ta.has-hover ? Ink.hover : transparent;
+    background: root.current ? Ink.row-lift : ta.has-hover ? Ink.hover : transparent;
+    border-width: root.current ? 1px : 0px;
+    border-color: Ink.row-lift-ring;
     animate background { duration: 80ms; }
 
     HorizontalLayout {
@@ -78,9 +80,11 @@ component EntryRow inherits Rectangle {
     callback clicked;
     callback double-clicked;
 
-    background: root.selected ? Ink.selection-row
+    background: root.selected ? Ink.row-lift
               : ta.has-hover ? Ink.hover
               : root.zebra ? Ink.field : transparent;
+    border-width: root.selected ? 1px : 0px;
+    border-color: Ink.row-lift-ring;
     border-radius: Ink.radius-sm;
 
     HorizontalLayout {

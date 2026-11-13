@@ -23,7 +23,9 @@ component ImageRow inherits Rectangle {
     accessible-label: root.data.name;
     accessible-item-selected: root.selected;
 
-    background: root.selected ? Ink.selection-row : ta.has-hover ? Ink.hover : transparent;
+    background: root.selected ? Ink.row-lift : ta.has-hover ? Ink.hover : transparent;
+    border-width: root.selected ? 1px : 0px;
+    border-color: Ink.row-lift-ring;
     border-radius: Ink.radius-md;
 
     ta := TouchArea {

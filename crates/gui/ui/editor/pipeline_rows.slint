@@ -68,7 +68,7 @@ export component SourcePill inherits Rectangle {
 // A pipeline's row: its place, name, source, steps on/total and the eye
 // (in the run or not). Hovered: the number turns into the drag grip and ⋯
 // takes the count's place - fixed columns, so the source label never moves.
-// The shown pipeline is a white row with a ring.
+// The shown pipeline is a lifted row with a ring (as the open image).
 export component PipelineRow inherits Rectangle {
     in property <Pipeline> pipeline;
     // Its place in the order, 1-based.
@@ -113,13 +113,15 @@ export component PipelineRow inherits Rectangle {
     face := Rectangle {
         y: root.drag-dy;
         border-radius: Ink.radius-sm;
-        background: root.dragging || root.active ? Ink.panel
+        // Shown: the lifted row with a ring, as the open image or the picked
+        // class - one look for 'in use' in every list.
+        background: root.dragging ? Ink.panel
+            : root.active ? Ink.row-lift
             : root.hovered || root.cursor ? (root.on-tray ? Ink.tray-hover : Ink.hover) : transparent;
-        border-width: root.active ? 1px : root.cursor ? 1px : 0px;
-        border-color: root.cursor ? Ink.focus : root.on-tray ? Ink.tray-edge : Ink.border;
-        drop-shadow-blur: root.dragging ? 12px : root.active && root.on-tray ? 2px : 0px;
-        drop-shadow-offset-y: root.active && !root.dragging ? 1px : 0px;
-        drop-shadow-color: root.dragging ? Ink.shadow : Ink.shadow.with-alpha(0.12);
+        border-width: root.cursor || root.active ? 1px : 0px;
+        border-color: root.cursor ? Ink.focus : root.on-tray ? Ink.tray-lift-ring : Ink.row-lift-ring;
+        drop-shadow-blur: root.dragging ? 12px : 0px;
+        drop-shadow-color: Ink.shadow;
 
         ta := TouchArea {
             mouse-cursor: pointer;
@@ -191,7 +193,7 @@ export component PipelineRow inherits Rectangle {
                     horizontal-stretch: 1;
                     text: root.pipeline.name;
                     font-size: Ink.fs-body;
-                    font-weight: root.active ? 600 : 400;
+                    font-weight: 400;
                     color: Ink.text;
                     opacity: root.dim;
                     overflow: elide;

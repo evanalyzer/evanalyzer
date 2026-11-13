@@ -24,7 +24,9 @@ component PaletteRow inherits Rectangle {
 
     face := Rectangle {
         border-radius: Ink.radius-md;
-        background: root.selected ? Ink.selection-row : transparent;
+        background: root.selected ? Ink.row-lift : transparent;
+        border-width: root.selected ? 1px : 0px;
+        border-color: Ink.row-lift-ring;
 
         HorizontalLayout {
             padding-left: 10px;
