@@ -38,6 +38,7 @@ pub use self::filters::color_deconvolution::{ColorDeconvolution, StainOutput, St
 pub use self::filters::color_filter::ColorFilterCommand;
 pub use self::filters::color_filter::{HsvBounds, HsvRange, hsv_range_around};
 pub use self::filters::color_to_grayscale::{ColorToGrayscale, GrayscaleMethod};
+pub use self::filters::difference_of_gaussians::DifferenceOfGaussians;
 pub use self::filters::edge_detection_canny::EdgeDetectionCanny;
 pub use self::filters::edge_detection_sobel::EdgeDetectionSobel;
 pub use self::filters::enhance_contrast::EnhanceContrast;

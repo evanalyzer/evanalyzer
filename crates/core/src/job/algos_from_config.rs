@@ -762,6 +762,15 @@ impl From<ConnectedComponentsSettings> for ConnectedComponents {
     }
 }
 
+impl From<DifferenceOfGaussiansSettings> for DifferenceOfGaussians {
+    fn from(_s: DifferenceOfGaussiansSettings) -> Self {
+        DifferenceOfGaussians {
+            sigma: _s.sigma.clamp(0.1, 1000.0),
+            unit: _s.unit,
+        }
+    }
+}
+
 impl From<DistanceTransformSettings> for DistanceTransform {
     fn from(_s: DistanceTransformSettings) -> Self {
         DistanceTransform {
@@ -1533,6 +1542,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         ))),
         PipelineCommand::ConnectedComponents(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::ConnectedComponents::from(settings),
+        ))),
+        PipelineCommand::DifferenceOfGaussians(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::DifferenceOfGaussians::from(settings),
         ))),
         PipelineCommand::DistanceTransform(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::DistanceTransform::from(settings),

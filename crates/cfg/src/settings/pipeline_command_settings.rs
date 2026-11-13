@@ -1289,6 +1289,38 @@ impl Default for ColorToGrayscaleSettings {
     }
 }
 
+/// Enhances spots of one size with a band-pass: a slightly blurred minus a
+/// more blurred copy of the image keeps the details of a spot's size and
+/// removes finer noise and coarser background and structures.
+///
+/// [Difference of Gaussians] -> [Find Maxima] -> [Extract Objects]
+///
+/// Bright spots become positive peaks, dark spots negative ones, flat
+/// background 0. Measure intensities on the original channel, not on this
+/// image.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[serde(default)]
+#[serde(rename_all = "camelCase")]
+pub struct DifferenceOfGaussiansSettings {
+    /// The scale σ of the spots to enhance (the narrower Gaussian; the
+    /// wider one is 1.6 σ); as a guide, σ ≈
+    /// spot radius / √2 (1.4 for spots of 4 px). Smaller details count as
+    /// noise, larger ones as background.
+    #[schemars(range(min = 0.1, max = 1000))]
+    pub sigma: f32,
+    /// Unit `sigma` is expressed in.
+    pub unit: SizeUnits,
+}
+
+impl Default for DifferenceOfGaussiansSettings {
+    fn default() -> Self {
+        Self {
+            sigma: 1.5f32,
+            unit: SizeUnits::Pixels,
+        }
+    }
+}
+
 /// A command that calculates the Euclidean Distance Map (EDM) of an f32 image.
 ///
 /// This algorithm identifies pixels below a threshold as "background" and

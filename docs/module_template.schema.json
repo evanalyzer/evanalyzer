@@ -606,6 +606,25 @@
         }
       }
     },
+    "DifferenceOfGaussiansSettings": {
+      "description": "Enhances spots of one size with a band-pass: a slightly blurred minus a\nmore blurred copy of the image keeps the details of a spot's size and\nremoves finer noise and coarser background and structures.\n\n[Difference of Gaussians] -> [Find Maxima] -> [Extract Objects]\n\nBright spots become positive peaks, dark spots negative ones, flat\nbackground 0. Measure intensities on the original channel, not on this\nimage.",
+      "type": "object",
+      "properties": {
+        "sigma": {
+          "description": "The scale σ of the spots to enhance (the narrower Gaussian; the\nwider one is 1.6 σ); as a guide, σ ≈\nspot radius / √2 (1.4 for spots of 4 px). Smaller details count as\nnoise, larger ones as background.",
+          "type": "number",
+          "format": "float",
+          "default": 1.5,
+          "maximum": 1000,
+          "minimum": 0.1
+        },
+        "unit": {
+          "description": "Unit `sigma` is expressed in.",
+          "$ref": "#/$defs/SizeUnits",
+          "default": "PIXELS"
+        }
+      }
+    },
     "DistanceTransformSettings": {
       "description": "A command that calculates the Euclidean Distance Map (EDM) of an f32 image.\n\nThis algorithm identifies pixels below a threshold as \"background\" and\ncalculates the distance of every \"foreground\" pixel to the nearest background pixel.",
       "type": "object",
@@ -3167,6 +3186,19 @@
             }
           },
           "$ref": "#/$defs/ConnectedComponentsSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "DIFFERENCE_OF_GAUSSIANS"
+            }
+          },
+          "$ref": "#/$defs/DifferenceOfGaussiansSettings",
           "required": [
             "type"
           ]

@@ -405,7 +405,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         Measure,
         Dataset,
     ];
-    let expected: [(&str, &[CommandCategory]); 68] = [
+    let expected: [(&str, &[CommandCategory]); 69] = [
         ("AI Object Classifier", &[Object, Measure, Dataset]),
         ("Blur", &[Segment, Preprocess]),
         ("AI Cellpose Segmentation", &[Extract]),
@@ -415,6 +415,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         ("Color Filter", &[Segment, Preprocess]),
         ("Color to Grayscale", &[Segment, Preprocess]),
         ("ConnectedComponents", &[InstanceSegmentation, Extract]),
+        ("Difference of Gaussians", &[Segment, Preprocess]),
         ("DistanceTransform", &[Segment, Preprocess]),
         ("EdgeDetectionCanny", &[Segment, Preprocess]),
         ("EdgeDetectionSobel", &[Segment, Preprocess]),
