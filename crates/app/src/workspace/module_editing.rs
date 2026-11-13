@@ -583,6 +583,7 @@ fn module_of_steps(
                         color: *color,
                         name: class_name.clone(),
                         notes: String::new(),
+                        results: Default::default(),
                     });
                     continue;
                 }
@@ -613,6 +614,7 @@ fn module_of_steps(
                     color: *color,
                     name: class_name.clone(),
                     notes: String::new(),
+                    results: Default::default(),
                 });
             }
             ClassRole::Parameter => {
@@ -1166,6 +1168,7 @@ fn expand_in_pipeline(
             color: class.color,
             name: class.name.clone(),
             notes: class.notes.clone(),
+            results: class.results,
         });
         to_global.insert(class.id, next_id);
         next_id += 1;
@@ -2406,6 +2409,7 @@ mod tests {
                 color: 0xFF0000,
                 name: name.into(),
                 notes: String::new(),
+                results: Default::default(),
             });
         }
         project.pipelines = vec![
@@ -4354,6 +4358,7 @@ mod tests {
             color: 0x00FF00,
             name: "Inner seeds".into(),
             notes: String::new(),
+            results: Default::default(),
         });
         outer.steps.push(uses_module(
             1,

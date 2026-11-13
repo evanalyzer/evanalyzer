@@ -132,6 +132,8 @@ export component ClassificationPanel inherits Rectangle {
                             title: data.name;
                             tag: data.id < 10 ? "0" + data.id : data.id;
                             swatch: data.color;
+                            // Not written to the results.
+                            badge: data.intermediate ? "not stored" : "";
                             trailing: data.count;
                             selected: root.in-split ? ResultsState.split-selected-class == data.id : ClassificationState.selected_class_id == data.id;
                             has-eye: true;

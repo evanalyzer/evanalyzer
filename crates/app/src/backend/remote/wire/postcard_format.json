@@ -1,5 +1,5 @@
 {
-  "protocol_version": 40,
+  "protocol_version": 41,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -266,8 +266,20 @@
         },
         {
           "notes": "STR"
+        },
+        {
+          "results": {
+            "TYPENAME": "ClassResults"
+          }
         }
       ]
+    },
+    "ClassResults": {
+      "ENUM": {
+        "0": {
+          "objects": "UNIT"
+        }
+      }
     },
     "ColorScale": {
       "ENUM": {

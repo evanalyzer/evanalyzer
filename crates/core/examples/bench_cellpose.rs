@@ -129,6 +129,7 @@ fn main() {
             color: 0xFF0000,
             name: "Cells".into(),
             notes: String::new(),
+            results: Default::default(),
         },
     );
     let step = |command| PipelineStepSettings {

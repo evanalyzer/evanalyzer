@@ -1135,6 +1135,7 @@ mod tests {
                 color: 0xff0000,
                 name: name.into(),
                 notes: String::new(),
+                results: Default::default(),
             })
         };
         let (a, b) = (class("a"), class("b"));
@@ -1300,6 +1301,7 @@ mod tests {
                 color: 0xff0000,
                 name: "cl1".into(),
                 notes: "note".into(),
+                results: Default::default(),
             });
 
         controller
@@ -1334,6 +1336,7 @@ mod tests {
                 color: 0xff0000,
                 name: "cl1".into(),
                 notes: "".into(),
+                results: Default::default(),
             });
         controller
             .app_state
@@ -1589,6 +1592,7 @@ mod tests {
                 color: 0xff0000,
                 name: "cl1".into(),
                 notes: "note".into(),
+                results: Default::default(),
             });
 
         controller

@@ -1122,6 +1122,7 @@ mod tests {
             color,
             name: name.to_string(),
             notes: String::new(),
+            results: Default::default(),
         }
     }
 

@@ -321,6 +321,7 @@ mod tests {
             color: 0xFF0000,
             name: name.into(),
             notes: String::new(),
+            results: Default::default(),
         }
     }
 

@@ -29,6 +29,7 @@ use evanalyzer_cfg::{
 use evanalyzer_cfg::{
     core_types::{InternalErrors, ObjectClass, StepId},
     settings::{
+        classification_settings::{Class, ClassResults},
         images_settings::ImageEntry,
         modules::ModuleDefinition,
         object_settings::ObjectMetricSettings,
@@ -117,11 +118,22 @@ pub fn generate_analyze_job_from_project_settings(
     // results folder behind.
     check_series(&config)?;
     check_pipeline_channels(&config)?;
+    // The intermediate classes aren't results: neither in the file's
+    // classes nor in its objects (see `DuckDbExporter::with_intermediate_classes`).
+    let is_intermediate = |c: &&Class| c.results == ClassResults::Intermediate;
     let class_names: std::collections::HashMap<_, _> = config
         .classification
         .classes()
         .iter()
+        .filter(|c| !is_intermediate(c))
         .map(|c| (c.global(), (c.name.clone(), c.color)))
+        .collect();
+    let intermediate: Vec<u32> = config
+        .classification
+        .classes()
+        .iter()
+        .filter(is_intermediate)
+        .map(|c| c.id)
         .collect();
 
     let (output_path, job_name) = create_results_dir(&project_path, job_name)?;
@@ -130,7 +142,10 @@ pub fn generate_analyze_job_from_project_settings(
 
     let db_out_name = output_path.join(format!("{job_name}.{RESULTS_FILE_EXTENSION}"));
     let database_storage = match DuckDbExporter::new(&db_out_name, class_names, &config.meta) {
-        Ok(exp) => Arc::new(exp.with_masks(config.results_storage.store_object_masks)),
+        Ok(exp) => Arc::new(
+            exp.with_masks(config.results_storage.store_object_masks)
+                .with_intermediate_classes(intermediate),
+        ),
         Err(e) => {
             error!(
                 "Failed to open result database {}: {e}",
@@ -1333,6 +1348,72 @@ mod tests {
             })
             .collect();
         assert_eq!(db_files.len(), 1, "exactly one .evadb file must be created");
+    }
+
+    /// An intermediate class isn't a result: not among the file's classes,
+    /// and an object only in it isn't written.
+    #[test]
+    fn analyze_job_leaves_the_intermediate_classes_out_of_the_results() {
+        use crate::object::{Object, ObjectInit};
+        use crate::pipeline::pipeline_cache::GlobalPipelineCache;
+        use evanalyzer_cfg::core_types::ObjectId;
+
+        let project_dir = tempfile::tempdir().unwrap();
+        let image_root = tempfile::tempdir().unwrap();
+        let mut project = project_with(
+            Some(image_root.path().to_path_buf()),
+            vec![pipeline(1, true, vec![blur_step(true)])],
+        );
+        for (id, results) in [(7, ClassResults::Objects), (8, ClassResults::Intermediate)] {
+            project.classification.classes_mut().push(Class {
+                id,
+                color: 0,
+                name: format!("c{id}"),
+                notes: String::new(),
+                results,
+            });
+        }
+        let job = generate_analyze_job_from_project_settings(
+            project,
+            project_dir.path().to_path_buf(),
+            None,
+        )
+        .unwrap();
+        let mut cache = GlobalPipelineCache::default();
+        cache.image_rel_path = PathBuf::from("a.tif");
+        cache.image_meta.nr_of_bits = 8;
+        for (id, class) in [(1u128, 7u32), (2, 8)] {
+            cache.object_cache.insert(
+                ObjectId(id),
+                Object::new(ObjectInit {
+                    id: ObjectId(id),
+                    object_class: [ObjectClass::Global(class)].into(),
+                    area: 1,
+                    bbox: [0, 0, 1, 1],
+                    ..Default::default()
+                }),
+            );
+        }
+        job.result_storage.export(&cache).unwrap();
+
+        let db = std::fs::read_dir(&job.output_path)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .find(|p| p.extension().and_then(|s| s.to_str()) == Some(RESULTS_FILE_EXTENSION))
+            .unwrap();
+        let conn = crate::storage::duckdb::shared_connection(&db).unwrap();
+        let classes: Vec<i64> = conn
+            .prepare("SELECT class_id FROM classes ORDER BY class_id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(classes, [0, 7]);
+        let objects: i64 = conn
+            .query_row("SELECT count(*) FROM objects", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(objects, 1);
     }
 
     #[test]

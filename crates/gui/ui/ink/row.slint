@@ -22,6 +22,8 @@ export component InkListRow inherits Rectangle {
     /// An eye at the right that shows/hides.
     in property <bool> has-eye: false;
     in property <bool> shown: true;
+    /// A short word in a pill after the title ("not stored"); empty: none.
+    in property <string> badge;
     /// A small mark (error, warning) after the title; transparent: none.
     in property <color> mark: transparent;
     /// Title in mono (file names, ids).
@@ -135,6 +137,23 @@ export component InkListRow inherits Rectangle {
                             wanted: ta.has-hover && title-text.preferred-width > title-text.width + 0.5px;
                             text: root.title;
                             side: InkTipSide.right;
+                        }
+                    }
+                    if root.badge != "": Rectangle {
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: Ink.row-lift-ring;
+                        HorizontalLayout {
+                            padding-left: 6px;
+                            padding-right: 6px;
+                            padding-top: 1px;
+                            padding-bottom: 1px;
+                            Text {
+                                text: root.badge;
+                                font-size: Ink.fs-caption;
+                                color: Ink.text-dim;
+                                vertical-alignment: center;
+                            }
                         }
                     }
                     Rectangle {

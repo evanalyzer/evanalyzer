@@ -149,6 +149,7 @@ fn main() {
             color: 0xFF0000,
             name: "Spots".into(),
             notes: String::new(),
+            results: Default::default(),
         },
     );
     if spot_size.is_some() {
@@ -158,6 +159,7 @@ fn main() {
                 color: 0x00FF00,
                 name: "Spot areas".into(),
                 notes: String::new(),
+                results: Default::default(),
             },
         );
     }
@@ -426,6 +428,7 @@ fn internal_objects_module() -> evanalyzer_cfg::settings::modules::ModuleDefinit
         color: 0,
         name: format!("Local {id}"),
         notes: String::new(),
+        results: Default::default(),
     };
     evanalyzer_cfg::settings::modules::ModuleDefinition {
         key: "INTERNAL".into(),

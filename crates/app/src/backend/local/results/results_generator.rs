@@ -2706,6 +2706,7 @@ impl ResultsGenerator {
                     name: row.get(1)?,
                     color: color.unwrap_or(0),
                     notes: String::new(),
+                    results: Default::default(),
                 })
             })
             .map_err(err)?
@@ -6493,6 +6494,7 @@ mod tests {
             name: "ClassA".to_string(),
             color: 0,
             notes: String::new(),
+            results: Default::default(),
         }];
         let column = Column::ColocCount(ObjectClass::Global(1));
         let key = column.as_key(&classes);
@@ -6542,6 +6544,7 @@ mod tests {
             name: "Nuclei".to_string(),
             color: 0,
             notes: String::new(),
+            results: Default::default(),
         }];
         assert_eq!(
             class_display_label(ObjectClass::Global(1), &classes),

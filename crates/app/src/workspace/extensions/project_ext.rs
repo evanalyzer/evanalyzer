@@ -1216,6 +1216,7 @@ impl ProjectExt for ProjectWithRuntime {
                             color: rgb_to_u32(colors[channel_id]),
                             name: class_name_of_channel(&ch.name, *channel_id),
                             notes: "".into(),
+                            results: Default::default(),
                         })
                         .collect()
                 })

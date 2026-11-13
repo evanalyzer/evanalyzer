@@ -4,6 +4,14 @@
 // api/classification_class_edit.slint — the Rust interface of dialogs/classification_class_edit_dialog.slint: the state Rust
 // sets, the callbacks it answers.
 
+// What the results keep of a class's objects (`ClassResults`).
+export enum ClassResultsKind {
+    // Every object with its measurements.
+    objects,
+    // Only for later steps of the pipeline: not written to the results.
+    intermediate,
+}
+
 export struct ClassSettingsSlint {
     // The class's id - negative for a new class.
     class_id: int,
@@ -12,6 +20,7 @@ export struct ClassSettingsSlint {
     name: string,
     notes: string,
     color: color,
+    results: ClassResultsKind,
 }
 
 export global ClassificationSettingsState {
@@ -40,5 +49,6 @@ export global ClassificationSettingsState {
         self.settings.name = "";
         self.settings.notes = "";
         self.settings.color = #FF00FF;
+        self.settings.results = ClassResultsKind.objects;
     }
 }

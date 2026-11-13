@@ -10,6 +10,8 @@ export struct ClassItemData {
     color: color,
     visible: bool,
     count: int,
+    // Not written to the results (`ClassResults::Intermediate`).
+    intermediate: bool,
 }
 
 export global ClassificationState {

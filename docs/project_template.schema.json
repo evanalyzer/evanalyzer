@@ -295,6 +295,11 @@
         },
         "notes": {
           "type": "string"
+        },
+        "results": {
+          "description": "What the results keep of the class's objects - missing in projects\nfrom before it: [`ClassResults::Objects`].",
+          "$ref": "#/$defs/ClassResults",
+          "default": "objects"
         }
       },
       "required": [
@@ -302,6 +307,21 @@
         "color",
         "name",
         "notes"
+      ]
+    },
+    "ClassResults": {
+      "description": "What the results keep of a class's objects. The pipeline and the viewer\nsee every class whatever it says.",
+      "oneOf": [
+        {
+          "description": "Every object with its measurements.",
+          "type": "string",
+          "const": "objects"
+        },
+        {
+          "description": "Only for later steps of the pipeline (e.g. the seeds of Grow\nRegions): nothing of the class is written to the results - an object\nin no other class isn't stored, nor its measurements.",
+          "type": "string",
+          "const": "intermediate"
+        }
       ]
     },
     "ClassificationMappingSettings": {

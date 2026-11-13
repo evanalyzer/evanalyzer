@@ -12,15 +12,15 @@ use crate::editor::object_list_controller::{ObjectListController, resolve_object
 use crate::editor::viewport_controller::ViewportController;
 use crate::helper::color_generators::color_from_hex;
 use crate::{
-    AppWindow, ClassItemData, ClassSettingsSlint, ClassificationSettingsState, ClassificationState,
-    ObjectListState,
+    AppWindow, ClassItemData, ClassResultsKind, ClassSettingsSlint, ClassificationSettingsState,
+    ClassificationState, ObjectListState,
 };
 use evanalyzer_app::prelude::classification_ext::ClassificationExt;
 use evanalyzer_app::project::{AnnotationsExt, ProjectExt};
 use evanalyzer_app::project::{free_class_ids, next_class_id};
 use evanalyzer_cfg::AssignObjectClass;
 use evanalyzer_cfg::core_types::ObjectClass;
-use evanalyzer_cfg::settings::classification_settings::Class;
+use evanalyzer_cfg::settings::classification_settings::{Class, ClassResults};
 use log::{info, warn};
 use slint::Model;
 use slint::{ComponentHandle, ModelNotify};
@@ -393,6 +393,10 @@ impl ClassificationController {
             color: class_settings.color.as_argb_encoded(),
             name: class_settings.name.into(),
             notes: class_settings.notes.into(),
+            results: match class_settings.results {
+                ClassResultsKind::Objects => ClassResults::Objects,
+                ClassResultsKind::Intermediate => ClassResults::Intermediate,
+            },
         };
 
         if class_settings.class_id < 0 {
@@ -464,6 +468,10 @@ impl ClassificationController {
                 class_settings_slint.color = color_from_hex(class.color);
                 class_settings_slint.name = class.name.clone().into();
                 class_settings_slint.notes = class.notes.clone().into();
+                class_settings_slint.results = match class.results {
+                    ClassResults::Objects => ClassResultsKind::Objects,
+                    ClassResults::Intermediate => ClassResultsKind::Intermediate,
+                };
 
                 class_settings_state.set_settings(class_settings_slint);
             }
@@ -518,6 +526,7 @@ impl Model for ClassificationModelBridge {
                 color: color_from_hex(c.color),
                 count,
                 visible,
+                intermediate: c.results == ClassResults::Intermediate,
             }
         })
     }
@@ -573,6 +582,7 @@ mod tests {
             name: name.into(),
             notes: "".into(),
             color: Color::from_rgb_u8(10, 20, 30),
+            results: ClassResultsKind::Objects,
         }
     }
 
@@ -685,8 +695,11 @@ mod tests {
             color: 0,
             name: "Nuclei".into(),
             notes: String::new(),
+            results: Default::default(),
         });
         let ui = crate::editor::test_support::test_ui_window();
+        // Room for the whole dialog (581 px), its Apply button included.
+        ui.window().set_size(slint::LogicalSize::new(1500.0, 900.0));
         let (ui_state, controller) = classification_on_windows(&ui, project);
         controller.attach_callbacks();
         controller.sync_classification_to_slint();
@@ -789,6 +802,57 @@ mod tests {
         assert_eq!(bridge.row_count(), 3);
     }
 
+    /// The dialog's results choice: Intermediate goes into the class, its
+    /// row shows "not stored" (`intermediate`), and the dialog opens with it
+    /// again; Objects is the default.
+    #[test]
+    fn the_results_choice_goes_into_the_class_its_row_and_back_into_the_dialog() {
+        let ui = crate::editor::test_support::test_ui_window();
+        let project = crate::editor::test_support::project_with_one_image();
+        let (ui_state, controller) = classification_on_windows(&ui, project);
+        controller.attach_callbacks();
+        let dialog = ui.global::<ClassificationSettingsState>();
+
+        dialog.invoke_apply_classification_settings(settings(-1, "Nuclei"));
+        dialog.invoke_apply_classification_settings(ClassSettingsSlint {
+            results: ClassResultsKind::Intermediate,
+            ..settings(-1, "Seeds")
+        });
+        let (nuclei, seeds) = {
+            let project = ui_state.get_project();
+            let class = |name: &str| {
+                project
+                    .classification
+                    .classes()
+                    .iter()
+                    .find(|c| c.name == name)
+                    .cloned()
+                    .unwrap()
+            };
+            (class("Nuclei"), class("Seeds"))
+        };
+        assert_eq!(nuclei.results, ClassResults::Objects);
+        assert_eq!(seeds.results, ClassResults::Intermediate);
+
+        let bridge = bridge_for(&ui_state);
+        let rows: Vec<(String, bool)> = (0..bridge.row_count())
+            .filter_map(|i| bridge.row_data(i))
+            .map(|r| (r.name.to_string(), r.intermediate))
+            .collect();
+        assert!(rows.contains(&("Seeds".into(), true)), "{rows:?}");
+        assert!(rows.contains(&("Nuclei".into(), false)), "{rows:?}");
+
+        controller.sync_class_settings_to_class_edit_dialog_slint(seeds.global());
+        crate::helper::ui_thread::drain_ui_queue();
+        assert_eq!(
+            dialog.get_settings().results,
+            ClassResultsKind::Intermediate
+        );
+        // A new class starts with the default.
+        dialog.invoke_reset_to_zero();
+        assert_eq!(dialog.get_settings().results, ClassResultsKind::Objects);
+    }
+
     #[test]
     fn classification_model_bridge_row_data_decodes_the_hex_color_and_id() {
         let (ui_state, controller) = make_controller();
@@ -798,6 +862,7 @@ mod tests {
             name: "Nuclei".into(),
             notes: "".into(),
             color: Color::from_rgb_u8(0x11, 0x22, 0x33),
+            results: ClassResultsKind::Objects,
         });
 
         let bridge = bridge_for(&ui_state);
@@ -822,6 +887,7 @@ mod tests {
                     color: 0,
                     name: "Nuclei".to_string(),
                     notes: String::new(),
+                    results: Default::default(),
                 },
             );
             let mut with_class =
@@ -1041,6 +1107,7 @@ mod tests {
             color: 0,
             name: "Nuclei".to_string(),
             notes: String::new(),
+            results: Default::default(),
         });
         project
     }

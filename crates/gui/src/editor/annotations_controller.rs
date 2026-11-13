@@ -911,6 +911,7 @@ mod tests {
             color: 0x3080f0,
             name: "Nuclei".into(),
             notes: String::new(),
+            results: Default::default(),
         });
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("qupath.geojson");
@@ -1136,6 +1137,7 @@ mod tests {
                 color,
                 name: name.into(),
                 notes: String::new(),
+                results: Default::default(),
             });
         }
         for image in project.settings.images.list.values_mut() {

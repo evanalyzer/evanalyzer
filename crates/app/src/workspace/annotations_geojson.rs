@@ -844,6 +844,7 @@ fn new_class(
         color: color.unwrap_or(0x808080),
         name: name.to_string(),
         notes: String::new(),
+        results: Default::default(),
     })
 }
 
@@ -1022,6 +1023,7 @@ mod tests {
             color: 0x3080f0,
             name: "Nuclei".into(),
             notes: String::new(),
+            results: Default::default(),
         });
         project
     }

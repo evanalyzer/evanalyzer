@@ -644,6 +644,8 @@ impl ResultsStateController {
                 color: bg_color_to_slint(class.color),
                 visible: !hidden.contains(&(class.id as i32)),
                 count: counts.get(&(class.id as i32)).copied().unwrap_or(0),
+                // A results file has no intermediate classes.
+                intermediate: false,
             })
             .collect();
         let ui_weak = self.ui.clone();

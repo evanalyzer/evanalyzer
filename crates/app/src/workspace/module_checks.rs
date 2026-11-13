@@ -30,10 +30,10 @@ use evanalyzer_cfg::{
         ImageAddress, ModuleParamKey, ObjectClass, PipelineId, StepId, is_valid_measurement_id,
     },
     settings::{
-        classification_settings::Class,
+        classification_settings::{Class, ClassResults},
         images_settings::{ZStackHandling, ZStackSettings},
         modules::{ModuleDefinition, ModuleInstance},
-        pipeline_command::PipelineCommand,
+        pipeline_command::{CommandCategory, PipelineCommand},
         pipeline_command_settings::MathLoadChannelChannelZProjectionSettings,
         pipeline_settings::{PipelineStepSettings, StepContent},
         project_settings::ProjectSettings,
@@ -75,6 +75,9 @@ pub struct ModuleProblem {
 pub enum ProblemFix {
     /// Adds project class `id` to the classification.
     AddClass(u32),
+    /// Project class `id` is stored in the results again
+    /// (`ClassResults::Objects`).
+    StoreClass(u32),
     /// Parameter `parameter` of module `module` stops setting `path`
     /// of step `step` (labelled `label`).
     RemoveBinding {
@@ -91,6 +94,7 @@ impl ProblemFix {
     pub fn label(&self) -> String {
         match self {
             ProblemFix::AddClass(id) => format!("Add class {id}"),
+            ProblemFix::StoreClass(id) => format!("Store class {id}"),
             ProblemFix::RemoveBinding { label, .. } => format!("Stop setting {label}"),
         }
     }
@@ -106,8 +110,16 @@ pub fn apply_fix(project: &mut ProjectSettings, fix: &ProblemFix) -> bool {
                 color: class_color(*id),
                 name: format!("Class {id}"),
                 notes: String::new(),
+                results: Default::default(),
             })
             .is_ok(),
+        ProblemFix::StoreClass(id) => project
+            .classification
+            .classes_mut()
+            .iter_mut()
+            .find(|c| c.id == *id && c.results != ClassResults::Objects)
+            .map(|c| c.results = ClassResults::Objects)
+            .is_some(),
         ProblemFix::RemoveBinding {
             module,
             parameter,
@@ -271,6 +283,61 @@ pub fn check_project(project: &ProjectSettings) -> Vec<ModuleProblem> {
     let mut problems = check_modules(project);
     problems.extend(check_steps(project));
     problems.extend(check_measurement_ids(project));
+    problems.extend(check_dataset_classes(project));
+    problems
+}
+
+/// The dataset steps of the enabled pipelines working on an intermediate
+/// class (`ClassResults::Intermediate`): they read the results, which have
+/// no object of it - so there's nothing to work on.
+fn check_dataset_classes(project: &ProjectSettings) -> Vec<ModuleProblem> {
+    let intermediate: Vec<u32> = project
+        .classification
+        .classes()
+        .iter()
+        .filter(|c| c.results == ClassResults::Intermediate)
+        .map(|c| c.id)
+        .collect();
+    if intermediate.is_empty() {
+        return Vec::new();
+    }
+    let mut problems = Vec::new();
+    for pipeline in project.pipelines.iter().filter(|p| p.enabled) {
+        for step in pipeline.steps.iter().filter(|s| s.enabled) {
+            let at = Some((pipeline.id, step.id));
+            for command in resolved_commands(step, &project.modules) {
+                if !matches!(command.command.category(), CommandCategory::Dataset) {
+                    continue;
+                }
+                for class in command.command.object_classes() {
+                    let ObjectClass::Global(n) = class else {
+                        continue;
+                    };
+                    if !intermediate.contains(&n)
+                        || problems.iter().any(|p: &ModuleProblem| {
+                            p.step == at && p.fix == Some(ProblemFix::StoreClass(n))
+                        })
+                    {
+                        continue;
+                    }
+                    problems.push(
+                        ModuleProblem::warning(
+                            None,
+                            at,
+                            format!(
+                                "{} works on class {}, which isn't stored in the results \
+                                 (Intermediate) - a dataset step reads the results, so it finds \
+                                 no objects of it",
+                                command.command.name(),
+                                class_label(project, class)
+                            ),
+                        )
+                        .fixed_by(ProblemFix::StoreClass(n)),
+                    );
+                }
+            }
+        }
+    }
     problems
 }
 
@@ -1137,6 +1204,64 @@ mod tests {
         ExtractObjectsSettings, RelateObjectsSettings, VoronoiSettings,
     };
     use evanalyzer_cfg::settings::pipeline_settings::PipelineSettings;
+
+    /// A dataset step (here tracking) on an intermediate class: a warning
+    /// at the step - it reads the results, which have none of its objects -
+    /// that "Store class" fixes. Not for a stored class or a disabled step.
+    #[test]
+    fn a_dataset_step_on_an_intermediate_class_is_warned_and_fixed_by_storing_it() {
+        use evanalyzer_cfg::settings::classification_settings::ClassResults;
+        use evanalyzer_cfg::settings::pipeline_command_settings::TrackLapSettings;
+        let track = |class: u32| {
+            PipelineCommand::TrackLap(TrackLapSettings {
+                object_class: ObjectClass::Global(class),
+                ..Default::default()
+            })
+        };
+        let mut project = ProjectSettings::default();
+        for (id, results) in [(1, ClassResults::Objects), (2, ClassResults::Intermediate)] {
+            project.classification.classes_mut().push(Class {
+                id,
+                color: 0,
+                name: format!("c{id}"),
+                notes: String::new(),
+                results,
+            });
+        }
+        let mut disabled = step(3, track(2));
+        disabled.enabled = false;
+        project.pipelines = vec![nuclei(vec![step(1, track(1)), step(2, track(2)), disabled])];
+
+        let warned: Vec<ModuleProblem> = check_project(&project)
+            .into_iter()
+            .filter(|p| matches!(p.fix, Some(ProblemFix::StoreClass(_))))
+            .collect();
+        assert_eq!(warned.len(), 1, "{warned:?}");
+        let problem = &warned[0];
+        assert_eq!(problem.severity, Severity::Warning);
+        assert_eq!(problem.step, Some((PipelineId(1), StepId(2))));
+        assert!(
+            problem.message.contains("class 2 “c2”"),
+            "{}",
+            problem.message
+        );
+        assert_eq!(ProblemFix::StoreClass(2).label(), "Store class 2");
+
+        assert!(apply_fix(&mut project, &ProblemFix::StoreClass(2)));
+        assert_eq!(
+            project.classification.classes()[2].results,
+            ClassResults::Objects
+        );
+        assert!(
+            !apply_fix(&mut project, &ProblemFix::StoreClass(2)),
+            "already stored"
+        );
+        assert!(
+            !check_project(&project)
+                .iter()
+                .any(|p| matches!(p.fix, Some(ProblemFix::StoreClass(_))))
+        );
+    }
 
     fn step(id: u32, command: PipelineCommand) -> PipelineStepSettings {
         PipelineStepSettings {

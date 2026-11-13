@@ -352,6 +352,8 @@ pub struct DuckDbExporter {
     /// Each object's mask is stored (`objects.mask`, see `mask_codec`) - the
     /// project's "Store object masks"; else the column stays NULL.
     store_masks: bool,
+    /// The project classes left out of the results - see [`Intermediate`].
+    intermediate: Intermediate,
     /// Each per-object measurement's position in `objects.measurement_values`
     /// (1-based, by key) - given the first time a key is exported, kept in
     /// `measurement_info.object_index`.
@@ -462,6 +464,7 @@ impl DuckDbExporter {
             conn: Mutex::new(conn),
             class_names,
             store_masks: true,
+            intermediate: Intermediate::default(),
             object_indices: Mutex::new(HashMap::new()),
         })
     }
@@ -469,6 +472,13 @@ impl DuckDbExporter {
     /// Whether the objects' masks are stored (default: they are).
     pub fn with_masks(mut self, store: bool) -> Self {
         self.store_masks = store;
+        self
+    }
+
+    /// The project classes (ids) nothing of which is written: the
+    /// project's `ClassResults::Intermediate` ones (default: none).
+    pub fn with_intermediate_classes(mut self, ids: impl IntoIterator<Item = u32>) -> Self {
+        self.intermediate = Intermediate::new(ids);
         self
     }
 
@@ -517,6 +527,7 @@ impl DuckDbExporter {
             conn: Mutex::new(conn),
             class_names: HashMap::new(),
             store_masks: true,
+            intermediate: Intermediate::default(),
             object_indices: Mutex::new(object_indices),
         })
     }
@@ -853,20 +864,51 @@ fn intensity_stats(v: &Intensity) -> [f64; INTENSITY_COLUMNS.len()] {
 /// `coloc_partner_ids` / `parent_ids` key for a class without a number.
 const UNSET_CLASS_KEY: i32 = -1;
 
-/// Whether `object` is stored: only an object with a project class is a
-/// result. One without (none left, or only `Unset`) gets no row, no
-/// measurement rows, and no stored object refers to it.
-fn is_stored(object: &Object) -> bool {
-    object
-        .object_classes()
-        .iter()
-        .any(|c| matches!(c, ObjectClass::Global(_)))
-}
+/// The project classes nothing of which is written to the results
+/// (`ClassResults::Intermediate`), sorted - empty for most projects, so each
+/// check below is then a look at `is_empty`.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct Intermediate(Vec<u32>);
 
-/// Whether `id` is an object of `objects` that isn't stored - a reference
-/// to it is left out. An object not in `objects` (another plane's) stays.
-fn refers_to_unstored(objects: &ObjectCache, id: &ObjectId) -> bool {
-    objects.get(id).is_some_and(|object| !is_stored(object))
+impl Intermediate {
+    fn new(ids: impl IntoIterator<Item = u32>) -> Self {
+        let mut ids: Vec<u32> = ids.into_iter().collect();
+        ids.sort_unstable();
+        ids.dedup();
+        Self(ids)
+    }
+
+    /// Whether `class` is one of them.
+    fn contains(&self, class: &ObjectClass) -> bool {
+        match class {
+            ObjectClass::Global(n) => !self.0.is_empty() && self.0.binary_search(n).is_ok(),
+            ObjectClass::Unset | ObjectClass::Local(_) => false,
+        }
+    }
+
+    /// Whether `class` is written to an object's classes: not `Unset`, not
+    /// intermediate.
+    fn writes(&self, class: &ObjectClass) -> bool {
+        *class != ObjectClass::Unset && !self.contains(class)
+    }
+
+    /// Whether `object` is stored: only an object in a stored project
+    /// class is a result. One without (none left, only `Unset`, only
+    /// intermediate ones) gets no row, no measurement rows, and no stored
+    /// object refers to it.
+    fn stores(&self, object: &Object) -> bool {
+        object
+            .object_classes()
+            .iter()
+            .any(|c| matches!(c, ObjectClass::Global(_)) && !self.contains(c))
+    }
+
+    /// Whether `id` is an object of `objects` that isn't stored - a
+    /// reference to it is left out. An object not in `objects` (another
+    /// plane's) stays.
+    fn refers_to_unstored(&self, objects: &ObjectCache, id: &ObjectId) -> bool {
+        objects.get(id).is_some_and(|object| !self.stores(object))
+    }
 }
 
 /// A class as a `coloc_partner_ids` / `parent_ids` key.
@@ -963,14 +1005,15 @@ impl ObjectColumns {
     }
 
     /// One row of `parent_ids`: parent class -> parent object id, without
-    /// the parents that aren't stored.
+    /// the parents that aren't stored or of an intermediate class.
     fn append_parents(
         &mut self,
         parents: &IndexMap<ObjectClass, ObjectId>,
         objects: &ObjectCache,
+        intermediate: &Intermediate,
     ) -> Result<(), InternalErrors> {
         for (class, id) in parents {
-            if refers_to_unstored(objects, id) {
+            if intermediate.contains(class) || intermediate.refers_to_unstored(objects, id) {
                 continue;
             }
             self.parent_ids.keys().append_value(class_key(class));
@@ -985,16 +1028,19 @@ impl ObjectColumns {
     }
 
     /// One row of `coloc_partner_ids`: partner class -> partner object ids,
-    /// without the partners that aren't stored (a class left without any
-    /// is left out).
+    /// without the partners that aren't stored (a class left without any is
+    /// left out) and without an intermediate partner class.
     fn append_coloc(
         &mut self,
         colocalized_with: &IndexMap<ObjectClass, Vec<ObjectId>>,
         objects: &ObjectCache,
+        intermediate: &Intermediate,
     ) -> Result<(), InternalErrors> {
         for (class, ids) in colocalized_with {
-            let stored = |id: &&ObjectId| !refers_to_unstored(objects, id);
-            if !ids.is_empty() && !ids.iter().any(|id| stored(&id)) {
+            let stored = |id: &&ObjectId| !intermediate.refers_to_unstored(objects, id);
+            if intermediate.contains(class)
+                || (!ids.is_empty() && !ids.iter().any(|id| stored(&id)))
+            {
                 continue;
             }
             self.coloc_partner_ids.keys().append_value(class_key(class));
@@ -1312,13 +1358,15 @@ impl<'a> MeasurementRows<'a> {
         }
     }
 
-    /// The classes' names (a JSON list, without `Unset`) and ids, sorted.
+    /// The classes' names (a JSON list, without `Unset` and the
+    /// intermediate classes) and ids, sorted.
     fn classes(&self, classes: &[ObjectClass]) -> (String, Vec<i32>) {
+        let intermediate = &self.exporter.intermediate;
         let mut sorted = classes.to_vec();
+        sorted.retain(|c| intermediate.writes(c));
         sorted.sort();
         let names: Vec<String> = sorted
             .iter()
-            .filter(|c| **c != ObjectClass::Unset)
             .map(|c| self.exporter.class_label(c))
             .collect();
         let ids = sorted
@@ -1333,11 +1381,17 @@ impl<'a> MeasurementRows<'a> {
 
     /// Adds a row; a value that isn't a number (NaN, infinite) is NULL.
     /// `position`: where on a profile the value is (else `None`). Nothing
-    /// for an object that isn't stored; a related object that isn't stored
-    /// is NULL.
+    /// for an object that isn't stored or an intermediate class; a related
+    /// object that isn't stored is NULL.
     fn push(&mut self, mut row: MeasurementRow<'_>, value: f64, position: Option<f64>) {
+        let intermediate = &self.exporter.intermediate;
+        if let RowRegion::Class(class) = &row.region
+            && intermediate.contains(class)
+        {
+            return;
+        }
         if let Some(id) = row.related
-            && refers_to_unstored(&self.cache.object_cache, id)
+            && intermediate.refers_to_unstored(&self.cache.object_cache, id)
         {
             row.related = None;
         }
@@ -1360,7 +1414,8 @@ impl<'a> MeasurementRows<'a> {
             }
             RowRegion::Object => row.object.and_then(|id| self.object_classes.get(id)),
         };
-        // An object without a project class (no class id) isn't stored.
+        // An object without a stored project class (no class id) isn't
+        // stored.
         if matches!(row.region, RowRegion::Object) && classes.is_some_and(|(_, ids)| ids.is_empty())
         {
             return;
@@ -1785,16 +1840,18 @@ impl DuckDbExporter {
                 object
                     .object_classes()
                     .iter()
-                    .filter(|c| **c != ObjectClass::Unset),
+                    .filter(|c| self.intermediate.writes(c)),
             );
             c.object_class_name.append_value(&c.text);
             for class in object.object_classes() {
-                if let ObjectClass::Global(n) = class {
+                if let ObjectClass::Global(n) = class
+                    && !self.intermediate.contains(class)
+                {
                     c.object_class_id.values().append_value(*n as i32);
                 }
             }
             c.object_class_id.append(true);
-            c.append_parents(object.parents(), &cache.object_cache)?;
+            c.append_parents(object.parents(), &cache.object_cache, &self.intermediate)?;
             c.track_id.append_value(object.track.id.0);
             c.f64(F64::CentroidXPx, centroid_x_px);
             c.f64(F64::CentroidYPx, centroid_y_px);
@@ -1842,7 +1899,11 @@ impl DuckDbExporter {
             c.f64_opt(F64::PixelSizeZNm, pxz);
             c.image_bit_depth.append_value(nr_of_bits as u8);
             c.append_intensities(&object.intensities, bit_max);
-            c.append_coloc(&object.colocalized_with, &cache.object_cache)?;
+            c.append_coloc(
+                &object.colocalized_with,
+                &cache.object_cache,
+                &self.intermediate,
+            )?;
             c.append_measurement_values(measurement_values.get(&object.id));
             if self.store_masks {
                 c.mask
@@ -1893,11 +1954,12 @@ impl PipelineResultExporter for DuckDbExporter {
 
     fn export(&self, cache: &GlobalPipelineCache) -> Result<(), InternalErrors> {
         let start = Instant::now();
-        // Objects without a project class aren't results (see `is_stored`).
+        // Objects without a stored project class aren't results (see
+        // `Intermediate::stores`).
         let mut objects = cache
             .object_cache
             .values()
-            .filter(|object| is_stored(object))
+            .filter(|object| self.intermediate.stores(object))
             .peekable();
         let mut object_count = 0usize;
 
@@ -4255,6 +4317,128 @@ mod tests {
         assert_eq!(names, ["class_4", "local_3"]);
         assert_eq!(ids, "[4]");
         assert_eq!(parent, ObjectId(2).to_string());
+    }
+
+    /// Nothing of an intermediate class (`ClassResults::Intermediate`) is
+    /// written: an object only in it isn't stored, one also in a stored
+    /// class is - without it; its class values and the parent and partner
+    /// entries keyed by it are left out.
+    #[test]
+    fn nothing_of_an_intermediate_class_is_written() {
+        use crate::pipeline::pipeline_measure::PipelineMeasurements;
+        use evanalyzer_cfg::core_types::{
+            MeasurementInfo, MeasurementRegion, MeasurementTarget, MeasurementUnit,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let exporter = test_exporter(&path).with_intermediate_classes([2]);
+        let mut cache = cache_with_objects("a.tif", 0);
+        // 1 in classes 1 and 2, 2 only in the intermediate 2, 3 in class 1.
+        cache
+            .object_cache
+            .insert(ObjectId(1), object_in_classes(1, &[1, 2]));
+        cache
+            .object_cache
+            .insert(ObjectId(2), object_in_classes(2, &[2]));
+        let mut three = object_in_classes(3, &[1]);
+        three.set_parent(ObjectClass::Global(2), Some(ObjectId(1)));
+        three.set_parent(ObjectClass::Global(1), Some(ObjectId(1)));
+        three
+            .colocalized_with
+            .insert(ObjectClass::Global(2), vec![ObjectId(1)]);
+        three
+            .colocalized_with
+            .insert(ObjectClass::Global(1), vec![ObjectId(1), ObjectId(2)]);
+        cache.object_cache.insert(ObjectId(3), three);
+        let info = |key: &str, target| MeasurementInfo {
+            key: key.into(),
+            name: key.into(),
+            step: "m".into(),
+            unit: MeasurementUnit::None,
+            target,
+            range: None,
+            aggregatable: true,
+            related_objects: false,
+            profile: false,
+        };
+        let value = |object: u128, value: f64| ObjectValue {
+            object: ObjectId(object),
+            value,
+            related: None,
+            position: None,
+        };
+        cache.measurements = PipelineMeasurements {
+            measurements: vec![
+                Measurement {
+                    info: info("m/count", MeasurementTarget::Image),
+                    values: MeasurementValues::Image(vec![
+                        (MeasurementRegion::Class(ObjectClass::Global(2)), 5.0),
+                        (MeasurementRegion::Class(ObjectClass::Global(1)), 6.0),
+                    ]),
+                },
+                Measurement {
+                    info: info("m/area", MeasurementTarget::Object),
+                    values: MeasurementValues::Objects(vec![value(1, 1.0), value(2, 2.0)]),
+                },
+            ],
+            z_stack: 0,
+            t_stack: 0,
+            excluded: None,
+        };
+
+        exporter.export(&cache).unwrap();
+
+        let conn = shared_connection(&path).unwrap();
+        let objects: Vec<(String, String, String, String, String)> = conn
+            .prepare(
+                "SELECT CAST(object_id AS VARCHAR), object_class_name, \
+                 CAST(object_class_id AS VARCHAR), CAST(parent_ids AS VARCHAR), \
+                 CAST(coloc_partner_ids AS VARCHAR) FROM objects ORDER BY object_id",
+            )
+            .unwrap()
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let (one, three) = (ObjectId(1).to_string(), ObjectId(3).to_string());
+        assert_eq!(
+            objects,
+            [
+                (
+                    one.clone(),
+                    r#"["class_1"]"#.into(),
+                    "[1]".into(),
+                    "{}".into(),
+                    "{}".into()
+                ),
+                (
+                    three,
+                    r#"["class_1"]"#.into(),
+                    "[1]".into(),
+                    format!("{{1={one}}}"),
+                    format!("{{1=[{one}]}}")
+                ),
+            ]
+        );
+        let values: Vec<(String, String, f64)> = conn
+            .prepare(
+                "SELECT region, CAST(object_class_id AS VARCHAR), value FROM measurements \
+                 ORDER BY value",
+            )
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            values,
+            [
+                ("object".into(), "[1]".into(), 1.0),
+                ("class".into(), "[1]".into(), 6.0)
+            ]
+        );
     }
 
     /// An object without a project class (none, or only `Unset`) isn't a

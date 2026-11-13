@@ -21,6 +21,24 @@ pub struct Class {
     pub color: u32,
     pub name: String,
     pub notes: String,
+    /// What the results keep of the class's objects - missing in projects
+    /// from before it: [`ClassResults::Objects`].
+    #[serde(default)]
+    pub results: ClassResults,
+}
+
+/// What the results keep of a class's objects. The pipeline and the viewer
+/// see every class whatever it says.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ClassResults {
+    /// Every object with its measurements.
+    #[default]
+    Objects,
+    /// Only for later steps of the pipeline (e.g. the seeds of Grow
+    /// Regions): nothing of the class is written to the results - an object
+    /// in no other class isn't stored, nor its measurements.
+    Intermediate,
 }
 
 #[allow(dead_code)] // unused in build.rs' copy of this file
@@ -65,6 +83,7 @@ impl ClassificationSettings {
                 color: 0x97978F,
                 name: "Background".to_string(),
                 notes: "".into(),
+                results: ClassResults::Objects,
             }],
         }
     }
@@ -76,6 +95,7 @@ impl ClassificationSettings {
             color: 0x97978F,
             name: "Background".to_string(),
             notes: "".into(),
+            results: ClassResults::Objects,
         }];
         classes.retain(|class| class.id != BACKGROUND_ID);
         all_classes.extend(classes);

@@ -4,7 +4,7 @@
 import { Places } from "../api/layout.slint";
 import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
 import { DialogType, GlobalAppState } from "../api/state.slint";
-import { ClassificationSettingsState } from "../api/classification_class_edit.slint";
+import { ClassificationSettingsState, ClassResultsKind } from "../api/classification_class_edit.slint";
 import { LineEdit, ComboBox } from "../ink/std_compat.slint";
 
 import { Ink } from "../ink/palette.slint";
@@ -22,6 +22,84 @@ component ColorTile inherits Rectangle {
     TouchArea {
         clicked => {
             ClassificationSettingsState.settings.color = item_color;
+        }
+    }
+}
+
+// One choice of what the results keep of the class: a radio, its name and
+// what it does - the whole card picks it.
+component ResultsOption inherits Rectangle {
+    in property <string> title;
+    in property <string> description;
+    in property <bool> checked;
+    callback picked;
+
+    accessible-role: radio-button;
+    accessible-checked: root.checked;
+    accessible-label: root.title;
+    accessible-description: root.description;
+    accessible-action-default => {
+        root.picked();
+    }
+    border-radius: Ink.radius-md;
+    border-width: 1px;
+    border-color: root.checked ? Ink.focus : ta.has-hover ? Ink.row-lift-ring : Ink.border;
+    background: ta.has-hover && !root.checked ? Ink.hover : Ink.panel;
+
+    // The chosen one's ring, as the focus ring of a field.
+    if root.checked: Rectangle {
+        x: -3px;
+        y: -3px;
+        width: root.width + 6px;
+        height: root.height + 6px;
+        border-radius: Ink.radius-md + 3px;
+        border-width: 3px;
+        border-color: Ink.focus-ring;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.picked();
+        }
+    }
+
+    HorizontalLayout {
+        padding-top: 9px;
+        padding-bottom: 9px;
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 10px;
+        VerticalLayout {
+            alignment: start;
+            padding-top: 2px;
+            Rectangle {
+                width: 14px;
+                height: 14px;
+                border-radius: 7px;
+                border-width: root.checked ? 4px : 1px;
+                border-color: root.checked ? Ink.focus : Ink.text-faint;
+                background: Ink.panel;
+            }
+        }
+
+        VerticalLayout {
+            spacing: 2px;
+            Text {
+                text: root.title;
+                font-size: Ink.fs-body;
+                font-weight: root.checked ? 600 : 400;
+                color: Ink.text;
+                accessible-role: none;
+            }
+
+            Text {
+                text: root.description;
+                font-size: Ink.fs-secondary;
+                color: Ink.text-dim;
+                wrap: word-wrap;
+                accessible-role: none;
+            }
         }
     }
 }
@@ -96,6 +174,34 @@ export component ClassEditDialog inherits InkDialog {
         font-size: Ink.fs-body;
         color: Ink.text-dim;
         wrap: word-wrap;
+    }
+
+    // What the results keep of the class (`ClassResults`).
+    VerticalLayout {
+        spacing: 6px;
+        Text {
+            text: "Results";
+            font-size: Ink.fs-heading;
+            color: Ink.text;
+        }
+
+        ResultsOption {
+            title: "Objects";
+            description: "Every object with its measurements. Default.";
+            checked: ClassificationSettingsState.settings.results == ClassResultsKind.objects;
+            picked => {
+                ClassificationSettingsState.settings.results = ClassResultsKind.objects;
+            }
+        }
+
+        ResultsOption {
+            title: "Intermediate";
+            description: "Only for later steps, e.g. seeds for Grow Regions. Shown in the viewer, not written to the results.";
+            checked: ClassificationSettingsState.settings.results == ClassResultsKind.intermediate;
+            picked => {
+                ClassificationSettingsState.settings.results = ClassResultsKind.intermediate;
+            }
+        }
     }
 
     HorizontalLayout {

@@ -2304,6 +2304,7 @@ mod tests {
                     color: 0x2a6bdf,
                     name: "Interphase".into(),
                     notes: String::new(),
+                    results: Default::default(),
                 },
             );
             let preview = &mut project.tmp_settings.preview_objects;

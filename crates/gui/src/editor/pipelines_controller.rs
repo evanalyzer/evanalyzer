@@ -4421,7 +4421,12 @@ impl PipelinesController {
             return;
         }
         self.pipeline_settings_changed();
-        if matches!(fix, evanalyzer_app::modules::ProblemFix::AddClass(_)) {
+        // A class added, or stored again (its "not stored" pill goes).
+        if matches!(
+            fix,
+            evanalyzer_app::modules::ProblemFix::AddClass(_)
+                | evanalyzer_app::modules::ProblemFix::StoreClass(_)
+        ) {
             self.focus_controller.classes_changed();
         }
         if let Some(ui) = self.ui.upgrade() {
@@ -6025,6 +6030,8 @@ impl PipelinesController {
                                 color: crate::helper::color_generators::color_from_hex(class.color),
                                 visible: true,
                                 count: 0,
+                                // A module's own classes end with it anyway.
+                                intermediate: false,
                             })
                             .collect::<Vec<_>>(),
                     )));
@@ -10316,6 +10323,7 @@ mod tests {
                     name: "Vesicles".into(),
                     color: 0x00FF00,
                     notes: String::new(),
+                    results: Default::default(),
                 });
             let mut classify = step("ClassifyObjects");
             classify.id = evanalyzer_cfg::core_types::StepId(9);

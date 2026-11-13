@@ -705,6 +705,7 @@ mod tests {
             name: "Mitotic".into(),
             color: 0x2a6bdf,
             notes: String::new(),
+            results: Default::default(),
         }]);
         let overlay = PredictionOverlay::default();
         overlay.set_objects(object_capture());
