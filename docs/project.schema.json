@@ -1310,9 +1310,11 @@
       "type": "object",
       "properties": {
         "cutoff": {
-          "description": "How the quality cut-off is chosen. A maximum's quality is the image's\nvalue at it.\n\nManual: maxima above `min_quality` are kept.\nOtsu: Otsu's method on the qualities of all maxima of the image\nsplits spots from noise peaks; `min_quality` stays the lowest cut-off,\nso an image without spots doesn't turn its noise into spots.",
+          "description": "How the quality cut-off is chosen. A maximum's quality is the image's\nvalue at it.\n\nManual: maxima above `min_quality` are kept.\nOtsu: Otsu's method on the qualities of all maxima of the image\nsplits spots from noise peaks.\nNoise: maxima more than `noise_factor` times the image's noise above\nits background are kept - the same factor fits every exposure.\n\nWith Otsu and Noise `min_quality` stays the lowest cut-off, so an\nimage without spots doesn't turn its noise into spots.",
           "$ref": "#/$defs/SegmentationFindMaximaMaximaCutoffSettings",
-          "default": "MANUAL"
+          "default": {
+            "type": "MANUAL"
+          }
         },
         "excludeAtEdges": {
           "description": "Drop maxima closer to the image border than the radius.",
@@ -1325,7 +1327,7 @@
           "default": false
         },
         "minQuality": {
-          "description": "Maxima with a quality at or below this value are dropped (with Otsu:\nthe lowest cut-off).",
+          "description": "Maxima with a quality at or below this value are dropped (with Otsu\nand Noise: the lowest cut-off).",
           "type": "number",
           "format": "float",
           "default": 0.0,
@@ -4952,10 +4954,54 @@
     },
     "SegmentationFindMaximaMaximaCutoffSettings": {
       "description": "How [`FindMaxima`] chooses its quality cut-off.",
-      "type": "string",
-      "enum": [
-        "MANUAL",
-        "OTSU"
+      "oneOf": [
+        {
+          "description": "Maxima above `min_quality` are kept.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "MANUAL"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Otsu's method on the qualities of all maxima splits spots from noise\npeaks.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "OTSU"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Maxima more than `noise_factor` times the noise above the background\nare kept. Background: the median of all pixels; noise: their median\nabsolute deviation × 1.4826 (the standard deviation for normally\ndistributed noise). Both from the image this step gets, so after a\nblur the blurred noise counts. Spots must cover less than half the\nimage (else they raise the background).",
+          "type": "object",
+          "properties": {
+            "noiseFactor": {
+              "description": "How many times the noise a maximum must lie above the\nbackground: 3 keeps few noise peaks, 5 hardly any; lower finds\nfainter spots and more noise.",
+              "type": "number",
+              "format": "float",
+              "maximum": 100,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "NOISE"
+            }
+          },
+          "required": [
+            "type",
+            "noiseFactor"
+          ]
+        }
       ]
     },
     "SegmentationMappingSettings": {

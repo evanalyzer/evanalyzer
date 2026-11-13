@@ -60,13 +60,17 @@ pub struct FindMaxima {
     ///
     /// Manual: maxima above `min_quality` are kept.
     /// Otsu: Otsu's method on the qualities of all maxima of the image
-    /// splits spots from noise peaks; `min_quality` stays the lowest cut-off,
-    /// so an image without spots doesn't turn its noise into spots.
+    /// splits spots from noise peaks.
+    /// Noise: maxima more than `noise_factor` times the image's noise above
+    /// its background are kept - the same factor fits every exposure.
+    ///
+    /// With Otsu and Noise `min_quality` stays the lowest cut-off, so an
+    /// image without spots doesn't turn its noise into spots.
     #[cmdsmeta(default = MaximaCutoff::Manual, summary = true)]
     pub cutoff: MaximaCutoff,
 
-    /// Maxima with a quality at or below this value are dropped (with Otsu:
-    /// the lowest cut-off).
+    /// Maxima with a quality at or below this value are dropped (with Otsu
+    /// and Noise: the lowest cut-off).
     #[cmdsmeta(default = 0, min = 0, max = 65535, step = 1, summary = true)]
     pub min_quality: f32,
 
@@ -91,11 +95,31 @@ pub struct FindMaxima {
 }
 
 /// How [`FindMaxima`] chooses its quality cut-off.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, CommandsMeta)]
 pub enum MaximaCutoff {
+    /// Maxima above `min_quality` are kept.
     Manual,
+    /// Otsu's method on the qualities of all maxima splits spots from noise
+    /// peaks.
     Otsu,
+    /// Maxima more than `noise_factor` times the noise above the background
+    /// are kept. Background: the median of all pixels; noise: their median
+    /// absolute deviation × 1.4826 (the standard deviation for normally
+    /// distributed noise). Both from the image this step gets, so after a
+    /// blur the blurred noise counts. Spots must cover less than half the
+    /// image (else they raise the background).
+    Noise {
+        /// How many times the noise a maximum must lie above the
+        /// background: 3 keeps few noise peaks, 5 hardly any; lower finds
+        /// fainter spots and more noise.
+        #[cmdsmeta(default = 3.0, min = 0.0, max = 100.0, step = 0.5)]
+        noise_factor: f32,
+    },
 }
+
+/// Turns the median absolute deviation of normally distributed values into
+/// their standard deviation (1 / Φ⁻¹(3/4), Hampel 1974).
+const MAD_TO_SIGMA: f32 = 1.4826;
 
 // Per-pixel mark bits of the search (one byte per pixel).
 /// No pixel within the radius is brighter.
@@ -122,7 +146,8 @@ impl ImageAlgorithm for FindMaxima {
     ///    `inside_segmentation` the maximum's pixel must lie on the
     ///    segmentation.
     /// 4. **Edges and quality:** the image border (not the tile's) and the
-    ///    cut-off (`> cutoff`, like Threshold's lower bound).
+    ///    cut-off (`> cutoff`, like Threshold's lower bound). Otsu and Noise
+    ///    work on the tile (the whole image up to the largest tile size).
     /// 5. **Output:** both maps cleared, then each maximum written with the
     ///    segmentation class and its own instance id (1, 2, … in row order).
     fn execute(
@@ -165,6 +190,10 @@ impl ImageAlgorithm for FindMaxima {
                 let qualities: Vec<f32> = maxima.iter().map(|&p| values[p]).collect();
                 otsu_cutoff(&qualities).map_or(floor, |otsu| otsu.max(floor))
             }
+            MaximaCutoff::Noise { noise_factor } => background_and_noise(values)
+                .map_or(floor, |(background, noise)| {
+                    (background + noise_factor * noise).max(floor)
+                }),
         };
         maxima.retain(|&p| values[p] > cutoff);
 
@@ -178,18 +207,22 @@ impl ImageAlgorithm for FindMaxima {
 
     /// One mark byte per pixel, and up to 4 bytes per pixel of the largest
     /// plateau (a flat region as big as the tile at worst); measured by
-    /// `tests::tile_ram`.
+    /// `tests::tile_ram`. The Noise cut-off's copy of the pixels (4 bytes
+    /// per pixel) comes after both are freed.
     fn ram_per_tile_pixel(&self) -> f64 {
         5.0
     }
 
     /// The detection (local maxima within a radius, then a brightness
     /// cut-off) is the one Sbalzarini & Koumoutsakos 2005 describe for
-    /// particles; Otsu 1979 for the automatic cut-off.
+    /// particles; Otsu 1979 for the automatic cut-off, Hampel 1974 for the
+    /// noise as scaled median absolute deviation.
     fn cite(&self) -> Vec<&'static CitationMetadata> {
         let mut papers = vec![&SBALZARINI_2005];
-        if self.cutoff == MaximaCutoff::Otsu {
-            papers.push(&OTSU_1979);
+        match self.cutoff {
+            MaximaCutoff::Manual => {}
+            MaximaCutoff::Otsu => papers.push(&OTSU_1979),
+            MaximaCutoff::Noise { .. } => papers.push(&HAMPEL_1974),
         }
         papers
     }
@@ -219,6 +252,17 @@ static OTSU_1979: CitationMetadata = CitationMetadata {
     doi: Some("10.1109/TSMC.1979.4310076"),
     url: Some("https://doi.org/10.1109/TSMC.1979.4310076"),
     pages: Some("62-66"),
+};
+
+static HAMPEL_1974: CitationMetadata = CitationMetadata {
+    cite_key: "hampel1974influence",
+    title: "The Influence Curve and Its Role in Robust Estimation",
+    authors: &["Frank R. Hampel"],
+    year: 1974,
+    container: Some("Journal of the American Statistical Association"),
+    doi: Some("10.1080/01621459.1974.10482962"),
+    url: Some("https://doi.org/10.1080/01621459.1974.10482962"),
+    pages: Some("383-393"),
 };
 
 impl FindMaxima {
@@ -459,6 +503,36 @@ fn otsu_cutoff(qualities: &[f32]) -> Option<f32> {
         .filter(|&q| q <= upper && bin(q) <= best_k)
         .fold(lo, f32::max);
     Some(cutoff)
+}
+
+/// The background (median) and noise (median absolute deviation ×
+/// [`MAD_TO_SIGMA`]) of `values`, NaN skipped; `None` without a value.
+/// Exact (no histogram), so it doesn't depend on the value range.
+fn background_and_noise(values: &[f32]) -> Option<(f32, f32)> {
+    let mut work: Vec<f32> = values.iter().copied().filter(|v| !v.is_nan()).collect();
+    if work.is_empty() {
+        return None;
+    }
+    let background = median_in_place(&mut work);
+    for v in &mut work {
+        *v = (*v - background).abs();
+    }
+    let mad = median_in_place(&mut work);
+    Some((background, mad * MAD_TO_SIGMA))
+}
+
+/// The median of `values` (not empty; reordered): the middle value, or the
+/// mean of the two middle values for an even count.
+fn median_in_place(values: &mut [f32]) -> f32 {
+    let odd = values.len() % 2 == 1;
+    let mid = values.len() / 2;
+    let (lower, &mut upper, _) = values.select_nth_unstable_by(mid, f32::total_cmp);
+    if odd {
+        upper
+    } else {
+        let below = lower.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        (below + upper) / 2.0
+    }
 }
 
 /// Clears the segmentation and the instance map (created if missing) and
@@ -786,6 +860,78 @@ mod tests {
         };
         run(&command, &mut ctx);
         assert_eq!(written(&ctx), vec![(3, 3, 1, 1)]);
+    }
+
+    /// A noisy row (background 0.15 and 0.25 alternating, 20 and 17 pixels:
+    /// median 0.2, MAD 0.05) with spots of 0.30, 0.45 and 0.9: noise =
+    /// 0.05 × 1.4826 ≈ 0.074.
+    fn noisy_row() -> PipelineContext {
+        let mut row = Vec::new();
+        for i in 0..40 {
+            row.push(if i % 2 == 0 { 0.15 } else { 0.25 });
+        }
+        for (x, v) in [(5, 0.30), (21, 0.45), (35, 0.9)] {
+            row[x] = v;
+        }
+        context(&[row])
+    }
+
+    #[test]
+    fn noise_keeps_maxima_the_factor_times_the_noise_above_the_background() {
+        // Cut-off 0.2 + 3 × 0.074 ≈ 0.42: keeps 0.45 and 0.9, not 0.30.
+        let mut ctx = noisy_row();
+        let command = FindMaxima {
+            cutoff: MaximaCutoff::Noise { noise_factor: 3.0 },
+            ..command()
+        };
+        run(&command, &mut ctx);
+        let xs: Vec<usize> = written(&ctx).iter().map(|w| w.0).collect();
+        assert_eq!(xs, vec![21, 35]);
+    }
+
+    #[test]
+    fn noise_cutoff_is_the_same_at_every_exposure() {
+        // The same scene at a quarter of the exposure: background, noise and
+        // spots all a quarter - the same spots are found.
+        let mut bright = noisy_row();
+        let mut dim = noisy_row();
+        for v in dim.get_f32_gray_image_mut().unwrap().as_slice_mut() {
+            *v /= 4.0;
+        }
+        let command = FindMaxima {
+            cutoff: MaximaCutoff::Noise { noise_factor: 3.0 },
+            ..command()
+        };
+        run(&command, &mut bright);
+        run(&command, &mut dim);
+        assert_eq!(written(&bright), written(&dim));
+        assert_eq!(written(&dim).len(), 2);
+    }
+
+    #[test]
+    fn noise_keeps_min_quality_as_the_lowest_cutoff() {
+        let mut ctx = noisy_row();
+        let command = FindMaxima {
+            cutoff: MaximaCutoff::Noise { noise_factor: 3.0 },
+            min_quality: 0.5,
+            ..command()
+        };
+        run(&command, &mut ctx);
+        let xs: Vec<usize> = written(&ctx).iter().map(|w| w.0).collect();
+        assert_eq!(xs, vec![35]);
+    }
+
+    #[test]
+    fn background_and_noise_are_median_and_scaled_mad() {
+        assert_eq!(background_and_noise(&[]), None);
+        assert_eq!(background_and_noise(&[f32::NAN]), None);
+        // Median 3, deviations 2 1 0 1 7 → MAD 1.
+        let (background, noise) =
+            background_and_noise(&[1.0, 2.0, 3.0, f32::NAN, 4.0, 10.0]).unwrap();
+        assert_eq!(background, 3.0);
+        assert_eq!(noise, MAD_TO_SIGMA);
+        // Even count: mean of the two middle values.
+        assert_eq!(background_and_noise(&[4.0, 1.0, 3.0, 2.0]).unwrap().0, 2.5);
     }
 
     #[test]

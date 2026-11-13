@@ -1663,7 +1663,7 @@ fn exclude_image_settings_convert_to_their_own_variants() {
     ));
 }
 
-/// Two-way choices convert one to one: line polarity, maxima cutoff,
+/// Small choices convert one to one: line polarity, maxima cutoff,
 /// relate rule, texture directions.
 #[test]
 fn two_way_settings_convert_to_their_own_variants() {
@@ -1682,6 +1682,12 @@ fn two_way_settings_convert_to_their_own_variants() {
     assert!(matches!(
         MaximaCutoff::from(SegmentationFindMaximaMaximaCutoffSettings::Otsu),
         MaximaCutoff::Otsu
+    ));
+    assert!(matches!(
+        MaximaCutoff::from(SegmentationFindMaximaMaximaCutoffSettings::Noise {
+            noise_factor: 4.5
+        }),
+        MaximaCutoff::Noise { noise_factor: 4.5 }
     ));
     assert!(matches!(
         RelateRule::from(ObjectRelateObjectsRelateRuleSettings::CentreInside),

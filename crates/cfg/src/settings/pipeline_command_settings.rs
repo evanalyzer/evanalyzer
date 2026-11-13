@@ -468,14 +468,37 @@ pub enum FiltersVesselnessLinePolaritySettings {
 }
 
 /// How [`FindMaxima`] chooses its quality cut-off.
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SegmentationFindMaximaMaximaCutoffSettings {
-    #[default]
+    /// Maxima above `min_quality` are kept.
     #[serde(alias = "manual")]
     Manual,
+    /// Otsu's method on the qualities of all maxima splits spots from noise
+    /// peaks.
     #[serde(alias = "otsu")]
     Otsu,
+    /// Maxima more than `noise_factor` times the noise above the background
+    /// are kept. Background: the median of all pixels; noise: their median
+    /// absolute deviation × 1.4826 (the standard deviation for normally
+    /// distributed noise). Both from the image this step gets, so after a
+    /// blur the blurred noise counts. Spots must cover less than half the
+    /// image (else they raise the background).
+    #[serde(rename_all = "camelCase")]
+    #[serde(alias = "noise")]
+    Noise {
+        /// How many times the noise a maximum must lie above the
+        /// background: 3 keeps few noise peaks, 5 hardly any; lower finds
+        /// fainter spots and more noise.
+        #[schemars(range(min = 0, max = 100))]
+        noise_factor: f32,
+    },
+}
+
+impl Default for SegmentationFindMaximaMaximaCutoffSettings {
+    fn default() -> Self {
+        Self::Manual {}
+    }
 }
 
 /// What a merge adds up and a split divides - telling a true merge or
@@ -1944,11 +1967,15 @@ pub struct FindMaximaSettings {
     ///
     /// Manual: maxima above `min_quality` are kept.
     /// Otsu: Otsu's method on the qualities of all maxima of the image
-    /// splits spots from noise peaks; `min_quality` stays the lowest cut-off,
-    /// so an image without spots doesn't turn its noise into spots.
+    /// splits spots from noise peaks.
+    /// Noise: maxima more than `noise_factor` times the image's noise above
+    /// its background are kept - the same factor fits every exposure.
+    ///
+    /// With Otsu and Noise `min_quality` stays the lowest cut-off, so an
+    /// image without spots doesn't turn its noise into spots.
     pub cutoff: SegmentationFindMaximaMaximaCutoffSettings,
-    /// Maxima with a quality at or below this value are dropped (with Otsu:
-    /// the lowest cut-off).
+    /// Maxima with a quality at or below this value are dropped (with Otsu
+    /// and Noise: the lowest cut-off).
     #[schemars(range(min = 0, max = 65535))]
     pub min_quality: f32,
     /// Unit used for `min_quality`.

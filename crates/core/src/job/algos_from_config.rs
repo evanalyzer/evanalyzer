@@ -273,6 +273,11 @@ impl From<SegmentationFindMaximaMaximaCutoffSettings> for MaximaCutoff {
         match _s {
             SegmentationFindMaximaMaximaCutoffSettings::Manual => MaximaCutoff::Manual,
             SegmentationFindMaximaMaximaCutoffSettings::Otsu => MaximaCutoff::Otsu,
+            SegmentationFindMaximaMaximaCutoffSettings::Noise { noise_factor } => {
+                MaximaCutoff::Noise {
+                    noise_factor: noise_factor.clamp(0.0, 100.0),
+                }
+            }
         }
     }
 }
