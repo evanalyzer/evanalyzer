@@ -645,6 +645,16 @@ impl From<AiObjectClassifierSettings> for AiObjectClassifier {
     }
 }
 
+impl From<BandpassSettings> for Bandpass {
+    fn from(_s: BandpassSettings) -> Self {
+        Bandpass {
+            sigma_small: _s.sigma_small.clamp(0.0, 10000.0),
+            sigma_large: _s.sigma_large.clamp(0.0, 10000.0),
+            unit: _s.unit,
+        }
+    }
+}
+
 impl From<BlurSettings> for Blur {
     fn from(_s: BlurSettings) -> Self {
         Blur {
@@ -1527,6 +1537,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
     match cmd {
         PipelineCommand::AiObjectClassifier(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::AiObjectClassifier::from(settings),
+        ))),
+        PipelineCommand::Bandpass(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::Bandpass::from(settings),
         ))),
         PipelineCommand::Blur(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::Blur::from(settings),

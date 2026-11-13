@@ -32,6 +32,7 @@ pub use self::ai_segmentation::unet::UNetOutputMode;
 pub use self::ai_segmentation::yolov5::YoloClassMapping;
 pub use self::ai_segmentation::yolov5::Yolov5;
 
+pub use self::filters::bandpass::Bandpass;
 pub use self::filters::blur::Blur;
 pub use self::filters::blur_gaussian::GaussianBlur;
 pub use self::filters::color_deconvolution::{ColorDeconvolution, StainOutput, StainVectors};

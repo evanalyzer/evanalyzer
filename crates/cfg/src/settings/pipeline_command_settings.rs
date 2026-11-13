@@ -1202,6 +1202,41 @@ pub enum AiSegmentationUnetUNetOutputModeSettings {
 
 // ============ PREPROCESSING ============
 
+/// Removes details finer than `sigma_small` (noise) and structures coarser
+/// than `sigma_large` (uneven background), keeps everything in between.
+///
+/// [Bandpass] -> [Threshold | Find Maxima]
+///
+/// The result is in the image's intensity units around 0: bright objects
+/// positive, the removed background 0. With `sigma_large` 0 it is a plain
+/// blur, with `sigma_small` 0 a background subtraction.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[serde(default)]
+#[serde(rename_all = "camelCase")]
+pub struct BandpassSettings {
+    /// σ of the narrower Gaussian: details finer than about this are
+    /// smoothed away (noise). 0: no smoothing.
+    #[schemars(range(min = 0, max = 10000))]
+    pub sigma_small: f32,
+    /// σ of the wider Gaussian, subtracted: structures coarser than about
+    /// this are removed (uneven background). Must be larger than
+    /// `sigma_small`; 0: nothing removed.
+    #[schemars(range(min = 0, max = 10000))]
+    pub sigma_large: f32,
+    /// Unit both σ are expressed in.
+    pub unit: SizeUnits,
+}
+
+impl Default for BandpassSettings {
+    fn default() -> Self {
+        Self {
+            sigma_small: 1.0f32,
+            sigma_large: 15.0f32,
+            unit: SizeUnits::Pixels,
+        }
+    }
+}
+
 /// Smooths an image by averaging pixel intensities within a local neighborhood.
 ///
 /// This algorithm applies a uniform box filter where every pixel within the moving

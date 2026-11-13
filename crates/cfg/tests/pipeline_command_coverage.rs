@@ -405,8 +405,9 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         Measure,
         Dataset,
     ];
-    let expected: [(&str, &[CommandCategory]); 70] = [
+    let expected: [(&str, &[CommandCategory]); 71] = [
         ("AI Object Classifier", &[Object, Measure, Dataset]),
+        ("Bandpass", &[Segment, Preprocess]),
         ("Blur", &[Segment, Preprocess]),
         ("AI Cellpose Segmentation", &[Extract]),
         ("ClassifyObjects", &[Object, Measure, Dataset]),
