@@ -381,14 +381,6 @@ component ParamListRow inherits Rectangle {
         root.clicked();
     }
 
-    // Selected: the focus color's edge.
-    if root.selected: Rectangle {
-        x: 0px;
-        width: 3px;
-        height: parent.height - 10px;
-        border-radius: 1.5px;
-        background: Ink.focus;
-    }
     ta := TouchArea {
         mouse-cursor: pointer;
         clicked => {

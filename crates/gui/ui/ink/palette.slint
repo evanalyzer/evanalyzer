@@ -52,8 +52,17 @@ export global Ink {
     /// The selected row, the active tab or chip.
     out property <color> selection: root.pick(#F1F1F3, #26262B, #3A3A42);
     /// The selected row of a list (images, steps, objects, tables): a
-    /// tint of `focus`, with a `focus` edge at its left.
+    /// tint of `focus` (no edge: blue alone means insert here or the
+    /// keyboard's focus). A selected step has no fill, only a semibold name.
     out property <color> selection-row: root.pick(#E5EDFB, #2D2D41, #3E3E5A);
+    /// The pipelines area above the steps: a tone darker than `panel`,
+    /// so where the pipelines end and the steps begin shows without a line
+    /// of its own; `tray-edge` is its bottom line and the shown row's ring,
+    /// `tray-hover` a hovered row on it. Muted text on it is `text-dim`
+    /// (`text-mute` is below 4.5:1 there).
+    out property <color> tray: root.pick(#E4E4E7, #111114, #222227);
+    out property <color> tray-edge: root.pick(#C9C9CF, #2E2E33, #3E3E46);
+    out property <color> tray-hover: root.pick(#D8D8DC, #1D1D21, #2E2E34);
     // -- Lines --
     out property <color> border: root.pick(#E4E4E7, #2E2E33, #3E3E46);
     out property <color> border-soft: root.pick(#F0F0F2, #232327, #34343B);

@@ -52,6 +52,7 @@ import {
 } from "../ink/ink.slint";
 
 import { FocusModeButton } from "pipeline_focus.slint";
+import { PipelineRow, InsertBar, SourcePill } from "pipeline_rows.slint";
 import { CommandPaletteState } from "../api/command_palette.slint";
 import {
     Ink,
@@ -124,196 +125,6 @@ component AdvancedRow inherits Rectangle {
             checked: root.always;
             toggled(on) => {
                 root.always-toggled(on);
-            }
-        }
-    }
-}
-
-// A pipeline in the switcher: included in Run (☑), its name, image
-// source and steps, focus and ⋯; click to edit its steps.
-component PipelineTab inherits Rectangle {
-    in property <Pipeline> pipeline;
-    in property <bool> active;
-    callback selected;
-    callback double-clicked;
-    callback alt-clicked;
-    callback toggled;
-    callback more-clicked;
-    callback move-up;
-    callback move-down;
-    // Dragged by this many rows (- up).
-    callback move-by(int);
-    callback focus-clicked;
-
-    height: 40px;
-    accessible-role: list-item;
-    accessible-label: root.pipeline.name;
-    accessible-item-selected: root.active;
-
-    // Dragged by its ⋮⋮: how far, while the mouse is down.
-    property <length> drag-dy: 0px;
-
-    face := Rectangle {
-        y: root.drag-dy;
-        border-radius: Ink.radius-sm;
-        background: root.drag-dy != 0px ? Ink.raised : root.active ? Ink.selection-row : ta.has-hover ? Ink.hover : transparent;
-        drop-shadow-blur: root.drag-dy != 0px ? 12px : 0px;
-        drop-shadow-color: Ink.shadow;
-
-        // Selected: the focus color's edge.
-        if root.active: Rectangle {
-            x: 0px;
-            width: 3px;
-            height: parent.height - 16px;
-            border-radius: 1.5px;
-            background: Ink.focus;
-        }
-        ta := TouchArea {
-            mouse-cursor: pointer;
-            clicked => {
-                root.selected();
-            }
-            double-clicked => {
-                root.double-clicked();
-            }
-            pointer-event(e) => {
-                if e.kind == PointerEventKind.down && e.button == PointerEventButton.left && e.modifiers.alt {
-                    root.alt-clicked();
-                }
-            }
-
-        // The buttons inside: over one the line stays hovered (as
-        // siblings they flickered).
-        HorizontalLayout {
-                padding-left: 2px;
-                padding-right: 4px;
-                spacing: 6px;
-
-                // ⋮⋮: drag up or down to reorder.
-            Rectangle {
-                    width: 14px;
-                    Image {
-                        source: InkIcons.drag;
-                        width: 12px;
-                        colorize: drag-ta.has-hover || root.drag-dy != 0px ? Ink.text-dim : Ink.text-faint;
-                    }
-
-                    drag-ta := TouchArea {
-                        mouse-cursor: MouseCursor.grab;
-                        property <length> start-y;
-                        pointer-event(e) => {
-                            if e.kind == PointerEventKind.down {
-                                self.start-y = self.mouse-y;
-                            }
-                            if e.kind == PointerEventKind.up {
-                            // By whole rows.
-                            let rows = round(root.drag-dy / root.height);
-                                root.drag-dy = 0px;
-                                if rows != 0 {
-                                    root.move-by(rows);
-                                }
-                            }
-                        }
-                        moved => {
-                            if self.pressed {
-                                root.drag-dy = self.mouse-y - self.start-y;
-                            }
-                        }
-                    }
-                }
-
-                InkCheckbox {
-                    y: (parent.height - self.height) / 2;
-                    checked: root.pipeline.enabled;
-                    toggled => {
-                        root.toggled();
-                    }
-                }
-
-                VerticalLayout {
-                    horizontal-stretch: 1;
-                    alignment: center;
-                    spacing: 1px;
-                    HorizontalLayout {
-                        spacing: 5px;
-                        Text {
-                            text: root.pipeline.name;
-                            font-size: Ink.fs-body;
-                            font-weight: root.active ? 600 : 500;
-                            color: root.pipeline.enabled ? Ink.text : Ink.text-mute;
-                            overflow: elide;
-                            vertical-alignment: center;
-                        }
-                    // Unsaved changes.
-                    Rectangle {
-                            width: root.pipeline.dirty ? 5px : 0px;
-                            Rectangle {
-                                visible: root.pipeline.dirty;
-                                width: 5px;
-                                height: 5px;
-                                border-radius: 2.5px;
-                                background: Ink.warn;
-                            }
-                        }
-
-                        Rectangle {
-                            horizontal-stretch: 1;
-                        }
-                    }
-
-                    Text {
-                        text: root.pipeline.image-source + " · " + root.pipeline.total-step-count + " steps · " + root.pipeline.enabled-step-count + " on";
-                        font-size: Ink.fs-caption;
-                        font-family: Ink.font-mono;
-                        color: Ink.text-mute;
-                        overflow: elide;
-                    }
-                }
-
-                HorizontalLayout {
-                    spacing: 0px;
-                    InkIconButton {
-                        y: (parent.height - self.height) / 2;
-                        size: 22px;
-                        visible: ta.has-hover || root.active;
-                        icon: InkIcons.caret-up;
-                        label: "Move up";
-                        clicked => {
-                            root.move-up();
-                        }
-                    }
-
-                    InkIconButton {
-                        y: (parent.height - self.height) / 2;
-                        size: 22px;
-                        visible: ta.has-hover || root.active;
-                        icon: InkIcons.caret-down;
-                        label: "Move down";
-                        clicked => {
-                            root.move-down();
-                        }
-                    }
-
-                    InkIconButton {
-                        y: (parent.height - self.height) / 2;
-                        size: 22px;
-                        icon: InkIcons.focus;
-                        label: "Focus on this pipeline";
-                        clicked => {
-                            root.focus-clicked();
-                        }
-                    }
-
-                    InkIconButton {
-                        y: (parent.height - self.height) / 2;
-                        size: 22px;
-                        icon: InkIcons.more;
-                        label: "Pipeline actions";
-                        clicked => {
-                            root.more-clicked();
-                        }
-                    }
-                }
             }
         }
     }
@@ -2143,15 +1954,17 @@ component StepRow inherits Rectangle {
     // or while open; hidden they keep no room - the values get it.
     property <bool> controls-shown: root.hovered || step.expanded;
     // What's under them, so the values fade out beneath.
-    property <color> line-bg: step.expanded ? Ink.panel : root.selected ? Ink.selection-row : root.hovered ? Ink.hover : Ink.panel;
+    property <color> line-bg: step.expanded ? Ink.panel : root.hovered ? Ink.hover : Ink.panel;
     // EVA › View › "Step values on a second line": the values under the name.
     property <bool> values-below: LayoutState.step-values-below && step.summary != "";
     property <bool> editable: !PipelinesPanelState.steps-read-only;
         // 0 = off, 1 = stop, 2 = snapshot - for this step.
         property <int> bp-state: (PipelinesPanelState.breakpoint-pipeline-id == root.pipeline-id && PipelinesPanelState.breakpoint-step-id == root.step.step-id) ? PipelinesPanelState.breakpoint-mode : 0;
 
+    // Selected (what the step shortcuts act on): only a semibold name - no
+    // fill, no edge.
     property <bool> selected: PipelinesPanelState.selected-step-id == root.idx;
-    background: step.expanded ? Ink.panel : root.selected ? Ink.selection-row : head-ta.has-hover ? Ink.hover : transparent;
+    background: step.expanded ? Ink.panel : head-ta.has-hover ? Ink.hover : transparent;
     border-width: step.expanded ? 1px : 0px;
     border-color: root.selected ? Ink.text-faint : Ink.border;
     border-radius: Ink.radius-md;
@@ -2168,14 +1981,6 @@ component StepRow inherits Rectangle {
                 border-radius: Ink.radius-md;
             border-width: line-keys.has-focus ? 2px : 0px;
             border-color: Ink.focus;
-            // Selected: the focus color's edge.
-            if root.selected && !step.expanded: Rectangle {
-                x: 0px;
-                width: 3px;
-                height: parent.height - 14px;
-                border-radius: 1.5px;
-                background: Ink.focus;
-            }
                 // Tab reaches it: focused, it's the selected step (the step
                 // shortcuts act on it); Space / Enter opens or closes it.
                 line-keys := FocusScope {
@@ -2283,7 +2088,7 @@ component StepRow inherits Rectangle {
                                 // Locked while an analysis runs: grey.
                                 color: PipelinesPanelState.run-locked ? Ink.text-dim : Ink.text;
                                 font-size: Ink.fs-body;
-                                font-weight: 500;
+                                font-weight: root.selected ? 600 : 500;
                                 vertical-alignment: center;
                                 overflow: elide;
                                 // Cut off: the whole name in a tip.
@@ -2814,56 +2619,6 @@ component StepRow inherits Rectangle {
 // ----------------------------------------------------------
 // Insertion point between rows
 
-component InsertPoint inherits Rectangle {
-    callback insert;
-
-    height: 8px;
-    accessible-role: button;
-    accessible-label: "Insert a step here";
-    accessible-action-default => {
-        root.insert();
-    }
-
-    // Shown on hover: a line and a +, where the step goes.
-    Rectangle {
-        visible: ta.has-hover;
-        x: 8px;
-        y: (parent.height - 1px) / 2;
-        width: parent.width - 16px;
-        height: 1px;
-        background: Ink.focus;
-    }
-
-    Rectangle {
-        visible: ta.has-hover;
-        x: (parent.width - 16px) / 2;
-        y: (parent.height - 16px) / 2;
-        width: 16px;
-        height: 16px;
-        border-radius: 8px;
-        background: Ink.focus;
-        Image {
-            source: InkIcons.add;
-            width: 10px;
-            colorize: #FFFFFF;
-        }
-    }
-
-    ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => {
-            root.insert();
-        }
-    }
-
-    InkTipZone {
-        width: 100%;
-        height: 100%;
-        wanted: ta.has-hover && !ta.pressed;
-        text: "Insert a step here";
-    }
-}
-
 // ----------------------------------------------------------
 // Category filter chip
 
@@ -2873,132 +2628,183 @@ export component PipelinesPanel inherits Rectangle {
     property <bool> has-pipeline: PipelinesPanelState.pipelines.length > 0;
     // A pipeline is shown (none: -1, see `deselect-pipeline`).
     property <bool> pipeline-selected: root.has-pipeline && PipelinesPanelState.active-pipeline-id >= 0;
-    // The pipelines above the steps (none shown: the body lists them).
-    property <bool> list-shown: LayoutState.pipelines-list-open && root.pipeline-selected;
-    property <length> pipeline-row-h: 40px;
+    // Expanded: the pipelines area above the steps; collapsed: the
+    // switcher head. With none shown (or none yet) always the area - its
+    // rows are how to pick one.
+    property <bool> list-shown: LayoutState.pipelines-list-open || !root.pipeline-selected;
+    property <length> pipeline-row-h: 30px;
+    // The pipelines area shows this many rows; more scroll.
+    property <int> list-rows-max: 6;
+    // The switcher list's keyboard cursor (index into `switcher-items`).
+    property <int> switcher-cursor: 0;
+    property <string> run-count: "\{PipelinesPanelState.enabled-pipeline-count} of \{PipelinesPanelState.pipelines.length} run";
 
-    // The head's ⌄: the list above the steps; with no pipeline shown the
-    // body lists them anyway - a new one then.
+    // ⌃ / ⌄: the pipelines area or the switcher head; with no pipeline
+    // the body lists them anyway - a new one then.
     function toggle-list() {
         if root.has-pipeline {
             LayoutState.pipelines-list-open = !LayoutState.pipelines-list-open;
+            PipelinesPanelState.switcher-open = false;
             LayoutState.panels-changed();
         } else {
             PipelinesPanelState.new-pipeline();
         }
     }
 
+    // Shows pipeline `id`'s steps.
+    function show-pipeline(id: int) {
+        PipelinesPanelState.active-pipeline-id = id;
+        PipelinesPanelState.select-pipeline(id);
+        PipelineFocusState.pipeline-selected(id);
+    }
+
+    // A row's click: shows it; on the shown one again: none shown.
+    function row-clicked(id: int) {
+        if id == PipelinesPanelState.active-pipeline-id {
+            PipelinesPanelState.deselect-pipeline();
+        } else {
+            root.show-pipeline(id);
+        }
+    }
+
+    function open-switcher(cursor: int) {
+        PipelinesPanelState.switcher-query = "";
+        PipelinesPanelState.switcher-search("");
+        root.switcher-cursor = cursor;
+        PipelinesPanelState.switcher-open = true;
+    }
+
+    function pick-from-switcher(id: int) {
+        PipelinesPanelState.switcher-open = false;
+        if id != PipelinesPanelState.active-pipeline-id {
+            root.show-pipeline(id);
+        }
+    }
+
     VerticalLayout {
         spacing: 0px;
 
-        // -- Head: the pipeline being edited (a click switches), focus, ⋯ --
-        Rectangle {
-            height: Ink.head-h;
+        // -- Expanded: the pipelines area (a tone darker than the steps) --
+        if root.list-shown: Rectangle {
+            vertical-stretch: 0;
+            height: tray.preferred-height;
+            background: Ink.tray;
 
-            HorizontalLayout {
-                padding-left: 6px;
-                padding-right: 6px;
-                spacing: 4px;
+            tray := VerticalLayout {
+                spacing: 0px;
+                padding-bottom: 2px;
 
-                switcher := Rectangle {
-                    horizontal-stretch: 1;
-                    accessible-role: button;
-                    accessible-label: LayoutState.pipelines-list-open ? "Hide the pipelines" : "Show the pipelines";
-                    accessible-expanded: LayoutState.pipelines-list-open;
-                    accessible-action-default => {
-                        root.toggle-list();
+                HorizontalLayout {
+                    height: Ink.head-h;
+                    padding-left: 14px;
+                    padding-right: 8px;
+                    spacing: 6px;
+                    Text {
+                        text: "Pipelines";
+                        font-size: Ink.fs-dialog-title;
+                        font-weight: 600;
+                        color: Ink.text;
+                        vertical-alignment: center;
                     }
 
-                    Rectangle {
-                        y: 4px;
-                        height: parent.height - 8px;
-                        border-radius: Ink.radius-md;
-                        background: switch-ta.has-hover ? Ink.hover : transparent;
-                        HorizontalLayout {
-                            padding-left: 8px;
-                            padding-right: 8px;
-                            spacing: 6px;
-                            Text {
-                                text: root.pipeline-selected ? "Steps · " + PipelinesPanelState.active-pipeline-name : "Pipelines";
-                                font-size: Ink.fs-dialog-title;
-                                font-weight: 600;
-                                color: Ink.text;
-                                vertical-alignment: center;
-                                overflow: elide;
-                            }
-
-                            Image {
-                                source: root.list-shown ? InkIcons.caret-up : InkIcons.caret-down;
-                                width: 10px;
-                                colorize: Ink.text-mute;
-                            }
-
-                            Text {
-                                horizontal-stretch: 1;
-                                text: PipelinesPanelState.active-pipeline-image-source;
-                                font-size: Ink.fs-secondary;
-                                font-family: Ink.font-mono;
-                                color: Ink.text-mute;
-                                vertical-alignment: center;
-                                overflow: elide;
-                            }
-                        }
+                    Text {
+                        horizontal-stretch: 1;
+                        text: root.run-count;
+                        font-size: Ink.fs-secondary;
+                        font-family: Ink.font-mono;
+                        color: Ink.text-dim;
+                        vertical-alignment: center;
+                        overflow: elide;
                     }
 
-                    switch-ta := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.toggle-list();
-                        }
-                    }
-
-                    InkTipZone {
-                        width: 100%;
-                        height: 100%;
-                        wanted: switch-ta.has-hover && !switch-ta.pressed;
-                        text: LayoutState.pipelines-list-open ? "Hide the pipelines" : "Show the pipelines";
-                    }
-                }
-
-                // Ctrl+K: find a step, an action, a command.
-                VerticalLayout {
-                    alignment: center;
-                    palette-hint := Rectangle {
-                        width: kbd.width;
-                        height: kbd.height;
-                        accessible-role: button;
-                        accessible-label: "Command palette (Ctrl K)";
-                        accessible-action-default => {
-                            CommandPaletteState.open = true;
-                        }
-                        kbd := InkKbd {
-                            text: "Ctrl K";
-                        }
-
-                        TouchArea {
-                            mouse-cursor: pointer;
+                    VerticalLayout {
+                        alignment: center;
+                        InkIconButton {
+                            size: 24px;
+                            icon: InkIcons.add;
+                            label: "New pipeline at the end";
                             clicked => {
-                                CommandPaletteState.open = true;
+                                PipelinesPanelState.new-pipeline();
+                            }
+                        }
+                    }
+
+                    if root.pipeline-selected: VerticalLayout {
+                        alignment: center;
+                        InkIconButton {
+                            size: 24px;
+                            icon: InkIcons.caret-up;
+                            label: "Collapse to the switcher";
+                            clicked => {
+                                root.toggle-list();
                             }
                         }
                     }
                 }
 
-                VerticalLayout {
-                    alignment: center;
-                    FocusModeButton { }
-                }
+                // At most six rows; more scroll.
+                // 5 px above and below the rows: room for the insert line
+                // at the top and the bottom.
+                ScrollView {
+                    height: min(PipelinesPanelState.pipelines.length, root.list-rows-max) * root.pipeline-row-h + 10px;
+                    VerticalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        Rectangle {
+                            height: PipelinesPanelState.pipelines.length * root.pipeline-row-h + 10px;
+                            VerticalLayout {
+                                y: 5px;
+                                height: parent.height - 10px;
+                                spacing: 0px;
+                                for p[i] in PipelinesPanelState.pipelines: PipelineRow {
+                                    height: root.pipeline-row-h;
+                                    pipeline: p;
+                                    number: i + 1;
+                                    active: p.id == PipelinesPanelState.active-pipeline-id;
+                                    selected => {
+                                        root.row-clicked(p.id);
+                                    }
+                                    double-clicked => {
+                                        PipelinesPanelState.pipeline-more(p.id);
+                                    }
+                                    alt-clicked => {
+                                        PipelineFocusState.toggle-pipeline-focus(p.id);
+                                    }
+                                    toggled => {
+                                        PipelinesPanelState.toggle-pipeline(p.id);
+                                    }
+                                    move-by(rows) => {
+                                        PipelinesPanelState.move-pipeline-by(p.id, rows);
+                                    }
+                                    more-clicked => {
+                                        root.open-pipeline-menu(p.id, p.name, i, self.absolute-position.y - root.absolute-position.y + self.height);
+                                    }
+                                }
+                            }
 
-                VerticalLayout {
-                    alignment: center;
-                    InkIconButton {
-                        size: 24px;
-                        icon: InkIcons.more;
-                        label: "Pipeline actions";
-                        enabled: root.pipeline-selected;
-                        disabled-reason: "Pick a pipeline first";
-                        clicked => {
-                            root.open-pipeline-menu(PipelinesPanelState.active-pipeline-id, PipelinesPanelState.active-pipeline-name, Ink.head-h - 4px, false);
+                            // The insert lines above each row and below the
+                            // last, in a layer above all rows - the next row
+                            // would cover them.
+                            for p[i] in PipelinesPanelState.pipelines: InsertBar {
+                                y: 5px + i * root.pipeline-row-h;
+                                height: 0px;
+                                reach: 5px;
+                                dot-x: 12px;
+                                tag: "New pipeline · \{i + 1}";
+                                insert => {
+                                    PipelinesPanelState.insert-pipeline(i);
+                                }
+                            }
+                            if PipelinesPanelState.pipelines.length > 0: InsertBar {
+                                y: 5px + PipelinesPanelState.pipelines.length * root.pipeline-row-h;
+                                height: 0px;
+                                reach: 5px;
+                                dot-x: 12px;
+                                tag: "New pipeline · \{PipelinesPanelState.pipelines.length + 1}";
+                                insert => {
+                                    PipelinesPanelState.insert-pipeline(PipelinesPanelState.pipelines.length);
+                                }
+                            }
                         }
                     }
                 }
@@ -3007,89 +2813,172 @@ export component PipelinesPanel inherits Rectangle {
             Rectangle {
                 y: parent.height - 1px;
                 height: 1px;
-                background: Ink.border-soft;
+                background: Ink.tray-edge;
             }
         }
 
-        // -- The pipelines, above the steps: which run (☑), the shown one
-        // (a click on another shows it, on it again shows none). At most
-        // four rows, more scroll --
-        if root.list-shown: VerticalLayout {
+        // -- Collapsed: the switcher head - ‹ the shown pipeline › --
+        if root.pipeline-selected && !root.list-shown: Rectangle {
+            height: Ink.head-h;
             vertical-stretch: 0;
-            padding-left: 8px;
-            padding-right: 8px;
-            padding-bottom: 6px;
+            background: Ink.tray;
 
-            HorizontalLayout {
-                height: 30px;
-                padding-left: 6px;
-                spacing: 4px;
-                InkCaption {
-                    horizontal-stretch: 1;
-                    text: "PIPELINES · " + PipelinesPanelState.enabled-pipeline-count + " OF " + PipelinesPanelState.pipelines.length + " RUN";
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
+            for p[i] in PipelinesPanelState.pipelines: Rectangle {
+                if p.id == PipelinesPanelState.active-pipeline-id: HorizontalLayout {
+                    padding-left: 6px;
+                    padding-right: 8px;
+                    spacing: 4px;
 
-                VerticalLayout {
-                    alignment: center;
-                    InkIconButton {
-                        size: 24px;
-                        icon: InkIcons.add;
-                        label: "New pipeline";
-                        clicked => {
-                            PipelinesPanelState.new-pipeline();
-                        }
-                    }
-                }
-            }
-
-            // At most four rows; more scroll (with a scrollbar).
-            ScrollView {
-                height: min(PipelinesPanelState.pipelines.length, 4) * root.pipeline-row-h;
-                VerticalLayout {
-                    for p in PipelinesPanelState.pipelines: PipelineTab {
-                        height: root.pipeline-row-h;
-                        pipeline: p;
-                        active: p.id == PipelinesPanelState.active-pipeline-id;
-                        selected => {
-                            if p.id == PipelinesPanelState.active-pipeline-id {
-                                PipelinesPanelState.deselect-pipeline();
-                            } else {
-                                PipelinesPanelState.active-pipeline-id = p.id;
-                                PipelinesPanelState.select-pipeline(p.id);
-                                PipelineFocusState.pipeline-selected(p.id);
+                    VerticalLayout {
+                        alignment: center;
+                        InkIconButton {
+                            size: 24px;
+                            icon: InkIcons.caret-left;
+                            label: "Previous pipeline (Ctrl PgUp)";
+                            enabled: i > 0;
+                            clicked => {
+                                PipelinesPanelState.switch-pipeline(-1);
                             }
                         }
-                        double-clicked => {
-                            PipelinesPanelState.pipeline-more(p.id);
+                    }
+
+                    switcher := Rectangle {
+                        horizontal-stretch: 1;
+                        accessible-role: button;
+                        accessible-label: "Pipeline \{i + 1} \{p.name} - switch pipeline";
+                        accessible-expanded: PipelinesPanelState.switcher-open;
+                        accessible-action-default => {
+                            root.open-switcher(i);
                         }
-                        alt-clicked => {
-                            PipelineFocusState.toggle-pipeline-focus(p.id);
+
+                        Rectangle {
+                            y: (parent.height - 30px) / 2;
+                            height: 30px;
+                            border-radius: Ink.radius-sm;
+                            // Outline only - a white box was too loud on the grey.
+                            background: sw-ta.has-hover ? Ink.tray-hover : transparent;
+                            border-width: 1px;
+                            border-color: PipelinesPanelState.switcher-open ? Ink.focus : Ink.tray-edge;
+
+                            sw-row := HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                spacing: 6px;
+                                sw-num := Text {
+                                    text: i + 1;
+                                    font-size: Ink.fs-caption;
+                                    font-family: Ink.font-mono;
+                                    color: Ink.text-mute;
+                                    vertical-alignment: center;
+                                }
+
+                                sw-name := Text {
+                                    horizontal-stretch: 1;
+                                    text: p.name;
+                                    font-size: Ink.fs-dialog-title;
+                                    font-weight: 600;
+                                    color: Ink.text;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+
+                                sw-pill := Rectangle {
+                                    width: pill.width;
+                                    pill := SourcePill {
+                                        y: (parent.height - self.height) / 2;
+                                        kind: p.source-kind;
+                                        index: p.source-index;
+                                    }
+                                }
+
+                                // Steps on/total - dropped first when it
+                                // would cut off the name.
+                                sw-count := Text {
+                                    property <bool> fits: sw-row.width >= sw-num.preferred-width + sw-name.preferred-width + sw-pill.width + self.preferred-width + 10px + 4 * 6px + 16px;
+                                    width: self.fits ? self.preferred-width : 0px;
+                                    visible: self.fits;
+                                    text: "\{p.enabled-step-count}/\{p.total-step-count}";
+                                    font-size: Ink.fs-caption;
+                                    font-family: Ink.font-mono;
+                                    color: Ink.text-mute;
+                                    vertical-alignment: center;
+                                }
+
+                                Image {
+                                    y: (parent.height - self.height) / 2;
+                                    source: PipelinesPanelState.switcher-open ? InkIcons.caret-up : InkIcons.caret-down;
+                                    width: 10px;
+                                    colorize: Ink.text-mute;
+                                }
+                            }
+
+                            sw-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    if PipelinesPanelState.switcher-open {
+                                        PipelinesPanelState.switcher-open = false;
+                                    } else {
+                                        root.open-switcher(i);
+                                    }
+                                }
+                            }
                         }
-                        focus-clicked => {
-                            PipelineFocusState.toggle-pipeline-focus(p.id);
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        InkIconButton {
+                            size: 24px;
+                            icon: InkIcons.caret-right;
+                            label: "Next pipeline (Ctrl PgDn)";
+                            enabled: i < PipelinesPanelState.pipelines.length - 1;
+                            clicked => {
+                                PipelinesPanelState.switch-pipeline(1);
+                            }
                         }
-                        toggled => {
-                            PipelinesPanelState.toggle-pipeline(p.id);
+                    }
+
+                    Text {
+                        text: "\{PipelinesPanelState.enabled-pipeline-count}/\{PipelinesPanelState.pipelines.length} run";
+                        font-size: Ink.fs-caption;
+                        font-family: Ink.font-mono;
+                        color: Ink.text-dim;
+                        vertical-alignment: center;
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        InkIconButton {
+                            size: 24px;
+                            icon: InkIcons.more;
+                            label: "Pipeline actions";
+                            clicked => {
+                                root.open-pipeline-menu(p.id, p.name, i, Ink.head-h - 4px);
+                            }
                         }
-                        move-up => {
-                            PipelinesPanelState.move-pipeline-up(p.id);
-                        }
-                        move-down => {
-                            PipelinesPanelState.move-pipeline-down(p.id);
-                        }
-                        move-by(rows) => {
-                            PipelinesPanelState.move-pipeline-by(p.id, rows);
-                        }
-                        more-clicked => {
-                            root.open-pipeline-menu(p.id, p.name, self.absolute-position.y - root.absolute-position.y + self.height, true);
+                    }
+
+                    // Collapse / expand: far right, open or closed.
+                    VerticalLayout {
+                        alignment: center;
+                        InkIconButton {
+                            size: 24px;
+                            icon: InkIcons.caret-down;
+                            label: "Expand the pipelines";
+                            clicked => {
+                                root.toggle-list();
+                            }
                         }
                     }
                 }
             }
+
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: Ink.tray-edge;
+            }
         }
-        if root.list-shown: InkDivider { }
 
         // -- An analysis runs: the steps locked or not (it runs a copy) --
         if PipelineRunningState.active && !PipelineRunningState.done: Rectangle {
@@ -3284,60 +3173,28 @@ export component PipelinesPanel inherits Rectangle {
                 padding-top: 6px;
                 spacing: 0px;
 
-                // None shown: the pipelines to pick one.
+                // None shown: how to pick one (the rows above).
                 if root.has-pipeline && !root.pipeline-selected: VerticalLayout {
-                    padding-top: 6px;
-                    spacing: 2px;
-                    InkCaption {
-                        height: 24px;
-                        x: 6px;
-                        text: "PICK A PIPELINE";
+                    padding: 20px;
+                    padding-top: 48px;
+                    spacing: 8px;
+                    Image {
+                        source: InkIcons.caret-up;
+                        height: 14px;
+                        colorize: Ink.text-faint;
                     }
 
-                    for p in PipelinesPanelState.pipelines: PipelineTab {
-                        pipeline: p;
-                        active: false;
-                        selected => {
-                            PipelinesPanelState.active-pipeline-id = p.id;
-                            PipelinesPanelState.select-pipeline(p.id);
-                            PipelineFocusState.pipeline-selected(p.id);
-                        }
-                        double-clicked => {
-                            PipelinesPanelState.pipeline-more(p.id);
-                        }
-                        alt-clicked => {
-                            PipelineFocusState.toggle-pipeline-focus(p.id);
-                        }
-                        focus-clicked => {
-                            PipelineFocusState.toggle-pipeline-focus(p.id);
-                        }
-                        toggled => {
-                            PipelinesPanelState.toggle-pipeline(p.id);
-                        }
-                        move-up => {
-                            PipelinesPanelState.move-pipeline-up(p.id);
-                        }
-                        move-down => {
-                            PipelinesPanelState.move-pipeline-down(p.id);
-                        }
-                        move-by(rows) => {
-                            PipelinesPanelState.move-pipeline-by(p.id, rows);
-                        }
-                        more-clicked => {
-                            PipelinesPanelState.pipeline-more(p.id);
-                        }
+                    Text {
+                        text: "Pick a pipeline to see its steps";
+                        font-size: Ink.fs-dialog-title;
+                        font-weight: 600;
+                        color: Ink.text;
+                        horizontal-alignment: center;
                     }
-                    HorizontalLayout {
-                        alignment: center;
-                        padding-top: 12px;
-                        InkButton {
-                            text: "New pipeline";
-                            kind: InkButtonKind.primary;
-                            icon: InkIcons.add;
-                            clicked => {
-                                PipelinesPanelState.new-pipeline();
-                            }
-                        }
+
+                    InkHint {
+                        text: "Click a row above. The eye says whether it runs.";
+                        horizontal-alignment: center;
                     }
                 }
 
@@ -3353,25 +3210,16 @@ export component PipelinesPanel inherits Rectangle {
                     }
 
                     InkHint {
-                        text: root.has-pipeline ? "Add a step below - it runs on every image." : "A pipeline is a list of steps run on every image.";
+                        text: root.has-pipeline ? "Add a step below - it runs on every image." : "A pipeline is a list of steps run on every image - make one with + above.";
                         horizontal-alignment: center;
-                    }
-
-                    if !root.has-pipeline: HorizontalLayout {
-                        alignment: center;
-                        padding-top: 4px;
-                        InkButton {
-                            text: "New pipeline";
-                            kind: InkButtonKind.primary;
-                            icon: InkIcons.add;
-                            clicked => {
-                                PipelinesPanelState.new-pipeline();
-                            }
-                        }
                     }
                 }
 
-                if PipelinesPanelState.active-commands.length > 0 && !PipelinesPanelState.steps-read-only: InsertPoint {
+                if PipelinesPanelState.active-commands.length > 0 && !PipelinesPanelState.steps-read-only: InsertBar {
+                    height: 8px;
+                    reach: 0px;
+                    dot-x: 14px;
+                    tag: "Insert step · 1";
                     insert => {
                         PipelinesPanelState.insert-step(PipelinesPanelState.active-pipeline-id, -1);
                     }
@@ -3432,58 +3280,25 @@ export component PipelinesPanel inherits Rectangle {
                         }
                     }
 
-                    if i < PipelinesPanelState.active-commands.length - 1 && !PipelinesPanelState.steps-read-only: InsertPoint {
+                    if !PipelinesPanelState.steps-read-only: InsertBar {
+                        height: 8px;
+                        reach: 4px;
+                        dot-x: 14px;
+                        tag: "Insert step · \{i + 2}";
                         insert => {
                             PipelinesPanelState.insert-step(PipelinesPanelState.active-pipeline-id, i);
                         }
                     }
-                    if i >= PipelinesPanelState.active-commands.length - 1: Rectangle {
+                    if PipelinesPanelState.steps-read-only && i >= PipelinesPanelState.active-commands.length - 1: Rectangle {
                         height: 6px;
                     }
                 }
 
-                if root.pipeline-selected && !PipelinesPanelState.steps-read-only: add-step := Rectangle {
-                    height: 30px;
-                    accessible-role: button;
-                    accessible-label: "Add step";
-                    accessible-action-default => {
-                        PipelinesPanelState.insert-step(PipelinesPanelState.active-pipeline-id, PipelinesPanelState.active-commands.length);
-                    }
-                    Rectangle {
-                        border-radius: Ink.radius-md;
-                        border-width: 1px;
-                        border-color: add-ta.has-hover ? Ink.text-faint : Ink.border;
-                        background: add-ta.has-hover ? Ink.hover : transparent;
-                        HorizontalLayout {
-                            alignment: center;
-                            spacing: 6px;
-                            Image {
-                                source: InkIcons.add;
-                                width: 12px;
-                                colorize: Ink.text-dim;
-                            }
-
-                            Text {
-                                text: "Add step";
-                                color: Ink.text-dim;
-                                font-size: Ink.fs-body;
-                                font-weight: 500;
-                                vertical-alignment: center;
-                            }
-                        }
-                    }
-
-                    add-ta := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            PipelinesPanelState.insert-step(PipelinesPanelState.active-pipeline-id, PipelinesPanelState.active-commands.length);
-                        }
-                    }
-                }
             }
         }
 
-        // -- Footer: the breakpoint's image, totals --
+        // -- Footer: the breakpoint's image, Add step, totals --
+        InkDivider { }
         VerticalLayout {
             padding-left: 12px;
             padding-right: 10px;
@@ -3515,16 +3330,49 @@ export component PipelinesPanel inherits Rectangle {
                 }
             }
 
+            // Add a step, the palette, focus mode, the time per image.
             HorizontalLayout {
-                spacing: 4px;
-                Text {
+                spacing: 8px;
+                if root.pipeline-selected && !PipelinesPanelState.steps-read-only: InkButton {
+                    small: true;
+                    icon: InkIcons.add;
+                    text: "Add step";
+                    clicked => {
+                        PipelinesPanelState.insert-step(PipelinesPanelState.active-pipeline-id, PipelinesPanelState.active-commands.length);
+                    }
+                }
+
+                // Ctrl+K: find a step, an action, a command.
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: kbd.width;
+                        height: kbd.height;
+                        accessible-role: button;
+                        accessible-label: "Command palette (Ctrl K)";
+                        accessible-action-default => {
+                            CommandPaletteState.open = true;
+                        }
+                        kbd := InkKbd {
+                            text: "Ctrl K";
+                        }
+
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                CommandPaletteState.open = true;
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
                     horizontal-stretch: 1;
-                    text: PipelinesPanelState.enabled-pipeline-count + " of " + PipelinesPanelState.pipelines.length + " pipelines · " + PipelinesPanelState.total-enabled-steps + " steps";
-                    color: Ink.text-mute;
-                    font-size: Ink.fs-caption;
-                    font-family: Ink.font-mono;
-                    vertical-alignment: center;
-                    overflow: elide;
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    FocusModeButton { }
                 }
 
                 Text {
@@ -3538,26 +3386,246 @@ export component PipelinesPanel inherits Rectangle {
         }
     }
 
-    // A pipeline's actions: the head's ⋯ (the shown pipeline) or a row's
-    // ⋯ (that row's pipeline, opening below it - without "New pipeline",
-    // the list's + is right there).
+    // -- The switcher's list, over the steps (collapsed only) --
+    if PipelinesPanelState.switcher-open && root.pipeline-selected && !root.list-shown: Rectangle {
+        y: Ink.head-h;
+        height: root.height - Ink.head-h;
+        background: Ink.panel.with-alpha(0.65);
+
+        // A click beside the card closes it.
+        TouchArea {
+            clicked => {
+                PipelinesPanelState.switcher-open = false;
+            }
+        }
+
+        Rectangle {
+            x: 6px;
+            y: 4px;
+            width: parent.width - 12px;
+            height: min(card.preferred-height, parent.height - 8px);
+            background: Ink.panel;
+            border-radius: Ink.radius-lg;
+            border-width: 1px;
+            border-color: Ink.border;
+            drop-shadow-blur: 24px;
+            drop-shadow-offset-y: 8px;
+            drop-shadow-color: Ink.shadow;
+            clip: true;
+
+            // Clicks on the card stay on it.
+            TouchArea { }
+
+            card := VerticalLayout {
+                padding: 8px;
+                spacing: 2px;
+
+                keys := FocusScope {
+                    height: search.height;
+                    capture-key-pressed(e) => {
+                        if e.text == Key.Escape {
+                            PipelinesPanelState.switcher-open = false;
+                            return accept;
+                        }
+                        if PipelinesPanelState.switcher-items.length == 0 {
+                            return reject;
+                        }
+                        if e.modifiers.alt && (e.text == Key.UpArrow || e.text == Key.DownArrow) {
+                            if PipelinesPanelState.switcher-query == "" {
+                                let id = PipelinesPanelState.switcher-items[root.switcher-cursor].pipeline.id;
+                                if e.text == Key.UpArrow && root.switcher-cursor > 0 {
+                                    PipelinesPanelState.move-pipeline-up(id);
+                                    root.switcher-cursor -= 1;
+                                }
+                                if e.text == Key.DownArrow && root.switcher-cursor < PipelinesPanelState.switcher-items.length - 1 {
+                                    PipelinesPanelState.move-pipeline-down(id);
+                                    root.switcher-cursor += 1;
+                                }
+                            }
+                            return accept;
+                        }
+                        if e.text == Key.UpArrow {
+                            root.switcher-cursor = max(0, root.switcher-cursor - 1);
+                            return accept;
+                        }
+                        if e.text == Key.DownArrow {
+                            root.switcher-cursor = min(PipelinesPanelState.switcher-items.length - 1, root.switcher-cursor + 1);
+                            return accept;
+                        }
+                        if e.text == Key.Return {
+                            root.pick-from-switcher(PipelinesPanelState.switcher-items[clamp(root.switcher-cursor, 0, PipelinesPanelState.switcher-items.length - 1)].pipeline.id);
+                            return accept;
+                        }
+                        // Space toggles the run - while nothing is typed.
+                        if e.text == " " && PipelinesPanelState.switcher-query == "" {
+                            PipelinesPanelState.toggle-pipeline(PipelinesPanelState.switcher-items[root.switcher-cursor].pipeline.id);
+                            return accept;
+                        }
+                        reject
+                    }
+
+                    search := InkSearchField {
+                        placeholder: "Find a pipeline";
+                        text <=> PipelinesPanelState.switcher-query;
+                        init => {
+                            self.focus-input();
+                        }
+                        edited(t) => {
+                            PipelinesPanelState.switcher-search(t);
+                            root.switcher-cursor = 0;
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    height: 24px;
+                    padding-left: 4px;
+                    padding-right: 4px;
+                    spacing: 8px;
+                    Rectangle {
+                        width: 16px;
+                    }
+
+                    InkCaption {
+                        horizontal-stretch: 1;
+                        text: "PIPELINE";
+                        vertical-alignment: center;
+                    }
+
+                    InkCaption {
+                        width: 92px;
+                        text: "SOURCE";
+                        vertical-alignment: center;
+                    }
+
+                    InkCaption {
+                        width: 36px;
+                        text: "STEPS";
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        width: 20px;
+                    }
+                }
+
+                if PipelinesPanelState.switcher-items.length == 0: Text {
+                    height: 32px;
+                    text: "No pipeline matches";
+                    font-size: Ink.fs-secondary;
+                    color: Ink.text-mute;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                ScrollView {
+                    height: min(PipelinesPanelState.switcher-items.length, 10) * 32px;
+                    VerticalLayout {
+                        spacing: 0px;
+                        for it[k] in PipelinesPanelState.switcher-items: PipelineRow {
+                            height: 32px;
+                            pipeline: it.pipeline;
+                            number: it.number;
+                            on-tray: false;
+                            active: it.pipeline.id == PipelinesPanelState.active-pipeline-id;
+                            cursor: k == root.switcher-cursor;
+                            // Reordering a filtered list would skip rows.
+                            draggable: PipelinesPanelState.switcher-query == "";
+                            selected => {
+                                root.pick-from-switcher(it.pipeline.id);
+                            }
+                            double-clicked => {
+                                PipelinesPanelState.switcher-open = false;
+                                PipelinesPanelState.pipeline-more(it.pipeline.id);
+                            }
+                            alt-clicked => {
+                                PipelineFocusState.toggle-pipeline-focus(it.pipeline.id);
+                            }
+                            toggled => {
+                                PipelinesPanelState.toggle-pipeline(it.pipeline.id);
+                            }
+                            move-by(rows) => {
+                                PipelinesPanelState.move-pipeline-by(it.pipeline.id, rows);
+                            }
+                            more-clicked => {
+                                root.open-pipeline-menu(it.pipeline.id, it.pipeline.name, it.number - 1, self.absolute-position.y - root.absolute-position.y + self.height);
+                            }
+                        }
+                    }
+                }
+
+                InkDivider { }
+
+                new-row := Rectangle {
+                    height: 30px;
+                    accessible-role: button;
+                    accessible-label: "New pipeline at the end";
+                    accessible-action-default => {
+                        PipelinesPanelState.switcher-open = false;
+                        PipelinesPanelState.new-pipeline();
+                    }
+                    border-radius: Ink.radius-sm;
+                    background: new-ta.has-hover ? Ink.hover : transparent;
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 8px;
+                        spacing: 8px;
+                        Image {
+                            y: (parent.height - self.height) / 2;
+                            source: InkIcons.add;
+                            width: 12px;
+                            colorize: Ink.text;
+                        }
+
+                        Text {
+                            horizontal-stretch: 1;
+                            text: "New pipeline at the end";
+                            font-size: Ink.fs-body;
+                            color: Ink.text;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: "↑↓ Enter · Space · Esc";
+                            font-size: Ink.fs-caption;
+                            font-family: Ink.font-mono;
+                            color: Ink.text-mute;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    new-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            PipelinesPanelState.switcher-open = false;
+                            PipelinesPanelState.new-pipeline();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // A pipeline's actions - a row's ⋯ (opening below it) or the switcher
+    // head's ⋯ (the shown pipeline).
     property <int> menu-pipeline-id: -1;
     property <string> menu-pipeline-name;
+    // Its place in the order (0-based).
+    property <int> menu-pipeline-index: 0;
     property <length> menu-y: Ink.head-h - 4px;
-    property <bool> menu-from-row: false;
 
-    function open-pipeline-menu(id: int, name: string, y: length, from-row: bool) {
+    function open-pipeline-menu(id: int, name: string, index: int, y: length) {
         root.menu-pipeline-id = id;
         root.menu-pipeline-name = name;
+        root.menu-pipeline-index = index;
         root.menu-y = y;
-        root.menu-from-row = from-row;
         pipeline-menu.show();
     }
 
     pipeline-menu := PopupWindow {
-        x: root.width - 250px - (root.menu-from-row ? 8px : 0px);
+        x: root.width - 250px - 8px;
         y: root.menu-y;
-
         InkMenuFrame {
             open-y: root.absolute-position.y + root.menu-y;
             menu-width: 250px;
@@ -3591,11 +3659,63 @@ export component PipelinesPanel inherits Rectangle {
 
             InkMenuSeparator { }
 
-            if !root.menu-from-row: InkMenuItem {
+            InkMenuItem {
                 icon: InkIcons.add;
-                text: "New pipeline";
+                text: "New pipeline above";
                 clicked => {
-                    PipelinesPanelState.new-pipeline();
+                    PipelinesPanelState.insert-pipeline(root.menu-pipeline-index);
+                }
+            }
+
+            InkMenuItem {
+                icon: InkIcons.add;
+                text: "New pipeline below";
+                clicked => {
+                    PipelinesPanelState.insert-pipeline(root.menu-pipeline-index + 1);
+                }
+            }
+
+            InkMenuSeparator { }
+
+            InkMenuItem {
+                text: "Move up";
+                enabled: root.menu-pipeline-index > 0;
+                clicked => {
+                    PipelinesPanelState.move-pipeline-up(root.menu-pipeline-id);
+                }
+            }
+
+            InkMenuItem {
+                text: "Move down";
+                enabled: root.menu-pipeline-index < PipelinesPanelState.pipelines.length - 1;
+                clicked => {
+                    PipelinesPanelState.move-pipeline-down(root.menu-pipeline-id);
+                }
+            }
+
+            InkMenuItem {
+                text: "Move to top";
+                enabled: root.menu-pipeline-index > 0;
+                clicked => {
+                    PipelinesPanelState.move-pipeline-to(root.menu-pipeline-id, 0);
+                }
+            }
+
+            InkMenuItem {
+                text: "Move to bottom";
+                enabled: root.menu-pipeline-index < PipelinesPanelState.pipelines.length - 1;
+                clicked => {
+                    PipelinesPanelState.move-pipeline-to(root.menu-pipeline-id, PipelinesPanelState.pipelines.length - 1);
+                }
+            }
+
+            InkMenuSeparator { }
+
+            InkMenuItem {
+                icon: InkIcons.focus;
+                text: "Focus on this pipeline";
+                clicked => {
+                    PipelineFocusState.toggle-pipeline-focus(root.menu-pipeline-id);
                 }
             }
 

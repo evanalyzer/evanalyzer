@@ -555,43 +555,66 @@ impl PipelinesController {
                     manager.sync_pipelines_to_slint();
                 });
 
-            // New pipeline
+            // New pipeline (at the end)
             let manager = self.clone();
             ui.global::<PipelinesPanelState>().on_new_pipeline(move || {
-                let (new_id, name) = {
-                    let mut project = manager.app_state.get_project_write();
-                    let next_id = project.pipelines.iter().map(|p| p.id.0).max().unwrap_or(0) + 1;
-                    let name = format!("Pipeline {}", next_id);
-                    project.add_pipeline(PipelineSettings {
-                        id: PipelineId(next_id),
-                        name: name.clone(),
-                        image_source: ImageAddress::Channel(0),
-                        enabled: true,
-                        steps: vec![],
-                        description: None,
-                    });
-                    (next_id, name)
-                };
-                manager.pipeline_settings_changed();
-                manager.sync_pipelines_to_slint();
-                manager.sync_steps_of_selected_pipeline_to_slint(PipelineId(new_id), true);
-                let ui_weak = manager.ui.clone();
-                crate::helper::ui_thread::invoke_from_event_loop(move || {
-                    if let Some(ui) = ui_weak.upgrade() {
-                        ui.global::<PipelinesPanelState>()
-                            .set_active_pipeline_id(new_id as i32);
-                        let edit = ui.global::<PipelineEditState>();
-                        edit.set_pipeline_id(new_id as i32);
-                        edit.set_pipeline_name(name.into());
-                        edit.set_source_type(2); // Channel
-                        edit.set_source_slot(1);
-                        edit.set_source_channel(0);
-                        ui.global::<GlobalAppState>()
-                            .set_active_dialog(DialogType::PipelineEdit);
-                    }
-                })
-                .ok();
+                manager.new_pipeline_at(None);
             });
+
+            // New pipeline at a place in the order (the insert line, New
+            // above / below)
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>().on_insert_pipeline(move |index| {
+                manager.new_pipeline_at(Some(index.max(0) as usize));
+            });
+
+            // Move a pipeline to a place in the order (Move to top / bottom)
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_move_pipeline_to(move |pipeline_id, index| {
+                    let moved = {
+                        let mut project = manager.app_state.get_project_write();
+                        let id = PipelineId(pipeline_id as u32);
+                        move_pipeline_to(&mut project.pipelines, id, index.max(0) as usize)
+                    };
+                    if moved {
+                        manager.pipeline_settings_changed();
+                        manager.sync_pipelines_to_slint();
+                    }
+                });
+
+            // The previous / next pipeline (‹ ›, Ctrl+PgUp/PgDn)
+            let ui_weak = self.ui.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_switch_pipeline(move |delta| {
+                    let Some(ui) = ui_weak.upgrade() else {
+                        return;
+                    };
+                    let state = ui.global::<PipelinesPanelState>();
+                    let pipelines = state.get_pipelines();
+                    let ids: Vec<i32> = pipelines.iter().map(|p| p.id).collect();
+                    let Some(next) = neighbour_pipeline(&ids, state.get_active_pipeline_id(), delta)
+                    else {
+                        return;
+                    };
+                    state.set_active_pipeline_id(next);
+                    state.invoke_select_pipeline(next);
+                    ui.global::<crate::PipelineFocusState>()
+                        .invoke_pipeline_selected(next);
+                });
+
+            // The switcher's search
+            let ui_weak = self.ui.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_switcher_search(move |query| {
+                    let Some(ui) = ui_weak.upgrade() else {
+                        return;
+                    };
+                    let state = ui.global::<PipelinesPanelState>();
+                    let pipelines: Vec<Pipeline> = state.get_pipelines().iter().collect();
+                    let items = switcher_items(&pipelines, &query);
+                    state.set_switcher_items(ModelRc::new(VecModel::from(items)));
+                });
 
             // Edit pipeline - open edit dialog
             let manager = self.clone();
@@ -627,6 +650,7 @@ impl PipelinesController {
                     };
                     let edit = ui.global::<PipelineEditState>();
                     edit.set_pipeline_id(pipeline_id);
+                    edit.set_new_at(-1);
                     edit.set_pipeline_name(name.into());
                     edit.set_source_type(stype);
                     edit.set_source_slot(slot);
@@ -782,6 +806,15 @@ impl PipelinesController {
                     3 => ImageAddress::None,
                     _ => ImageAddress::default(),
                 };
+                // A new pipeline: made now, at its place.
+                let new_at = edit.get_new_at();
+                if new_at >= 0 {
+                    edit.set_new_at(-1);
+                    ui.global::<GlobalAppState>()
+                        .set_active_dialog(DialogType::None);
+                    manager.add_new_pipeline(new_at as usize, display_name, image_source);
+                    return;
+                }
                 {
                     let mut project = manager.app_state.get_project_write();
                     if let Some(p) = project.pipelines.iter_mut().find(|p| p.id.0 == pipeline_id) {
@@ -816,6 +849,8 @@ impl PipelinesController {
             let manager = self.clone();
             ui.global::<PipelineEditState>().on_cancel(move || {
                 if let Some(ui) = manager.ui.upgrade() {
+                    // A new pipeline not added: none is made.
+                    ui.global::<PipelineEditState>().set_new_at(-1);
                     ui.global::<GlobalAppState>()
                         .set_active_dialog(DialogType::None);
                 }
@@ -4560,6 +4595,63 @@ impl PipelinesController {
         self.sync_pipelines_to_slint();
     }
 
+    /// Opens the edit dialog for a new pipeline at `index` in the order
+    /// (`None`: the end). It is made only on Add (`add_new_pipeline`);
+    /// Cancel / Esc make none - a slip on an insert line costs nothing.
+    fn new_pipeline_at(self: &Arc<Self>, index: Option<usize>) {
+        let (next_id, at) = {
+            let project = self.app_state.get_project();
+            let next_id = project.pipelines.iter().map(|p| p.id.0).max().unwrap_or(0) + 1;
+            let at = index.unwrap_or(project.pipelines.len()).min(project.pipelines.len());
+            (next_id, at)
+        };
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                let edit = ui.global::<PipelineEditState>();
+                edit.set_pipeline_id(next_id as i32);
+                edit.set_new_at(at as i32);
+                edit.set_pipeline_name(format!("Pipeline {next_id}").into());
+                edit.set_source_type(2); // Channel
+                edit.set_source_slot(1);
+                edit.set_source_channel(0);
+                ui.global::<GlobalAppState>()
+                    .set_active_dialog(DialogType::PipelineEdit);
+            }
+        })
+        .ok();
+    }
+
+    /// Makes the new pipeline of the edit dialog at `at` in the order and
+    /// shows it.
+    fn add_new_pipeline(self: &Arc<Self>, at: usize, name: String, image_source: ImageAddress) {
+        let new_id = {
+            let mut project = self.app_state.get_project_write();
+            let new_id = project.pipelines.iter().map(|p| p.id.0).max().unwrap_or(0) + 1;
+            project.add_pipeline(PipelineSettings {
+                id: PipelineId(new_id),
+                name,
+                image_source,
+                enabled: true,
+                steps: vec![],
+                description: None,
+            });
+            move_pipeline_to(&mut project.pipelines, PipelineId(new_id), at);
+            new_id
+        };
+        self.pipeline_settings_changed();
+        self.sync_pipelines_to_slint();
+        self.sync_steps_of_selected_pipeline_to_slint(PipelineId(new_id), true);
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.global::<PipelinesPanelState>()
+                    .set_active_pipeline_id(new_id as i32);
+            }
+        })
+        .ok();
+    }
+
     pub fn sync_pipelines_to_slint(self: &Arc<Self>) {
         // Also runs when a project is opened or created: the focus banner
         // must follow the (focus-less) new project.
@@ -4593,6 +4685,8 @@ impl PipelinesController {
                         status: PipelineStatus::Idle,
                         total_step_count: total,
                         enabled_step_count: enabled_steps,
+                        source_kind: source_kind(&p.image_source).into(),
+                        source_index: source_index(&p.image_source),
                     }
                 })
                 .collect()
@@ -4612,7 +4706,9 @@ impl PipelinesController {
                     state.set_active_pipeline_image_source("".into());
                     state.set_active_commands(ModelRc::default());
                 }
+                let items = switcher_items(&slint_pipelines, &state.get_switcher_query());
                 state.set_pipelines(ModelRc::new(VecModel::from(slint_pipelines)));
+                state.set_switcher_items(ModelRc::new(VecModel::from(items)));
                 state.set_enabled_pipeline_count(enabled_count);
             }
         }) {
@@ -7284,6 +7380,137 @@ fn show_in_place_failure(ui: &AppWindow, error: &evanalyzer_cfg::core_types::Int
         .set_active_dialog(DialogType::Warning);
 }
 
+/// A pipeline's image source kind for its label in the pipelines list.
+fn source_kind(source: &ImageAddress) -> &'static str {
+    match source {
+        ImageAddress::Channel(_) => "channel",
+        ImageAddress::Memory(MemoryId::PipelineContext(_)) => "memory",
+        ImageAddress::Memory(MemoryId::ProjectCache(_)) => "shared",
+        ImageAddress::Memory(MemoryId::ModuleContext(_)) => "module",
+        ImageAddress::Scratchpad => "scratchpad",
+        ImageAddress::None => "none",
+    }
+}
+
+/// The channel or slot number of a pipeline's image source (0 for
+/// Scratchpad / None).
+fn source_index(source: &ImageAddress) -> i32 {
+    match source {
+        ImageAddress::Channel(c) => *c as i32,
+        ImageAddress::Memory(
+            MemoryId::PipelineContext(s) | MemoryId::ProjectCache(s) | MemoryId::ModuleContext(s),
+        ) => *s as i32,
+        ImageAddress::Scratchpad | ImageAddress::None => 0,
+    }
+}
+
+/// Moves pipeline `id` to `index` in the order (past the end: last).
+/// False if it isn't there or is there already.
+fn move_pipeline_to(pipelines: &mut Vec<PipelineSettings>, id: PipelineId, index: usize) -> bool {
+    let Some(from) = pipelines.iter().position(|p| p.id == id) else {
+        return false;
+    };
+    let to = index.min(pipelines.len() - 1);
+    if from == to {
+        return false;
+    }
+    let pipeline = pipelines.remove(from);
+    pipelines.insert(to, pipeline);
+    true
+}
+
+/// The pipeline `delta` places from `active` in `ids` (no wrap-around);
+/// `None` at the ends or when `active` isn't there.
+fn neighbour_pipeline(ids: &[i32], active: i32, delta: i32) -> Option<i32> {
+    let at = ids.iter().position(|&id| id == active)? as i64;
+    let next = at + delta as i64;
+    if next < 0 || next >= ids.len() as i64 {
+        return None;
+    }
+    Some(ids[next as usize])
+}
+
+/// The switcher's rows: the pipelines whose name contains `query`
+/// (ignoring case; all for an empty one), with their place in the order.
+fn switcher_items(pipelines: &[Pipeline], query: &str) -> Vec<crate::SwitcherItem> {
+    let query = query.trim().to_lowercase();
+    pipelines
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| query.is_empty() || p.name.to_lowercase().contains(&query))
+        .map(|(i, p)| crate::SwitcherItem { pipeline: p.clone(), number: i as i32 + 1 })
+        .collect()
+}
+
+#[cfg(test)]
+mod pipeline_list_tests {
+    use super::*;
+
+    fn settings(id: u32) -> PipelineSettings {
+        PipelineSettings {
+            id: PipelineId(id),
+            name: format!("P{id}"),
+            image_source: ImageAddress::Channel(0),
+            enabled: true,
+            steps: vec![],
+            description: None,
+        }
+    }
+
+    fn order(pipelines: &[PipelineSettings]) -> Vec<u32> {
+        pipelines.iter().map(|p| p.id.0).collect()
+    }
+
+    #[test]
+    fn a_pipeline_moves_to_the_top_the_bottom_and_past_the_end() {
+        let mut p: Vec<_> = (1..=4).map(settings).collect();
+        assert!(move_pipeline_to(&mut p, PipelineId(3), 0));
+        assert_eq!(order(&p), [3, 1, 2, 4]);
+        assert!(move_pipeline_to(&mut p, PipelineId(3), 99));
+        assert_eq!(order(&p), [1, 2, 4, 3]);
+        assert!(move_pipeline_to(&mut p, PipelineId(1), 2));
+        assert_eq!(order(&p), [2, 4, 1, 3]);
+        assert!(!move_pipeline_to(&mut p, PipelineId(1), 2));
+        assert!(!move_pipeline_to(&mut p, PipelineId(9), 0));
+    }
+
+    #[test]
+    fn the_neighbour_pipeline_stops_at_the_ends() {
+        let ids = [4, 7, 2];
+        assert_eq!(neighbour_pipeline(&ids, 7, 1), Some(2));
+        assert_eq!(neighbour_pipeline(&ids, 7, -1), Some(4));
+        assert_eq!(neighbour_pipeline(&ids, 2, 1), None);
+        assert_eq!(neighbour_pipeline(&ids, 4, -1), None);
+        assert_eq!(neighbour_pipeline(&ids, 9, 1), None);
+    }
+
+    #[test]
+    fn each_image_source_has_its_label_kind_and_number() {
+        assert_eq!(source_kind(&ImageAddress::Channel(2)), "channel");
+        assert_eq!(source_index(&ImageAddress::Channel(2)), 2);
+        let memory = ImageAddress::Memory(MemoryId::PipelineContext(1));
+        assert_eq!((source_kind(&memory), source_index(&memory)), ("memory", 1));
+        let shared = ImageAddress::Memory(MemoryId::ProjectCache(3));
+        assert_eq!((source_kind(&shared), source_index(&shared)), ("shared", 3));
+        assert_eq!(source_kind(&ImageAddress::Scratchpad), "scratchpad");
+        assert_eq!(source_kind(&ImageAddress::None), "none");
+    }
+
+    #[test]
+    fn the_switcher_finds_pipelines_by_name_and_keeps_their_place() {
+        let pipelines: Vec<Pipeline> = ["Cell", "Nuclei", "Cell spots"]
+            .iter()
+            .map(|name| Pipeline { name: (*name).into(), ..Default::default() })
+            .collect();
+        let found = switcher_items(&pipelines, " cell ");
+        let got: Vec<(String, i32)> =
+            found.iter().map(|it| (it.pipeline.name.to_string(), it.number)).collect();
+        assert_eq!(got, [("Cell".to_string(), 1), ("Cell spots".to_string(), 3)]);
+        assert_eq!(switcher_items(&pipelines, "").len(), 3);
+        assert!(switcher_items(&pipelines, "xyz").is_empty());
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -8409,6 +8636,8 @@ mod tests {
         controller.attach_callbacks();
 
         ui.global::<PipelinesPanelState>().invoke_new_pipeline();
+        crate::helper::ui_thread::drain_ui_queue();
+        ui.global::<PipelineEditState>().invoke_confirm();
 
         let project = ui_state.get_project();
         assert_eq!(project.pipelines.len(), 2);
@@ -8823,18 +9052,56 @@ mod tests {
 
     #[test]
     fn new_pipeline_opens_the_edit_dialog_prefilled_for_it() {
-        let (ui, _ui_state, _controller) = selected(vec![]);
+        let (ui, ui_state, _controller) = selected(vec![]);
         ui.global::<PipelinesPanelState>().invoke_new_pipeline();
         drain_ui_queue();
         let edit = ui.global::<PipelineEditState>();
         assert_eq!(edit.get_pipeline_id(), 2);
+        assert_eq!(edit.get_new_at(), 1, "a new one, at the end");
         assert_eq!(edit.get_pipeline_name(), "Pipeline 2");
         assert_eq!(edit.get_source_type(), 2, "channel source");
+        assert_eq!(active_dialog(&ui), DialogType::PipelineEdit);
+        assert_eq!(ui_state.get_project().pipelines.len(), 1, "not made before Add");
+
+        edit.invoke_confirm();
+        drain_ui_queue();
+        assert_eq!(ui_state.get_project().pipelines.len(), 2);
+        assert_eq!(edit.get_new_at(), -1);
         assert_eq!(
             ui.global::<PipelinesPanelState>().get_active_pipeline_id(),
             2
         );
-        assert_eq!(active_dialog(&ui), DialogType::PipelineEdit);
+    }
+
+    #[test]
+    fn a_new_pipeline_cancelled_is_not_made() {
+        let (ui, ui_state, _controller) = selected(vec![]);
+        ui.global::<PipelinesPanelState>().invoke_insert_pipeline(0);
+        drain_ui_queue();
+        let edit = ui.global::<PipelineEditState>();
+        assert_eq!(edit.get_new_at(), 0);
+        edit.invoke_cancel();
+        drain_ui_queue();
+        assert_eq!(ui_state.get_project().pipelines.len(), 1);
+        assert_eq!(edit.get_new_at(), -1);
+        assert_eq!(active_dialog(&ui), DialogType::None);
+    }
+
+    #[test]
+    fn a_new_pipeline_is_made_where_it_was_inserted_with_its_name_and_source() {
+        let (ui, ui_state, _controller) = selected(vec![]);
+        let panel = ui.global::<PipelinesPanelState>();
+        let edit = ui.global::<PipelineEditState>();
+        panel.invoke_insert_pipeline(0);
+        drain_ui_queue();
+        edit.set_pipeline_name("Nuclei".into());
+        edit.set_source_type(3);
+        edit.invoke_confirm();
+        drain_ui_queue();
+        let project = ui_state.get_project();
+        assert_eq!(project.pipelines.len(), 2);
+        assert_eq!(project.pipelines[0].name, "Nuclei");
+        assert_eq!(project.pipelines[0].image_source, ImageAddress::None);
     }
 
     #[test]
@@ -13057,6 +13324,8 @@ mod tests {
         let panel = ui.global::<PipelinesPanelState>();
         for _ in 0..2 {
             panel.invoke_new_pipeline();
+            drain_ui_queue();
+            ui.global::<PipelineEditState>().invoke_confirm();
             drain_ui_queue();
         }
         let order = || {

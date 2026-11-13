@@ -210,6 +210,17 @@ export struct Pipeline {
     status: PipelineStatus,
         total-step-count: int,         // pre-computed in host
     enabled-step-count: int,       // pre-computed in host
+    // The image source for its label: "channel", "memory", "shared",
+    // "module", "scratchpad" or "none", and the channel or slot number.
+    source-kind: string,
+    source-index: int,
+}
+
+// A row of the pipeline switcher's list: the pipeline and its place in
+// the order (1-based; the list may be filtered by the search).
+export struct SwitcherItem {
+    pipeline: Pipeline,
+    number: int,
 }
 
 export global Cat {
@@ -370,7 +381,23 @@ export global PipelinesPanelState {
         callback move-pipeline-down(int);
         // Moves pipeline (id) by this many places (- up) - dragged by its ⋮⋮.
         callback move-pipeline-by(int, int);
+        // Moves pipeline (id) to this place in the order (0 = top, a big
+        // number = bottom).
+        callback move-pipeline-to(int, int);
         callback new-pipeline();
+        // A new pipeline at this place in the order (0 = top), its edit
+        // dialog opened - the insert line between two rows, New above/below.
+        callback insert-pipeline(int);
+        // Shows the next (1) or previous (-1) pipeline - the switcher's ‹ ›
+        // and Ctrl+PgUp/PgDn.
+        callback switch-pipeline(int);
+        // The switcher's list: the pipelines whose name has the search
+        // text (all for ""), in order. Filled by the host on
+        // `switcher-search` and whenever the pipelines change.
+        in property <[SwitcherItem]> switcher-items: [];
+        in-out property <string> switcher-query;
+        in-out property <bool> switcher-open: false;
+        callback switcher-search(string);
         callback duplicate-pipeline(int);
         callback delete-pipeline(int);
         callback pipeline-more(int);
@@ -517,8 +544,8 @@ export global PipelinesPanelState {
         }
     }
 
-    // Shows no pipeline (`active-pipeline-id` -1): the steps panel lists
-    // the pipelines to pick one.
+    // Shows no pipeline (`active-pipeline-id` -1): the pipelines area is
+    // shown and the steps area says to pick one.
     public function deselect-pipeline() {
         self.active-pipeline-id = -1;
         self.active-pipeline-name = "";

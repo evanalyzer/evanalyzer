@@ -64,14 +64,6 @@ component PaletteRow inherits Rectangle {
                 vertical-alignment: center;
             }
         }
-        // Selected: the focus color's edge.
-        if root.selected: Rectangle {
-            x: 0px;
-            width: 3px;
-            height: parent.height - 14px;
-            border-radius: 1.5px;
-            background: Ink.focus;
-        }
     }
 
     ta := TouchArea {

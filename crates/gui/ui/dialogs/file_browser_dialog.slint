@@ -53,14 +53,6 @@ component PlaceRow inherits Rectangle {
         }
     }
 
-    // Selected: the focus color's edge.
-    if root.current: Rectangle {
-        x: 0px;
-        width: 3px;
-        height: parent.height - 14px;
-        border-radius: 1.5px;
-        background: Ink.focus;
-    }
     ta := TouchArea {
         mouse-cursor: pointer;
         clicked => { root.clicked(); }
@@ -136,14 +128,6 @@ component EntryRow inherits Rectangle {
         }
     }
 
-    // Selected: the focus color's edge.
-    if root.selected: Rectangle {
-        x: 0px;
-        width: 3px;
-        height: parent.height - 10px;
-        border-radius: 1.5px;
-        background: Ink.focus;
-    }
     ta := TouchArea {
         clicked => { root.clicked(); }
         double-clicked => { root.double-clicked(); }

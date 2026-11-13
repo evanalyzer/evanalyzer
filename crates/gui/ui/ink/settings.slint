@@ -23,15 +23,6 @@ export component InkNavItem inherits Rectangle {
     border-radius: Ink.radius-md;
     background: root.active ? Ink.selection : (ta.has-hover ? Ink.hover : transparent);
 
-    Rectangle {
-        x: 0;
-        y: 8px;
-        width: 3px;
-        height: parent.height - 16px;
-        border-radius: 1.5px;
-        background: root.active ? Ink.focus : transparent;
-    }
-
     HorizontalLayout {
         padding-left: 12px;
         padding-right: 8px;

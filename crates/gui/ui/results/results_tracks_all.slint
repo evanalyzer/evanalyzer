@@ -433,11 +433,6 @@ export component ResultsTracksAllView inherits Rectangle {
                                 accessible-action-default => {
                                     ResultsState.tracks-all-row-clicked(index);
                                 }
-                                if index == ResultsState.tracks-all-selected: Rectangle {
-                                    x: 0;
-                                    width: 3px;
-                                    background: Ink.focus;
-                                }
                                 HorizontalLayout {
                                     padding-left: 14px;
                                     padding-right: 14px;

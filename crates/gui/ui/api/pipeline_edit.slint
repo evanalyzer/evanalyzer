@@ -6,6 +6,9 @@
 
 export global PipelineEditState {
     in property <int> pipeline-id: 0;
+    // >= 0: a new pipeline, made at this place in the order only on Save
+    // (Cancel / Esc make none); -1: editing pipeline `pipeline-id`.
+    in property <int> new-at: -1;
     in-out property <string> pipeline-name: "";
     // 0 = Scratchpad · 1 = Shared memory slot (ProjectCache) · 2 = Channel · 3 = None
     in-out property <int> source-type: 0;

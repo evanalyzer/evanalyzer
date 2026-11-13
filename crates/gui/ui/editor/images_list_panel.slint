@@ -32,14 +32,6 @@ component ImageRow inherits Rectangle {
             root.clicked();
         }
     }
-    // Selected: the focus color's edge.
-    if root.selected: Rectangle {
-        x: 0px;
-        width: 3px;
-        height: parent.height - 16px;
-        border-radius: 1.5px;
-        background: Ink.focus;
-    }
 
     HorizontalLayout {
         padding-left: 8px;

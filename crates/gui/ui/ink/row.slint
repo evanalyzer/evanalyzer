@@ -8,8 +8,7 @@ import { InkIcons } from "icons.slint";
 import { InkTipSide, InkTipZone } from "tooltip.slint";
 
 /// A list row: a color, a title and a dimmer second text, a mono value at
-/// the right (a count), an eye to show/hide. Selected: a filled row with
-/// the focus color's edge.
+/// the right (a count), an eye to show/hide. Selected: a filled row.
 export component InkListRow inherits Rectangle {
     in property <string> title;
     in property <string> subtitle;
@@ -68,15 +67,6 @@ export component InkListRow inherits Rectangle {
         // The keyboard's ring (a click doesn't focus it).
         border-width: row-keys.has-focus ? 2px : 0px;
         border-color: Ink.focus;
-
-        edge := Rectangle {
-            visible: root.selected;
-            x: 0px;
-            width: 3px;
-            height: parent.height - 10px;
-            border-radius: 1.5px;
-            background: Ink.focus;
-        }
 
         ta := TouchArea {
             clicked => {

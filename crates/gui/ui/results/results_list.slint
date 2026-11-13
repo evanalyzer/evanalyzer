@@ -487,12 +487,6 @@ export component ResultsListView inherits Rectangle {
                                     height: 1px;
                                     x: 0;
                                 }
-                                // The selected row's accent edge.
-                                if index == ResultsState.list-selected-row: Rectangle {
-                                    x: -body-list.content-x;
-                                    width: 3px;
-                                    background: Ink.focus;
-                                }
 
                                 ta := TouchArea {
                                     mouse-cursor: pointer;

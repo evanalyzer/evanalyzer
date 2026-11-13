@@ -42,14 +42,6 @@ component SeriesRow inherits Rectangle {
             vertical-alignment: center;
         }
     }
-    // Selected: the focus color's edge.
-    if root.current: Rectangle {
-        x: 0px;
-        width: 3px;
-        height: parent.height - 16px;
-        border-radius: 1.5px;
-        background: Ink.focus;
-    }
     ta := TouchArea {
         mouse-cursor: pointer;
         clicked => {

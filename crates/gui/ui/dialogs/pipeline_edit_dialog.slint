@@ -112,7 +112,7 @@ component LabeledInput inherits VerticalLayout {
 export component PipelineEditDialog inherits InkDialog {
     // Next to the steps panel.
     anchor-x: Places.beside-left;
-    title: "Edit pipeline";
+    title: PipelineEditState.new-at >= 0 ? "New pipeline" : "Edit pipeline";
     card-width: 420px;
     close-on-backdrop: true;
     close => {
@@ -240,7 +240,7 @@ export component PipelineEditDialog inherits InkDialog {
 
         InkButton {
             kind: InkButtonKind.primary;
-            text: "Save";
+            text: PipelineEditState.new-at >= 0 ? "Add" : "Save";
             clicked => {
                 PipelineEditState.confirm();
             }

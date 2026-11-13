@@ -251,6 +251,11 @@ export component GlobalShortcuts inherits FocusScope {
 
         // -- Z / T -- the stack bar's ◀ ▶ (the slice only while no
         // projection is shown).
+        // Ctrl+PgUp / PgDn: the previous / next pipeline (the switcher's ‹ ›).
+        if (e.text == Key.PageUp || e.text == Key.PageDown) && e.modifiers.control && LayoutState.mode == WorkspaceMode.pipelines {
+            PipelinesPanelState.switch-pipeline(e.text == Key.PageUp ? -1 : 1);
+            return accept;
+        }
         if (e.text == Key.PageUp || e.text == Key.PageDown) && !e.modifiers.control {
             StackSteps.step-z(e.text == Key.PageUp ? -1 : 1);
             return accept;

@@ -1,0 +1,326 @@
+// Copyright 2026 Joachim Danmayr.
+// Licensed under the PolyForm Noncommercial License 1.0.0.
+
+// pipeline_rows.slint
+// The pipelines list's parts: a pipeline's row (expanded list and the
+// switcher's list), its image source label, and the insert line between
+// two rows (also between steps).
+
+import { Ink, InkIcons, InkIconButton } from "../ink/ink.slint";
+import { ChannelState } from "../api/state.slint";
+import { Pipeline } from "../api/pipelines.slint";
+
+// A pipeline's image source: a swatch and its name. A channel's swatch is
+// its display colour from the Image panel (grey with no image open);
+// Memory / Shared / Module a grey ring, Scratchpad amber, None hollow. The
+// text always stays - colour is never the only cue.
+export component SourcePill inherits Rectangle {
+    in property <string> kind;
+    in property <int> index;
+
+    property <bool> is-channel: root.kind == "channel";
+    property <bool> is-slot: root.kind == "memory" || root.kind == "shared" || root.kind == "module";
+    property <bool> is-scratch: root.kind == "scratchpad";
+    property <bool> is-none: root.kind == "none";
+    property <string> label: root.is-channel ? "Ch \{root.index}"
+        : root.kind == "memory" ? "Memory \{root.index}"
+        : root.kind == "shared" ? "Shared \{root.index}"
+        : root.kind == "module" ? "Module \{root.index}"
+        : root.is-scratch ? "Scratchpad" : "None";
+
+    width: row.preferred-width;
+    height: 18px;
+    border-radius: 4px;
+    border-width: 1px;
+    border-color: root.is-scratch ? Ink.warn.with-alpha(0.45) : root.is-none ? Ink.text-faint : Ink.border;
+    background: root.is-scratch ? Ink.warn-tint : root.is-none ? transparent : root.is-slot ? Ink.raised : Ink.panel;
+    accessible-role: text;
+    accessible-label: "Source " + root.label;
+
+    row := HorizontalLayout {
+        padding-left: 4px;
+        padding-right: 6px;
+        spacing: 5px;
+        alignment: start;
+        Rectangle {
+            y: (parent.height - self.height) / 2;
+            width: 8px;
+            height: 8px;
+            border-radius: root.is-slot ? 4px : 2px;
+            background: root.is-channel
+                ? (root.index >= 0 && root.index < ChannelState.channels.length ? ChannelState.channels[root.index].color : Ink.text-faint)
+                : root.is-scratch ? Ink.warn : transparent;
+            border-width: root.is-slot ? 1.5px : root.is-none ? 1px : 0px;
+            border-color: Ink.text-mute;
+        }
+
+        Text {
+            text: root.label;
+            font-size: Ink.fs-caption;
+            font-family: Ink.font-mono;
+            font-weight: 500;
+            color: root.is-none ? Ink.text-dim : Ink.text;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// A pipeline's row: its place, name, source, steps on/total and the eye
+// (in the run or not). Hovered: the number turns into the drag grip and ⋯
+// takes the count's place - fixed columns, so the source label never moves.
+// The shown pipeline is a white row with a ring.
+export component PipelineRow inherits Rectangle {
+    in property <Pipeline> pipeline;
+    // Its place in the order, 1-based.
+    in property <int> number;
+    in property <bool> active;
+    // On the pipelines area (darker ground) or the switcher's card.
+    in property <bool> on-tray: true;
+    in property <bool> draggable: true;
+    // The keyboard's cursor (switcher list).
+    in property <bool> cursor: false;
+    callback selected;
+    callback double-clicked;
+    callback alt-clicked;
+    callback toggled;
+    callback more-clicked;
+    // Dragged by this many rows (- up).
+    callback move-by(int);
+
+    out property <bool> hovered: ta.has-hover;
+    property <bool> dragging: root.drag-dy != 0px;
+    // Dragged by the grip: how far, while the mouse is down.
+    property <length> drag-dy: 0px;
+    property <int> drag-rows: round(root.drag-dy / root.height);
+    property <color> mute: root.on-tray ? Ink.text-dim : Ink.text-mute;
+    property <float> dim: root.pipeline.enabled ? 1.0 : 0.45;
+
+    height: 30px;
+    accessible-role: list-item;
+    accessible-label: "\{root.number} \{root.pipeline.name}" + (root.pipeline.enabled ? "" : ", not in the run");
+    accessible-item-selected: root.active;
+
+    // Where a dragged row lands.
+    if root.dragging && root.drag-rows != 0: Rectangle {
+        x: 2px;
+        width: parent.width - 4px;
+        y: (root.drag-rows > 0 ? (root.drag-rows + 1) : root.drag-rows) * root.height - 1px;
+        height: 2px;
+        border-radius: 1px;
+        background: Ink.focus;
+    }
+
+    face := Rectangle {
+        y: root.drag-dy;
+        border-radius: Ink.radius-sm;
+        background: root.dragging || root.active ? Ink.panel
+            : root.hovered || root.cursor ? (root.on-tray ? Ink.tray-hover : Ink.hover) : transparent;
+        border-width: root.active ? 1px : root.cursor ? 1px : 0px;
+        border-color: root.cursor ? Ink.focus : root.on-tray ? Ink.tray-edge : Ink.border;
+        drop-shadow-blur: root.dragging ? 12px : root.active && root.on-tray ? 2px : 0px;
+        drop-shadow-offset-y: root.active && !root.dragging ? 1px : 0px;
+        drop-shadow-color: root.dragging ? Ink.shadow : Ink.shadow.with-alpha(0.12);
+
+        ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.selected();
+            }
+            double-clicked => {
+                root.double-clicked();
+            }
+            pointer-event(e) => {
+                if e.kind == PointerEventKind.down && e.button == PointerEventButton.left && e.modifiers.alt {
+                    root.alt-clicked();
+                }
+            }
+
+            // The buttons inside: over one the row stays hovered.
+            HorizontalLayout {
+                padding-left: 4px;
+                padding-right: 4px;
+                spacing: 8px;
+
+                // The place, or (hovered) the grip to drag it.
+                Rectangle {
+                    width: 16px;
+                    if !(root.draggable && (root.hovered || root.dragging)): Text {
+                        width: 100%;
+                        text: root.number;
+                        font-size: Ink.fs-caption;
+                        font-family: Ink.font-mono;
+                        color: root.mute;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                    if root.draggable && (root.hovered || root.dragging): Rectangle {
+                        accessible-role: button;
+                        accessible-label: "Drag to reorder";
+                        Image {
+                            x: parent.width - self.width;
+                            source: InkIcons.drag;
+                            width: 12px;
+                            colorize: Ink.text-dim;
+                        }
+
+                        drag-ta := TouchArea {
+                            mouse-cursor: root.dragging ? MouseCursor.grabbing : MouseCursor.grab;
+                            property <length> start-y;
+                            pointer-event(e) => {
+                                if e.kind == PointerEventKind.down {
+                                    self.start-y = self.mouse-y;
+                                }
+                                if e.kind == PointerEventKind.up {
+                                    let rows = root.drag-rows;
+                                    root.drag-dy = 0px;
+                                    if rows != 0 {
+                                        root.move-by(rows);
+                                    }
+                                }
+                            }
+                            moved => {
+                                if self.pressed {
+                                    root.drag-dy = self.mouse-y - self.start-y;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Text {
+                    horizontal-stretch: 1;
+                    text: root.pipeline.name;
+                    font-size: Ink.fs-body;
+                    font-weight: root.active ? 600 : 400;
+                    color: Ink.text;
+                    opacity: root.dim;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+
+                Rectangle {
+                    width: 92px;
+                    opacity: root.dim;
+                    SourcePill {
+                        x: 0px;
+                        y: (parent.height - self.height) / 2;
+                        kind: root.pipeline.source-kind;
+                        index: root.pipeline.source-index;
+                    }
+                }
+
+                // Steps on/total; hovered, ⋯ takes its place - a plain icon
+                // as on a step. The column keeps its width, so nothing moves.
+                Rectangle {
+                    width: 36px;
+                    if !(root.hovered && !root.dragging): Text {
+                        width: 100%;
+                        text: "\{root.pipeline.enabled-step-count}/\{root.pipeline.total-step-count}";
+                        font-size: Ink.fs-caption;
+                        font-family: Ink.font-mono;
+                        color: root.mute;
+                        opacity: root.dim;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                    if root.hovered && !root.dragging: InkIconButton {
+                        x: parent.width - self.width;
+                        y: (parent.height - self.height) / 2;
+                        size: 20px;
+                        icon: InkIcons.more;
+                        label: "Pipeline actions";
+                        clicked => {
+                            root.more-clicked();
+                        }
+                    }
+                }
+
+                // In the run: no icon (an eye on hover); not: a crossed eye.
+                Rectangle {
+                    width: 20px;
+                    if !root.pipeline.enabled || root.hovered: InkIconButton {
+                        y: (parent.height - self.height) / 2;
+                        size: 20px;
+                        icon: root.pipeline.enabled ? InkIcons.visible : InkIcons.hidden;
+                        label: root.pipeline.enabled ? "Leave out of the run" : "Include in the run";
+                        clicked => {
+                            root.toggled();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Where a new step or pipeline goes: hovered, a blue line, a round + in
+// the number column and a tag on the line ("Insert step · 4"); a click
+// inserts there. Its hit area reaches `reach` into the rows above and
+// below, so a thin (or zero) gap is enough - nothing opens up, no tooltip
+// covers the next row. Between pipeline rows it sits in a layer above
+// them, or the next row would cover it.
+export component InsertBar inherits Rectangle {
+    in property <string> tag;
+    // x of the + (its centre), the number column.
+    in property <length> dot-x: 16px;
+    in property <length> reach: 4px;
+    callback insert;
+
+    property <bool> shown: ta.has-hover;
+    property <length> line-y: root.height / 2;
+
+    accessible-role: button;
+    accessible-label: root.tag;
+    accessible-action-default => {
+        root.insert();
+    }
+
+    ta := TouchArea {
+        y: -root.reach;
+        height: root.height + 2 * root.reach;
+        mouse-cursor: pointer;
+        clicked => {
+            root.insert();
+        }
+    }
+
+    if root.shown: Rectangle {
+        x: root.dot-x + 10px;
+        y: root.line-y - 1px;
+        width: parent.width - self.x - 4px;
+        height: 2px;
+        border-radius: 1px;
+        background: Ink.focus;
+    }
+
+    if root.shown: Rectangle {
+        x: root.dot-x - 10px;
+        y: root.line-y - 10px;
+        width: 20px;
+        height: 20px;
+        border-radius: 10px;
+        background: Ink.focus;
+        border-width: 2px;
+        border-color: Ink.panel;
+        Image {
+            source: InkIcons.add;
+            width: 10px;
+            colorize: #FFFFFF;
+        }
+    }
+
+    if root.shown: Rectangle {
+        x: parent.width - self.width - 4px;
+        y: root.line-y - 9px;
+        width: tag-text.preferred-width + 14px;
+        height: 18px;
+        border-radius: 4px;
+        background: Ink.focus;
+        tag-text := Text {
+            text: root.tag;
+            font-size: Ink.fs-caption;
+            font-weight: 500;
+            color: #FFFFFF;
+        }
+    }
+}
