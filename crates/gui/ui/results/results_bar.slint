@@ -296,7 +296,7 @@ export component ResultsBarNav inherits HorizontalLayout {
     all-menu := PopupWindow {
         x: root.all-x;
         y: Ink.bar-h - 6px;
-        InkMenuFrame {
+        all-frame := InkMenuFrame {
             open-y: root.absolute-position.y + Ink.bar-h - 6px;
             menu-width: 260px;
             InkMenuCaption {
@@ -307,6 +307,11 @@ export component ResultsBarNav inherits HorizontalLayout {
                 text: tab.name;
                 shortcut: tab.kind;
                 checked: tab.id == ResultsState.active-view;
+                init => {
+                    if self.checked {
+                        all-frame.reveal(self.absolute-position.y, self.height);
+                    }
+                }
                 enabled: tab.available;
                 clicked => {
                     if tab.id != ResultsState.active-view {
@@ -500,7 +505,7 @@ export component ResultsBarNav inherits HorizontalLayout {
     analyses-menu := PopupWindow {
         x: chip-box.x;
         y: Ink.bar-h - 6px;
-        InkMenuFrame {
+        analyses-frame := InkMenuFrame {
             open-y: root.absolute-position.y + Ink.bar-h - 6px;
             menu-width: 300px;
             InkMenuCaption {
@@ -512,6 +517,11 @@ export component ResultsBarNav inherits HorizontalLayout {
                 text: data.name;
                 shortcut: data.modified;
                 checked: ResultsListState.selected_result_index == index;
+                init => {
+                    if self.checked {
+                        analyses-frame.reveal(self.absolute-position.y, self.height);
+                    }
+                }
                 clicked => {
                     ResultsListState.selected_result_index = index;
                     ResultsListState.result_selected(data.path);

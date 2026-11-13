@@ -47,6 +47,18 @@ export component InkMenuFrame inherits Rectangle {
 
     property <bool> scrolls: items.preferred-height > root.max-menu-height + 0.5px;
 
+    /// Scroll so the item at `abs-y` (its `absolute-position.y`), `h` high,
+    /// is in the middle - call it from a checked item's `init` so a menu
+    /// taller than the window opens with that item in sight.
+    public function reveal(abs-y: length, h: length) {
+        root.reveal-h = h;
+        root.reveal-top = abs-y - list.absolute-position.y - list.content-y;
+    }
+    // Where `reveal` asked to go; scrolled by the element after the items
+    // once all are made (the `init` calling it runs while they are).
+    property <length> reveal-top: -1px;
+    property <length> reveal-h;
+
     list := Flickable {
         content-height: items.preferred-height;
         interactive: root.scrolls;
@@ -54,6 +66,14 @@ export component InkMenuFrame inherits Rectangle {
             padding: 4px;
             spacing: 0px;
             @children
+            Rectangle {
+                height: 0px;
+                init => {
+                    if root.reveal-top >= 0 {
+                        list.content-y = Ink.center-row(root.reveal-top, root.reveal-h, root.menu-height, list.content-height);
+                    }
+                }
+            }
         }
     }
 

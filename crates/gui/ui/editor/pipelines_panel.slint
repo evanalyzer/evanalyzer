@@ -199,11 +199,15 @@ component ClassDropdown inherits Rectangle {
             drop-shadow-color: Ink.shadow;
             clip: true;
 
-            ScrollView {
+            // Opens with the chosen entry in sight: its row's `init` notes
+            // where it is, the last element scrolls there once all rows are
+            // made (the list's height is only known then).
+            scroll := ScrollView {
                 x: 4px;
                 y: 4px;
                 width: parent.width - 8px;
                 height: parent.height - 8px;
+                property <length> reveal-top: -1px;
 
                 VerticalLayout {
                     spacing: 0px;
@@ -213,6 +217,11 @@ component ClassDropdown inherits Rectangle {
                         mono: false;
                         label-color: Ink.text-mute;
                         selected: root.value == "-1";
+                        init => {
+                            if self.selected {
+                                scroll.reveal-top = self.absolute-position.y - scroll.absolute-position.y - scroll.content-y;
+                            }
+                        }
                         clicked => {
                             root.pick("-1");
                         }
@@ -222,6 +231,11 @@ component ClassDropdown inherits Rectangle {
                         label: "Manual annotation";
                         mono: false;
                         selected: root.value == "4294967295";
+                        init => {
+                            if self.selected {
+                                scroll.reveal-top = self.absolute-position.y - scroll.absolute-position.y - scroll.content-y;
+                            }
+                        }
                         clicked => {
                             root.pick("4294967295");
                         }
@@ -231,13 +245,22 @@ component ClassDropdown inherits Rectangle {
                         label: "Background";
                         mono: false;
                         selected: root.value == "0";
+                        init => {
+                            if self.selected {
+                                scroll.reveal-top = self.absolute-position.y - scroll.absolute-position.y - scroll.content-y;
+                            }
+                        }
                         clicked => {
                             root.pick("0");
                         }
                     }
 
                     // A class of its own: named, colored, picked at once.
-                        if !root.is-seg: InkPickerRow {
+                        // Hidden, not an `if`: an `if` row is made after the
+                        // others, which would put the chosen row off by one.
+                        InkPickerRow {
+                        height: !root.is-seg ? 26px : 0px;
+                        visible: !root.is-seg;
                         label: "+ New class…";
                         mono: false;
                         label-color: Ink.focus;
@@ -258,6 +281,11 @@ component ClassDropdown inherits Rectangle {
                         label: "◆ L\{cls.id}";
                         label-color: Ink.cat-module;
                         selected: root.value == "L\{cls.id}";
+                        init => {
+                            if self.selected {
+                                scroll.reveal-top = self.absolute-position.y - scroll.absolute-position.y - scroll.content-y;
+                            }
+                        }
                         clicked => {
                             root.pick("L\{cls.id}");
                         }
@@ -277,6 +305,11 @@ component ClassDropdown inherits Rectangle {
                         for i in 32: InkPickerRow {
                         label: root.prefix + " class " + ClassHelper.zeropad2(i + 1);
                         selected: root.numbered && round(root.value.to-float()) == i + 1;
+                        init => {
+                            if self.selected {
+                                scroll.reveal-top = self.absolute-position.y - scroll.absolute-position.y - scroll.content-y;
+                            }
+                        }
                         clicked => {
                             root.pick("\{i + 1}");
                         }
@@ -284,6 +317,16 @@ component ClassDropdown inherits Rectangle {
                             visible: cls.id == i + 1;
                             color: cls.color;
                             name: cls.name;
+                        }
+                    }
+
+                    // After all rows: scroll to the chosen one.
+                    Rectangle {
+                        height: 0px;
+                        init => {
+                            if scroll.reveal-top >= 0 {
+                                scroll.content-y = Ink.center-row(scroll.reveal-top, 26px, 292px, scroll.content-height);
+                            }
                         }
                     }
                 }

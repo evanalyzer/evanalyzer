@@ -536,7 +536,7 @@ export component InkSelect inherits Rectangle {
             drop-shadow-color: Ink.shadow;
         }
 
-        Flickable {
+        flick := Flickable {
             x: 4px;
             y: 4px;
             width: parent.width - 8px;
@@ -549,6 +549,13 @@ export component InkSelect inherits Rectangle {
                     height: 26px;
                     border-radius: Ink.radius-sm;
                     background: item-ta.has-hover ? Ink.hover : entry == root.current ? Ink.selection : transparent;
+                    // Opens with the chosen entry in sight (`init` runs while
+                    // the rows are made: the list's height from the model).
+                    init => {
+                        if entry == root.current {
+                            flick.content-y = Ink.center-row(i * 26px, 26px, min(root.model.length * 26px, 272px), root.model.length * 26px);
+                        }
+                    }
                     accessible-role: list-item;
                     accessible-label: entry;
                     accessible-item-selected: entry == root.current;

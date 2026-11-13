@@ -850,8 +850,10 @@ fn image_list_item(
 const QUICK_PICK_LIMIT: usize = 50;
 
 /// The quick picker's images: those whose path holds every word of
-/// `query` (any case, any order), at most [`QUICK_PICK_LIMIT`]. Also how
-/// many match in all and where the open image `current` (relative) is.
+/// `query` (any case, any order), at most [`QUICK_PICK_LIMIT`]. Without a
+/// query the listed window is centred on the open image `current`
+/// (relative), so it is always in the list. Also how many match in all and
+/// where `current` is in the returned items.
 fn quick_pick_items(
     images: &evanalyzer_cfg::settings::images_settings::ImageList,
     query: &str,
@@ -860,16 +862,31 @@ fn quick_pick_items(
     image_root: &std::path::Path,
 ) -> (Vec<ImageItemData>, usize, Option<usize>) {
     let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+    let is_match = |entry: &evanalyzer_cfg::settings::images_settings::ImageEntry| {
+        let path = entry.rel_path.to_string_lossy().to_lowercase();
+        words.iter().all(|word| path.contains(word.as_str()))
+    };
+    // Without a query every image matches: the open image's position in the
+    // whole list decides which window of images is shown.
+    let start = match current {
+        Some(current) if words.is_empty() && images.len() > QUICK_PICK_LIMIT => images
+            .values()
+            .position(|entry| entry.rel_path.as_path() == current)
+            .map_or(0, |pos| {
+                pos.saturating_sub(QUICK_PICK_LIMIT / 2)
+                    .min(images.len() - QUICK_PICK_LIMIT)
+            }),
+        _ => 0,
+    };
     let mut items = Vec::new();
     let mut matches = 0;
     let mut current_index = None;
     for entry in images.values() {
-        let path = entry.rel_path.to_string_lossy().to_lowercase();
-        if !words.iter().all(|word| path.contains(word.as_str())) {
+        if !is_match(entry) {
             continue;
         }
         matches += 1;
-        if items.len() < QUICK_PICK_LIMIT {
+        if matches > start && items.len() < QUICK_PICK_LIMIT {
             if current == Some(entry.rel_path.as_path()) {
                 current_index = Some(items.len());
             }
@@ -1508,6 +1525,50 @@ mod tests {
         assert_eq!(items.len(), QUICK_PICK_LIMIT);
         assert_eq!(matches, QUICK_PICK_LIMIT + 7);
         assert_eq!(items[0].path.as_str(), "img_000.tif");
+    }
+
+    #[test]
+    fn quick_pick_without_a_query_lists_the_window_around_the_open_image() {
+        let names: Vec<String> = (0..QUICK_PICK_LIMIT * 3)
+            .map(|i| format!("img_{i:03}.tif"))
+            .collect();
+        let images = image_entries(&names.iter().map(String::as_str).collect::<Vec<_>>());
+        let open = |i: usize| {
+            quick_pick_items(
+                &images,
+                "",
+                Some(std::path::Path::new(&names[i])),
+                &Default::default(),
+                std::path::Path::new(""),
+            )
+        };
+
+        // In the middle: centred.
+        let (items, matches, current) = open(100);
+        assert_eq!(items.len(), QUICK_PICK_LIMIT);
+        assert_eq!(matches, QUICK_PICK_LIMIT * 3);
+        assert_eq!(current, Some(QUICK_PICK_LIMIT / 2));
+        assert_eq!(items[QUICK_PICK_LIMIT / 2].path.as_str(), names[100]);
+
+        // Near the start and the end: the window stays inside the list.
+        let (items, _, current) = open(3);
+        assert_eq!(items[0].path.as_str(), names[0]);
+        assert_eq!(current, Some(3));
+        let last = names.len() - 1;
+        let (items, _, current) = open(last);
+        assert_eq!(items.len(), QUICK_PICK_LIMIT);
+        assert_eq!(items[QUICK_PICK_LIMIT - 1].path.as_str(), names[last]);
+        assert_eq!(current, Some(QUICK_PICK_LIMIT - 1));
+
+        // With a query the first matches are listed, as before.
+        let (items, _, _) = quick_pick_items(
+            &images,
+            "img",
+            Some(std::path::Path::new(&names[100])),
+            &Default::default(),
+            std::path::Path::new(""),
+        );
+        assert_eq!(items[0].path.as_str(), names[0]);
     }
 
     #[test]

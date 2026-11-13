@@ -262,12 +262,17 @@ export component AnnotateBar inherits Rectangle {
     class-menu := PopupWindow {
         x: class-field.x;
         y: root.height + 4px;
-        InkMenuFrame {
+        class-frame := InkMenuFrame {
             open-y: root.absolute-position.y + root.height + 4px;
             menu-width: 240px;
             for data in ClassificationState.classes_list: InkPickerRow {
                 label: data.id < 10 ? "0" + data.id : data.id;
                 selected: data.id == ClassificationState.selected_class_id;
+                init => {
+                    if self.selected {
+                        class-frame.reveal(self.absolute-position.y, self.height);
+                    }
+                }
                 clicked => {
                     root.pick(data.id, data.name);
                     class-menu.close();

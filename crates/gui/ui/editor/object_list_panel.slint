@@ -596,7 +596,7 @@ export component ObjectListPanel inherits Rectangle {
     class-menu := PopupWindow {
         x: root.table ? root.width - root.table-filter-w - root.head-buttons-w : Ink.pad-panel;
         y: root.table ? Ink.head-h - 4px : Ink.head-h + 26px;
-        InkMenuFrame {
+        class-frame := InkMenuFrame {
             open-y: root.absolute-position.y + (root.table ? Ink.head-h - 4px : Ink.head-h + 26px);
             menu-width: 220px;
             InkMenuCaption {
@@ -630,6 +630,11 @@ export component ObjectListPanel inherits Rectangle {
             for cls in ClassificationState.classes_list: InkPickerRow {
                 label: cls.id < 10 ? "0" + cls.id : cls.id;
                 selected: cls.id == ObjectListState.filter-class;
+                init => {
+                    if self.selected {
+                        class-frame.reveal(self.absolute-position.y, self.height);
+                    }
+                }
                 clicked => {
                     root.filter-class-name = cls.name;
                     root.filter-class-color = cls.color;

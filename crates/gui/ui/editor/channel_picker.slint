@@ -99,11 +99,15 @@ export component ChannelPicker inherits Rectangle {
             drop-shadow-color: Ink.shadow;
             clip: true;
 
-            ScrollView {
+            scroll := ScrollView {
                 x: 4px;
                 y: 4px;
                 width: parent.width - 8px;
                 height: parent.height - 8px;
+                // Opens with the chosen channel in sight.
+                init => {
+                    self.content-y = Ink.center-row(root.value * root.row-height, root.row-height, min(root.channel-count, root.max-visible-rows) * root.row-height, root.channel-count * root.row-height);
+                }
 
                 VerticalLayout {
                     spacing: 0px;

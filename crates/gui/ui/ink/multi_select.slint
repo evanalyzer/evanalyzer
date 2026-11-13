@@ -367,6 +367,21 @@ export component InkMultiSelect inherits Rectangle {
 
                 popup-scroll := ScrollView {
                     vertical-stretch: 1;
+                    // The grouped list's full height (the rows are made
+                    // after the chosen one's `init` runs): a header per group,
+                    // a row per item - exact while every item is ungrouped or
+                    // in a listed group.
+                    property <length> grouped-height: 8px + root.groups.length * 22px + root.items.length * root.row-pitch;
+                    // Single-select opens with the chosen entry in sight.
+                    // Only the windowed rows exist (their `init` below
+                    // handles a choice among the first ones), so a choice
+                    // further down comes from the last pick.
+                    init => {
+                        if !root.multi-select && root.groups.length == 0 && root.single-selected-index >= 0
+                            && root.single-selected-index < root.items.length && root.items[root.single-selected-index].selected {
+                            self.content-y = Ink.center-row(4px + root.single-selected-index * root.row-pitch, root.row-height, self.height, self.content-height);
+                        }
+                    }
 
                     property <int> max-first-visible-index: max(0, root.items.length - root.window-size);
                     // The window's starting index: `-content-y` grows as
@@ -405,7 +420,12 @@ export component InkMultiSelect inherits Rectangle {
                                     item: root.items[row-slot.item-index];
                                     show-checkbox: root.multi-select;
                                     activated => { root.toggle(row-slot.item-index); }
-                                    init => { root.note-initial-selection(row-slot.item-index, root.items[row-slot.item-index].selected); }
+                                    init => {
+                                        root.note-initial-selection(row-slot.item-index, root.items[row-slot.item-index].selected);
+                                        if !root.multi-select && root.items[row-slot.item-index].selected {
+                                            popup-scroll.content-y = Ink.center-row(4px + row-slot.item-index * root.row-pitch, root.row-height, popup-scroll.height, popup-scroll.content-height);
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -438,6 +458,11 @@ export component InkMultiSelect inherits Rectangle {
                                 // back on the layout's `spacing`, which
                                 // can't tell a real row from an empty one.
                                 height: it.group == "" ? 28px : 0px;
+                                init => {
+                                    if !root.multi-select && it.selected && it.group == "" {
+                                        popup-scroll.content-y = Ink.center-row(self.absolute-position.y - popup-scroll.absolute-position.y - popup-scroll.content-y, root.row-height, popup-scroll.height, popup-scroll.grouped-height);
+                                    }
+                                }
                                 if it.group == "": MultiSelectRow {
                                     item: it;
                                     show-checkbox: root.multi-select;
@@ -462,6 +487,11 @@ export component InkMultiSelect inherits Rectangle {
                                 for it[idx] in root.items: Rectangle {
                                     // Same reasoning as the ungrouped loop above.
                                     height: it.group == g ? 28px : 0px;
+                                    init => {
+                                        if !root.multi-select && it.selected && it.group == g {
+                                            popup-scroll.content-y = Ink.center-row(self.absolute-position.y - popup-scroll.absolute-position.y - popup-scroll.content-y, root.row-height, popup-scroll.height, popup-scroll.grouped-height);
+                                        }
+                                    }
                                     if it.group == g: MultiSelectRow {
                                         item: it;
                                         show-checkbox: root.multi-select;

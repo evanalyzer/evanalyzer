@@ -170,7 +170,32 @@ component QuickImagePicker inherits Rectangle {
     property <length> list-h: min(10 * root.row-h, max(1, ImagesListState.quick-images.length) * root.row-h);
     // The highlighted row (the one Enter opens).
     property <int> cursor: max(0, ImagesListState.quick-current);
+    // The open image's row; the list arrives after the popup opened.
+    property <int> current: ImagesListState.quick-current;
     callback closed;
+
+    // Scroll the open image's row to the middle of the list (only before
+    // anything was typed: typing starts at the first match).
+    function reveal-current() {
+        if search.text != "" || root.current < 0 {
+            return;
+        }
+        root.cursor = root.current;
+        list.content-y = -clamp(root.current * root.row-h - (root.list-h - root.row-h) / 2, 0, max(0, list.content-height - root.list-h));
+    }
+
+    changed current => {
+        root.reveal-current();
+    }
+    // The list may arrive with the open image at the same index as in the
+    // last one but another length (which limits the scroll).
+    property <int> count: ImagesListState.quick-images.length;
+    changed count => {
+        root.reveal-current();
+    }
+    init => {
+        root.reveal-current();
+    }
 
     function pick(i: int) {
         if i >= 0 && i < ImagesListState.quick-images.length {

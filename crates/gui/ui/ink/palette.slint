@@ -118,6 +118,14 @@ export global Ink {
 
     out property <bool> dark: root.scheme != InkScheme.light;
 
+    /// The `content-y` that puts a row (its top at `top` in the content,
+    /// `h` high) in the middle of a scrolled view `view-h` high over
+    /// content `content-h` high, as far as the content allows - a
+    /// dropdown's chosen entry when it opens.
+    public pure function center-row(top: length, h: length, view-h: length, content-h: length) -> length {
+        -clamp(top - (view-h - h) / 2, 0px, max(0px, content-h - view-h))
+    }
+
     // The value of the scheme in use.
     pure function pick(light: color, dark: color, dim: color) -> color {
         root.scheme == InkScheme.dark ? dark : root.scheme == InkScheme.dim ? dim : light
