@@ -593,6 +593,8 @@ impl Stardist {
 }
 
 #[cfg(test)]
+// Indices written as `row * width + column`, row 0 and column 0 included.
+#[allow(clippy::erasing_op, clippy::identity_op)]
 mod tests {
     use super::*;
     #[cfg(feature = "libtorch-in-process")]

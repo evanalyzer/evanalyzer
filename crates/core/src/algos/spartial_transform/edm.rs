@@ -448,7 +448,9 @@ mod tests {
             .flat_map(|row| row.chars().map(|c| if c == '#' { 1.0 } else { 0.0 }))
             .collect();
 
+        // Distances as printed, 5 digits (1.41421 is not meant as √2).
         #[rustfmt::skip]
+        #[allow(clippy::approx_constant)]
         const EXPECTED: &[f32] = &[
             0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
             1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,

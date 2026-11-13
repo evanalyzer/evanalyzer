@@ -36,7 +36,7 @@ const EQUAL: u8 = 16; // marks contiguous maximum points of equal level
 const MAX_POINT: u8 = 32; // marks a single point standing for a maximum
 const ELIMINATED: u8 = 64; // marks maxima that have been eliminated before watershed
 
-const SQRT2: f32 = 1.414_213_6;
+const SQRT2: f32 = std::f32::consts::SQRT_2;
 
 /// Directions to the 8 neighboring pixels, clockwise: 0=N(-y), 1=NE, 2=E(+x), …7=NW.
 const DIR_X_OFFSET: [i32; 8] = [0, 1, 1, 1, 0, -1, -1, -1];

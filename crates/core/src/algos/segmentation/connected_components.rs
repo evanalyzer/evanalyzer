@@ -257,6 +257,8 @@ impl ConnectedComponents {
 // --- Tests ------------------------------------------------------------------
 
 #[cfg(test)]
+// Indices written as `row * width + column`, row 0 and column 0 included.
+#[allow(clippy::erasing_op, clippy::identity_op)]
 mod tests {
     use super::*;
     use crate::{F32Gray, image::ImageDebugExt};

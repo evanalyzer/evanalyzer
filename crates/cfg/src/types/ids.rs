@@ -280,10 +280,6 @@ impl ObjectId {
         // Atomic increment ensures every ID is unique across all threads
         Self(fast_uuid_v7::gen_id_u128())
     }
-
-    pub fn to_string(&self) -> String {
-        format!("{}", self)
-    }
 }
 
 impl fmt::Display for ObjectId {
@@ -314,10 +310,11 @@ impl TrackId {
         // Atomic increment ensures every ID is unique across all threads
         Self(GLOBAL_TRACK_ID_COUNTER.fetch_add(1, Ordering::SeqCst))
     }
+}
 
-    pub fn to_string(&self) -> String {
-        let tmp: String = format!("{}", self.0);
-        tmp
+impl fmt::Display for TrackId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 

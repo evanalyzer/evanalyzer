@@ -44,10 +44,6 @@ impl SegmentationClass {
     pub fn as_usize(&self) -> usize {
         self.0 as usize
     }
-
-    pub fn to_string(&self) -> String {
-        format!("{}", self)
-    }
 }
 
 impl From<SegmentationClass> for u32 {

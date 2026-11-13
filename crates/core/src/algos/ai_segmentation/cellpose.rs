@@ -1097,6 +1097,8 @@ mod tests {
     /// `cellpose.dynamics.masks_to_flows_gpu` (Cellpose 4.2.1) on this label
     /// map: two touching squares, a C shape whose mean lies outside it, a
     /// single pixel next to another object, and a 3x3 square.
+    // Values as Cellpose printed them (0.707107 is not meant as 1/√2).
+    #[allow(clippy::approx_constant)]
     mod reference {
         pub const LABELS: [u32; 108] = [
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 0, 0, 0, 0, 0, 1, 1, 1, 1,
