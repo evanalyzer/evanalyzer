@@ -246,6 +246,12 @@ pub enum PipelineCommand {
     #[serde(alias = "laplacian")]
     Laplacian(LaplacianSettings),
     #[serde(
+        alias = "laplacian-of-gaussian",
+        alias = "laplacianOfGaussian",
+        alias = "laplacian_of_gaussian"
+    )]
+    LaplacianOfGaussian(LaplacianOfGaussianSettings),
+    #[serde(
         alias = "load-annotated-objects",
         alias = "loadAnnotatedObjects",
         alias = "load_annotated_objects"
@@ -651,6 +657,14 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
         },
         CommandMeta {
             id: 25,
+            name: "Laplacian of Gaussian",
+            category: CommandCategory::Preprocess,
+            categories: &[CommandCategory::Preprocess],
+            summary: "Enhances spots of one size: keeps the details of a spot's size and removes finer noise and coarser background and structures.",
+            description: "[Laplacian of Gaussian] -> [Find Maxima] -> [Extract Objects]\n\nBright spots become positive peaks, dark spots negative ones, flat and\nevenly sloped background 0. Measure intensities on the original channel,\nnot on this image.",
+        },
+        CommandMeta {
+            id: 26,
             name: "LoadAnnotatedObjects",
             category: CommandCategory::Object,
             categories: &[CommandCategory::Object],
@@ -658,7 +672,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "Every loaded object gets a new object id, is marked as manually annotated\nand has its intensities measured on every channel - from there on it is\nhandled like any segmented object.",
         },
         CommandMeta {
-            id: 26,
+            id: 27,
             name: "LoadChannel",
             category: CommandCategory::Preprocess,
             categories: &[CommandCategory::Preprocess],
@@ -666,7 +680,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "Replaces the current image. Use it as the first step of a pipeline\nwithout an image source, or to switch channels within a pipeline - e.g.\na module that detects nuclei in one channel and cells in another.\n\nProjection: Auto loads the channel as the project's z-stack setting does.\nAny other choice loads it with its own z-projection, or one z-plane (None).\nUse it with a project that analyzes one projection or one plane: if the project analyzes the z-planes one by one, the pipeline runs once per plane on the same image and its objects repeat for every plane.\nObjects found on another projection are still drawn over the project's image, and annotations are matched to the project's z-planes.",
         },
         CommandMeta {
-            id: 27,
+            id: 28,
             name: "Measure Filament Tree",
             category: CommandCategory::Measure,
             categories: &[CommandCategory::Measure],
@@ -674,7 +688,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "Lengths in pixels.\n\n[Trace Filaments] -> [Measure Filament Tree]",
         },
         CommandMeta {
-            id: 28,
+            id: 29,
             name: "Measure Image Area Occupied",
             category: CommandCategory::Measure,
             categories: &[CommandCategory::Measure],
@@ -682,7 +696,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "The area in pixels and µm² (with a known pixel size) and the part of the\nimage (0..1). Where objects overlap, the area counts once.",
         },
         CommandMeta {
-            id: 29,
+            id: 30,
             name: "Measure Image Colocalization",
             category: CommandCategory::Measure,
             categories: &[CommandCategory::Measure],
@@ -690,7 +704,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "Pearson (-1 to 1) uses every pixel. Manders M1 is the part of channel\nA's intensity where channel B is bright too (M2 the other way round),\n\"bright\" meaning above the threshold - a percentage of the channel's\nmaximum, or Costes' automatic threshold. The overlap coefficient, K1/K2\nand RWC (Manders weighted by how similar the two pixels' ranks are) use\nthe same pixels.",
         },
         CommandMeta {
-            id: 30,
+            id: 31,
             name: "Measure Image Intensity",
             category: CommandCategory::Measure,
             categories: &[CommandCategory::Measure],
@@ -698,7 +712,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "Total, mean, standard deviation, minimum, maximum, median, lower and\nupper quartile and median absolute deviation - in gray values, like the\nobjects' intensities. It uses every pixel of the image, the background\ntoo.",
         },
         CommandMeta {
-            id: 31,
+            id: 32,
             name: "Measure Image Quality",
             category: CommandCategory::Measure,
             categories: &[CommandCategory::Measure],
@@ -706,7 +720,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "Focus score (the variance over the mean - low: blurry), power log-log\nslope (how fast fine detail fades - more negative: blurrier), the\npercent of pixels at the image's maximum and minimum (high: saturated or\nclipped) - all by their standard definitions - and the noise (σ in gray\nvalues, Immerkær's estimate). Use them with \"Exclude Image\" to leave bad\nimages out of the results.",
         },
         CommandMeta {
-            id: 32,
+            id: 33,
             name: "Measure Image Texture",
             category: CommandCategory::Measure,
             categories: &[CommandCategory::Measure],
@@ -714,7 +728,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "The pixel pairs the scale apart in a direction say how the gray levels\ngo together: e.g. contrast is high where neighbours differ a lot, the\nangular second moment where few pairs repeat over and over (smooth or\nregular), entropy where the pairs are all different.",
         },
         CommandMeta {
-            id: 33,
+            id: 34,
             name: "Measure Object Colocalization",
             category: CommandCategory::Measure,
             categories: &[CommandCategory::Measure],
@@ -722,7 +736,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "The values of Measure Image Colocalization (but the slope) of the\nobject's pixels: the threshold is a percentage of the object's maximum,\nRWC ranks the values of all the objects, and Costes uses the whole\nimage's Costes thresholds.",
         },
         CommandMeta {
-            id: 34,
+            id: 35,
             name: "Measure Object Distance To Parent",
             category: CommandCategory::Measure,
             categories: &[CommandCategory::Measure],
@@ -730,7 +744,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "A child without a parent of the class has no value.",
         },
         CommandMeta {
-            id: 35,
+            id: 36,
             name: "Measure Object Neighbors",
             category: CommandCategory::Measure,
             categories: &[CommandCategory::Measure],
@@ -738,7 +752,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "The closest objects are by the distance between the centres; each\ndistance names the object it is to. \"Percent touching\" is the part of\nthe object's outline pixels within the distance (+ ½ px) of a neighbour.",
         },
         CommandMeta {
-            id: 36,
+            id: 37,
             name: "Measure Object Shape",
             category: CommandCategory::Measure,
             categories: &[CommandCategory::Measure],
@@ -746,7 +760,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "",
         },
         CommandMeta {
-            id: 37,
+            id: 38,
             name: "Measure Object Sholl",
             category: CommandCategory::Measure,
             categories: &[CommandCategory::Measure],
@@ -754,7 +768,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "Radii in pixels.\n\n[Skeletonize Objects] -> [Relate Objects (skeletons to somata)] -> [Measure Object Sholl]",
         },
         CommandMeta {
-            id: 38,
+            id: 39,
             name: "Measure Object Skeleton",
             category: CommandCategory::Measure,
             categories: &[CommandCategory::Measure],
@@ -762,7 +776,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "Lengths in pixels.\n\n[Skeletonize Objects] -> [Relate Objects] -> [Measure Object Skeleton]",
         },
         CommandMeta {
-            id: 39,
+            id: 40,
             name: "Measure Object Texture",
             category: CommandCategory::Measure,
             categories: &[CommandCategory::Measure],
@@ -770,7 +784,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "The same values as Measure Image Texture, of the object's pixels only.",
         },
         CommandMeta {
-            id: 40,
+            id: 41,
             name: "Measure Track Motion",
             category: CommandCategory::Dataset,
             categories: &[CommandCategory::Dataset],
@@ -778,7 +792,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "[Track LAP / Kalman / ...] -> [Measure Track Motion]\n\nWith a drift reference (objects that don't swim, e.g. immotile cells or\nbeads, tracked too) the drift of the image is taken away first: the\nmedian step of the reference tracks from one time point to the next.",
         },
         CommandMeta {
-            id: 41,
+            id: 42,
             name: "MedianSubtract",
             category: CommandCategory::Preprocess,
             categories: &[CommandCategory::Preprocess],
@@ -786,7 +800,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "This algorithm is highly effective for removing large-scale background\nvariations while preserving small, high-contrast features. It works by\nestimating the background as the median intensity within a local radius.",
         },
         CommandMeta {
-            id: 42,
+            id: 43,
             name: "MorphologicalCommand",
             category: CommandCategory::Preprocess,
             categories: &[
@@ -797,7 +811,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "Morphological operations use a structuring element (kernel) to probe\nand modify the shapes within an image.\n\nIts place in the pipeline decides what it works on: before a\nsegmentation on the image, after one (e.g. a Threshold) on the\nsegmentation mask - every class transformed as its own mask: classes grow\ninto background only (Dilate) and touching classes shrink away from each\nother equally (Erode), whatever their class numbers.",
         },
         CommandMeta {
-            id: 43,
+            id: 44,
             name: "ObjectMath",
             category: CommandCategory::Object,
             categories: &[CommandCategory::Object],
@@ -805,7 +819,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "When more than one `other_class` object overlaps a given input object, all of them\nare unioned into a single \"B\" before the operation is applied, so the result\ndoesn't depend on the order they'd otherwise be combined in.",
         },
         CommandMeta {
-            id: 44,
+            id: 45,
             name: "AI Pixel Classifier",
             category: CommandCategory::Segment,
             categories: &[CommandCategory::Segment],
@@ -813,7 +827,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "[Preprocessing] -> [Pixel classifier] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]\n\nTrain a classifier in EVAnalyzer's AI training dialog from your annotated objects; the training saves it as an `.evamodel` file, which this step applies.\nThe classifier assigns every pixel of the image to a class, producing a segmented image.\nThe segmentation mapping translates the model's classes into this project's segmentation classes.\n\nUse a pixel classifier in place of a threshold step.\nLike a threshold, it is usually followed by a Connected Components step and then an Extract Objects step.",
         },
         CommandMeta {
-            id: 45,
+            id: 46,
             name: "Propagation",
             category: CommandCategory::Object,
             categories: &[CommandCategory::Object],
@@ -821,7 +835,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "E.g. a cell around its nucleus through the cell stain: every pixel goes\nto the seed it is reached from at the lowest cost, a step costing more\nthe more the stain's brightness changes - so neighbouring cells meet\nwhere the stain is dim, not halfway between their nuclei. Each region\nkeeps its seed's pixels (Relate Objects links it to its seed).",
         },
         CommandMeta {
-            id: 46,
+            id: 47,
             name: "RankFilter",
             category: CommandCategory::Preprocess,
             categories: &[CommandCategory::Preprocess],
@@ -829,7 +843,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "Rank filters are non-linear operators used for noise reduction,\nmorphological operations, and feature enhancement.\n\nThis algorithm sorts (ranks) all pixel values within a local neighborhood\nwindow and assigns a specific percentile value to the center pixel. By selecting\ndifferent ranks, it acts as a configurable operator: the minimum rank performs\nerosion, the maximum rank performs dilation, and the median rank (50th percentile)\nprovides highly effective impulse noise suppression while preserving sharp structural edges.",
         },
         CommandMeta {
-            id: 47,
+            id: 48,
             name: "Relate Objects",
             category: CommandCategory::Object,
             categories: &[CommandCategory::Object],
@@ -837,7 +851,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "a spot) gets at most one parent of each parent class (e.g. its cell).\n\nThe results then give per parent the number of its children and the\nmean, median, ... of their measurements, and the parent's values next to\neach child. A child already linked to a parent of one of these classes\nis linked anew - or unlinked when no parent matches.",
         },
         CommandMeta {
-            id: 48,
+            id: 49,
             name: "Rolling Ball",
             category: CommandCategory::Preprocess,
             categories: &[CommandCategory::Preprocess],
@@ -845,7 +859,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "This algorithm models the image as a 3D intensity landscape and conceptually rolls\na sphere of a user-defined radius underneath it. The ball cannot penetrate narrow\nintensity peaks (true signal objects) but follows the sweeping, lower-frequency\ncurves of background variations. The path traced by the ball establishes a local\nbaseline map that is subtracted from the original image to isolate foreground features.",
         },
         CommandMeta {
-            id: 49,
+            id: 50,
             name: "SaveImage",
             category: CommandCategory::Utility,
             categories: &[CommandCategory::Utility],
@@ -853,7 +867,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "This is a **transparent command**: it does not modify the image data in the\npipeline context, nor does it perform a buffer swap. It acts as a tap\nto view the state of the image at a specific point in the pipeline.",
         },
         CommandMeta {
-            id: 50,
+            id: 51,
             name: "Script",
             category: CommandCategory::Utility,
             categories: &[CommandCategory::Utility],
@@ -861,7 +875,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "The script sees the current tile as read-only constants:\n`image_width`, `image_height`, `tile_x`, `tile_y` and `image_bits`.\n`print(...)` writes to the log. `run(command, #{ params })` runs a\npipeline command on the current image, with the parameter names of the\nstep settings.",
         },
         CommandMeta {
-            id: 51,
+            id: 52,
             name: "Skeletonize Objects",
             category: CommandCategory::Object,
             categories: &[CommandCategory::Object],
@@ -869,7 +883,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "[Threshold] -> [Extract Objects] -> [Skeletonize Objects] -> [Relate Objects] -> [Measure Object Skeleton]\n\nEach object of the input class gets one skeleton object; branch points\nand end points can become 1-pixel objects of their own classes. Spurs\nshorter than the minimum branch length are pruned. The input objects\nstay as they are; link skeletons and points to them with Relate Objects.",
         },
         CommandMeta {
-            id: 52,
+            id: 53,
             name: "AI Stardist Segmentation",
             category: CommandCategory::Segment,
             categories: &[CommandCategory::Segment],
@@ -877,7 +891,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return two tensors:\nan object-probability map `[1, 1, H', W']` and a ray-distance map\n`[1, n_rays, H', W']` giving, for each grid cell, the distance to the object\nboundary along `n_rays` equally-spaced angles (the StarDist star-convex-polygon\nrepresentation). `H'`/`W'` may be smaller than the input size if the model\npredicts on a coarser grid; this is detected from the output shape and the\npolygons are rescaled back to image resolution automatically.\n\nSome TorchScript exports concatenate both outputs into a single\n`[1, 1 + n_rays, H', W']` tensor (channel 0 = probability, the rest =\ndistances); this is also supported.\n\nPer grid cell candidates above `probability_threshold` are converted to\nstar-convex polygons, then greedily filtered with non-maximum suppression\n(polygons whose pixel-overlap ratio with a higher-scoring candidate exceeds\n`nms_threshold` are discarded) before being rasterized into the pipeline's\nsegmentation and instance maps. Runs on GPU automatically if CUDA is\navailable in the linked libtorch build, otherwise falls back to CPU.",
         },
         CommandMeta {
-            id: 53,
+            id: 54,
             name: "StructureTensor",
             category: CommandCategory::Preprocess,
             categories: &[CommandCategory::Preprocess],
@@ -885,7 +899,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "This algorithm summarizes the predominant directions of the image gradient within a local\nneighborhood, smoothing the structural data with a Gaussian window. By evaluating the\neigenvalues of the resulting matrix tensor, it distinguishes between flat areas (both eigenvalues\nnear zero), straight linear boundaries (one dominant eigenvalue indicating structural direction),\nand complex corners or intersections (two large eigenvalues).",
         },
         CommandMeta {
-            id: 54,
+            id: 55,
             name: "Threshold",
             category: CommandCategory::Segment,
             categories: &[CommandCategory::Segment],
@@ -893,7 +907,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "This supports \"Multi-Otsu\" style behavior by allowing several\nthresholds. Each pixel is evaluated against them to determine which\nsegmentation class it belongs to.",
         },
         CommandMeta {
-            id: 55,
+            id: 56,
             name: "Trace Filaments",
             category: CommandCategory::Object,
             categories: &[CommandCategory::Object],
@@ -901,7 +915,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "[Skeletonize Objects (end points)] -> [Trace Filaments] -> [Measure Filament Tree]\n\nEach segment is a 1-pixel-wide object of the output class, linked to the\nnext segment towards the soma (a root segment: none) and to its soma.",
         },
         CommandMeta {
-            id: 56,
+            id: 57,
             name: "Track Kalman",
             category: CommandCategory::Dataset,
             categories: &[CommandCategory::Dataset],
@@ -909,7 +923,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "Objects of `object_class` in two consecutive frames of the same image and\nz-plane are linked so that the sum of the squared distances to the\npredicted positions is smallest, each object once. Each track's velocity\nis followed by a Kalman filter. Then track ends are linked to starts up\nto `max_gap_frames` later, and - if switched on - track ends into other\ntracks (merge) and starts out of them (split), as in Track LAP.",
         },
         CommandMeta {
-            id: 57,
+            id: 58,
             name: "Track LAP",
             category: CommandCategory::Dataset,
             categories: &[CommandCategory::Dataset],
@@ -917,7 +931,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "Objects of `object_class` in two consecutive frames of the same image and\nz-plane are linked so that the sum of the squared distances is smallest,\neach object once (Jaqaman et al., 2008). Then track ends are linked to\nstarts up to `max_gap_frames` later (an object missed by the\nsegmentation), and - if switched on - track ends into other tracks\n(merge) and starts out of them (split). A merge or split starts new\ntracks, with the old ones as parents.",
         },
         CommandMeta {
-            id: 58,
+            id: 59,
             name: "TrackNearestNeighbor",
             category: CommandCategory::Dataset,
             categories: &[CommandCategory::Dataset],
@@ -925,7 +939,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "Objects of `object_class` in two consecutive frames of the same image and\nz-plane are linked closest pair first, each object once, if they are at\nmost `max_distance` apart. Every object gets a track id; one that can't\nbe linked starts a new track.",
         },
         CommandMeta {
-            id: 59,
+            id: 60,
             name: "Track Overlap",
             category: CommandCategory::Dataset,
             categories: &[CommandCategory::Dataset],
@@ -933,7 +947,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "Objects of `object_class` in two consecutive frames of the same image and\nz-plane are linked so that they overlap the most in total, each object\nonce - two objects can be linked if their intersection over union is\nat least `min_overlap`. Then track ends are linked to starts up to\n`max_gap_frames` later, and - if switched on - track ends into other\ntracks (merge) and starts out of them (split). A merge or split starts\nnew tracks, with the old ones as parents.",
         },
         CommandMeta {
-            id: 60,
+            id: 61,
             name: "TransformObjects",
             category: CommandCategory::Object,
             categories: &[CommandCategory::Object],
@@ -941,7 +955,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "This command applies a geometric transform (scale, circle, fitted ellipse) to every object\ncarrying `input_class`. The transformed shape keeps the original object's bounding-box center.\nIf `output_class` is unset (or equal to `input_class`) the input object is replaced in place;\notherwise a new object carrying `output_class` is created alongside the untouched input object.\n\nA transformed shape with no pixels left (e.g. `Shrink` by more than the object's own\nsize) is not an object: no new object is created, and in place the input object is removed.",
         },
         CommandMeta {
-            id: 61,
+            id: 62,
             name: "AI UNet Segmentation",
             category: CommandCategory::Segment,
             categories: &[CommandCategory::Segment],
@@ -949,7 +963,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return either a\n`[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already\napplies its final sigmoid) or a `[1, C, H, W]` tensor with more than one\nchannel, in which case `output_mode` and `foreground_channel` decide how the\nforeground probability is extracted. Runs on GPU\nautomatically if CUDA is available in the linked libtorch build, otherwise\nfalls back to CPU.\n\nAny tile size works: the tile is mirror-padded to a multiple of 16 (U-Nets\nhalve the image 4 times and fail otherwise) plus a 16 px border (context\nfor the pixels at the tile edge, the \"halo\" bioimage.io models declare),\nand the prediction is cropped back to the tile.",
         },
         CommandMeta {
-            id: 62,
+            id: 63,
             name: "Vesselness",
             category: CommandCategory::Preprocess,
             categories: &[CommandCategory::Preprocess],
@@ -957,7 +971,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "[Vesselness] -> [Threshold] -> [Connected Components] -> [Extract Objects] -> [Skeletonize Objects]\n\nThe result is 0..1: high in the middle of a line, low for the\nbackground, blobs and flat areas.",
         },
         CommandMeta {
-            id: 63,
+            id: 64,
             name: "Voronoi",
             category: CommandCategory::Object,
             categories: &[CommandCategory::Object],
@@ -965,7 +979,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "Each seed center expands outward until it reaches another region, the optional mask\nboundary, or the maximum radius. The resulting areas are stored as new ROIs labeled\nwith `output_class` and linked to their originating center object.",
         },
         CommandMeta {
-            id: 64,
+            id: 65,
             name: "Watershed",
             category: CommandCategory::InstanceSegmentation,
             categories: &[CommandCategory::InstanceSegmentation],
@@ -973,7 +987,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "[Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]\n\nThis is a faithful port of ImageJ's `Process > Binary > Watershed`\n(`MaximumFinder` applied to the Euclidean distance map). Touching objects that\n`ConnectedComponents` merged into a single blob are split at their \"necks\":\nthe distance map's local maxima are the seeds, maxima protruding less than\n`maximum_finder_tolerance` above the ridge connecting them to a higher maximum\nare merged, and a constrained flood draws 1-pixel watershed lines between the\nsurviving basins. The split blob is then re-labeled into separate instances.",
         },
         CommandMeta {
-            id: 65,
+            id: 66,
             name: "WeightedDeviation",
             category: CommandCategory::Preprocess,
             categories: &[CommandCategory::Preprocess],
@@ -981,7 +995,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "Unlike a standard deviation filter which treats all pixels in a window equally,\nthe Weighted Deviation uses a Gaussian kernel to give more importance to\npixels closer to the center. This is particularly effective for edge-preserving\nnoise analysis and local contrast enhancement.\n\nThis algorithm evaluates local variance by calculating two distinct Gaussian-blurred\nbaselines across the image: the weighted average of the pixel intensities, and the\nweighted average of the squared intensities. By subtracting the squared mean from\nthe mean of squares, it yields a localized, smooth statistical variance map that\nhighlights micro-textures and subtle surface boundaries without producing blocky artifacts.",
         },
         CommandMeta {
-            id: 66,
+            id: 67,
             name: "AI YOLOv5 Segmentation",
             category: CommandCategory::Segment,
             categories: &[CommandCategory::Segment],
@@ -1053,100 +1067,103 @@ pub fn default_command(id: i32) -> Option<PipelineCommand> {
             IntensityTransformationSettings::default(),
         )),
         24 => Some(PipelineCommand::Laplacian(LaplacianSettings::default())),
-        25 => Some(PipelineCommand::LoadAnnotatedObjects(
+        25 => Some(PipelineCommand::LaplacianOfGaussian(
+            LaplacianOfGaussianSettings::default(),
+        )),
+        26 => Some(PipelineCommand::LoadAnnotatedObjects(
             LoadAnnotatedObjectsSettings::default(),
         )),
-        26 => Some(PipelineCommand::LoadChannel(LoadChannelSettings::default())),
-        27 => Some(PipelineCommand::MeasureFilamentTree(
+        27 => Some(PipelineCommand::LoadChannel(LoadChannelSettings::default())),
+        28 => Some(PipelineCommand::MeasureFilamentTree(
             MeasureFilamentTreeSettings::default(),
         )),
-        28 => Some(PipelineCommand::MeasureImageAreaOccupied(
+        29 => Some(PipelineCommand::MeasureImageAreaOccupied(
             MeasureImageAreaOccupiedSettings::default(),
         )),
-        29 => Some(PipelineCommand::MeasureImageColocalization(
+        30 => Some(PipelineCommand::MeasureImageColocalization(
             MeasureImageColocalizationSettings::default(),
         )),
-        30 => Some(PipelineCommand::MeasureImageIntensity(
+        31 => Some(PipelineCommand::MeasureImageIntensity(
             MeasureImageIntensitySettings::default(),
         )),
-        31 => Some(PipelineCommand::MeasureImageQuality(
+        32 => Some(PipelineCommand::MeasureImageQuality(
             MeasureImageQualitySettings::default(),
         )),
-        32 => Some(PipelineCommand::MeasureImageTexture(
+        33 => Some(PipelineCommand::MeasureImageTexture(
             MeasureImageTextureSettings::default(),
         )),
-        33 => Some(PipelineCommand::MeasureObjectColocalization(
+        34 => Some(PipelineCommand::MeasureObjectColocalization(
             MeasureObjectColocalizationSettings::default(),
         )),
-        34 => Some(PipelineCommand::MeasureObjectDistanceToParent(
+        35 => Some(PipelineCommand::MeasureObjectDistanceToParent(
             MeasureObjectDistanceToParentSettings::default(),
         )),
-        35 => Some(PipelineCommand::MeasureObjectNeighbors(
+        36 => Some(PipelineCommand::MeasureObjectNeighbors(
             MeasureObjectNeighborsSettings::default(),
         )),
-        36 => Some(PipelineCommand::MeasureObjectShape(
+        37 => Some(PipelineCommand::MeasureObjectShape(
             MeasureObjectShapeSettings::default(),
         )),
-        37 => Some(PipelineCommand::MeasureObjectSholl(
+        38 => Some(PipelineCommand::MeasureObjectSholl(
             MeasureObjectShollSettings::default(),
         )),
-        38 => Some(PipelineCommand::MeasureObjectSkeleton(
+        39 => Some(PipelineCommand::MeasureObjectSkeleton(
             MeasureObjectSkeletonSettings::default(),
         )),
-        39 => Some(PipelineCommand::MeasureObjectTexture(
+        40 => Some(PipelineCommand::MeasureObjectTexture(
             MeasureObjectTextureSettings::default(),
         )),
-        40 => Some(PipelineCommand::MeasureTrackMotion(
+        41 => Some(PipelineCommand::MeasureTrackMotion(
             MeasureTrackMotionSettings::default(),
         )),
-        41 => Some(PipelineCommand::MedianSubtract(
+        42 => Some(PipelineCommand::MedianSubtract(
             MedianSubtractSettings::default(),
         )),
-        42 => Some(PipelineCommand::MorphologicalCommand(
+        43 => Some(PipelineCommand::MorphologicalCommand(
             MorphologicalCommandSettings::default(),
         )),
-        43 => Some(PipelineCommand::ObjectMath(ObjectMathSettings::default())),
-        44 => Some(PipelineCommand::PixelClassifier(
+        44 => Some(PipelineCommand::ObjectMath(ObjectMathSettings::default())),
+        45 => Some(PipelineCommand::PixelClassifier(
             PixelClassifierSettings::default(),
         )),
-        45 => Some(PipelineCommand::Propagation(PropagationSettings::default())),
-        46 => Some(PipelineCommand::RankFilter(RankFilterSettings::default())),
-        47 => Some(PipelineCommand::RelateObjects(
+        46 => Some(PipelineCommand::Propagation(PropagationSettings::default())),
+        47 => Some(PipelineCommand::RankFilter(RankFilterSettings::default())),
+        48 => Some(PipelineCommand::RelateObjects(
             RelateObjectsSettings::default(),
         )),
-        48 => Some(PipelineCommand::RollingBall(RollingBallSettings::default())),
-        49 => Some(PipelineCommand::SaveImage(SaveImageSettings::default())),
-        50 => Some(PipelineCommand::Script(ScriptSettings::default())),
-        51 => Some(PipelineCommand::SkeletonizeObjects(
+        49 => Some(PipelineCommand::RollingBall(RollingBallSettings::default())),
+        50 => Some(PipelineCommand::SaveImage(SaveImageSettings::default())),
+        51 => Some(PipelineCommand::Script(ScriptSettings::default())),
+        52 => Some(PipelineCommand::SkeletonizeObjects(
             SkeletonizeObjectsSettings::default(),
         )),
-        52 => Some(PipelineCommand::Stardist(StardistSettings::default())),
-        53 => Some(PipelineCommand::StructureTensor(
+        53 => Some(PipelineCommand::Stardist(StardistSettings::default())),
+        54 => Some(PipelineCommand::StructureTensor(
             StructureTensorSettings::default(),
         )),
-        54 => Some(PipelineCommand::Threshold(ThresholdSettings::default())),
-        55 => Some(PipelineCommand::TraceFilaments(
+        55 => Some(PipelineCommand::Threshold(ThresholdSettings::default())),
+        56 => Some(PipelineCommand::TraceFilaments(
             TraceFilamentsSettings::default(),
         )),
-        56 => Some(PipelineCommand::TrackKalman(TrackKalmanSettings::default())),
-        57 => Some(PipelineCommand::TrackLap(TrackLapSettings::default())),
-        58 => Some(PipelineCommand::TrackNearestNeighbor(
+        57 => Some(PipelineCommand::TrackKalman(TrackKalmanSettings::default())),
+        58 => Some(PipelineCommand::TrackLap(TrackLapSettings::default())),
+        59 => Some(PipelineCommand::TrackNearestNeighbor(
             TrackNearestNeighborSettings::default(),
         )),
-        59 => Some(PipelineCommand::TrackOverlap(
+        60 => Some(PipelineCommand::TrackOverlap(
             TrackOverlapSettings::default(),
         )),
-        60 => Some(PipelineCommand::TransformObjects(
+        61 => Some(PipelineCommand::TransformObjects(
             TransformObjectsSettings::default(),
         )),
-        61 => Some(PipelineCommand::UNet(UNetSettings::default())),
-        62 => Some(PipelineCommand::Vesselness(VesselnessSettings::default())),
-        63 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
-        64 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
-        65 => Some(PipelineCommand::WeightedDeviation(
+        62 => Some(PipelineCommand::UNet(UNetSettings::default())),
+        63 => Some(PipelineCommand::Vesselness(VesselnessSettings::default())),
+        64 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
+        65 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
+        66 => Some(PipelineCommand::WeightedDeviation(
             WeightedDeviationSettings::default(),
         )),
-        66 => Some(PipelineCommand::Yolov5(Yolov5Settings::default())),
+        67 => Some(PipelineCommand::Yolov5(Yolov5Settings::default())),
         _ => None,
     }
 }
@@ -1181,6 +1198,7 @@ impl PipelineCommand {
         "image_math",
         "intensity_transformation",
         "laplacian",
+        "laplacian_of_gaussian",
         "load_annotated_objects",
         "load_channel",
         "measure_filament_tree",
@@ -1253,6 +1271,7 @@ impl PipelineCommand {
             Self::ImageMath(_) => "image_math",
             Self::IntensityTransformation(_) => "intensity_transformation",
             Self::Laplacian(_) => "laplacian",
+            Self::LaplacianOfGaussian(_) => "laplacian_of_gaussian",
             Self::LoadAnnotatedObjects(_) => "load_annotated_objects",
             Self::LoadChannel(_) => "load_channel",
             Self::MeasureFilamentTree(_) => "measure_filament_tree",
@@ -1348,6 +1367,9 @@ impl PipelineCommand {
                 IntensityTransformationSettings::default(),
             )),
             "laplacian" => Some(Self::Laplacian(LaplacianSettings::default())),
+            "laplacian_of_gaussian" => Some(Self::LaplacianOfGaussian(
+                LaplacianOfGaussianSettings::default(),
+            )),
             "load_annotated_objects" => Some(Self::LoadAnnotatedObjects(
                 LoadAnnotatedObjectsSettings::default(),
             )),
@@ -1461,6 +1483,7 @@ impl PipelineCommand {
             Self::ImageMath(_) => "ImageMath",
             Self::IntensityTransformation(_) => "IntensityTransformation",
             Self::Laplacian(_) => "Laplacian",
+            Self::LaplacianOfGaussian(_) => "Laplacian of Gaussian",
             Self::LoadAnnotatedObjects(_) => "LoadAnnotatedObjects",
             Self::LoadChannel(_) => "LoadChannel",
             Self::MeasureFilamentTree(_) => "Measure Filament Tree",
@@ -1539,6 +1562,7 @@ impl PipelineCommand {
             Self::ImageMath(_) => &CommandCategory::Preprocess,
             Self::IntensityTransformation(_) => &CommandCategory::Preprocess,
             Self::Laplacian(_) => &CommandCategory::Preprocess,
+            Self::LaplacianOfGaussian(_) => &CommandCategory::Preprocess,
             Self::LoadAnnotatedObjects(_) => &CommandCategory::Object,
             Self::LoadChannel(_) => &CommandCategory::Preprocess,
             Self::MeasureFilamentTree(_) => &CommandCategory::Measure,
@@ -1614,6 +1638,7 @@ impl PipelineCommand {
             Self::ImageMath(_) => &[CommandCategory::Preprocess],
             Self::IntensityTransformation(_) => &[CommandCategory::Preprocess],
             Self::Laplacian(_) => &[CommandCategory::Preprocess],
+            Self::LaplacianOfGaussian(_) => &[CommandCategory::Preprocess],
             Self::LoadAnnotatedObjects(_) => &[CommandCategory::Object],
             Self::LoadChannel(_) => &[CommandCategory::Preprocess],
             Self::MeasureFilamentTree(_) => &[CommandCategory::Measure],
@@ -1721,6 +1746,9 @@ impl PipelineCommand {
                 &[CommandCategory::Segment, CommandCategory::Preprocess]
             }
             Self::Laplacian(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
+            Self::LaplacianOfGaussian(_) => {
+                &[CommandCategory::Segment, CommandCategory::Preprocess]
+            }
             Self::LoadAnnotatedObjects(_) => &[
                 CommandCategory::Object,
                 CommandCategory::Measure,
@@ -1853,6 +1881,7 @@ impl PipelineCommand {
             Self::ImageMath(_s) => [vec![ParameterDef { name: "operand".to_string(), display_name: "Operand".to_string(), description: "The specific mathematical or logical operator to apply.".to_string(), value: match _s.operand { MathImageMathOperandSettings::None => "None".to_string(), MathImageMathOperandSettings::Invert => "Invert".to_string(), MathImageMathOperandSettings::Add => "Add".to_string(), MathImageMathOperandSettings::Subtract => "Subtract".to_string(), MathImageMathOperandSettings::Multiply => "Multiply".to_string(), MathImageMathOperandSettings::Divide => "Divide".to_string(), MathImageMathOperandSettings::And => "And".to_string(), MathImageMathOperandSettings::Or => "Or".to_string(), MathImageMathOperandSettings::Xor => "Xor".to_string(), MathImageMathOperandSettings::Min => "Min".to_string(), MathImageMathOperandSettings::Max => "Max".to_string(), MathImageMathOperandSettings::Average => "Average".to_string(), MathImageMathOperandSettings::DifferenceType => "Difference Type".to_string() }, param_type: ParamType::Dropdown, options: vec!["None".to_string(), "Invert".to_string(), "Add".to_string(), "Subtract".to_string(), "Multiply".to_string(), "Divide".to_string(), "And".to_string(), "Or".to_string(), "Xor".to_string(), "Min".to_string(), "Max".to_string(), "Average".to_string(), "Difference Type".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MathImageMathOperandSettings::default()) { MathImageMathOperandSettings::None => "None".to_string(), MathImageMathOperandSettings::Invert => "Invert".to_string(), MathImageMathOperandSettings::Add => "Add".to_string(), MathImageMathOperandSettings::Subtract => "Subtract".to_string(), MathImageMathOperandSettings::Multiply => "Multiply".to_string(), MathImageMathOperandSettings::Divide => "Divide".to_string(), MathImageMathOperandSettings::And => "And".to_string(), MathImageMathOperandSettings::Or => "Or".to_string(), MathImageMathOperandSettings::Xor => "Xor".to_string(), MathImageMathOperandSettings::Min => "Min".to_string(), MathImageMathOperandSettings::Max => "Max".to_string(), MathImageMathOperandSettings::Average => "Average".to_string(), MathImageMathOperandSettings::DifferenceType => "Difference Type".to_string() }, advanced: false, option_advanced: vec![false, false, false, false, false, false, false, false, false, false, false, false, false], section: String::new() }], vec![ParameterDef { name: "second_image_address".to_string(), display_name: "Second Image Address".to_string(), description: "The second image to use for the operation.".to_string(), value: _s.second_image_address.to_param_value(), param_type: ParamType::ImageAddress, options: { let (kind, nr) = _s.second_image_address.param_parts(); vec![kind.to_string(), nr.to_string()] }, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageAddress::default()).to_param_value(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "swap_operands".to_string(), display_name: "Swap Operands".to_string(), description: "If false, the calculation is `(Current Image OP Cached Image)`.\nIf true, the calculation is `(Cached Image OP Current Image)`.\n\nThis is critical for non-commutative operations like Subtraction or Division.".to_string(), value: format!("{}", _s.swap_operands), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::IntensityTransformation(_s) => [vec![ParameterDef { name: "mode".to_string(), display_name: "Mode".to_string(), description: "Determines whether to use automated enhancement or user-defined values.".to_string(), value: match _s.mode { FiltersIntensityTransformIntensityTransformModeSettings::Automatic => "Automatic".to_string(), FiltersIntensityTransformIntensityTransformModeSettings::Manual => "Manual".to_string() }, param_type: ParamType::Dropdown, options: vec!["Automatic".to_string(), "Manual".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (FiltersIntensityTransformIntensityTransformModeSettings::default()) { FiltersIntensityTransformIntensityTransformModeSettings::Automatic => "Automatic".to_string(), FiltersIntensityTransformIntensityTransformModeSettings::Manual => "Manual".to_string() }, advanced: false, option_advanced: vec![false, false], section: String::new() }], vec![ParameterDef { name: "contrast".to_string(), display_name: "Contrast".to_string(), description: "Contrast multiplier (gain).\n\nOnly active in manual mode.\nValues > 1.0 increase contrast, while values < 1.0 decrease it.".to_string(), value: format!("{}", _s.contrast), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (f32::default())), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "brightness".to_string(), display_name: "Brightness".to_string(), description: "Brightness offset (bias).\n\nOnly active in manual mode.\nPositive values brighten the image, negative values darken it.".to_string(), value: format!("{}", _s.brightness), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (f32::default())), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::Laplacian(_s) => vec![ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel Size".to_string(), description: "The size of the discrete Laplacian aperture.\n\nTypically 3. Larger sizes (5, 7) approximate the Laplacian of Gaussian (LoG)\nmore closely but are more computationally expensive. Must be an odd number.".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Dropdown, options: vec!["3".to_string(), "5".to_string(), "7".to_string()], min: 3.0f32, max: 7.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (3usize)), advanced: false, option_advanced: vec![], section: String::new() }],
+            Self::LaplacianOfGaussian(_s) => [vec![ParameterDef { name: "sigma".to_string(), display_name: "Sigma".to_string(), description: "The scale σ of the spots to enhance (Lindeberg's `t = σ²`). A\nGaussian spot of standard deviation σ responds most; as a guide, σ ≈\nspot radius / √2 (1.4 for spots of 4 px). Smaller details count as\nnoise, larger ones as background.".to_string(), value: format!("{}", _s.sigma), param_type: ParamType::Spinner, options: vec![], min: 0.1f32, max: 1000.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (1.5f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "unit".to_string(), display_name: "Unit".to_string(), description: "Unit `sigma` is expressed in.".to_string(), value: match _s.unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SizeUnits :: Pixels) { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::LoadAnnotatedObjects(_s) => [vec![ParameterDef { name: "input_classes".to_string(), display_name: "Input Classes".to_string(), description: "Only load annotations carrying at least one of these classes.\n\nLeave empty to load every annotated object of the image.".to_string(), value: _s.input_classes.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.input_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "output_class".to_string(), display_name: "Output Class".to_string(), description: "Class added to every loaded object, so later steps can select them.\nSet to `Unset` to add none.".to_string(), value: _s.output_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "keep_annotated_classes".to_string(), display_name: "Keep Annotated Classes".to_string(), description: "Keep the classes the objects were given while annotating.\n\nTurn off to start from `output_class` alone.".to_string(), value: format!("{}", _s.keep_annotated_classes), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (false)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "use_on".to_string(), display_name: "Use on".to_string(), description: "On which planes an annotation is used: where it was drawn, or on\nevery plane (and time point) - e.g. a region outlined once.".to_string(), value: match _s.use_on { ObjectLoadAnnotaedObjectsAnnotationUseSettings::OwnPlane => "Its own plane".to_string(), ObjectLoadAnnotaedObjectsAnnotationUseSettings::EveryPlane => "Every plane".to_string(), ObjectLoadAnnotaedObjectsAnnotationUseSettings::EveryPlaneAndTimePoint => "Every plane and time point".to_string() }, param_type: ParamType::Dropdown, options: vec!["Its own plane".to_string(), "Every plane".to_string(), "Every plane and time point".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (ObjectLoadAnnotaedObjectsAnnotationUseSettings :: OwnPlane) { ObjectLoadAnnotaedObjectsAnnotationUseSettings::OwnPlane => "Its own plane".to_string(), ObjectLoadAnnotaedObjectsAnnotationUseSettings::EveryPlane => "Every plane".to_string(), ObjectLoadAnnotaedObjectsAnnotationUseSettings::EveryPlaneAndTimePoint => "Every plane and time point".to_string() }, advanced: false, option_advanced: vec![false, false, false], section: String::new() }]].concat(),
             Self::LoadChannel(_s) => [vec![ParameterDef { name: "channel".to_string(), display_name: "Channel".to_string(), description: "The image channel to load.".to_string(), value: _s.channel.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx::default()).to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "projection".to_string(), display_name: "Projection".to_string(), description: "Optional z projection setting\n\nIf set to Auto the global z-projection setting from the project is used.\nIf not Auto the image channel is loaded with the given z-projection settings.".to_string(), value: match _s.projection { MathLoadChannelChannelZProjectionSettings::Auto => "Auto".to_string(), MathLoadChannelChannelZProjectionSettings::None => "None".to_string(), MathLoadChannelChannelZProjectionSettings::MaxIntensity => "Max Intensity".to_string(), MathLoadChannelChannelZProjectionSettings::MinIntensity => "Min Intensity".to_string(), MathLoadChannelChannelZProjectionSettings::AvgIntensity => "Avg Intensity".to_string(), MathLoadChannelChannelZProjectionSettings::SumIntensity => "Sum Intensity".to_string(), MathLoadChannelChannelZProjectionSettings::TakeTheMiddle => "Take The Middle".to_string() }, param_type: ParamType::Dropdown, options: vec!["Auto".to_string(), "None".to_string(), "Max Intensity".to_string(), "Min Intensity".to_string(), "Avg Intensity".to_string(), "Sum Intensity".to_string(), "Take The Middle".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MathLoadChannelChannelZProjectionSettings :: Auto) { MathLoadChannelChannelZProjectionSettings::Auto => "Auto".to_string(), MathLoadChannelChannelZProjectionSettings::None => "None".to_string(), MathLoadChannelChannelZProjectionSettings::MaxIntensity => "Max Intensity".to_string(), MathLoadChannelChannelZProjectionSettings::MinIntensity => "Min Intensity".to_string(), MathLoadChannelChannelZProjectionSettings::AvgIntensity => "Avg Intensity".to_string(), MathLoadChannelChannelZProjectionSettings::SumIntensity => "Sum Intensity".to_string(), MathLoadChannelChannelZProjectionSettings::TakeTheMiddle => "Take The Middle".to_string() }, advanced: false, option_advanced: vec![false, false, false, false, false, false, false], section: String::new() }], vec![ParameterDef { name: "z_index".to_string(), display_name: "Z Index".to_string(), description: "With projection None: the z-plane loaded (0 = the first).".to_string(), value: format!("{}", _s.z_index), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0u32)), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::MeasureFilamentTree(_s) => [vec![ParameterDef { name: "id".to_string(), display_name: "ID".to_string(), description: "The step's ID, unique in the project - its values' keys start with\nit (\"tree_01/...\").".to_string(), value: _s.id.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "segments".to_string(), display_name: "Segments".to_string(), description: "The segments measured (Trace Filaments' output class).".to_string(), value: _s.segments.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "somata".to_string(), display_name: "Somata".to_string(), description: "The somata (Trace Filaments' seeds): the per-neuron values go on them.".to_string(), value: _s.somata.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
@@ -1984,6 +2013,7 @@ impl PipelineCommand {
             Self::ImageMath(_) => String::new(),
             Self::IntensityTransformation(_) => String::new(),
             Self::Laplacian(s) => format!("Kernel Size: {}", format!("{:.3}", s.kernel_size)),
+            Self::LaplacianOfGaussian(s) => format!("Sigma: {}", format!("{:.3}", s.sigma)),
             Self::LoadAnnotatedObjects(_) => String::new(),
             Self::LoadChannel(_) => String::new(),
             Self::MeasureFilamentTree(s) => format!("ID: {}", s.id.clone()),
@@ -2248,6 +2278,7 @@ impl PipelineCommand {
             Self::ImageMath(_) => {}
             Self::IntensityTransformation(_) => {}
             Self::Laplacian(_) => {}
+            Self::LaplacianOfGaussian(_) => {}
             Self::LoadAnnotatedObjects(s) => {
                 classes.extend(s.input_classes.iter().copied());
                 classes.push(s.output_class);
@@ -3247,6 +3278,19 @@ impl PipelineCommand {
                     if let Ok(v) = value.parse::<usize>() {
                         s.kernel_size = v;
                     }
+                }
+            }
+            Self::LaplacianOfGaussian(s) => {
+                if param_name == "sigma" {
+                    if let Ok(v) = value.parse::<f32>() {
+                        s.sigma = v;
+                    }
+                }
+                if param_name == "unit" {
+                    s.unit = match value {
+                        "nm" => SizeUnits::NanoMeter,
+                        _ => SizeUnits::Pixels,
+                    };
                 }
             }
             Self::LoadAnnotatedObjects(s) => {
@@ -4768,6 +4812,7 @@ impl PipelineCommand {
             Self::ImageMath(_) => {}
             Self::IntensityTransformation(_) => {}
             Self::Laplacian(_) => {}
+            Self::LaplacianOfGaussian(_) => {}
             Self::LoadAnnotatedObjects(_) => {}
             Self::LoadChannel(_) => {}
             Self::MeasureFilamentTree(_) => {}
@@ -4881,6 +4926,7 @@ impl PipelineCommand {
             Self::ImageMath(_) => {}
             Self::IntensityTransformation(_) => {}
             Self::Laplacian(_) => {}
+            Self::LaplacianOfGaussian(_) => {}
             Self::LoadAnnotatedObjects(_) => {}
             Self::LoadChannel(_) => {}
             Self::MeasureFilamentTree(_) => {}

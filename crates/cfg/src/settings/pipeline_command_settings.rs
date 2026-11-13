@@ -1582,6 +1582,37 @@ impl Default for LaplacianSettings {
     }
 }
 
+/// Enhances spots of one size: keeps the details of a spot's size and
+/// removes finer noise and coarser background and structures.
+///
+/// [Laplacian of Gaussian] -> [Find Maxima] -> [Extract Objects]
+///
+/// Bright spots become positive peaks, dark spots negative ones, flat and
+/// evenly sloped background 0. Measure intensities on the original channel,
+/// not on this image.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[serde(default)]
+#[serde(rename_all = "camelCase")]
+pub struct LaplacianOfGaussianSettings {
+    /// The scale σ of the spots to enhance (Lindeberg's `t = σ²`). A
+    /// Gaussian spot of standard deviation σ responds most; as a guide, σ ≈
+    /// spot radius / √2 (1.4 for spots of 4 px). Smaller details count as
+    /// noise, larger ones as background.
+    #[schemars(range(min = 0.1, max = 1000))]
+    pub sigma: f32,
+    /// Unit `sigma` is expressed in.
+    pub unit: SizeUnits,
+}
+
+impl Default for LaplacianOfGaussianSettings {
+    fn default() -> Self {
+        Self {
+            sigma: 1.5f32,
+            unit: SizeUnits::Pixels,
+        }
+    }
+}
+
 fn _serde_default_loadchannel_projection() -> MathLoadChannelChannelZProjectionSettings {
     MathLoadChannelChannelZProjectionSettings::Auto
 }

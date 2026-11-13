@@ -19,6 +19,7 @@ pub mod hessian;
 pub mod illumination_correction;
 pub mod intensity_transform;
 pub mod laplacian;
+pub mod laplacian_of_gaussian;
 pub mod rank_filter;
 pub mod rolling_ball;
 pub mod structure_tensor;

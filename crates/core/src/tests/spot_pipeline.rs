@@ -14,13 +14,20 @@
 //! at a quarter of the exposure (Poisson shot noise, a constant camera
 //! offset, an uneven background); one noise factor has to find the spots in
 //! both.
+//!
+//! On a mottled background with filaments (small spots of 2-3 px) the
+//! blur pipeline breaks down, the Laplacian of Gaussian at the spot's σ
+//! followed by the same Noise cut-off doesn't.
 
 use evanalyzer_cfg::core_types::{PixelUnits, SegmentationClass, SizeUnits};
 use kornia_image::ImageSize;
 
 use crate::{
     F32Gray,
-    algos::{BallType, FindMaxima, GaussianBlur, ImageAlgorithm, MaximaCutoff, RollingBall},
+    algos::{
+        BallType, FindMaxima, GaussianBlur, ImageAlgorithm, LaplacianOfGaussian, MaximaCutoff,
+        RollingBall,
+    },
     pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext},
 };
 
@@ -214,4 +221,130 @@ fn a_manual_cutoff_does_not_carry_over_to_another_exposure() {
     assert_eq!(full, (total, 0), "full exposure: (found, false)");
     let quarter = score(&detect(image(0.25, 2), MaximaCutoff::Manual, manual));
     assert!(quarter.0 < total * 2 / 3, "quarter {quarter:?}");
+}
+
+// --- Textured background ----------------------------------------------------
+
+/// The scene with small spots (σ 0.8 px, peaks twice those of [`spots`]) on
+/// a mottled background - 400 bright and dark blobs of σ 4-10 px and up to
+/// ±40 photons at full exposure - with two filaments (σ 2 px, 60 photons).
+fn textured(exposure: f64, seed: u64) -> PipelineContext {
+    const SPOT: f64 = 0.8;
+    let spots = spots();
+    let mut layout = Rng(0xbeef);
+    let blobs: Vec<(f64, f64, f64, f64)> = (0..400)
+        .map(|_| {
+            let x = layout.next_f64() * SIZE as f64;
+            let y = layout.next_f64() * SIZE as f64;
+            let sigma = 4.0 + 6.0 * layout.next_f64();
+            (x, y, sigma, 40.0 * (2.0 * layout.next_f64() - 1.0))
+        })
+        .collect();
+    // Lines a·x + b·y + c = 0.
+    let filaments: [(f64, f64, f64); 2] = [(0.10, -1.0, 76.0), (1.0, -0.02, -150.0)];
+    let mut rng = Rng(seed);
+    let mut pixels = vec![0.0f32; SIZE * SIZE];
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let (xf, yf) = (x as f64, y as f64);
+            let t = xf / (SIZE - 1) as f64;
+            let mut photons = BACKGROUND.0 + t * (BACKGROUND.1 - BACKGROUND.0);
+            for &(bx, by, sigma, amplitude) in &blobs {
+                let d2 = (xf - bx).powi(2) + (yf - by).powi(2);
+                if d2 < 9.0 * sigma * sigma {
+                    photons += amplitude * (-d2 / (2.0 * sigma * sigma)).exp();
+                }
+            }
+            for &(a, b, c) in &filaments {
+                let d = (a * xf + b * yf + c).abs() / (a * a + b * b).sqrt();
+                photons += 60.0 * (-d * d / 8.0).exp();
+            }
+            for &(sx, sy, peak) in &spots {
+                let d2 = (xf - sx).powi(2) + (yf - sy).powi(2);
+                if d2 < 100.0 {
+                    photons += 2.0 * peak * (-d2 / (2.0 * SPOT * SPOT)).exp();
+                }
+            }
+            let counts = OFFSET + rng.poisson(photons.max(0.0) * exposure);
+            pixels[y * SIZE + x] = (counts / FULL_SCALE) as f32;
+        }
+    }
+    let size = ImageSize {
+        width: SIZE,
+        height: SIZE,
+    };
+    let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
+    ctx.image_meta.nr_of_bits = 16;
+    ctx.get_f32_gray_image_mut()
+        .unwrap()
+        .as_slice_mut()
+        .copy_from_slice(&pixels);
+    ctx
+}
+
+/// Runs `filters`, then Find Maxima (radius 2, Noise cut-off 5), and scores
+/// the found spots.
+fn detect_after(mut ctx: PipelineContext, filters: Vec<Box<dyn ImageAlgorithm>>) -> (usize, usize) {
+    let mut cache = GlobalPipelineCache::default();
+    let maxima = FindMaxima {
+        radius: 2.0,
+        radius_unit: SizeUnits::Pixels,
+        cutoff: MaximaCutoff::Noise { noise_factor: 5.0 },
+        min_quality: 0.0,
+        quality_unit: PixelUnits::Relative,
+        inside_segmentation: false,
+        exclude_at_edges: false,
+        segmentation_class: SegmentationClass(1),
+    };
+    for step in filters {
+        step.execute(&mut ctx, &mut cache).unwrap();
+    }
+    maxima.execute(&mut ctx, &mut cache).unwrap();
+    let segmentation = ctx.segmentation_map.as_ref().unwrap().as_slice();
+    let found: Vec<(f64, f64)> = (0..segmentation.len())
+        .filter(|&p| segmentation[p] != 0)
+        .map(|p| ((p % SIZE) as f64, (p / SIZE) as f64))
+        .collect();
+    score(&found)
+}
+
+fn laplacian_of_gaussian() -> Vec<Box<dyn ImageAlgorithm>> {
+    vec![Box::new(LaplacianOfGaussian {
+        sigma: 0.8,
+        unit: SizeUnits::Pixels,
+    })]
+}
+
+/// The Laplacian of Gaussian at the spots' σ removes the texture and the
+/// wider filaments: nearly all spots at full and a quarter exposure, a few
+/// false detections at filament crossings and texture.
+#[test]
+fn laplacian_of_gaussian_finds_small_spots_on_texture_and_filaments() {
+    let total = spots().len();
+    let full = detect_after(textured(1.0, 1), laplacian_of_gaussian());
+    assert!(full.0 >= total - 3 && full.1 <= 5, "full exposure {full:?}");
+    let quarter = detect_after(textured(0.25, 2), laplacian_of_gaussian());
+    assert!(
+        quarter.0 >= total - 8 && quarter.1 <= 5,
+        "quarter {quarter:?}"
+    );
+}
+
+/// Why the spot filter: Rolling Ball + Gaussian Blur leave the texture in,
+/// which raises the noise estimate - a third of the spots is lost.
+#[test]
+fn the_blur_pipeline_loses_spots_on_texture() {
+    let blur: Vec<Box<dyn ImageAlgorithm>> = vec![
+        Box::new(RollingBall {
+            radius: 10.0,
+            ball_type: BallType::Paraboloid,
+            pre_smooth: true,
+        }),
+        Box::new(GaussianBlur {
+            kernel_size: 9,
+            sigma: 1.5,
+        }),
+    ];
+    let (found, _) = detect_after(textured(1.0, 1), blur);
+    assert!(found < spots().len() * 3 / 4, "found {found}");
 }

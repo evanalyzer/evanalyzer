@@ -50,6 +50,7 @@ pub use self::filters::illumination_correction::SmoothingMethod;
 pub use self::filters::intensity_transform::IntensityTransformMode;
 pub use self::filters::intensity_transform::IntensityTransformation;
 pub use self::filters::laplacian::Laplacian;
+pub use self::filters::laplacian_of_gaussian::LaplacianOfGaussian;
 pub use self::filters::rank_filter::RankFilter;
 pub use self::filters::rank_filter::RankFilterType;
 pub use self::filters::rolling_ball::BallType;

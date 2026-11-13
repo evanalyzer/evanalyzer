@@ -405,7 +405,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         Measure,
         Dataset,
     ];
-    let expected: [(&str, &[CommandCategory]); 67] = [
+    let expected: [(&str, &[CommandCategory]); 68] = [
         ("AI Object Classifier", &[Object, Measure, Dataset]),
         ("Blur", &[Segment, Preprocess]),
         ("AI Cellpose Segmentation", &[Extract]),
@@ -440,6 +440,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         ("ImageMath", &[Segment, Preprocess]),
         ("IntensityTransformation", &[Segment, Preprocess]),
         ("Laplacian", &[Segment, Preprocess]),
+        ("Laplacian of Gaussian", &[Segment, Preprocess]),
         ("LoadAnnotatedObjects", &[Object, Measure, Dataset]),
         ("MedianSubtract", &[Segment, Preprocess]),
         ("MorphologicalCommand", &[Segment, Preprocess]),

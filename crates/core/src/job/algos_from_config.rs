@@ -954,6 +954,15 @@ impl From<LaplacianSettings> for Laplacian {
     }
 }
 
+impl From<LaplacianOfGaussianSettings> for LaplacianOfGaussian {
+    fn from(_s: LaplacianOfGaussianSettings) -> Self {
+        LaplacianOfGaussian {
+            sigma: _s.sigma.clamp(0.1, 1000.0),
+            unit: _s.unit,
+        }
+    }
+}
+
 impl From<LoadAnnotatedObjectsSettings> for LoadAnnotatedObjects {
     fn from(_s: LoadAnnotatedObjectsSettings) -> Self {
         LoadAnnotatedObjects {
@@ -1572,6 +1581,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         ))),
         PipelineCommand::Laplacian(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::Laplacian::from(settings),
+        ))),
+        PipelineCommand::LaplacianOfGaussian(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::LaplacianOfGaussian::from(settings),
         ))),
         PipelineCommand::LoadAnnotatedObjects(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::LoadAnnotatedObjects::from(settings),

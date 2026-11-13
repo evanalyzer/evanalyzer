@@ -1904,6 +1904,25 @@
         "brightness"
       ]
     },
+    "LaplacianOfGaussianSettings": {
+      "description": "Enhances spots of one size: keeps the details of a spot's size and\nremoves finer noise and coarser background and structures.\n\n[Laplacian of Gaussian] -> [Find Maxima] -> [Extract Objects]\n\nBright spots become positive peaks, dark spots negative ones, flat and\nevenly sloped background 0. Measure intensities on the original channel,\nnot on this image.",
+      "type": "object",
+      "properties": {
+        "sigma": {
+          "description": "The scale σ of the spots to enhance (Lindeberg's `t = σ²`). A\nGaussian spot of standard deviation σ responds most; as a guide, σ ≈\nspot radius / √2 (1.4 for spots of 4 px). Smaller details count as\nnoise, larger ones as background.",
+          "type": "number",
+          "format": "float",
+          "default": 1.5,
+          "maximum": 1000,
+          "minimum": 0.1
+        },
+        "unit": {
+          "description": "Unit `sigma` is expressed in.",
+          "$ref": "#/$defs/SizeUnits",
+          "default": "PIXELS"
+        }
+      }
+    },
     "LaplacianSettings": {
       "description": "Configuration for the Laplacian edge detection filter.\n\nThe Laplacian is a second-order derivative operator used to find regions of\nrapid intensity change. It is particularly effective for detecting edges\nand fine details, though it is highly sensitive to noise.",
       "type": "object",
@@ -3944,6 +3963,19 @@
             }
           },
           "$ref": "#/$defs/LaplacianSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "LAPLACIAN_OF_GAUSSIAN"
+            }
+          },
+          "$ref": "#/$defs/LaplacianOfGaussianSettings",
           "required": [
             "type"
           ]
