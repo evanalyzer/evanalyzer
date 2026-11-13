@@ -62,6 +62,11 @@ export global Ink {
     out property <color> row-lift: root.pick(#FFFFFF, #2A2A2F, #3C3C44);
     out property <color> row-lift-ring: root.pick(#D4D4D8, #3F3F46, #50505A);
     out property <color> tray-lift-ring: root.pick(#C9C9CF, #3F3F46, #50505A);
+    /// The selected row of a results table: a neutral fill, a step darker
+    /// than `hover` in light (one lighter in dim / dark), no ring - a table
+    /// row runs edge to edge between dividers on a `panel`, where a lift
+    /// (`row-lift`, white on white in light) doesn't show.
+    out property <color> row-select: root.pick(#E8E8EB, #2A2A2F, #3C3C44);
     /// The pipelines area above the steps: a tone darker than `panel`,
     /// so where the pipelines end and the steps begin shows without a line
     /// of its own; `tray-edge` is its bottom line and the switcher's outline,
