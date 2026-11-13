@@ -405,7 +405,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         Measure,
         Dataset,
     ];
-    let expected: [(&str, &[CommandCategory]); 69] = [
+    let expected: [(&str, &[CommandCategory]); 70] = [
         ("AI Object Classifier", &[Object, Measure, Dataset]),
         ("Blur", &[Segment, Preprocess]),
         ("AI Cellpose Segmentation", &[Extract]),
@@ -486,6 +486,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         ("AI UNet Segmentation", &[InstanceSegmentation]),
         ("AI YOLOv5 Segmentation", &[Extract]),
         ("Vesselness", &[Segment, Preprocess]),
+        ("Wavelet Spots", &[Segment, Preprocess]),
         ("Voronoi", &[Object, Measure, Dataset]),
         ("Watershed", &[Extract]),
         ("WeightedDeviation", &[Segment, Preprocess]),

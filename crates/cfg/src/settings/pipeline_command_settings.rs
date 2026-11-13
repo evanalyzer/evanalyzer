@@ -1868,6 +1868,40 @@ impl Default for VesselnessSettings {
     }
 }
 
+/// Enhances spots by combining several levels of detail: keeps what stands
+/// out of the noise at each level from the finest to `levels`.
+///
+/// [Wavelet Spots] -> [Find Maxima] -> [Extract Objects]
+///
+/// The result is the paper's multiscale product: positive at bright spots,
+/// exactly 0 everywhere else (background, dark spots, what stands out at
+/// one level only). Its values are the image's intensities to the power of
+/// `levels`, so a manual cut-off in Find Maxima is the paper's detection
+/// level in these units. Measure intensities on the original channel, not
+/// on this image.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[serde(default)]
+#[serde(rename_all = "camelCase")]
+pub struct WaveletSpotsSettings {
+    /// How many levels are combined: level i holds details of about 2^i
+    /// pixels, so 3 suits spots up to about 8 px.
+    #[schemars(range(min = 2, max = 5))]
+    pub levels: usize,
+    /// A level counts at a pixel only where it is at least this many times
+    /// its noise; 3 in the paper.
+    #[schemars(range(min = 0, max = 20))]
+    pub noise_factor: f32,
+}
+
+impl Default for WaveletSpotsSettings {
+    fn default() -> Self {
+        Self {
+            levels: 3usize,
+            noise_factor: 3.0f32,
+        }
+    }
+}
+
 /// A filter that computes the Gaussian-weighted standard deviation of a local neighborhood.
 ///
 /// Unlike a standard deviation filter which treats all pixels in a window equally,
@@ -2006,7 +2040,7 @@ impl Default for CellposeSettings {
 /// Finds spots as local maxima: each pixel that is the brightest within the
 /// radius becomes one 1-pixel object.
 ///
-/// [Preprocessing (Gaussian Blur)] -> [Find Maxima] -> [Extract Objects] -> [Transform Objects (Draw Circle)]
+/// [Laplacian of Gaussian | Difference of Gaussians | Wavelet Spots | Gaussian Blur] -> [Find Maxima] -> [Extract Objects] -> [Transform Objects (Draw Circle)]
 ///
 /// Writes the segmentation and the instance map (both replaced): the maxima
 /// get the segmentation class and one instance each; the image stays as it

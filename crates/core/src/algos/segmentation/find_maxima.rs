@@ -10,7 +10,8 @@
 //! ## Overview
 //! Spot detection by local maxima: every pixel that is the brightest within
 //! `radius` becomes one 1-pixel object. Meant for an image smoothed at the
-//! spot size beforehand (Gaussian Blur, or a difference of two Gaussians):
+//! spot size beforehand (Gaussian Blur, or a spot filter: Laplacian of
+//! Gaussian, Difference of Gaussians, Wavelet Spots):
 //! each spot is then one peak, its height the spot's "quality". Takes the
 //! place of Threshold + Connected Components + Watershed in a spot pipeline;
 //! the size of a spot comes afterwards (Transform Objects › Draw Circle, or
@@ -34,7 +35,7 @@ use crate::{
 /// Finds spots as local maxima: each pixel that is the brightest within the
 /// radius becomes one 1-pixel object.
 ///
-/// [Preprocessing (Gaussian Blur)] -> [Find Maxima] -> [Extract Objects] -> [Transform Objects (Draw Circle)]
+/// [Laplacian of Gaussian | Difference of Gaussians | Wavelet Spots | Gaussian Blur] -> [Find Maxima] -> [Extract Objects] -> [Transform Objects (Draw Circle)]
 ///
 /// Writes the segmentation and the instance map (both replaced): the maxima
 /// get the segmentation class and one instance each; the image stays as it

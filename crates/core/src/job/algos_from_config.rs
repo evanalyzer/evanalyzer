@@ -1474,6 +1474,15 @@ impl From<WatershedSettings> for Watershed {
     }
 }
 
+impl From<WaveletSpotsSettings> for WaveletSpots {
+    fn from(_s: WaveletSpotsSettings) -> Self {
+        WaveletSpots {
+            levels: _s.levels,
+            noise_factor: _s.noise_factor.clamp(0.0, 20.0),
+        }
+    }
+}
+
 impl From<WeightedDeviationSettings> for WeightedDeviation {
     fn from(_s: WeightedDeviationSettings) -> Self {
         WeightedDeviation {
@@ -1716,6 +1725,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         ))),
         PipelineCommand::Watershed(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::Watershed::from(settings),
+        ))),
+        PipelineCommand::WaveletSpots(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::WaveletSpots::from(settings),
         ))),
         PipelineCommand::WeightedDeviation(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::WeightedDeviation::from(settings),

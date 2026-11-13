@@ -438,6 +438,12 @@ pub enum PipelineCommand {
     #[serde(alias = "watershed")]
     Watershed(WatershedSettings),
     #[serde(
+        alias = "wavelet-spots",
+        alias = "waveletSpots",
+        alias = "wavelet_spots"
+    )]
+    WaveletSpots(WaveletSpotsSettings),
+    #[serde(
         alias = "weighted-deviation",
         alias = "weightedDeviation",
         alias = "weighted_deviation"
@@ -611,7 +617,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             category: CommandCategory::Segment,
             categories: &[CommandCategory::Segment],
             summary: "Finds spots as local maxima: each pixel that is the brightest within the radius becomes one 1-pixel object.",
-            description: "[Preprocessing (Gaussian Blur)] -> [Find Maxima] -> [Extract Objects] -> [Transform Objects (Draw Circle)]\n\nWrites the segmentation and the instance map (both replaced): the maxima\nget the segmentation class and one instance each; the image stays as it\nis. A plateau (equal neighbouring pixels) gives one maximum, its pixel\nnearest the plateau's centre; of equal maxima within the radius the one\nfound first (row order) is kept. Flat regions (a background of 0) are\nnever maxima.",
+            description: "[Laplacian of Gaussian | Difference of Gaussians | Wavelet Spots | Gaussian Blur] -> [Find Maxima] -> [Extract Objects] -> [Transform Objects (Draw Circle)]\n\nWrites the segmentation and the instance map (both replaced): the maxima\nget the segmentation class and one instance each; the image stays as it\nis. A plateau (equal neighbouring pixels) gives one maximum, its pixel\nnearest the plateau's centre; of equal maxima within the radius the one\nfound first (row order) is kept. Flat regions (a background of 0) are\nnever maxima.",
         },
         CommandMeta {
             id: 19,
@@ -1002,6 +1008,14 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
         },
         CommandMeta {
             id: 67,
+            name: "Wavelet Spots",
+            category: CommandCategory::Preprocess,
+            categories: &[CommandCategory::Preprocess],
+            summary: "Enhances spots by combining several levels of detail: keeps what stands out of the noise at each level from the finest to `levels`.",
+            description: "[Wavelet Spots] -> [Find Maxima] -> [Extract Objects]\n\nThe result is the paper's multiscale product: positive at bright spots,\nexactly 0 everywhere else (background, dark spots, what stands out at\none level only). Its values are the image's intensities to the power of\n`levels`, so a manual cut-off in Find Maxima is the paper's detection\nlevel in these units. Measure intensities on the original channel, not\non this image.",
+        },
+        CommandMeta {
+            id: 68,
             name: "WeightedDeviation",
             category: CommandCategory::Preprocess,
             categories: &[CommandCategory::Preprocess],
@@ -1009,7 +1023,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "Unlike a standard deviation filter which treats all pixels in a window equally,\nthe Weighted Deviation uses a Gaussian kernel to give more importance to\npixels closer to the center. This is particularly effective for edge-preserving\nnoise analysis and local contrast enhancement.\n\nThis algorithm evaluates local variance by calculating two distinct Gaussian-blurred\nbaselines across the image: the weighted average of the pixel intensities, and the\nweighted average of the squared intensities. By subtracting the squared mean from\nthe mean of squares, it yields a localized, smooth statistical variance map that\nhighlights micro-textures and subtle surface boundaries without producing blocky artifacts.",
         },
         CommandMeta {
-            id: 68,
+            id: 69,
             name: "AI YOLOv5 Segmentation",
             category: CommandCategory::Segment,
             categories: &[CommandCategory::Segment],
@@ -1177,10 +1191,13 @@ pub fn default_command(id: i32) -> Option<PipelineCommand> {
         64 => Some(PipelineCommand::Vesselness(VesselnessSettings::default())),
         65 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
         66 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
-        67 => Some(PipelineCommand::WeightedDeviation(
+        67 => Some(PipelineCommand::WaveletSpots(
+            WaveletSpotsSettings::default(),
+        )),
+        68 => Some(PipelineCommand::WeightedDeviation(
             WeightedDeviationSettings::default(),
         )),
-        68 => Some(PipelineCommand::Yolov5(Yolov5Settings::default())),
+        69 => Some(PipelineCommand::Yolov5(Yolov5Settings::default())),
         _ => None,
     }
 }
@@ -1257,6 +1274,7 @@ impl PipelineCommand {
         "vesselness",
         "voronoi",
         "watershed",
+        "wavelet_spots",
         "weighted_deviation",
         "yolov5",
     ];
@@ -1331,6 +1349,7 @@ impl PipelineCommand {
             Self::Vesselness(_) => "vesselness",
             Self::Voronoi(_) => "voronoi",
             Self::Watershed(_) => "watershed",
+            Self::WaveletSpots(_) => "wavelet_spots",
             Self::WeightedDeviation(_) => "weighted_deviation",
             Self::Yolov5(_) => "yolov5",
         }
@@ -1470,6 +1489,7 @@ impl PipelineCommand {
             "vesselness" => Some(Self::Vesselness(VesselnessSettings::default())),
             "voronoi" => Some(Self::Voronoi(VoronoiSettings::default())),
             "watershed" => Some(Self::Watershed(WatershedSettings::default())),
+            "wavelet_spots" => Some(Self::WaveletSpots(WaveletSpotsSettings::default())),
             "weighted_deviation" => {
                 Some(Self::WeightedDeviation(WeightedDeviationSettings::default()))
             }
@@ -1547,6 +1567,7 @@ impl PipelineCommand {
             Self::Vesselness(_) => "Vesselness",
             Self::Voronoi(_) => "Voronoi",
             Self::Watershed(_) => "Watershed",
+            Self::WaveletSpots(_) => "Wavelet Spots",
             Self::WeightedDeviation(_) => "WeightedDeviation",
             Self::Yolov5(_) => "AI YOLOv5 Segmentation",
         }
@@ -1627,6 +1648,7 @@ impl PipelineCommand {
             Self::Vesselness(_) => &CommandCategory::Preprocess,
             Self::Voronoi(_) => &CommandCategory::Object,
             Self::Watershed(_) => &CommandCategory::InstanceSegmentation,
+            Self::WaveletSpots(_) => &CommandCategory::Preprocess,
             Self::WeightedDeviation(_) => &CommandCategory::Preprocess,
             Self::Yolov5(_) => &CommandCategory::Segment,
         }
@@ -1707,6 +1729,7 @@ impl PipelineCommand {
             Self::Vesselness(_) => &[CommandCategory::Preprocess],
             Self::Voronoi(_) => &[CommandCategory::Object],
             Self::Watershed(_) => &[CommandCategory::InstanceSegmentation],
+            Self::WaveletSpots(_) => &[CommandCategory::Preprocess],
             Self::WeightedDeviation(_) => &[CommandCategory::Preprocess],
             Self::Yolov5(_) => &[CommandCategory::Segment],
         }
@@ -1877,6 +1900,7 @@ impl PipelineCommand {
                 CommandCategory::Dataset,
             ],
             Self::Watershed(_) => &[CommandCategory::Extract],
+            Self::WaveletSpots(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::WeightedDeviation(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::Yolov5(_) => &[CommandCategory::Extract],
         }
@@ -1951,6 +1975,7 @@ impl PipelineCommand {
             Self::Vesselness(_s) => [vec![ParameterDef { name: "min_width".to_string(), display_name: "Min Width".to_string(), description: "The width of the thinnest lines to find.".to_string(), value: format!("{}", _s.min_width), param_type: ParamType::Spinner, options: vec![], min: 0.5f32, max: 1000.0f32, step: 0.5000f32, groups: vec![], default_value: format!("{}", (2.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_width".to_string(), display_name: "Max Width".to_string(), description: "The width of the widest lines to find.".to_string(), value: format!("{}", _s.max_width), param_type: ParamType::Spinner, options: vec![], min: 0.5f32, max: 1000.0f32, step: 0.5000f32, groups: vec![], default_value: format!("{}", (6.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "width_steps".to_string(), display_name: "Width Steps".to_string(), description: "How many widths between the thinnest and the widest are tried\n(spaced evenly on a log scale). More: steadier response over the\nwidths, slower.".to_string(), value: format!("{}", _s.width_steps), param_type: ParamType::Spinner, options: vec![], min: 1.0f32, max: 10.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (3usize)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "width_unit".to_string(), display_name: "Width Unit".to_string(), description: "Unit the widths are expressed in.".to_string(), value: match _s.width_unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SizeUnits :: Pixels) { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "polarity".to_string(), display_name: "Polarity".to_string(), description: "Bright lines on a dark background (fluorescence) or dark lines on a\nbright one (brightfield).".to_string(), value: match _s.polarity { FiltersVesselnessLinePolaritySettings::Bright => "Bright".to_string(), FiltersVesselnessLinePolaritySettings::Dark => "Dark".to_string() }, param_type: ParamType::Dropdown, options: vec!["Bright".to_string(), "Dark".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (FiltersVesselnessLinePolaritySettings :: Bright) { FiltersVesselnessLinePolaritySettings::Bright => "Bright".to_string(), FiltersVesselnessLinePolaritySettings::Dark => "Dark".to_string() }, advanced: false, option_advanced: vec![false, false], section: String::new() }], vec![ParameterDef { name: "blob_suppression".to_string(), display_name: "Blob Suppression".to_string(), description: "How strongly blobs are suppressed (Frangi's β): lower suppresses\nmore, so only clearly elongated structures stay.".to_string(), value: format!("{}", _s.blob_suppression), param_type: ParamType::Spinner, options: vec![], min: 0.1f32, max: 5.0f32, step: 0.0500f32, groups: vec![], default_value: format!("{}", (0.5f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "noise_level".to_string(), display_name: "Noise Level".to_string(), description: "Structures much weaker than this count as noise (Frangi's c, on the\nrelative 0..1 scale of the image's second derivatives). 0:\nautomatic - half the strongest structure in the image (on a whole\nslide: in each tile).".to_string(), value: format!("{}", _s.noise_level), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.0010f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
             Self::Voronoi(_s) => [vec![ParameterDef { name: "centers".to_string(), display_name: "Centers".to_string(), description: "Object class whose instances act as Voronoi seed points.".to_string(), value: _s.centers.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "center_filter_classes".to_string(), display_name: "Center Filter Classes".to_string(), description: "Additional label filters applied to center objects before tessellation.\n\nOnly center objects that carry all listed classes pass the filter.\nLeave empty to include all objects of `centers`.".to_string(), value: _s.center_filter_classes.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.center_filter_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "mask".to_string(), display_name: "Mask".to_string(), description: "Object class used to spatially constrain the Voronoi areas.\n\nEach computed Voronoi region is intersected with the union of all mask objects,\ndiscarding pixels that fall outside the mask. Set to `Unset` to expand\nto the full image boundary instead.".to_string(), value: _s.mask.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "mask_filter_classes".to_string(), display_name: "Mask Filter Classes".to_string(), description: "Additional label filters applied to mask objects.\n\nOnly mask objects that carry all listed classes pass the filter.\nLeave empty to include all objects of `mask`.".to_string(), value: _s.mask_filter_classes.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.mask_filter_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "output_class".to_string(), display_name: "Output Class".to_string(), description: "Object class assigned to the resulting Voronoi region ROIs.".to_string(), value: _s.output_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "unit".to_string(), display_name: "Unit".to_string(), description: "Unit in which `max_radius` is expressed (e.g. pixels, nm, µm).".to_string(), value: match _s.unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SizeUnits::default()) { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_radius".to_string(), display_name: "Max Radius".to_string(), description: "Maximum expansion radius for a Voronoi region.\n\nPixels farther than this distance from the nearest seed center are excluded\nfrom the region. Use `0` or a negative value to disable the limit.".to_string(), value: format!("{}", _s.max_radius), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (f32::default())), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "exclude_areas_at_the_edges".to_string(), display_name: "Exclude Areas At The Edges".to_string(), description: "Discard Voronoi regions that touch the image border.".to_string(), value: format!("{}", _s.exclude_areas_at_the_edges), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "exclude_areas_with_no_center".to_string(), display_name: "Exclude Areas With No Center".to_string(), description: "Discard Voronoi regions whose originating center object was filtered out or missing.".to_string(), value: format!("{}", _s.exclude_areas_with_no_center), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
             Self::Watershed(_s) => [vec![ParameterDef { name: "maximum_finder_tolerance".to_string(), display_name: "Maximum Finder Tolerance".to_string(), description: "Prominence tolerance for the maximum finder, in pixels of distance -\n**or**, when `seed_source == Intensity`, the maxima-suppression\nradius in pixels, derived from the typical object diameter (the\ndisk-shaped local-maximum search footprint is `max(1, this - 0.5)`).\nSame field, two meanings depending on which surface seeds come from -\nboth are fundamentally a spatial scale over the *seed-finding*\nsurface, only the surface itself changes.\n\nFor `DistanceMap`: a local maximum of the distance map is treated as\na separate object only if it protrudes more than this value above\nthe ridge connecting it to a higher maximum. This is ImageJ's\n\"prominence\"/\"noise tolerance\" parameter.\n\n* **Low values**: more sensitive; may over-segment ragged objects.\n* **High values**: more robust; may fail to split genuinely touching objects.\n\nImageJ's default of `0.5` works well for most distance maps; raise it if a\nsingle object is being split into several pieces.".to_string(), value: format!("{}", _s.maximum_finder_tolerance), param_type: ParamType::Spinner, options: vec![], min: 0.1f32, max: 20.0f32, step: 0.5000f32, groups: vec![], default_value: format!("{}", (0.5f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "smoothing_sigma".to_string(), display_name: "Smoothing Sigma".to_string(), description: "Standard deviation (px) of an optional Gaussian blur applied *before*\nseed-finding, to the surface `seed_source` seeds from - the distance\nmap for `DistanceMap`, or the grayscale intensity image for\n`Intensity` (smoothing the intensity image keeps noise from creating\nspurious brightness peaks, each of which would become its own seed).\n`0` disables it. The watershed *flood*\nalways runs on the (unsmoothed-by-this-field) distance map either way.\n\nImageJ's `trueEdmHeight` correction already handles ordinary ragged mask\nboundaries, so this is rarely needed for `DistanceMap`; for extremely\nnoisy AI masks a value of `1.0`–`2.0` can further suppress spurious maxima.".to_string(), value: format!("{}", _s.smoothing_sigma), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 10.0f32, step: 0.5000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "min_object_size".to_string(), display_name: "Min Object Size".to_string(), description: "Minimum object size, in pixels. After segmentation, any object smaller than\nthis is removed (its pixels become background). `0` disables the filter.\n\nUse it to drop tiny fragments left by very ragged masks.".to_string(), value: format!("{}", _s.min_object_size), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 100000.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0i32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "seed_source".to_string(), display_name: "Seed Source".to_string(), description: "What surface local maxima are seeded from. The watershed *flood*\nitself is unaffected either way - it always runs on the distance\nmap (the \"Shape\" watershed: boundaries follow the objects' geometry\neven when the seeds come from brightness).\n\n`DistanceMap` (default) emulates ImageJ's watershed implementation:\nseeds and flood both come from the distance map. `Intensity` instead\nfinds seeds as local maxima of the (optionally smoothed) grayscale\nimage, restricted to each object's own footprint (\"Intensity\"\nunclumping) - the fix for diffusely-connected regions whose *shape*\nhas no separate peaks but whose *brightness* clearly does.".to_string(), value: match _s.seed_source { SegmentationWatershedSeedSourceSettings::DistanceMap => "Distance Map".to_string(), SegmentationWatershedSeedSourceSettings::Intensity => "Intensity".to_string() }, param_type: ParamType::Dropdown, options: vec!["Distance Map".to_string(), "Intensity".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SegmentationWatershedSeedSourceSettings :: DistanceMap) { SegmentationWatershedSeedSourceSettings::DistanceMap => "Distance Map".to_string(), SegmentationWatershedSeedSourceSettings::Intensity => "Intensity".to_string() }, advanced: true, option_advanced: vec![false, false], section: String::new() }]].concat(),
+            Self::WaveletSpots(_s) => [vec![ParameterDef { name: "levels".to_string(), display_name: "Levels".to_string(), description: "How many levels are combined: level i holds details of about 2^i\npixels, so 3 suits spots up to about 8 px.".to_string(), value: format!("{}", _s.levels), param_type: ParamType::Dropdown, options: vec!["2".to_string(), "3".to_string(), "4".to_string(), "5".to_string()], min: 2.0f32, max: 5.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (3usize)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "noise_factor".to_string(), display_name: "Noise Factor".to_string(), description: "A level counts at a pixel only where it is at least this many times\nits noise; 3 in the paper.".to_string(), value: format!("{}", _s.noise_factor), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 20.0f32, step: 0.5000f32, groups: vec![], default_value: format!("{}", (3.0f32)), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::WeightedDeviation(_s) => [vec![ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel Size".to_string(), description: "The size of the local neighborhood window.\n\nMust be an odd number. Larger windows capture broader texture\nvariations but increase computational load.".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (usize::default())), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "sigma".to_string(), display_name: "Sigma".to_string(), description: "The standard deviation for the Gaussian weighting function.\n\nDefines the \"softness\" of the neighborhood boundaries. A larger\nsigma includes more of the surrounding context in the deviation calculation.".to_string(), value: format!("{}", _s.sigma), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (f32::default())), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
             Self::Yolov5(_s) => [vec![ParameterDef { name: "model_path".to_string(), display_name: "Model Path".to_string(), description: "Path to a YOLOv5 model exported as TorchScript.".to_string(), value: _s.model_path.display().to_string(), param_type: ParamType::FilePath, options: vec!["pt,torchscript".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (PathBuf::default()).display().to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "class_mapping".to_string(), display_name: "Class Mapping".to_string(), description: "Maps the model's classes to this project's segmentation classes;\nobjects of classes not listed are dropped. Leave empty to write model\nclass `i` as segmentation class `i + 1`, for every class.".to_string(), value: String::new(), param_type: ParamType::Group, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: _s.class_mapping.iter().map(|__item| [vec![ParameterDef { name: "model_class".to_string(), display_name: "Model Class".to_string(), description: "Index of the class in the model (`0` = its first class).".to_string(), value: format!("{}", __item.model_class), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1000.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0i32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "segmentation_class".to_string(), display_name: "Segmentation Class".to_string(), description: "The project's segmentation class objects of `model_class` are written as.".to_string(), value: format!("{}", __item.segmentation_class.as_u32()), param_type: ParamType::SegClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (SegmentationClass (1)).as_u32()), advanced: false, option_advanced: vec![], section: String::new() }]].concat()).collect(), default_value: String::new(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "confidence_threshold".to_string(), display_name: "Confidence Threshold".to_string(), description: "Minimum confidence (objectness x class score) of a detection.".to_string(), value: format!("{}", _s.confidence_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.0100f32, groups: vec![], default_value: format!("{}", (0.25f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "iou_threshold".to_string(), display_name: "Iou Threshold".to_string(), description: "Detections of the same class overlapping more than this (box\nintersection over union) are merged into the more confident one.".to_string(), value: format!("{}", _s.iou_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.0100f32, groups: vec![], default_value: format!("{}", (0.45f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "mask_threshold".to_string(), display_name: "Mask Threshold".to_string(), description: "Mask probability above which a pixel belongs to its object\n(segmentation models only).".to_string(), value: format!("{}", _s.mask_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.0100f32, groups: vec![], default_value: format!("{}", (0.5f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "image_scale".to_string(), display_name: "Image Scale".to_string(), description: "Factor the image is scaled by before it is given to the model, the\nmasks are scaled back afterwards. Use it when the model was trained on\ndownscaled images: `640 / training image size`, e.g. `0.3125` for\n2048 px images YOLOv5 shrank to 640. `1` = full resolution.".to_string(), value: format!("{}", _s.image_scale), param_type: ParamType::Spinner, options: vec![], min: 0.1f32, max: 4.0f32, step: 0.0100f32, groups: vec![], default_value: format!("{}", (1.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "window_overlap".to_string(), display_name: "Window Overlap".to_string(), description: "Overlap of neighboring 640x640 windows, in pixels. Must be larger\nthan the biggest object, so every object lies completely inside some\nwindow.".to_string(), value: format!("{}", _s.window_overlap), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 512.0f32, step: 8.0000f32, groups: vec![], default_value: format!("{}", (128i32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "min_object_size".to_string(), display_name: "Min Object Size".to_string(), description: "Objects with fewer pixels than this (after overlapping objects were\nresolved) are removed. `0` keeps every object.".to_string(), value: format!("{}", _s.min_object_size), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 100000.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (15i32)), advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
         }
@@ -2140,6 +2165,7 @@ impl PipelineCommand {
             ),
             Self::Voronoi(_) => String::new(),
             Self::Watershed(_) => String::new(),
+            Self::WaveletSpots(s) => format!("Levels: {}", format!("{:.3}", s.levels)),
             Self::WeightedDeviation(_) => String::new(),
             Self::Yolov5(_) => String::new(),
         }
@@ -2435,6 +2461,7 @@ impl PipelineCommand {
                 classes.push(s.output_class);
             }
             Self::Watershed(_) => {}
+            Self::WaveletSpots(_) => {}
             Self::WeightedDeviation(_) => {}
             Self::Yolov5(s) => {
                 for item0 in s.class_mapping.iter() {
@@ -4726,6 +4753,18 @@ impl PipelineCommand {
                     };
                 }
             }
+            Self::WaveletSpots(s) => {
+                if param_name == "levels" {
+                    if let Ok(v) = value.parse::<usize>() {
+                        s.levels = v;
+                    }
+                }
+                if param_name == "noise_factor" {
+                    if let Ok(v) = value.parse::<f32>() {
+                        s.noise_factor = v;
+                    }
+                }
+            }
             Self::WeightedDeviation(s) => {
                 if param_name == "kernel_size" {
                     if let Ok(v) = value.parse::<usize>() {
@@ -4915,6 +4954,7 @@ impl PipelineCommand {
             Self::Vesselness(_) => {}
             Self::Voronoi(_) => {}
             Self::Watershed(_) => {}
+            Self::WaveletSpots(_) => {}
             Self::WeightedDeviation(_) => {}
             Self::Yolov5(s) => {
                 if param_name == "class_mapping" {
@@ -5021,6 +5061,7 @@ impl PipelineCommand {
             Self::Vesselness(_) => {}
             Self::Voronoi(_) => {}
             Self::Watershed(_) => {}
+            Self::WaveletSpots(_) => {}
             Self::WeightedDeviation(_) => {}
             Self::Yolov5(s) => {
                 if param_name == "class_mapping" && idx < s.class_mapping.len() {

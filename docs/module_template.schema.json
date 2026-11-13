@@ -1204,7 +1204,7 @@
       ]
     },
     "FindMaximaSettings": {
-      "description": "Finds spots as local maxima: each pixel that is the brightest within the\nradius becomes one 1-pixel object.\n\n[Preprocessing (Gaussian Blur)] -> [Find Maxima] -> [Extract Objects] -> [Transform Objects (Draw Circle)]\n\nWrites the segmentation and the instance map (both replaced): the maxima\nget the segmentation class and one instance each; the image stays as it\nis. A plateau (equal neighbouring pixels) gives one maximum, its pixel\nnearest the plateau's centre; of equal maxima within the radius the one\nfound first (row order) is kept. Flat regions (a background of 0) are\nnever maxima.",
+      "description": "Finds spots as local maxima: each pixel that is the brightest within the\nradius becomes one 1-pixel object.\n\n[Laplacian of Gaussian | Difference of Gaussians | Wavelet Spots | Gaussian Blur] -> [Find Maxima] -> [Extract Objects] -> [Transform Objects (Draw Circle)]\n\nWrites the segmentation and the instance map (both replaced): the maxima\nget the segmentation class and one instance each; the image stays as it\nis. A plateau (equal neighbouring pixels) gives one maximum, its pixel\nnearest the plateau's centre; of equal maxima within the radius the one\nfound first (row order) is kept. Flat regions (a background of 0) are\nnever maxima.",
       "type": "object",
       "properties": {
         "cutoff": {
@@ -3949,6 +3949,19 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "WAVELET_SPOTS"
+            }
+          },
+          "$ref": "#/$defs/WaveletSpotsSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "WEIGHTED_DEVIATION"
             }
           },
@@ -5314,6 +5327,28 @@
           "format": "float",
           "default": 0.0,
           "maximum": 10,
+          "minimum": 0
+        }
+      }
+    },
+    "WaveletSpotsSettings": {
+      "description": "Enhances spots by combining several levels of detail: keeps what stands\nout of the noise at each level from the finest to `levels`.\n\n[Wavelet Spots] -> [Find Maxima] -> [Extract Objects]\n\nThe result is the paper's multiscale product: positive at bright spots,\nexactly 0 everywhere else (background, dark spots, what stands out at\none level only). Its values are the image's intensities to the power of\n`levels`, so a manual cut-off in Find Maxima is the paper's detection\nlevel in these units. Measure intensities on the original channel, not\non this image.",
+      "type": "object",
+      "properties": {
+        "levels": {
+          "description": "How many levels are combined: level i holds details of about 2^i\npixels, so 3 suits spots up to about 8 px.",
+          "type": "integer",
+          "format": "uint",
+          "default": 3,
+          "maximum": 5,
+          "minimum": 2
+        },
+        "noiseFactor": {
+          "description": "A level counts at a pixel only where it is at least this many times\nits noise; 3 in the paper.",
+          "type": "number",
+          "format": "float",
+          "default": 3.0,
+          "maximum": 20,
           "minimum": 0
         }
       }

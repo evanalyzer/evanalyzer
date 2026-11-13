@@ -25,4 +25,5 @@ pub mod rank_filter;
 pub mod rolling_ball;
 pub mod structure_tensor;
 pub mod vesselness;
+pub mod wavelet_spots;
 pub mod weighted_deviation;
