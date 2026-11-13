@@ -187,6 +187,15 @@ fn configured(command: &PipelineCommand) -> Option<PipelineCommand> {
             output_class: OUTPUT,
             ..Default::default()
         }),
+        // The cells grow (the default 10 px reach), the tissue-sized one
+        // among them: each seed's window bounded by the reach, a seed too
+        // large to grow kept as it is - never a window over the slide.
+        C::GrowRegions(_) => C::GrowRegions(GrowRegionsSettings {
+            seeds: CELL,
+            growth_channel: ImageChannelIdx(0),
+            output_class: OUTPUT,
+            ..Default::default()
+        }),
         C::Propagation(_) => C::Propagation(PropagationSettings {
             seeds: NUCLEUS,
             growth_channel: ImageChannelIdx(0),

@@ -10,6 +10,8 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+/// A rectangle of a channel read from its tiles.
+pub(crate) mod channel_window;
 /// For every pixel the nearest marked pixel (SciPy's exact Euclidean
 /// feature transform).
 pub(crate) mod feature_transform;

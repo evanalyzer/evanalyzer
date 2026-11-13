@@ -185,6 +185,15 @@ impl From<FiltersColorToGrayscaleGrayscaleMethodSettings> for GrayscaleMethod {
     }
 }
 
+impl From<ObjectGrowRegionsGrowthOrderSettings> for GrowthOrder {
+    fn from(_s: ObjectGrowRegionsGrowthOrderSettings) -> Self {
+        match _s {
+            ObjectGrowRegionsGrowthOrderSettings::Intensity => GrowthOrder::Intensity,
+            ObjectGrowRegionsGrowthOrderSettings::Similarity => GrowthOrder::Similarity,
+        }
+    }
+}
+
 impl From<FiltersHessianHessianModeSettings> for HessianMode {
     fn from(_s: FiltersHessianHessianModeSettings) -> Self {
         match _s {
@@ -278,6 +287,18 @@ impl From<SegmentationFindMaximaMaximaCutoffSettings> for MaximaCutoff {
                     noise_factor: noise_factor.clamp(0.0, 100.0),
                 }
             }
+        }
+    }
+}
+
+impl From<ObjectGrowRegionsMeetingSettings> for Meeting {
+    fn from(_s: ObjectGrowRegionsMeetingSettings) -> Self {
+        match _s {
+            ObjectGrowRegionsMeetingSettings::Separate => Meeting::Separate,
+            ObjectGrowRegionsMeetingSettings::Overlap => Meeting::Overlap,
+            ObjectGrowRegionsMeetingSettings::Merge { max_valley } => Meeting::Merge {
+                max_valley: max_valley.clamp(0.0, 1.0),
+            },
         }
     }
 }
@@ -380,6 +401,15 @@ impl From<AiSegmentationPieceSizePieceSizeSettings> for PieceSize {
     }
 }
 
+impl From<ObjectGrowRegionsPolaritySettings> for Polarity {
+    fn from(_s: ObjectGrowRegionsPolaritySettings) -> Self {
+        match _s {
+            ObjectGrowRegionsPolaritySettings::Bright => Polarity::Bright,
+            ObjectGrowRegionsPolaritySettings::Dark => Polarity::Dark,
+        }
+    }
+}
+
 impl From<FiltersRankFilterRankFilterTypeSettings> for RankFilterType {
     fn from(_s: FiltersRankFilterRankFilterTypeSettings) -> Self {
         match _s {
@@ -474,6 +504,29 @@ impl From<FiltersColorDeconvolutionStainVectorsSettings> for StainVectors {
                 stain_3_red: stain_3_red.clamp(0.0, 1.0),
                 stain_3_green: stain_3_green.clamp(0.0, 1.0),
                 stain_3_blue: stain_3_blue.clamp(0.0, 1.0),
+            },
+        }
+    }
+}
+
+impl From<ObjectGrowRegionsStopRuleSettings> for StopRule {
+    fn from(_s: ObjectGrowRegionsStopRuleSettings) -> Self {
+        match _s {
+            ObjectGrowRegionsStopRuleSettings::Relative { fraction } => StopRule::Relative {
+                fraction: fraction.clamp(0.0, 1.0),
+            },
+            ObjectGrowRegionsStopRuleSettings::Tolerance { tolerance, unit } => {
+                StopRule::Tolerance {
+                    tolerance: tolerance.clamp(0.0, 65535.0),
+                    unit: unit,
+                }
+            }
+            ObjectGrowRegionsStopRuleSettings::Threshold { level, unit } => StopRule::Threshold {
+                level: level.clamp(0.0, 65535.0),
+                unit: unit,
+            },
+            ObjectGrowRegionsStopRuleSettings::Noise { noise_factor } => StopRule::Noise {
+                noise_factor: noise_factor.clamp(0.0, 100.0),
             },
         }
     }
@@ -887,6 +940,24 @@ impl From<GaussianBlurSettings> for GaussianBlur {
         GaussianBlur {
             kernel_size: _s.kernel_size,
             sigma: _s.sigma.clamp(0.1, 8.0),
+        }
+    }
+}
+
+impl From<GrowRegionsSettings> for GrowRegions {
+    fn from(_s: GrowRegionsSettings) -> Self {
+        GrowRegions {
+            seeds: _s.seeds,
+            growth_channel: _s.growth_channel,
+            objects_are: Polarity::from(_s.objects_are),
+            order: GrowthOrder::from(_s.order),
+            stop: StopRule::from(_s.stop),
+            max_distance: _s.max_distance.clamp(1.0, 1000.0),
+            distance_unit: _s.distance_unit,
+            when_regions_meet: Meeting::from(_s.when_regions_meet),
+            mask: _s.mask,
+            output_class: _s.output_class,
+            exclude_at_edges: _s.exclude_at_edges,
         }
     }
 }
@@ -1597,6 +1668,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         ))),
         PipelineCommand::GaussianBlur(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::GaussianBlur::from(settings),
+        ))),
+        PipelineCommand::GrowRegions(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::GrowRegions::from(settings),
         ))),
         PipelineCommand::Hessian(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::Hessian::from(settings),

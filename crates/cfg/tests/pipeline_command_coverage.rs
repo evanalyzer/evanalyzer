@@ -405,7 +405,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         Measure,
         Dataset,
     ];
-    let expected: [(&str, &[CommandCategory]); 71] = [
+    let expected: [(&str, &[CommandCategory]); 72] = [
         ("AI Object Classifier", &[Object, Measure, Dataset]),
         ("Bandpass", &[Segment, Preprocess]),
         ("Blur", &[Segment, Preprocess]),
@@ -435,6 +435,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         // commands need extracted objects.
         ("FillObjectHoles", &[Extract]),
         ("GaussianBlur", &[Segment, Preprocess]),
+        ("Grow Regions", &[Object, Measure, Dataset]),
         ("Hessian", &[Segment, Preprocess]),
         ("IlluminationCorrection", &[Segment, Preprocess]),
         ("ImageCache", ANY_STAGE),

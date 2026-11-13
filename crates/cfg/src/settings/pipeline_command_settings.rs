@@ -320,6 +320,21 @@ pub enum FiltersColorToGrayscaleGrayscaleMethodSettings {
     Darkness,
 }
 
+/// Which neighbouring pixel joins a [`GrowRegions`] region next.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ObjectGrowRegionsGrowthOrderSettings {
+    /// The brightest: a region spreads downhill from its peak (spots,
+    /// blobs).
+    #[default]
+    #[serde(alias = "intensity")]
+    Intensity,
+    /// The one closest to the seed's value: a region covers what looks like
+    /// its seed (evenly bright objects).
+    #[serde(alias = "similarity")]
+    Similarity,
+}
+
 /// Specifies the feature extraction method for the Hessian matrix.
 ///
 /// The Hessian matrix describes the local second-order structure of an image,
@@ -498,6 +513,42 @@ pub enum SegmentationFindMaximaMaximaCutoffSettings {
 impl Default for SegmentationFindMaximaMaximaCutoffSettings {
     fn default() -> Self {
         Self::Manual {}
+    }
+}
+
+/// What [`GrowRegions`] does where regions of different seeds meet.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ObjectGrowRegionsMeetingSettings {
+    /// Each pixel goes to one region: the border lies on the darkest line
+    /// between them (touching spots counted apart).
+    #[serde(alias = "separate")]
+    Separate,
+    /// Every region grows as if it were alone: a pixel may belong to
+    /// several (e.g. each spot's whole halo) - a region may then take in a
+    /// neighbouring spot if the valley between them stays above its stop
+    /// level.
+    #[serde(alias = "overlap")]
+    Overlap,
+    /// Regions that meet over a shallow valley become one object (several
+    /// maxima on one object); regions with a deep valley between them stay
+    /// apart.
+    #[serde(rename_all = "camelCase")]
+    #[serde(alias = "merge")]
+    Merge {
+        /// The deepest valley merged, as a part of the dimmer region's
+        /// contrast (peak - background): 0.2 merges regions whose border
+        /// lies at most 20 % below the dimmer peak. Two objects only
+        /// touching at their stop level never merge below 1 - the stop
+        /// fraction.
+        #[schemars(range(min = 0, max = 1))]
+        max_valley: f32,
+    },
+}
+
+impl Default for ObjectGrowRegionsMeetingSettings {
+    fn default() -> Self {
+        Self::Separate {}
     }
 }
 
@@ -709,6 +760,20 @@ impl Default for AiSegmentationPieceSizePieceSizeSettings {
     }
 }
 
+/// Whether [`GrowRegions`]' objects are brighter or darker than their
+/// background.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ObjectGrowRegionsPolaritySettings {
+    /// Brighter than the background (fluorescence).
+    #[default]
+    #[serde(alias = "bright")]
+    Bright,
+    /// Darker than the background (brightfield, stains).
+    #[serde(alias = "dark")]
+    Dark,
+}
+
 /// Specifies the statistical operation to perform on the local pixel neighborhood.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -885,6 +950,65 @@ pub enum FiltersColorDeconvolutionStainVectorsSettings {
 impl Default for FiltersColorDeconvolutionStainVectorsSettings {
     fn default() -> Self {
         Self::HDab {}
+    }
+}
+
+/// Which pixels may join a [`GrowRegions`] region. "Brighter"/"above"
+/// count the other way round for dark objects.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ObjectGrowRegionsStopRuleSettings {
+    /// A level between the background (0) and the seed (1): 0.5 cuts each
+    /// region at half its height (full width at half maximum), so dim and
+    /// bright objects keep the same shape. Intensity: pixels above the
+    /// level, measured from the region's peak (the brightest pixel the seed
+    /// reaches without going down). Similarity: pixels closer to
+    /// the seed's value than (1 - fraction) of its contrast, on either side.
+    /// A seed not above its background grows nothing.
+    #[serde(rename_all = "camelCase")]
+    #[serde(alias = "relative")]
+    Relative {
+        /// The level between the background (0) and the seed (1).
+        #[schemars(range(min = 0, max = 1))]
+        fraction: f32,
+    },
+    /// The classic magic wand. Intensity: pixels at most `tolerance` below
+    /// the region's peak. Similarity: pixels at most `tolerance` from the
+    /// seed's value, on either side.
+    #[serde(rename_all = "camelCase")]
+    #[serde(alias = "tolerance")]
+    Tolerance {
+        /// How far a pixel may lie from the peak or seed value.
+        #[schemars(range(min = 0, max = 65535))]
+        tolerance: f32,
+        /// Unit of `tolerance` (bit: 0 - 255/65535, %: 0 - 100, rel: 0 - 1).
+        unit: PixelUnits,
+    },
+    /// Pixels above one fixed level, the same for every seed.
+    #[serde(rename_all = "camelCase")]
+    #[serde(alias = "threshold")]
+    Threshold {
+        /// The level a pixel must lie above.
+        #[schemars(range(min = 0, max = 65535))]
+        level: f32,
+        /// Unit of `level` (bit: 0 - 255/65535, %: 0 - 100, rel: 0 - 1).
+        unit: PixelUnits,
+    },
+    /// Pixels more than `noise_factor` times the noise above the
+    /// background: a region covers what stands out from the noise around
+    /// it - the same factor fits every exposure.
+    #[serde(rename_all = "camelCase")]
+    #[serde(alias = "noise")]
+    Noise {
+        /// How many times the noise a pixel must lie above the background.
+        #[schemars(range(min = 0, max = 100))]
+        noise_factor: f32,
+    },
+}
+
+impl Default for ObjectGrowRegionsStopRuleSettings {
+    fn default() -> Self {
+        Self::Relative { fraction: 0.5f32 }
     }
 }
 
@@ -3083,6 +3207,84 @@ pub struct ExtractClassMappingSettings {
     /// The object class its objects get: a project class, or inside a
     /// module one of the module's own classes.
     pub object_class: ObjectClass,
+}
+
+/// Grows a region from each seed object through a channel, like a magic
+/// wand: e.g. a spot's outline from its maximum, or a nucleus from a point
+/// inside it.
+///
+/// [Find Maxima] -> [Extract Objects] -> [Grow Regions]
+///
+/// Every seed gets its own stop level (relative to its own peak and
+/// background, so dim and bright objects keep the same shape); touching
+/// regions are split on the darkest line between them, may overlap, or are
+/// merged. Each region keeps its seed's pixels; Relate Objects links it to
+/// its seed. Seeds 1024 px across or more (a tissue-sized object) don't
+/// grow: their region is the seed.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[serde(default)]
+#[serde(rename_all = "camelCase")]
+pub struct GrowRegionsSettings {
+    /// Objects carrying this class are the seeds (e.g. the maxima of Find
+    /// Maxima after Extract Objects, or nuclei): each grows into one region.
+    pub seeds: ObjectClass,
+    /// The channel the regions grow through (the raw spot or nucleus
+    /// stain).
+    pub growth_channel: ImageChannelIdx,
+    /// Bright: objects brighter than their background (fluorescence).
+    /// Dark: objects darker than their background (brightfield, stains) -
+    /// everything below then counts the other way round.
+    pub objects_are: ObjectGrowRegionsPolaritySettings,
+    /// Which neighbouring pixel joins a region next.
+    ///
+    /// Intensity: the brightest - a region spreads downhill from its peak.
+    /// For objects with a bright centre that fades out (spots, blobs).
+    /// Similarity: the one closest to the seed's value (the median of the
+    /// seed's pixels) - a region covers what looks like its seed. For evenly
+    /// bright objects (nuclei, organelles); larger seeds give a steadier
+    /// value than a single pixel.
+    pub order: ObjectGrowRegionsGrowthOrderSettings,
+    /// Which pixels may join a region (the seed's own pixels always
+    /// belong to it).
+    ///
+    /// Relative, Noise: the background is the median of the pixels just
+    /// beyond `max_distance` around the seed (2 px wide ring), the noise
+    /// their median absolute deviation × 1.4826.
+    pub stop: ObjectGrowRegionsStopRuleSettings,
+    /// How far a region reaches at most from its seed (from the nearest
+    /// seed pixel). Also where the background is measured: a little more
+    /// than the largest object's radius.
+    #[schemars(range(min = 1, max = 1000))]
+    pub max_distance: f32,
+    /// Unit of `max_distance`.
+    pub distance_unit: SizeUnits,
+    /// What happens where regions of different seeds meet.
+    pub when_regions_meet: ObjectGrowRegionsMeetingSettings,
+    /// Regions only grow into pixels of objects carrying this class (e.g.
+    /// the thresholded cells). `Unset`: everywhere.
+    pub mask: ObjectClass,
+    /// The class the grown regions get.
+    pub output_class: ObjectClass,
+    /// Discard regions that touch the image border.
+    pub exclude_at_edges: bool,
+}
+
+impl Default for GrowRegionsSettings {
+    fn default() -> Self {
+        Self {
+            seeds: ObjectClass::default(),
+            growth_channel: ImageChannelIdx::default(),
+            objects_are: ObjectGrowRegionsPolaritySettings::Bright,
+            order: ObjectGrowRegionsGrowthOrderSettings::Intensity,
+            stop: ObjectGrowRegionsStopRuleSettings::default(),
+            max_distance: 10.0f32,
+            distance_unit: SizeUnits::Pixels,
+            when_regions_meet: ObjectGrowRegionsMeetingSettings::default(),
+            mask: ObjectClass::default(),
+            output_class: ObjectClass::default(),
+            exclude_at_edges: bool::default(),
+        }
+    }
 }
 
 /// One intensity criterion of [`ClassifyObjects`], e.g. "average intensity

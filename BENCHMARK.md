@@ -2271,6 +2271,50 @@ keeping freed blocks, not memory the command uses. Close with two or more
 classes is ~2× the CPU (each class closed as its own 1-byte mask; correct per
 class, before the class numbers decided) and needs less RAM.
 
+## Grow Regions (2026-11-13)
+
+New whole-image command: a region per seed, each seed flooded on its own
+within its reach (`max_distance`), a stop level per seed. Release, 22 cores,
+alternated, 10 s apart, results identical in every run (rows hash).
+
+Spot pipeline, `bench_pipeline --images 200 --size 2048 --spots 5000
+--spot-size circle|grow`: blur, Find Maxima (5 × noise), Extract Objects
+(~12,300 maxima per image), then each spot's area from Draw Circle (10 px) or
+Grow Regions (half maximum, reach 15 px, separate). 21 threads:
+
+| Spot area from | Wall | CPU | Peak RSS |
+|---|---|---|---|
+| Draw Circle | 37.7-38.8 s | 177-183 s | 3.92-4.25 GB |
+| Grow Regions, first version | 59.8-76.3 s | 559-676 s | 3.80-4.25 GB |
+| Grow Regions, faster flood (packed queue, bordered grid, ring rows only) | 54.9-68.7 s | 471-574 s | 3.90-4.69 GB |
+| Grow Regions, groups split at 1024² (taken) | 47.3-47.7 s | 391-404 s | 3.69-3.74 GB |
+| Same, groups split at 512² | 48.1-48.7 s | 416-422 s | 3.82-3.99 GB |
+| Grow Regions, reach 8 px (faster flood, one piece up to 4096²) | 57.6 s | 376 s | 4.38 GB |
+| Grow Regions, reach 1 px (no growth: the step's own cost) | 40.1 s | 170 s | 4.00 GB |
+
+The images' spots are flat disks far above the half maximum, overlapping into
+blobs: nearly every flood fills its whole reach (~700 pixels) - a worst case;
+a Gaussian spot stops at its half maximum after a few dozen. The cost grows
+with the pixels grown (~reach²). One image alone (one thread): 0.7-0.85 s for
+12,300 seeds; 21 images at once took twice that while each worker held its
+image's 64 MB of arrays (one group over the whole image), hence the 1024²
+split.
+
+Whole slide, `bench_whole_slide tests/haut --cells voronoi|grow` (blur, Otsu,
+106,209 objects, then cells from Voronoi radius 50 px or Grow Regions reach
+50 px from the objects), 21 threads:
+
+| Cells from | Wall | CPU | Peak RSS |
+|---|---|---|---|
+| Voronoi | 18.2-18.3 s | 220-223 s | 7.14-7.22 GB |
+| Grow Regions, first version | 30.6-30.7 s | 276-278 s | 9.06-9.55 GB |
+| Grow Regions, seeds 1024 px across or more kept as they are (taken) | 22.4-22.7 s | 178-182 s | 7.42 GB |
+
+The first version grew Otsu's tissue-sized objects too: one seed's window
+covered most of the slide. `tests::whole_image_ram` (now seeded from the
+cells, the tissue-sized one among them): 0.57 bytes per pixel of a larger
+slide (limit 1).
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -2333,6 +2377,8 @@ graphics driver).
 | Track LAP / Kalman / Overlap, 432,575 objects (16 images × 48 frames) | 203 / 219 / 219 MB; with merges and splits 356-385 MB | 2026-10-29 | Tracking |
 | Track Nearest Neighbor, same objects (image by image; was 384 MB all at once) | 199-229 MB | 2026-10-29 | Lineage in the results, Track Nearest Neighbor image by image |
 | Whole slide `tests/haut` with Propagation, 21 threads / 4 threads and `--max-ram 6000` | 7.55-7.65 GB / 3.9 GB (was 11.1-11.3 / 7.07 GB) | 2026-10-29 | Whole-image commands without RAM per pixel |
+| Whole slide `tests/haut`, cells from Grow Regions (reach 50 px), 21 threads | 7.42 GB (Voronoi 7.14-7.22 GB) | 2026-11-13 | Grow Regions |
+| Spot pipeline with Grow Regions: 200 images 2048², 21 threads | 3.69-3.74 GB (Draw Circle 3.92-4.25 GB) | 2026-11-13 | Grow Regions |
 | StarDist post-processing, 2048² tile, 590,000 candidates | 280 MB (was 1,494 MB) | 2026-11-04 | AI steps per thread and StarDist's candidates |
 | One U-Net / StarDist inference on a 4096² slide tile, CPU (above the model) | 2048² pieces: StarDist 2.4 GB, U-Net 32 / 64 filters 3.1 / 5.8 GB, joyful-pig 7.4 GB (was 6.3 / 10.6 / ~21 / 25.2 GB); 1024² pieces (8-16 GB computers): 1.3 / 1.2 GB; up to 2048² whole: 1.6 / 2.7 / 5.4 / 6.4 GB | 2026-11-04 | AI models: RAM per inference |
 

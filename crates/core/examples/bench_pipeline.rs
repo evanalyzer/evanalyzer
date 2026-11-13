@@ -25,6 +25,10 @@
 // detection pipeline starts from that slot (an image passed between pipelines).
 // `--module 1` adds a module instance that turns the larger objects
 // into local (internal) objects - they don't reach the results.
+// `--spot-size circle|grow`: a spot pipeline instead of the threshold -
+// blur, Find Maxima (radius 4, 5 × noise), Extract Objects, then each spot's
+// area from Transform Objects › Draw Circle (10 px) or Grow Regions (half
+// maximum, `--grow-reach` px (default 15), separate).
 
 use evanalyzer_cfg::core_types::{ImageAddress, SegmentationClass};
 use evanalyzer_cfg::core_types::{ObjectClass, SizeUnits};
@@ -99,6 +103,11 @@ fn main() {
     let module = arg("--module", 0);
     let source = arg("--source", 0);
     let shared = arg("--shared", 0);
+    let spot_size = std::env::args()
+        .collect::<Vec<_>>()
+        .windows(2)
+        .find(|w| w[0] == "--spot-size")
+        .map(|w| w[1].clone());
     let images_dir = workdir.join(format!("images_{size}_{spots}"));
     std::fs::create_dir_all(&images_dir).unwrap();
 
@@ -141,6 +150,16 @@ fn main() {
             notes: String::new(),
         },
     );
+    if spot_size.is_some() {
+        project.classification.classes_mut().push(
+            evanalyzer_cfg::settings::classification_settings::Class {
+                id: 2,
+                color: 0x00FF00,
+                name: "Spot areas".into(),
+                notes: String::new(),
+            },
+        );
+    }
     let step = |command| PipelineStepSettings {
         id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
         enabled: true,
@@ -187,7 +206,8 @@ fn main() {
                     sigma: 1.0,
                 }))
             }))
-            .chain([
+            .chain(spot_size.iter().flat_map(|how| spot_steps(how)).map(step))
+            .chain(spot_size.is_none().then(|| [
                 step(PipelineCommand::Threshold(ThresholdSettings {
                     thresholds: vec![ThresholdEntrySettings {
                         min_threshold: 1500.0,
@@ -200,7 +220,7 @@ fn main() {
                     max_objects_before_fail: 100000,
                     ..Default::default()
                 })),
-            ])
+            ]).into_iter().flatten())
             .chain((0..classify).map(|i| {
                 step(PipelineCommand::ClassifyObjects(ClassifyObjectsSettings {
                     input_classes: vec![ObjectClass::Global(1)],
@@ -304,6 +324,73 @@ fn main() {
         images as f64 / elapsed,
         mpx / elapsed
     );
+    println!(
+        "peak_rss={} MB cpu={:.2}s",
+        proc_status_kb("VmHWM:") / 1024,
+        cpu_seconds()
+    );
+}
+
+/// A `/proc/self/status` value in kB (Linux; 0 elsewhere).
+fn proc_status_kb(key: &str) -> u64 {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with(key))
+                .and_then(|l| l.split_whitespace().nth(1)?.parse().ok())
+        })
+        .unwrap_or(0)
+}
+
+/// User + system CPU seconds of this process so far (Linux, 100 ticks/s).
+fn cpu_seconds() -> f64 {
+    std::fs::read_to_string("/proc/self/stat")
+        .ok()
+        .and_then(|s| {
+            let rest = s.rsplit_once(')')?.1;
+            let fields: Vec<&str> = rest.split_whitespace().collect();
+            let ticks =
+                fields.get(11)?.parse::<f64>().ok()? + fields.get(12)?.parse::<f64>().ok()?;
+            Some(ticks / 100.0)
+        })
+        .unwrap_or(0.0)
+}
+
+/// The spot pipeline of `--spot-size`: maxima as class 1, their areas as
+/// class 2.
+fn spot_steps(how: &str) -> Vec<PipelineCommand> {
+    use evanalyzer_cfg::settings::pipeline_command_settings::*;
+    let area = match how {
+        "circle" => PipelineCommand::TransformObjects(TransformObjectsSettings {
+            function: ObjectTransformObjectsTransformFunctionSettings::DrawCircle {
+                diameter: 10.0,
+                unit: SizeUnits::Pixels,
+            },
+            input_class: ObjectClass::Global(1),
+            output_class: ObjectClass::Global(2),
+        }),
+        "grow" => PipelineCommand::GrowRegions(GrowRegionsSettings {
+            seeds: ObjectClass::Global(1),
+            max_distance: arg("--grow-reach", 15) as f32,
+            output_class: ObjectClass::Global(2),
+            ..Default::default()
+        }),
+        other => panic!("--spot-size circle|grow, not {other}"),
+    };
+    vec![
+        PipelineCommand::FindMaxima(FindMaximaSettings {
+            radius: 4.0,
+            cutoff: SegmentationFindMaximaMaximaCutoffSettings::Noise { noise_factor: 5.0 },
+            segmentation_class: SegmentationClass(1),
+            ..Default::default()
+        }),
+        PipelineCommand::ExtractObjects(ExtractObjectsSettings {
+            max_objects_before_fail: 100000,
+            ..Default::default()
+        }),
+        area,
+    ]
 }
 
 /// A module that reclassifies the larger objects into a local class and

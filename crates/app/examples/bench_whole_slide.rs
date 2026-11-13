@@ -25,6 +25,8 @@
 //
 // `--cells propagation` grows the cells with Propagation (growth channel
 // `--channel`, regularization 0.05, no mask) instead of Voronoi.
+// `--cells grow` with Grow Regions (growth channel `--channel`, Intensity,
+// half maximum, separate, reach `--voronoi-radius`).
 // `--image-coloc 1` / `--image-texture 1` add Measure Image Colocalization
 // (channels 0 and 1) / Measure Image Texture (channel `--channel`).
 //
@@ -42,7 +44,7 @@ use evanalyzer_cfg::core_types::{
 use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
 use evanalyzer_cfg::settings::pipeline_command_settings::{
-    ExtractObjectsSettings, GaussianBlurSettings, LoadChannelSettings,
+    ExtractObjectsSettings, GaussianBlurSettings, GrowRegionsSettings, LoadChannelSettings,
     MathLoadChannelChannelZProjectionSettings, MeasureColocalizationCostesMethodSettings,
     MeasureImageColocalizationSettings, MeasureImageTextureSettings,
     MeasureObjectColocalizationSettings, PropagationSettings,
@@ -145,7 +147,9 @@ fn main() {
     let channel = arg("--channel", 0) as u32;
     let coloc = arg("--coloc", 0) == 1;
     let voronoi_radius = arg("--voronoi-radius", 50) as f32;
-    let propagation = arg_str("--cells").as_deref() == Some("propagation");
+    let cells = arg_str("--cells");
+    let propagation = cells.as_deref() == Some("propagation");
+    let grow = cells.as_deref() == Some("grow");
     let image_coloc = arg("--image-coloc", 0) == 1;
     let image_texture = arg("--image-texture", 0) == 1;
     std::fs::create_dir_all(&workdir).unwrap();
@@ -210,7 +214,15 @@ fn main() {
                 max_objects_before_fail: 10_000_000,
                 ..Default::default()
             })),
-            if propagation {
+            if grow {
+                step(PipelineCommand::GrowRegions(GrowRegionsSettings {
+                    seeds: ObjectClass::Global(1),
+                    growth_channel: ImageChannelIdx(channel),
+                    max_distance: voronoi_radius.max(1.0),
+                    output_class: ObjectClass::Global(2),
+                    ..Default::default()
+                }))
+            } else if propagation {
                 step(PipelineCommand::Propagation(PropagationSettings {
                     seeds: ObjectClass::Global(1),
                     growth_channel: ImageChannelIdx(channel),

@@ -1515,6 +1515,75 @@
         }
       ]
     },
+    "GrowRegionsSettings": {
+      "description": "Grows a region from each seed object through a channel, like a magic\nwand: e.g. a spot's outline from its maximum, or a nucleus from a point\ninside it.\n\n[Find Maxima] -> [Extract Objects] -> [Grow Regions]\n\nEvery seed gets its own stop level (relative to its own peak and\nbackground, so dim and bright objects keep the same shape); touching\nregions are split on the darkest line between them, may overlap, or are\nmerged. Each region keeps its seed's pixels; Relate Objects links it to\nits seed. Seeds 1024 px across or more (a tissue-sized object) don't\ngrow: their region is the seed.",
+      "type": "object",
+      "properties": {
+        "distanceUnit": {
+          "description": "Unit of `max_distance`.",
+          "$ref": "#/$defs/SizeUnits",
+          "default": "PIXELS"
+        },
+        "excludeAtEdges": {
+          "description": "Discard regions that touch the image border.",
+          "type": "boolean",
+          "default": false
+        },
+        "growthChannel": {
+          "description": "The channel the regions grow through (the raw spot or nucleus\nstain).",
+          "$ref": "#/$defs/ImageChannelIdx",
+          "default": 0
+        },
+        "mask": {
+          "description": "Regions only grow into pixels of objects carrying this class (e.g.\nthe thresholded cells). `Unset`: everywhere.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "maxDistance": {
+          "description": "How far a region reaches at most from its seed (from the nearest\nseed pixel). Also where the background is measured: a little more\nthan the largest object's radius.",
+          "type": "number",
+          "format": "float",
+          "default": 10.0,
+          "maximum": 1000,
+          "minimum": 1
+        },
+        "objectsAre": {
+          "description": "Bright: objects brighter than their background (fluorescence).\nDark: objects darker than their background (brightfield, stains) -\neverything below then counts the other way round.",
+          "$ref": "#/$defs/ObjectGrowRegionsPolaritySettings",
+          "default": "BRIGHT"
+        },
+        "order": {
+          "description": "Which neighbouring pixel joins a region next.\n\nIntensity: the brightest - a region spreads downhill from its peak.\nFor objects with a bright centre that fades out (spots, blobs).\nSimilarity: the one closest to the seed's value (the median of the\nseed's pixels) - a region covers what looks like its seed. For evenly\nbright objects (nuclei, organelles); larger seeds give a steadier\nvalue than a single pixel.",
+          "$ref": "#/$defs/ObjectGrowRegionsGrowthOrderSettings",
+          "default": "INTENSITY"
+        },
+        "outputClass": {
+          "description": "The class the grown regions get.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "seeds": {
+          "description": "Objects carrying this class are the seeds (e.g. the maxima of Find\nMaxima after Extract Objects, or nuclei): each grows into one region.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "stop": {
+          "description": "Which pixels may join a region (the seed's own pixels always\nbelong to it).\n\nRelative, Noise: the background is the median of the pixels just\nbeyond `max_distance` around the seed (2 px wide ring), the noise\ntheir median absolute deviation × 1.4826.",
+          "$ref": "#/$defs/ObjectGrowRegionsStopRuleSettings",
+          "default": {
+            "fraction": 0.5,
+            "type": "RELATIVE"
+          }
+        },
+        "whenRegionsMeet": {
+          "description": "What happens where regions of different seeds meet.",
+          "$ref": "#/$defs/ObjectGrowRegionsMeetingSettings",
+          "default": {
+            "type": "SEPARATE"
+          }
+        }
+      }
+    },
     "HessianSettings": {
       "description": "Extracts continuous structural ridges, tubular vessels, and blobs using second-order spatial derivatives.\n\nThis algorithm constructs a localized Hessian matrix for each pixel to analyze local curvature\nand intensity topography. By evaluating the eigenvalues of this matrix, it differentiates\nbetween directional ridges (like blood vessels or filaments), distinct intensity peaks (blobs),\nand flat regions, making it highly effective for curvilinear feature extraction.",
       "type": "object",
@@ -3135,6 +3204,187 @@
         }
       ]
     },
+    "ObjectGrowRegionsGrowthOrderSettings": {
+      "description": "Which neighbouring pixel joins a [`GrowRegions`] region next.",
+      "oneOf": [
+        {
+          "description": "The brightest: a region spreads downhill from its peak (spots,\nblobs).",
+          "type": "string",
+          "const": "INTENSITY"
+        },
+        {
+          "description": "The one closest to the seed's value: a region covers what looks like\nits seed (evenly bright objects).",
+          "type": "string",
+          "const": "SIMILARITY"
+        }
+      ]
+    },
+    "ObjectGrowRegionsMeetingSettings": {
+      "description": "What [`GrowRegions`] does where regions of different seeds meet.",
+      "oneOf": [
+        {
+          "description": "Each pixel goes to one region: the border lies on the darkest line\nbetween them (touching spots counted apart).",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "SEPARATE"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Every region grows as if it were alone: a pixel may belong to\nseveral (e.g. each spot's whole halo) - a region may then take in a\nneighbouring spot if the valley between them stays above its stop\nlevel.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "OVERLAP"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Regions that meet over a shallow valley become one object (several\nmaxima on one object); regions with a deep valley between them stay\napart.",
+          "type": "object",
+          "properties": {
+            "maxValley": {
+              "description": "The deepest valley merged, as a part of the dimmer region's\ncontrast (peak - background): 0.2 merges regions whose border\nlies at most 20 % below the dimmer peak. Two objects only\ntouching at their stop level never merge below 1 - the stop\nfraction.",
+              "type": "number",
+              "format": "float",
+              "maximum": 1,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "MERGE"
+            }
+          },
+          "required": [
+            "type",
+            "maxValley"
+          ]
+        }
+      ]
+    },
+    "ObjectGrowRegionsPolaritySettings": {
+      "description": "Whether [`GrowRegions`]' objects are brighter or darker than their\nbackground.",
+      "oneOf": [
+        {
+          "description": "Brighter than the background (fluorescence).",
+          "type": "string",
+          "const": "BRIGHT"
+        },
+        {
+          "description": "Darker than the background (brightfield, stains).",
+          "type": "string",
+          "const": "DARK"
+        }
+      ]
+    },
+    "ObjectGrowRegionsStopRuleSettings": {
+      "description": "Which pixels may join a [`GrowRegions`] region. \"Brighter\"/\"above\"\ncount the other way round for dark objects.",
+      "oneOf": [
+        {
+          "description": "A level between the background (0) and the seed (1): 0.5 cuts each\nregion at half its height (full width at half maximum), so dim and\nbright objects keep the same shape. Intensity: pixels above the\nlevel, measured from the region's peak (the brightest pixel the seed\nreaches without going down). Similarity: pixels closer to\nthe seed's value than (1 - fraction) of its contrast, on either side.\nA seed not above its background grows nothing.",
+          "type": "object",
+          "properties": {
+            "fraction": {
+              "description": "The level between the background (0) and the seed (1).",
+              "type": "number",
+              "format": "float",
+              "maximum": 1,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "RELATIVE"
+            }
+          },
+          "required": [
+            "type",
+            "fraction"
+          ]
+        },
+        {
+          "description": "The classic magic wand. Intensity: pixels at most `tolerance` below\nthe region's peak. Similarity: pixels at most `tolerance` from the\nseed's value, on either side.",
+          "type": "object",
+          "properties": {
+            "tolerance": {
+              "description": "How far a pixel may lie from the peak or seed value.",
+              "type": "number",
+              "format": "float",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "TOLERANCE"
+            },
+            "unit": {
+              "description": "Unit of `tolerance` (bit: 0 - 255/65535, %: 0 - 100, rel: 0 - 1).",
+              "$ref": "#/$defs/PixelUnits"
+            }
+          },
+          "required": [
+            "type",
+            "tolerance",
+            "unit"
+          ]
+        },
+        {
+          "description": "Pixels above one fixed level, the same for every seed.",
+          "type": "object",
+          "properties": {
+            "level": {
+              "description": "The level a pixel must lie above.",
+              "type": "number",
+              "format": "float",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "THRESHOLD"
+            },
+            "unit": {
+              "description": "Unit of `level` (bit: 0 - 255/65535, %: 0 - 100, rel: 0 - 1).",
+              "$ref": "#/$defs/PixelUnits"
+            }
+          },
+          "required": [
+            "type",
+            "level",
+            "unit"
+          ]
+        },
+        {
+          "description": "Pixels more than `noise_factor` times the noise above the\nbackground: a region covers what stands out from the noise around\nit - the same factor fits every exposure.",
+          "type": "object",
+          "properties": {
+            "noiseFactor": {
+              "description": "How many times the noise a pixel must lie above the background.",
+              "type": "number",
+              "format": "float",
+              "maximum": 100,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "NOISE"
+            }
+          },
+          "required": [
+            "type",
+            "noiseFactor"
+          ]
+        }
+      ]
+    },
     "ObjectId": {
       "description": "An object's id - a UUIDv7. Stored in JSON as the UUID string (as in the\nresults database), in binary formats as the number: project files are loaded through `serde_json::Value`, which\nkeeps numbers above 2^64 only as `f64`, so as a number the id came back\nwrong. Numbers are still read - from files written before; a rounded one\nrounds the same way everywhere in the file, so references between\nobjects (parent, children, coloc partners) still match.",
       "type": "string"
@@ -3957,6 +4207,19 @@
             }
           },
           "$ref": "#/$defs/GaussianBlurSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "GROW_REGIONS"
+            }
+          },
+          "$ref": "#/$defs/GrowRegionsSettings",
           "required": [
             "type"
           ]
