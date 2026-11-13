@@ -806,8 +806,9 @@ export component TopBar inherits Rectangle {
             HorizontalLayout {
                 spacing: 6px;
                 // Compare the breakpoint image with the original (hold
-                // Space: the original) - with a breakpoint image.
-                if PipelinesPanelState.has-breakpoint-image: InkIconButton {
+                // Space: the original) - with a breakpoint image, or while
+                // on: a moved breakpoint's image is still to come.
+                if PipelinesPanelState.has-breakpoint-image || (ViewportObjectState.compare && PipelinesPanelState.breakpoint-mode != 0): InkIconButton {
                     size: 28px;
                     icon: InkIcons.compare;
                     label: "Compare with the original (hold Space: original)";

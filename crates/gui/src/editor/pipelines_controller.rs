@@ -214,6 +214,10 @@ impl PipelinesController {
             crate::helper::ui_thread::invoke_from_event_loop(move || {
                 if let Some(manager) = weak.upgrade() {
                     manager.whole_image_preview_outdated(true);
+                    // The last image's breakpoint image would be compared
+                    // with this one: it goes (compare stays on, and shows
+                    // again with this image's - after its preview).
+                    manager.viewport_controller.clear_breakpoint();
                     manager.schedule_auto_preview();
                 }
             })
@@ -228,6 +232,9 @@ impl PipelinesController {
             crate::helper::ui_thread::invoke_from_event_loop(move || {
                 if let Some(manager) = weak.upgrade() {
                     manager.whole_image_preview_outdated(false);
+                    // The last plane's breakpoint image goes, as for
+                    // another image (compare stays on).
+                    manager.viewport_controller.clear_breakpoint();
                     manager.schedule_auto_preview();
                 }
             })
@@ -319,6 +326,8 @@ impl PipelinesController {
             ui.global::<PipelinesPanelState>()
                 .on_auto_preview(move |auto_preview| {
                     *manager.auto_preview_enabled.lock().expect("Poisned") = auto_preview;
+                    // Turned on: the preview is brought up to date.
+                    manager.schedule_auto_preview_of_shown_image();
                 });
 
             // Set breakpoint (mode: 1=Stop, 2=Snapshot)
@@ -334,6 +343,9 @@ impl PipelinesController {
                         .map(|step_id| (pipeline_id as u32, step_id, bp_mode));
                     // Another step's image: its histogram window anew.
                     manager.viewport_controller.set_breakpoint_histogram(None);
+                    // ...and, with auto preview on, the image itself, so a
+                    // compare shows again without a manual refresh.
+                    manager.schedule_auto_preview_of_shown_image();
                 },
             );
 
@@ -3576,6 +3588,21 @@ impl PipelinesController {
                 (v_w, v_h),
                 reduce_motion,
             );
+        }
+    }
+
+    /// [`Self::schedule_auto_preview`] for a change that doesn't imply an
+    /// image (auto preview turned on, a breakpoint set): only with a saved
+    /// project and an image shown, so none of the preview's "save the
+    /// project / pick an image" warnings appear for it.
+    fn schedule_auto_preview_of_shown_image(self: &Arc<Self>) {
+        let ready = {
+            let project = self.app_state.get_project();
+            project.tmp_settings.current_project.is_some()
+                && project.get_current_image_path_cloned().is_some()
+        };
+        if ready {
+            self.schedule_auto_preview();
         }
     }
 
@@ -12658,6 +12685,125 @@ mod tests {
         ui_state.model_saved();
         wait();
         assert!(dispatched().expect("previewed").preview);
+    }
+
+    /// The shown image of a saved project, with the selected pipeline.
+    fn with_shown_image(ui_state: &UiState) {
+        let mut project = ui_state.get_project_write();
+        let mut with_image = crate::editor::test_support::project_with_one_image();
+        with_image.tmp_settings.current_project = Some(PathBuf::from("/data/project.evaproj"));
+        with_image.settings.pipelines = project.settings.pipelines.clone();
+        *project = with_image;
+    }
+
+    fn wait_for_debounce() {
+        drain_ui_queue();
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(
+            PREVIEW_DEBOUNCE_MS + 50,
+        ));
+    }
+
+    /// Auto preview turned on brings the preview up to date at once (after
+    /// the debounce); turned off, nothing runs.
+    #[test]
+    fn turning_auto_preview_on_previews_the_shown_image() {
+        let (ui, ui_state, controller) = selected(vec![step("Threshold")]);
+        with_shown_image(&ui_state);
+        let dispatched = || controller.task_request.0.lock().unwrap().take();
+        let panel = ui.global::<PipelinesPanelState>();
+
+        panel.invoke_auto_preview(true);
+        wait_for_debounce();
+        assert!(dispatched().expect("previewed").preview);
+
+        panel.invoke_auto_preview(false);
+        wait_for_debounce();
+        assert!(dispatched().is_none(), "turned off: none");
+    }
+
+    /// Auto preview turned on without an image (or a saved project): no
+    /// preview, and none of its warnings.
+    #[test]
+    fn turning_auto_preview_on_without_an_image_runs_nothing() {
+        let (ui, _ui_state, controller) = selected(vec![step("Threshold")]);
+        ui.global::<PipelinesPanelState>().invoke_auto_preview(true);
+        assert!(!PREVIEW_DEBOUNCE.with(|timer| timer.running()), "not armed");
+        wait_for_debounce();
+        assert!(controller.task_request.0.lock().unwrap().is_none());
+        drain_ui_queue();
+        assert_ne!(active_dialog(&ui), DialogType::Warning, "no warning");
+    }
+
+    /// A breakpoint set on another step: with auto preview on, the preview
+    /// runs with it (the compare shows again by itself); off, nothing runs.
+    #[test]
+    fn a_moved_breakpoint_previews_with_auto_preview_on() {
+        let (ui, ui_state, controller) = selected(vec![step("Threshold"), step("Blur")]);
+        with_shown_image(&ui_state);
+        let dispatched = || controller.task_request.0.lock().unwrap().take();
+        let panel = ui.global::<PipelinesPanelState>();
+        let step_id = |i: usize| panel.get_active_commands().row_data(i).unwrap().step_id;
+
+        panel.invoke_set_breakpoint(1, step_id(0), 1);
+        wait_for_debounce();
+        assert!(dispatched().is_none(), "auto preview off: none");
+
+        *controller.auto_preview_enabled.lock().unwrap() = true;
+        panel.invoke_set_breakpoint(1, step_id(1), 1);
+        wait_for_debounce();
+        let task = dispatched().expect("previewed");
+        assert!(task.preview);
+        assert!(task.breakpoint.is_some(), "with the new breakpoint");
+    }
+
+    /// Another image (or frame, z-slice) shown: the last one's breakpoint
+    /// image goes (it would be compared with this one), the compare stays on.
+    #[test]
+    fn another_image_or_plane_drops_the_breakpoint_image_but_keeps_the_compare() {
+        let (ui, ui_state, controller) = selected(vec![step("Threshold")]);
+        controller.viewport_controller.set_breakpoint_channel(
+            crate::editor::test_support::gray_container(vec![0.5; 16], 4, 4),
+            None,
+            None,
+            0,
+            0,
+            4,
+            4,
+            8,
+            Some(0),
+        );
+        drain_ui_queue();
+        let panel = ui.global::<PipelinesPanelState>();
+        assert!(panel.get_has_breakpoint_image());
+        ui.global::<crate::ViewportObjectState>().set_compare(true);
+
+        ui_state.image_opened();
+        drain_ui_queue();
+        assert!(!panel.get_has_breakpoint_image(), "the last image's is gone");
+        assert!(
+            controller.viewport_controller.breakpoint_tiles.read().unwrap().is_empty(),
+            "and its RAM"
+        );
+        assert!(ui.global::<crate::ViewportObjectState>().get_compare(), "compare stays on");
+
+        // Another frame or z-slice: the same.
+        controller.viewport_controller.set_breakpoint_channel(
+            crate::editor::test_support::gray_container(vec![0.5; 16], 4, 4),
+            None,
+            None,
+            0,
+            0,
+            4,
+            4,
+            8,
+            Some(0),
+        );
+        drain_ui_queue();
+        assert!(panel.get_has_breakpoint_image());
+        ui_state.analyzed_plane_changed();
+        drain_ui_queue();
+        assert!(!panel.get_has_breakpoint_image(), "the last plane's is gone");
+        assert!(ui.global::<crate::ViewportObjectState>().get_compare(), "compare stays on");
     }
 
     /// A pinned setting is marked on its card and listed in the Tuning

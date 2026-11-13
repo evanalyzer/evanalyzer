@@ -317,3 +317,22 @@ pub(crate) fn test_focus_controller(
         viewport.clone(),
     ))
 }
+
+/// A one-channel f32 image of `width` x `height` (row by row), at the
+/// image's top left - e.g. a breakpoint image.
+pub(crate) fn gray_container(
+    pixels: Vec<f32>,
+    width: usize,
+    height: usize,
+) -> evanalyzer_app::images::ImageContainer {
+    use evanalyzer_app::images::{ImageContainer, ManagedImage, Point2d};
+    use evanalyzer_cfg::core_types::{ImageDimensionality, ImagePlane};
+    use kornia_image::{Image, ImageSize};
+    let image = Image::<f32, 1>::new(ImageSize { width, height }, pixels).unwrap();
+    ImageContainer::F32Gray(ManagedImage {
+        data: image,
+        tile_offset: Point2d { x: 0, y: 0 },
+        plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
+        dimensionality: ImageDimensionality::Planar,
+    })
+}
