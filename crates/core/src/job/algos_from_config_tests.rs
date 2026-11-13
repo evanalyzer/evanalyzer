@@ -1684,9 +1684,7 @@ fn two_way_settings_convert_to_their_own_variants() {
         MaximaCutoff::Otsu
     ));
     assert!(matches!(
-        MaximaCutoff::from(SegmentationFindMaximaMaximaCutoffSettings::Noise {
-            noise_factor: 4.5
-        }),
+        MaximaCutoff::from(SegmentationFindMaximaMaximaCutoffSettings::Noise { noise_factor: 4.5 }),
         MaximaCutoff::Noise { noise_factor: 4.5 }
     ));
     assert!(matches!(

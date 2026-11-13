@@ -16,5 +16,6 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 pub(crate) mod counting_allocator;
+mod spot_pipeline;
 mod tile_ram;
 mod whole_image_ram;
