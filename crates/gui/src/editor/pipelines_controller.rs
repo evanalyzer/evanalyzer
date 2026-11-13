@@ -2627,15 +2627,18 @@ impl PipelinesController {
                             return;
                         }
 
-                        let new_param_value = new_group_fields
+                        let (new_param_value, new_options) = new_group_fields
                             .and_then(|item| item.iter().find(|fd| fd.name == field_name))
-                            .map(|fd| fd.value.clone())
+                            .map(|fd| (fd.value.clone(), options_following_value(fd)))
                             .unwrap_or_default();
                         if let Some(fields) = old_fields_model {
                             for k in 0..fields.row_count() {
                                 if let Some(mut lp) = fields.row_data(k) {
                                     if lp.name.as_str() == field_name {
                                         lp.value = new_param_value.clone().into();
+                                        if let Some(options) = &new_options {
+                                            lp.options = string_model(options);
+                                        }
                                         fields.set_row_data(k, lp);
                                         break;
                                     }
@@ -2681,16 +2684,22 @@ impl PipelinesController {
 
                         // Flat parameter, field set unchanged: patch the single value (and
                         // flags for multi-select) in place.
-                        let new_param_value = params_now
+                        let (new_param_value, new_options) = params_now
                             .into_iter()
                             .find(|p| p.name == param_name)
-                            .map(|p| p.value)
+                            .map(|p| {
+                                let options = options_following_value(&p);
+                                (p.value, options)
+                            })
                             .unwrap_or_default();
                         'patch: for list in [&params, &advanced_ui] {
                             for i in 0..list.row_count() {
                                 if let Some(mut p) = list.row_data(i) {
                                     if p.name.as_str() == param_name {
                                         p.value = new_param_value.clone().into();
+                                        if let Some(options) = &new_options {
+                                            p.options = string_model(options);
+                                        }
                                         if is_toggle {
                                             let selected: std::collections::HashSet<u32> =
                                                 new_param_value
@@ -6089,6 +6098,21 @@ fn value_summary(p: &CommandParameter, names: &ValueNames) -> String {
 
 /// Writes setting `changed`'s value (and options, a class list's flags)
 /// into the copies `card`'s sections and tables show (see `card_layout`).
+/// The options of `def` to patch into its row when only its value changed:
+/// `Some` for settings whose options encode the value itself - an image
+/// address's `[kind, number]`, which its picker shows instead of the value.
+/// Without them the picker would keep showing the old kind (e.g. "Channel"
+/// after picking "Memory") and its number box would write the old kind back.
+fn options_following_value(def: &ParameterDef) -> Option<Vec<String>> {
+    (def.param_type == CfgParamType::ImageAddress).then(|| def.options.clone())
+}
+
+fn string_model(items: &[String]) -> ModelRc<SharedString> {
+    ModelRc::new(VecModel::from(
+        items.iter().map(SharedString::from).collect::<Vec<_>>(),
+    ))
+}
+
 fn patch_card_copies(card: &SlintPipelineCommand, changed: &CommandParameter) {
     let patch = |list: ModelRc<CommandParameter>| {
         for k in 0..list.row_count() {
@@ -12226,6 +12250,101 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    /// The image-address picker shows `options` (`[kind, number]`), not the
+    /// value: a changed address must patch them too, else the dropdown stays
+    /// on "Channel" after picking "Memory" and the number box then writes a
+    /// channel back over the stored memory slot.
+    #[test]
+    fn changing_an_image_address_updates_the_pickers_kind_and_number() {
+        fn shown(ui: &AppWindow, name: &str) -> (String, Vec<String>) {
+            let p = ui_param(ui, 0, name);
+            let options = p.options.iter().map(|o| o.to_string()).collect();
+            (p.value.to_string(), options)
+        }
+        for (command, name) in [
+            ("ImageMath", "second_image_address"),
+            ("ImageCache", "address"),
+        ] {
+            let (ui, ui_state, _controller) = selected(vec![step(command)]);
+            let panel = ui.global::<PipelinesPanelState>();
+            let stored = || {
+                let project = ui_state.get_project();
+                match project.pipelines[0].steps[0].command().unwrap() {
+                    PipelineCommand::ImageMath(s) => s.second_image_address,
+                    PipelineCommand::ImageCache(s) => s.address,
+                    other => panic!("unexpected {other:?}"),
+                }
+            };
+
+            panel.invoke_param_changed(0, name.into(), "channel:2".into());
+            drain_ui_queue();
+            assert_eq!(stored(), ImageAddress::Channel(2), "{command}");
+            assert_eq!(
+                shown(&ui, name),
+                ("channel:2".into(), vec!["channel".into(), "2".into()]),
+                "{command}"
+            );
+
+            // Kind dropdown: Channel -> Memory.
+            panel.invoke_param_changed(0, name.into(), "memory:1".into());
+            drain_ui_queue();
+            let memory = |slot| ImageAddress::Memory(MemoryId::PipelineContext(slot));
+            assert_eq!(stored(), memory(1), "{command}");
+            assert_eq!(
+                shown(&ui, name),
+                ("memory:1".into(), vec!["memory".into(), "1".into()]),
+                "{command}"
+            );
+
+            // Slot number box: stays a memory slot.
+            panel.invoke_param_changed(0, name.into(), "memory:3".into());
+            drain_ui_queue();
+            assert_eq!(stored(), memory(3), "{command}");
+            assert_eq!(shown(&ui, name).1, vec!["memory", "3"], "{command}");
+
+            // Shared and scratchpad too.
+            panel.invoke_param_changed(0, name.into(), "cache:2".into());
+            drain_ui_queue();
+            assert_eq!(
+                stored(),
+                ImageAddress::Memory(MemoryId::ProjectCache(2)),
+                "{command}"
+            );
+            assert_eq!(shown(&ui, name).1, vec!["cache", "2"], "{command}");
+            panel.invoke_param_changed(0, name.into(), "scratchpad".into());
+            drain_ui_queue();
+            assert_eq!(stored(), ImageAddress::Scratchpad, "{command}");
+            assert_eq!(shown(&ui, name).1, vec!["scratchpad", "0"], "{command}");
+        }
+    }
+
+    #[test]
+    fn only_image_addresses_patch_their_options_with_the_value() {
+        let def = |param_type| ParameterDef {
+            name: "x".into(),
+            display_name: "x".into(),
+            description: String::new(),
+            value: "memory:1".into(),
+            param_type,
+            options: vec!["memory".into(), "1".into()],
+            min: 0.0,
+            max: 0.0,
+            step: 1.0,
+            groups: vec![],
+            default_value: String::new(),
+            advanced: false,
+            option_advanced: vec![],
+            section: String::new(),
+        };
+        assert_eq!(
+            options_following_value(&def(CfgParamType::ImageAddress)),
+            Some(vec!["memory".to_string(), "1".to_string()])
+        );
+        // A dropdown's options are its choices; the value doesn't change them.
+        assert_eq!(options_following_value(&def(CfgParamType::Dropdown)), None);
+        assert_eq!(options_following_value(&def(CfgParamType::Text)), None);
     }
 
     #[test]
