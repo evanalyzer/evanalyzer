@@ -13,6 +13,7 @@
 /// For every pixel the nearest marked pixel (SciPy's exact Euclidean
 /// feature transform).
 pub(crate) mod feature_transform;
+pub(crate) mod robust_stats;
 pub(crate) mod row_runs;
 /// A uniform grid over bounding boxes, to find the objects near one.
 pub(crate) mod spatial_grid;

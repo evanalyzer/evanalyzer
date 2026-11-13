@@ -27,7 +27,7 @@ use kornia_image::Image;
 use macros::CommandsMeta;
 
 use crate::{
-    algos::{ExecutionScope, ImageAlgorithm},
+    algos::{ExecutionScope, ImageAlgorithm, libs::robust_stats::background_and_noise},
     pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext},
 };
 
@@ -116,10 +116,6 @@ pub enum MaximaCutoff {
         noise_factor: f32,
     },
 }
-
-/// Turns the median absolute deviation of normally distributed values into
-/// their standard deviation (1 / Φ⁻¹(3/4), Hampel 1974).
-const MAD_TO_SIGMA: f32 = 1.4826;
 
 // Per-pixel mark bits of the search (one byte per pixel).
 /// No pixel within the radius is brighter.
@@ -503,36 +499,6 @@ fn otsu_cutoff(qualities: &[f32]) -> Option<f32> {
         .filter(|&q| q <= upper && bin(q) <= best_k)
         .fold(lo, f32::max);
     Some(cutoff)
-}
-
-/// The background (median) and noise (median absolute deviation ×
-/// [`MAD_TO_SIGMA`]) of `values`, NaN skipped; `None` without a value.
-/// Exact (no histogram), so it doesn't depend on the value range.
-fn background_and_noise(values: &[f32]) -> Option<(f32, f32)> {
-    let mut work: Vec<f32> = values.iter().copied().filter(|v| !v.is_nan()).collect();
-    if work.is_empty() {
-        return None;
-    }
-    let background = median_in_place(&mut work);
-    for v in &mut work {
-        *v = (*v - background).abs();
-    }
-    let mad = median_in_place(&mut work);
-    Some((background, mad * MAD_TO_SIGMA))
-}
-
-/// The median of `values` (not empty; reordered): the middle value, or the
-/// mean of the two middle values for an even count.
-fn median_in_place(values: &mut [f32]) -> f32 {
-    let odd = values.len() % 2 == 1;
-    let mid = values.len() / 2;
-    let (lower, &mut upper, _) = values.select_nth_unstable_by(mid, f32::total_cmp);
-    if odd {
-        upper
-    } else {
-        let below = lower.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-        (below + upper) / 2.0
-    }
 }
 
 /// Clears the segmentation and the instance map (created if missing) and
@@ -919,19 +885,6 @@ mod tests {
         run(&command, &mut ctx);
         let xs: Vec<usize> = written(&ctx).iter().map(|w| w.0).collect();
         assert_eq!(xs, vec![35]);
-    }
-
-    #[test]
-    fn background_and_noise_are_median_and_scaled_mad() {
-        assert_eq!(background_and_noise(&[]), None);
-        assert_eq!(background_and_noise(&[f32::NAN]), None);
-        // Median 3, deviations 2 1 0 1 7 → MAD 1.
-        let (background, noise) =
-            background_and_noise(&[1.0, 2.0, 3.0, f32::NAN, 4.0, 10.0]).unwrap();
-        assert_eq!(background, 3.0);
-        assert_eq!(noise, MAD_TO_SIGMA);
-        // Even count: mean of the two middle values.
-        assert_eq!(background_and_noise(&[4.0, 1.0, 3.0, 2.0]).unwrap().0, 2.5);
     }
 
     #[test]
