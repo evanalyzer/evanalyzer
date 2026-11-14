@@ -612,10 +612,21 @@ export component ResultsListView inherits Rectangle {
                                     color: row.note != "" ? Ink.warn : Ink.text-mute;
                                     vertical-alignment: center;
                                 }
+                                // Why - while the pointer is on the pill itself
+                                // (the tip layer drops a tip whose pointer is
+                                // outside its control, so the whole row's hover
+                                // asked once, off the pill, and never again).
+                                // From the row's pointer, not a TouchArea of
+                                // its own: a click on the pill still selects
+                                // the row.
+                                property <length> left: self.absolute-position.x - ta.absolute-position.x;
+                                property <length> top: self.absolute-position.y - ta.absolute-position.y;
                                 InkTipZone {
                                     width: 100%;
                                     height: 100%;
-                                    wanted: ta.has-hover;
+                                    wanted: ta.has-hover
+                                        && ta.mouse-x >= parent.left && ta.mouse-x <= parent.left + parent.width
+                                        && ta.mouse-y >= parent.top && ta.mouse-y <= parent.top + parent.height;
                                     text: row.note != "" ? "Excluded by the pipeline: " + row.note : "Left out of the results by hand";
                                     side: InkTipSide.above;
                                 }
