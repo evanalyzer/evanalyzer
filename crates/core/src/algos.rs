@@ -61,7 +61,7 @@ pub use self::filters::structure_tensor::StructureTensor;
 pub use self::filters::structure_tensor::TensorMode;
 pub use self::filters::vesselness::LinePolarity;
 pub use self::filters::vesselness::Vesselness;
-pub use self::filters::wavelet_spots::WaveletSpots;
+pub use self::filters::wavelet_spots::{WaveletNoise, WaveletOutput, WaveletSpots};
 pub use self::filters::weighted_deviation::WeightedDeviation;
 pub(crate) use self::flow_control::end_scope::EndScope;
 pub(crate) use self::flow_control::keep_image::KeepImage;

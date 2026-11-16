@@ -1371,6 +1371,36 @@
         "DARK"
       ]
     },
+    "FiltersWaveletSpotsWaveletNoiseSettings": {
+      "description": "How [`WaveletSpots`] estimates the noise of each level.",
+      "oneOf": [
+        {
+          "description": "From each level on its own, as in the paper. Where spots or other\nstructures fill much of the image, the coarser levels count them as\nnoise and their threshold rises.",
+          "type": "string",
+          "const": "PER_LEVEL"
+        },
+        {
+          "description": "From the finest level, which holds the least structure, scaled to\nthe other levels as Gaussian noise passes through the transform.\nSteadier with many spots or a structured background.",
+          "type": "string",
+          "const": "FINEST_LEVEL"
+        }
+      ]
+    },
+    "FiltersWaveletSpotsWaveletOutputSettings": {
+      "description": "The unit of [`WaveletSpots`]' result.",
+      "oneOf": [
+        {
+          "description": "The paper's product of the combined levels: intensity to the power\nof their number.",
+          "type": "string",
+          "const": "PRODUCT"
+        },
+        {
+          "description": "The geometric mean of the combined levels (the product's n-th root):\nthe same spots and maxima, in the image's units, so Find Maxima's\ncut-off and prominence don't change with the number of levels.",
+          "type": "string",
+          "const": "INTENSITY"
+        }
+      ]
+    },
     "FindMaximaSettings": {
       "description": "Finds spots as local maxima: each pixel that is the brightest within the\nradius becomes one 1-pixel object.\n\n[Laplacian of Gaussian | Difference of Gaussians | Wavelet Spots | Gaussian Blur] -> [Find Maxima] -> [Extract Objects] -> [Transform Objects (Draw Circle)]\n\nWrites the segmentation and the instance map (both replaced): the maxima\nget the segmentation class and one instance each; the image stays as it\nis. A plateau (equal neighbouring pixels) gives one maximum, its pixel\nnearest the plateau's centre; of equal maxima within the radius the one\nfound first (row order) is kept. Flat regions (a background of 0) are\nnever maxima.",
       "type": "object",
@@ -6728,16 +6758,29 @@
       }
     },
     "WaveletSpotsSettings": {
-      "description": "Enhances spots by combining several levels of detail: keeps what stands\nout of the noise at each level from the finest to `levels`.\n\n[Wavelet Spots] -> [Find Maxima] -> [Extract Objects]\n\nThe result is the paper's multiscale product: positive at bright spots,\nexactly 0 everywhere else (background, dark spots, what stands out at\none level only). Its values are the image's intensities to the power of\n`levels`, so a manual cut-off in Find Maxima is the paper's detection\nlevel in these units. Measure intensities on the original channel, not\non this image.",
+      "description": "Enhances spots by combining several levels of detail: keeps what stands\nout of the noise at each level from `first_level` to `levels`.\n\n[Wavelet Spots] -> [Find Maxima] -> [Extract Objects]\n\nThe result is positive at bright spots and exactly 0 everywhere else\n(background, dark spots, what stands out at one level only). With output\nProduct it is the paper's multiscale product: the image's intensities to\nthe power of the number of combined levels, so a manual cut-off in Find\nMaxima is the paper's detection level in these units. With output\nIntensity it is in the image's units. Measure intensities on the\noriginal channel, not on this image.",
       "type": "object",
       "properties": {
+        "firstLevel": {
+          "description": "The finest level that is combined; the levels below are skipped.\nLevel 1 is mostly noise: 2 gives fewer false spots for spots of 4 px\nand more. At most `levels`.",
+          "type": "integer",
+          "format": "uint",
+          "default": 1,
+          "maximum": 5,
+          "minimum": 1
+        },
         "levels": {
-          "description": "How many levels are combined: level i holds details of about 2^i\npixels, so 3 suits spots up to about 8 px.",
+          "description": "How many levels are computed: level i holds details of about 2^i\npixels, so 3 suits spots up to about 8 px.",
           "type": "integer",
           "format": "uint",
           "default": 3,
           "maximum": 5,
           "minimum": 2
+        },
+        "noise": {
+          "description": "How the noise of each level is estimated.",
+          "$ref": "#/$defs/FiltersWaveletSpotsWaveletNoiseSettings",
+          "default": "PER_LEVEL"
         },
         "noiseFactor": {
           "description": "A level counts at a pixel only where it is at least this many times\nits noise; 3 in the paper.",
@@ -6746,6 +6789,11 @@
           "default": 3.0,
           "maximum": 20,
           "minimum": 0
+        },
+        "output": {
+          "description": "The unit of the result.",
+          "$ref": "#/$defs/FiltersWaveletSpotsWaveletOutputSettings",
+          "default": "PRODUCT"
         }
       }
     },

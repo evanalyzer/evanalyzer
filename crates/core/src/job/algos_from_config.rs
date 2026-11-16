@@ -697,6 +697,24 @@ impl From<AiSegmentationUnetUNetOutputModeSettings> for UNetOutputMode {
     }
 }
 
+impl From<FiltersWaveletSpotsWaveletNoiseSettings> for WaveletNoise {
+    fn from(_s: FiltersWaveletSpotsWaveletNoiseSettings) -> Self {
+        match _s {
+            FiltersWaveletSpotsWaveletNoiseSettings::PerLevel => WaveletNoise::PerLevel,
+            FiltersWaveletSpotsWaveletNoiseSettings::FinestLevel => WaveletNoise::FinestLevel,
+        }
+    }
+}
+
+impl From<FiltersWaveletSpotsWaveletOutputSettings> for WaveletOutput {
+    fn from(_s: FiltersWaveletSpotsWaveletOutputSettings) -> Self {
+        match _s {
+            FiltersWaveletSpotsWaveletOutputSettings::Product => WaveletOutput::Product,
+            FiltersWaveletSpotsWaveletOutputSettings::Intensity => WaveletOutput::Intensity,
+        }
+    }
+}
+
 // ============ STRUCT FROM IMPLS ============
 
 impl From<AiObjectClassifierSettings> for AiObjectClassifier {
@@ -1582,7 +1600,10 @@ impl From<WaveletSpotsSettings> for WaveletSpots {
     fn from(_s: WaveletSpotsSettings) -> Self {
         WaveletSpots {
             levels: _s.levels,
+            first_level: _s.first_level,
             noise_factor: _s.noise_factor.clamp(0.0, 20.0),
+            noise: WaveletNoise::from(_s.noise),
+            output: WaveletOutput::from(_s.output),
         }
     }
 }

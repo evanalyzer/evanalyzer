@@ -2375,6 +2375,51 @@ difference on the small images; on the slide every tile's kept image waits
 for Grow Regions - ~0.3 GB more peak with 21 threads, with a RAM limit the
 same peak and ~1 GB more spilled to disk.
 
+### Wavelet Spots - first level, noise from the finest level, output (2026-11-16)
+
+New settings `first_level`, `noise` (Per Level / Finest Level) and `output`
+(Product / Intensity); the defaults are the paper's as before. Old build
+(9ae558f9) and new build, both with `bench_pipeline --wavelet MODE --blurs 0`
+(Wavelet Spots only, 3 levels, no objects after it), alternated, 10 s apart,
+8 threads. With the spot pipeline after it (`--spot-size circle`, 5.49M
+objects) old and new gave the same rows hash.
+
+| Benchmark | Old | New: Per Level, Product | Finest Level | Intensity | First level 2 |
+|---|---|---|---|---|---|
+| 200 × 2048², wall | 4.44-4.69 s | 4.37-4.42 s | 3.08-3.16 s | 4.40-4.48 s | 3.59-3.86 s |
+| same, CPU | 33.3-35.7 s | 33.4-33.8 s | 23.1-23.4 s | 34.0-34.2 s | 27.2-27.5 s |
+| same, peak RSS | 943-949 MB | 927-934 MB | 929-946 MB | 925-944 MB | 909-921 MB |
+| 3 × 12288² (4096 tiles), wall | 2.66-2.82 s | 2.65-2.83 s | 1.82-1.85 s | | |
+| same, CPU | 18.3-19.5 s | 18.3-18.7 s | 12.1-12.2 s | | |
+| same, peak RSS | 3.62-3.68 GB | 3.62-3.68 GB | 3.62 GB | | |
+
+The defaults cost what they did. Finest Level computes one median instead of
+one per level (-30 % CPU), first level 2 skips level 1's median; Intensity's
+root per kept pixel doesn't show.
+
+**Less RAM (same day):** 12 → 8 bytes per tile pixel (measured 8.03). The
+convolution's column pass runs in place, keeping only the last `reach + 1`
+rows of the row pass (`convolve_separable_rolling`); the noise's median and
+MAD come from a radix select over the plane computed on the fly
+(`median_and_mad_streamed`, 2 passes each, branchless) instead of a copy.
+Bit-identical: the spot pipeline (`--spot-size circle`, 20 images, 550,708
+objects) gave the old rows hash. Old build (9ae558f9) against the new one,
+alternated, 10 s apart, 8 threads:
+
+| Benchmark | Old | New: Per Level | New: Finest Level |
+|---|---|---|---|
+| 200 × 2048², wall | 4.64-4.78 s | 4.18-4.49 s | 3.09-3.31 s |
+| same, CPU | 35.7-36.9 s | 32.3-33.8 s | 23.2-23.8 s |
+| same, peak RSS | 935-974 MB | 819-842 MB | 826-857 MB |
+| 3 × 12288² (4096 tiles), wall | 2.71-2.94 s | 2.41-2.52 s | 1.70-1.74 s |
+| same, CPU | 19.1-20.2 s | 15.7-18.1 s | 11.3-11.8 s |
+| same, peak RSS | 3.65-3.75 GB | 3.24-3.30 GB | 3.15-3.24 GB |
+
+Two tries before were rejected: column strips of 16 (-15 % RAM but +17 %
+time on 2048²: short loops, the mirrored rows found once per strip) and
+the radix select with branches on the sign and on "below the bucket" (+20 %
+time: mispredicted on a wavelet plane's random signs).
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -2416,6 +2461,7 @@ graphics driver).
 | Results views, 5.6M objects, measurement columns (plate, per image, list, histogram) | 113-228 MB (query process) | 2026-10-24 | Measurement storage and object intensity spread |
 | Making the time series dataset (6.6M objects) | 2.4 GB | 2026-10-21 | `make_time_series` |
 | Running a pipeline: 6 images 12288² (54 tiles), 8 threads | 4.5-4.6 GB | 2026-10-25 | One shared image reader |
+| Wavelet Spots only: 200 images 2048² / 3 images 12288², 8 threads | 819-842 MB / 3.24-3.30 GB (was 935-974 MB / 3.65-3.75 GB) | 2026-11-16 | Wavelet Spots |
 | Reading a 3-channel ND2 2424² with a max projection of 23 z | ~390 MB (test process) | 2026-10-25 | One shared image reader |
 | Whole slide (5 channels, 21 tiles, 99,441 objects), performance-check project | 7.41-7.91 GB (was 8.25-8.29 GB) | 2026-10-25 | scopeio 0.0.0-alpha.2 |
 | Pixel classifier with certainty, one 512² tile (20 features, 50 trees) | +62 MB (1 thread) / +104 MB (22 threads) above the test process (was +141 MB) | 2026-10-27 | Pixel classifier: class and certainty in one pass |

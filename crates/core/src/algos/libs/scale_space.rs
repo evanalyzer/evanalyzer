@@ -129,32 +129,8 @@ pub(crate) fn convolve_separable(
     height: usize,
     taps: &[Tap],
 ) {
-    let reach = taps.iter().map(|&(offset, _)| offset).max().unwrap_or(0);
-    let (center, side) = taps
-        .split_first()
-        .map(|(&(_, c), rest)| (c, rest))
-        .expect("a kernel has a centre tap");
-
-    // Rows: the interior without index checks, the borders mirrored.
-    for y in 0..height {
-        let row = &src[y * width..(y + 1) * width];
-        let out = &mut tmp[y * width..(y + 1) * width];
-        for (x, o) in out.iter_mut().enumerate() {
-            let mut sum = center * row[x];
-            if x >= reach && x + reach < width {
-                for &(offset, weight) in side {
-                    sum += weight * (row[x - offset] + row[x + offset]);
-                }
-            } else {
-                for &(offset, weight) in side {
-                    let left = mirror(x as isize - offset as isize, width);
-                    let right = mirror((x + offset) as isize, width);
-                    sum += weight * (row[left] + row[right]);
-                }
-            }
-            *o = sum;
-        }
-    }
+    let (center, side) = split_taps(taps);
+    row_pass(src, tmp, width, height, taps);
 
     // Columns: whole rows at a time (cache friendly), mirrored row indices.
     for y in 0..height {
@@ -173,6 +149,88 @@ pub(crate) fn convolve_separable(
             for ((o, &a), &b) in out.iter_mut().zip(up).zip(down) {
                 *o += weight * (a + b);
             }
+        }
+    }
+}
+
+/// [`convolve_separable`] without the `width * height` row pass: the rows
+/// go straight into `dst`, the columns are then convolved in place from
+/// the top down. Row `y` needs the row pass's rows `y - reach..=y + reach`
+/// (`reach` the kernel's largest offset; mirrored, they stay in that range
+/// once the image is taller than `reach`); those below `y` are still in
+/// `dst`, those up to `y` (already overwritten) are kept in `ring`, the
+/// last `reach + 1` rows (resized to that × `width`). The same sums in the
+/// same order, so the result is [`convolve_separable`]'s bit for bit.
+pub(crate) fn convolve_separable_rolling(
+    src: &[f32],
+    dst: &mut [f32],
+    ring: &mut Vec<f32>,
+    width: usize,
+    height: usize,
+    taps: &[Tap],
+) {
+    let (center, side) = split_taps(taps);
+    row_pass(src, dst, width, height, taps);
+
+    let reach = taps.iter().map(|&(offset, _)| offset).max().unwrap_or(0);
+    // A short image's mirrored rows can be anywhere: then it keeps them all.
+    let rows = (reach + 1).min(height);
+    ring.resize(rows * width, 0.0);
+    for y in 0..height {
+        let slot = (y % rows) * width;
+        ring[slot..slot + width].copy_from_slice(&dst[y * width..(y + 1) * width]);
+        let (done, below) = dst.split_at_mut((y + 1) * width);
+        let out = &mut done[y * width..];
+        // Row `j` of the row pass: kept in the ring up to `y`, else in `dst`.
+        let row = |j: usize| -> &[f32] {
+            if j <= y {
+                &ring[(j % rows) * width..(j % rows + 1) * width]
+            } else {
+                &below[(j - y - 1) * width..(j - y) * width]
+            }
+        };
+        for (o, &v) in out.iter_mut().zip(row(y)) {
+            *o = center * v;
+        }
+        for &(offset, weight) in side {
+            let up = row(mirror(y as isize - offset as isize, height));
+            let down = row(mirror((y + offset) as isize, height));
+            for ((o, &a), &b) in out.iter_mut().zip(up).zip(down) {
+                *o += weight * (a + b);
+            }
+        }
+    }
+}
+
+/// The centre tap's weight and the side taps.
+fn split_taps(taps: &[Tap]) -> (f32, &[Tap]) {
+    taps.split_first()
+        .map(|(&(_, c), rest)| (c, rest))
+        .expect("a kernel has a centre tap")
+}
+
+/// The row pass of the separable convolutions: `src` along the rows into
+/// `dst` - the interior without index checks, the borders mirrored.
+fn row_pass(src: &[f32], dst: &mut [f32], width: usize, height: usize, taps: &[Tap]) {
+    let reach = taps.iter().map(|&(offset, _)| offset).max().unwrap_or(0);
+    let (center, side) = split_taps(taps);
+    for y in 0..height {
+        let row = &src[y * width..(y + 1) * width];
+        let out = &mut dst[y * width..(y + 1) * width];
+        for (x, o) in out.iter_mut().enumerate() {
+            let mut sum = center * row[x];
+            if x >= reach && x + reach < width {
+                for &(offset, weight) in side {
+                    sum += weight * (row[x - offset] + row[x + offset]);
+                }
+            } else {
+                for &(offset, weight) in side {
+                    let left = mirror(x as isize - offset as isize, width);
+                    let right = mirror((x + offset) as isize, width);
+                    sum += weight * (row[left] + row[right]);
+                }
+            }
+            *o = sum;
         }
     }
 }
@@ -273,5 +331,24 @@ mod tests {
         convolve_separable(&src, &mut dst, &mut tmp, 4, 1, &B3);
         // x = 0 sees (4, 2 | 1 | 2, 4): (1·4 + 4·2 + 6·1 + 4·2 + 1·4) / 16.
         assert!((dst[0] - 30.0 / 16.0).abs() < 1e-6);
+    }
+
+    /// The rolling column pass gives the full row pass's result bit for
+    /// bit - also on images shorter than the kernel's reach.
+    #[test]
+    fn rolling_equals_the_full_row_pass() {
+        let taps: Vec<Tap> = vec![(0, 0.375), (2, 0.25), (4, 0.0625)];
+        for (w, h) in [(37, 23), (16, 5), (16, 6), (7, 4), (3, 2), (1, 9), (5, 1)] {
+            let src: Vec<f32> = (0..w * h).map(|i| ((i * 37) % 101) as f32 / 7.0).collect();
+            let (mut full, mut tmp) = (vec![0.0; w * h], vec![0.0; w * h]);
+            convolve_separable(&src, &mut full, &mut tmp, w, h, &taps);
+            let (mut rolling, mut ring) = (vec![0.0; w * h], Vec::new());
+            convolve_separable_rolling(&src, &mut rolling, &mut ring, w, h, &taps);
+            assert_eq!(
+                full.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                rolling.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                "{w}x{h}"
+            );
+        }
     }
 }

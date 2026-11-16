@@ -33,6 +33,9 @@
 // `--grow-source channel|step|memory`: what Grow Regions grows through -
 // channel 0 (the default, as before), the pipeline's image at its step, or
 // memory slot 1 an Image Cache step stores right before it.
+// `--wavelet paper|finest|intensity|first2`: a Wavelet Spots step before
+// the spot pipeline (with `--spot-size`, `--blurs 0`); without
+// `--spot-size` the pipeline ends after it (no objects).
 
 use evanalyzer_cfg::core_types::{ImageAddress, SegmentationClass};
 use evanalyzer_cfg::core_types::{ObjectClass, SizeUnits};
@@ -212,8 +215,9 @@ fn main() {
                     sigma: 1.0,
                 }))
             }))
+            .chain(arg_text("--wavelet").map(|m| step(PipelineCommand::WaveletSpots(wavelet(&m)))))
             .chain(spot_size.iter().flat_map(|how| spot_steps(how)).map(step))
-            .chain(spot_size.is_none().then(|| [
+            .chain((spot_size.is_none() && arg_text("--wavelet").is_none()).then(|| [
                 step(PipelineCommand::Threshold(ThresholdSettings {
                     thresholds: vec![ThresholdEntrySettings {
                         min_threshold: 1500.0,
@@ -307,7 +311,7 @@ fn main() {
     // To compare runs: identical inputs must give identical sums.
     let (area, intensity): (i64, f64) = conn
         .query_row(
-            "SELECT sum(area_px)::BIGINT, sum(list_sum(intensity_sum_gray)) FROM objects",
+            "SELECT coalesce(sum(area_px), 0)::BIGINT, coalesce(sum(list_sum(intensity_sum_gray)), 0) FROM objects",
             [],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
@@ -418,6 +422,26 @@ fn spot_steps(how: &str) -> Vec<PipelineCommand> {
     .chain(store)
     .chain([area])
     .collect()
+}
+
+/// `--wavelet paper|finest|intensity|first2`: a Wavelet Spots step (3
+/// levels) before the spot pipeline. From JSON, so a build without the
+/// newer settings ignores them (before/after comparisons).
+fn wavelet(
+    mode: &str,
+) -> evanalyzer_cfg::settings::pipeline_command_settings::WaveletSpotsSettings {
+    let extra = match mode {
+        "paper" => serde_json::json!({}),
+        "finest" => serde_json::json!({ "noise": "FINEST_LEVEL" }),
+        "intensity" => serde_json::json!({ "output": "INTENSITY" }),
+        "first2" => serde_json::json!({ "firstLevel": 2 }),
+        other => panic!("--wavelet paper|finest|intensity|first2, not {other}"),
+    };
+    let mut json = serde_json::json!({ "levels": 3, "noiseFactor": 3.0 });
+    json.as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    serde_json::from_value(json).unwrap()
 }
 
 fn arg_text(name: &str) -> Option<String> {

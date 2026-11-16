@@ -1376,6 +1376,39 @@ pub enum AiSegmentationUnetUNetOutputModeSettings {
     IndependentChannels,
 }
 
+/// How [`WaveletSpots`] estimates the noise of each level.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum FiltersWaveletSpotsWaveletNoiseSettings {
+    /// From each level on its own, as in the paper. Where spots or other
+    /// structures fill much of the image, the coarser levels count them as
+    /// noise and their threshold rises.
+    #[default]
+    #[serde(alias = "per-level", alias = "perLevel", alias = "per_level")]
+    PerLevel,
+    /// From the finest level, which holds the least structure, scaled to
+    /// the other levels as Gaussian noise passes through the transform.
+    /// Steadier with many spots or a structured background.
+    #[serde(alias = "finest-level", alias = "finestLevel", alias = "finest_level")]
+    FinestLevel,
+}
+
+/// The unit of [`WaveletSpots`]' result.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum FiltersWaveletSpotsWaveletOutputSettings {
+    /// The paper's product of the combined levels: intensity to the power
+    /// of their number.
+    #[default]
+    #[serde(alias = "product")]
+    Product,
+    /// The geometric mean of the combined levels (the product's n-th root):
+    /// the same spots and maxima, in the image's units, so Find Maxima's
+    /// cut-off and prominence don't change with the number of levels.
+    #[serde(alias = "intensity")]
+    Intensity,
+}
+
 // ============ PREPROCESSING ============
 
 /// Removes details finer than `sigma_small` (noise) and structures coarser
@@ -2080,35 +2113,48 @@ impl Default for VesselnessSettings {
 }
 
 /// Enhances spots by combining several levels of detail: keeps what stands
-/// out of the noise at each level from the finest to `levels`.
+/// out of the noise at each level from `first_level` to `levels`.
 ///
 /// [Wavelet Spots] -> [Find Maxima] -> [Extract Objects]
 ///
-/// The result is the paper's multiscale product: positive at bright spots,
-/// exactly 0 everywhere else (background, dark spots, what stands out at
-/// one level only). Its values are the image's intensities to the power of
-/// `levels`, so a manual cut-off in Find Maxima is the paper's detection
-/// level in these units. Measure intensities on the original channel, not
-/// on this image.
+/// The result is positive at bright spots and exactly 0 everywhere else
+/// (background, dark spots, what stands out at one level only). With output
+/// Product it is the paper's multiscale product: the image's intensities to
+/// the power of the number of combined levels, so a manual cut-off in Find
+/// Maxima is the paper's detection level in these units. With output
+/// Intensity it is in the image's units. Measure intensities on the
+/// original channel, not on this image.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct WaveletSpotsSettings {
-    /// How many levels are combined: level i holds details of about 2^i
+    /// How many levels are computed: level i holds details of about 2^i
     /// pixels, so 3 suits spots up to about 8 px.
     #[schemars(range(min = 2, max = 5))]
     pub levels: usize,
+    /// The finest level that is combined; the levels below are skipped.
+    /// Level 1 is mostly noise: 2 gives fewer false spots for spots of 4 px
+    /// and more. At most `levels`.
+    #[schemars(range(min = 1, max = 5))]
+    pub first_level: usize,
     /// A level counts at a pixel only where it is at least this many times
     /// its noise; 3 in the paper.
     #[schemars(range(min = 0, max = 20))]
     pub noise_factor: f32,
+    /// How the noise of each level is estimated.
+    pub noise: FiltersWaveletSpotsWaveletNoiseSettings,
+    /// The unit of the result.
+    pub output: FiltersWaveletSpotsWaveletOutputSettings,
 }
 
 impl Default for WaveletSpotsSettings {
     fn default() -> Self {
         Self {
             levels: 3usize,
+            first_level: 1usize,
             noise_factor: 3.0f32,
+            noise: FiltersWaveletSpotsWaveletNoiseSettings::PerLevel,
+            output: FiltersWaveletSpotsWaveletOutputSettings::Product,
         }
     }
 }
