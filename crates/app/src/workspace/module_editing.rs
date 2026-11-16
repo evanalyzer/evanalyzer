@@ -180,7 +180,7 @@ pub fn plan_module(
         let other_slots: BTreeSet<u32> = others().flat_map(module_slots).collect();
         for slot in moved_slots.intersection(&other_slots) {
             // Handed in through a setting the slot is written in - where a step
-            // uses it otherwise (e.g. a threshold's value source), it can't be.
+            // uses it otherwise (not as a memory slot setting), it can't be.
             let fixed = steps.iter().find(|step| {
                 step.command().is_some_and(|command| {
                     memory_slots(command, "moduleContext").contains(slot)
@@ -3246,27 +3246,40 @@ mod tests {
         );
     }
 
+    /// A threshold's value source "Memory" is a memory slot setting of its
+    /// own (`value_source.0`), so the slot is handed in like an address.
     #[test]
-    fn a_shared_slot_a_step_uses_other_than_as_an_address_is_refused() {
+    fn a_shared_slot_a_thresholds_value_source_uses_is_handed_in() {
         use evanalyzer_cfg::settings::pipeline_command_settings::{
-            SegmentationThresholdThresholdValueSourceSettings, ThresholdEntrySettings,
+            SegmentationThresholdThresholdValueSourceSettings as Source, ThresholdEntrySettings,
             ThresholdSettings,
         };
         let threshold = PipelineCommand::Threshold(ThresholdSettings {
             thresholds: vec![ThresholdEntrySettings {
-                value_source: SegmentationThresholdThresholdValueSourceSettings::Memory(
-                    MemoryId::ModuleContext(1),
-                ),
+                value_source: Source::Memory(MemoryId::ModuleContext(1)),
                 ..Default::default()
             }],
         });
-        let project = with_slots_module(threshold);
-        let error = plan_module(&project, StepList::Module("SLOTS".into()), 2..=2)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            error.contains("step 3 uses it in a way that can't be handed"),
-            "{error}"
+        let mut project = with_slots_module(threshold);
+        let before = runs(&project, "SLOTS", &[]);
+        let list = StepList::Module("SLOTS".into());
+        let plan = plan_module(&project, list.clone(), 2..=2).unwrap();
+        assert_eq!(plan.handed_slots, BTreeSet::from([1]));
+
+        let key = create_module(&mut project, list, 2..=2, "Inner", &roles(&plan)).unwrap();
+        let inner = project.modules.iter().find(|d| d.key == key).unwrap();
+        assert_eq!(inner.parameters.len(), 1);
+        assert_eq!(
+            inner.parameters[0].bindings,
+            [ParamBinding {
+                step: StepId(3),
+                param: "thresholds.0.value_source.0".into()
+            }]
+        );
+        assert_eq!(
+            runs(&project, "SLOTS", &[]),
+            before,
+            "the outer module runs what it ran"
         );
     }
 
@@ -4311,37 +4324,6 @@ mod tests {
             threshold.thresholds[0].value_source,
             Source::Memory(MemoryId::ModuleContext(1))
         );
-    }
-
-    /// `create_module` refuses what `plan_module` refuses - here a shared
-    /// slot a step uses other than as an address - and changes nothing.
-    #[test]
-    fn creating_a_module_of_steps_that_cant_be_one_is_refused() {
-        use evanalyzer_cfg::settings::pipeline_command_settings::SegmentationThresholdThresholdValueSourceSettings as Source;
-        let threshold = PipelineCommand::Threshold(ThresholdSettings {
-            thresholds: vec![ThresholdEntrySettings {
-                value_source: Source::Memory(MemoryId::ModuleContext(1)),
-                ..Default::default()
-            }],
-        });
-        let mut project = with_slots_module(threshold);
-
-        let error = create_module(
-            &mut project,
-            StepList::Module("SLOTS".into()),
-            2..=2,
-            "Inner",
-            &[],
-        )
-        .unwrap_err()
-        .to_string();
-
-        assert!(
-            error.contains("step 3 uses it in a way that can't be handed"),
-            "{error}"
-        );
-        assert_eq!(project.modules.len(), 1);
-        assert_eq!(project.modules[0].steps.len(), 3);
     }
 
     /// Expanding a module into the pipeline: what its step hands a module
