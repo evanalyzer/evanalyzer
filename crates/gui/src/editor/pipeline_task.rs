@@ -9,10 +9,7 @@
 
 use std::path::PathBuf;
 
-use evanalyzer_cfg::{
-    core_types::BreakpointSettings,
-    settings::project_settings::ProjectSettings,
-};
+use evanalyzer_cfg::{core_types::BreakpointSettings, settings::project_settings::ProjectSettings};
 
 #[derive(Debug)]
 pub struct PipelineTask {

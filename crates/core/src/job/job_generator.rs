@@ -688,8 +688,7 @@ fn generate_job_from_project_settings_intenal(
                 breakpoint
                     .filter(|b| b.pipeline_id == pipeline_setting.id && b.step_id == step.id)
                     .map(|b| b.inner.as_slice()),
-            )?
-            {
+            )? {
                 if let Some(name) = command.measurement_id() {
                     measurement_ids.push((name.to_string(), pipeline_setting.name.as_str()));
                 }
@@ -1708,7 +1707,10 @@ mod tests {
             .collect();
         assert_eq!(
             ids,
-            [evanalyzer_cfg::core_types::StepId::INNER_BREAKPOINT, module_id],
+            [
+                evanalyzer_cfg::core_types::StepId::INNER_BREAKPOINT,
+                module_id
+            ],
             "the first blur is where it stops; the module keeps its id"
         );
         assert_eq!(
@@ -1844,7 +1846,12 @@ mod tests {
             command_names(tiles),
             ["Blur", "Keep Image", "Blur", "Keep Image"]
         );
-        assert!(tiles.commands.iter().all(|(_, place, _)| place.kept.is_none()));
+        assert!(
+            tiles
+                .commands
+                .iter()
+                .all(|(_, place, _)| place.kept.is_none())
+        );
         let kept: Vec<_> = whole_image
             .commands
             .iter()
@@ -1867,7 +1874,9 @@ mod tests {
         pipeline.steps = vec![PipelineStepSettings {
             id: evanalyzer_cfg::core_types::StepId(1),
             enabled: true,
-            content: StepContent::Command(PipelineCommand::default_for_key("grow_regions").unwrap()),
+            content: StepContent::Command(
+                PipelineCommand::default_for_key("grow_regions").unwrap(),
+            ),
         }];
         let project = project_with(Some(image_root.path().to_path_buf()), vec![pipeline]);
         let Err(error) =

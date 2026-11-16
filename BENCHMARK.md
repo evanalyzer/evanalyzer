@@ -2340,6 +2340,41 @@ window is convolved, overlapping margins included) and ~0.25 GB more peak on
 the slide (raw values + row pass per window, 16 bytes per window pixel, up to
 1024² windows on 21 workers) - only when it is switched on.
 
+### Grow Regions - growing through the pipeline's image or a memory slot (2026-11-16)
+
+Setting `growth_channel`: the pipeline's image at the step (the default), an
+image channel, or a memory slot. Grow Regions runs after every tile command
+(regions cross tile borders), when the pipeline's image and the memory slots
+are gone: for the step's image or a slot, the tile pass keeps it per tile at
+the step's place (a reference, copied only if a later tile step changes the
+image) until Grow Regions has read it. Old build (4d041b78) and new build
+(c5ae0d47 + `--grow-source`), alternated, 10 s apart, two runs each, 21
+threads. Image channel gave the old rows / object hashes in every run; step
+and memory the same hashes as each other (the blurred image). The first
+2048² round ran while other sessions loaded the computer (~52 s); the rows
+below are the quiet re-run.
+
+| Benchmark | Old | Channel | Pipeline step | Memory slot |
+|---|---|---|---|---|
+| Spots 200 × 2048² (`--spots 5000 --spot-size grow`), wall | 29.2-29.6 s | 29.3-30.4 s | 29.8 s | 28.8-29.0 s |
+| same, CPU | 244-250 s | 238-244 s | 244-246 s | 229-235 s |
+| same, peak RSS | 4.39-4.67 GB | 4.34-4.52 GB | 4.45-4.62 GB | 4.38-4.66 GB |
+| Spots 200 × 1024² (`--spots 1250`), wall | 10.8-11.3 s | 10.5-11.6 s | 10.8-11.2 s | 11.6-13.2 s |
+| same, CPU | 73-80 s | 72-73 s | 70-75 s | 75-86 s |
+| same, peak RSS | 2.38-2.39 GB | 2.15-2.36 GB | 2.24-2.51 GB | 2.12-2.19 GB |
+| Whole slide `tests/haut --cells grow`, wall | 31.1-32.7 s | 29.9-31.7 s | 31.2-32.0 s | 31.3-32.0 s |
+| same, CPU | 290-328 s | 275-310 s | 302-312 s | 298-312 s |
+| same, peak RSS | 7.38-7.43 GB | 7.38-7.41 GB | 7.68-7.71 GB | 7.64-7.71 GB |
+| Same slide, `--max-threads 4 --max-ram 6000`, wall | 44.1-50.2 s | 43.9-45.4 s | 44.4-45.5 s | 44.2-45.1 s |
+| same, CPU | 123-150 s | 121-124 s | 126 s | 125-126 s |
+| same, peak RSS | 3.54-3.61 GB | 3.74-3.92 GB | 3.64-3.70 GB | 3.45-3.53 GB |
+| same, spill peak | 6.09 GB | 6.09 GB | 7.10 GB | 7.10 GB |
+
+The channel costs what it did. The step's image or a slot: no measurable
+difference on the small images; on the slide every tile's kept image waits
+for Grow Regions - ~0.3 GB more peak with 21 threads, with a RAM limit the
+same peak and ~1 GB more spilled to disk.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -2404,6 +2439,7 @@ graphics driver).
 | Whole slide `tests/haut` with Propagation, 21 threads / 4 threads and `--max-ram 6000` | 7.55-7.65 GB / 3.9 GB (was 11.1-11.3 / 7.07 GB) | 2026-10-29 | Whole-image commands without RAM per pixel |
 | Whole slide `tests/haut`, cells from Grow Regions (reach 50 px), 21 threads | 7.42 GB (Voronoi 7.14-7.22 GB) | 2026-11-13 | Grow Regions |
 | Spot pipeline with Grow Regions: 200 images 2048², 21 threads | 3.69-3.74 GB (Draw Circle 3.92-4.25 GB) | 2026-11-13 | Grow Regions |
+| Whole slide `tests/haut`, Grow Regions through the pipeline's image or a memory slot, 21 threads / 4 threads and `--max-ram 6000` | 7.64-7.71 GB / 3.45-3.70 GB (+1 GB spill; channel 7.38-7.41 / 3.74-3.92 GB) | 2026-11-16 | Grow Regions - growing through the pipeline's image or a memory slot |
 | StarDist post-processing, 2048² tile, 590,000 candidates | 280 MB (was 1,494 MB) | 2026-11-04 | AI steps per thread and StarDist's candidates |
 | One U-Net / StarDist inference on a 4096² slide tile, CPU (above the model) | 2048² pieces: StarDist 2.4 GB, U-Net 32 / 64 filters 3.1 / 5.8 GB, joyful-pig 7.4 GB (was 6.3 / 10.6 / ~21 / 25.2 GB); 1024² pieces (8-16 GB computers): 1.3 / 1.2 GB; up to 2048² whole: 1.6 / 2.7 / 5.4 / 6.4 GB | 2026-11-04 | AI models: RAM per inference |
 

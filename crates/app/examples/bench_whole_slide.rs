@@ -27,7 +27,10 @@
 // `--channel`, regularization 0.05, no mask) instead of Voronoi.
 // `--cells grow` with Grow Regions (growth channel `--channel`, Intensity,
 // half maximum, separate, reach `--voronoi-radius`; `--grow-sigma N`
-// smooths the channel with a Gaussian of N px first).
+// smooths the channel with a Gaussian of N px first; `--grow-source
+// channel|step|memory`: channel `--channel` (the default, as before), the
+// pipeline's image at its step, or memory slot 1 an Image Cache step stores
+// right before it).
 // `--image-coloc 1` / `--image-texture 1` add Measure Image Colocalization
 // (channels 0 and 1) / Measure Image Texture (channel `--channel`).
 //
@@ -40,15 +43,18 @@ use evanalyzer_app::backends::Backend;
 use evanalyzer_app::backends::local::LocalBackend;
 use evanalyzer_app::project::{ImageListExt, ProjectExt, ProjectWithRuntime};
 use evanalyzer_cfg::core_types::{
-    ImageAddress, ImageChannelIdx, ObjectClass, PipelineId, SegmentationClass, SizeUnits, StepId,
+    ImageAddress, ImageChannelIdx, MemoryId, ObjectClass, PipelineId, SegmentationClass, SizeUnits,
+    StepId,
 };
 use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
 use evanalyzer_cfg::settings::pipeline_command_settings::{
-    ExtractObjectsSettings, GaussianBlurSettings, GrowRegionsSettings, LoadChannelSettings,
+    ExtractObjectsSettings, GaussianBlurSettings, GrowRegionsSettings, ImageCacheSettings,
+    LoadChannelSettings, MathImageCacheImageCacheModeSettings,
     MathLoadChannelChannelZProjectionSettings, MeasureColocalizationCostesMethodSettings,
     MeasureImageColocalizationSettings, MeasureImageTextureSettings,
-    MeasureObjectColocalizationSettings, ObjectGrowRegionsSmoothingSettings, PropagationSettings,
+    MeasureObjectColocalizationSettings, ObjectGrowRegionsGrowChannelSettings,
+    ObjectGrowRegionsSmoothingSettings, PropagationSettings,
     SegmentationThresholdThresholdMethodSettings, ThresholdEntrySettings, ThresholdSettings,
     VoronoiSettings,
 };
@@ -219,7 +225,18 @@ fn main() {
             if grow {
                 step(PipelineCommand::GrowRegions(GrowRegionsSettings {
                     seeds: ObjectClass::Global(1),
-                    growth_channel: ImageChannelIdx(channel),
+                    growth_channel: match arg_str("--grow-source").as_deref() {
+                        None | Some("channel") => {
+                            ObjectGrowRegionsGrowChannelSettings::ImageChannel(ImageChannelIdx(
+                                channel,
+                            ))
+                        }
+                        Some("step") => ObjectGrowRegionsGrowChannelSettings::PipelineStep,
+                        Some("memory") => ObjectGrowRegionsGrowChannelSettings::Memory(
+                            MemoryId::PipelineContext(1),
+                        ),
+                        Some(other) => panic!("--grow-source channel|step|memory, not {other}"),
+                    },
                     max_distance: voronoi_radius.max(1.0),
                     output_class: ObjectClass::Global(2),
                     // `--grow-sigma N`: smoothed with a Gaussian of N px (0: off).
@@ -287,6 +304,27 @@ fn main() {
         }))
         .collect(),
     });
+    // `--grow-source memory`: the image Grow Regions reads stored in memory
+    // slot 1 right before it (the last step but the measurements after it).
+    if grow && arg_str("--grow-source").as_deref() == Some("memory") {
+        let steps = &mut project.pipelines.last_mut().unwrap().steps;
+        let at = steps
+            .iter()
+            .position(|s| {
+                matches!(
+                    s.content,
+                    StepContent::Command(PipelineCommand::GrowRegions(_))
+                )
+            })
+            .unwrap();
+        steps.insert(
+            at,
+            step(PipelineCommand::ImageCache(ImageCacheSettings {
+                mode: MathImageCacheImageCacheModeSettings::Store,
+                address: ImageAddress::Memory(MemoryId::PipelineContext(1)),
+            })),
+        );
+    }
 
     // The spill files' peak, sampled while the run goes on.
     let tmp = std::env::temp_dir();

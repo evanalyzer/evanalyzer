@@ -297,9 +297,7 @@ impl GlobalPipelineCache {
             CacheAddress::Memory(memory_id) => self.get_image_from_memory_cache(memory_id.clone()),
             CacheAddress::ModuleMemory(..)
             | CacheAddress::ChannelVariant(_)
-            | CacheAddress::Kept(_) => {
-                self.image_cache.get(cache_slot)
-            }
+            | CacheAddress::Kept(_) => self.image_cache.get(cache_slot),
             CacheAddress::Channel(channel_idx) => {
                 self.get_image_from_channel_cache_for_tile(channel_idx.clone())
             }

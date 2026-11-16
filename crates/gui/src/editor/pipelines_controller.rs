@@ -3793,7 +3793,11 @@ impl PipelinesController {
         pipeline_id: u32,
     ) -> Option<Vec<evanalyzer_cfg::core_types::StepId>> {
         let path = self.open_module_path(pipeline_id);
-        let mut steps = &project.pipelines.iter().find(|p| p.id.0 == pipeline_id)?.steps;
+        let mut steps = &project
+            .pipelines
+            .iter()
+            .find(|p| p.id.0 == pipeline_id)?
+            .steps;
         let mut ids = Vec::new();
         for level in &path {
             let step = steps.get(level.viewing_from?)?;

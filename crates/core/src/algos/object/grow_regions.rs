@@ -47,8 +47,8 @@ use crate::algos::libs::scale_space::{
     LINDEBERG_1998, Tap, convolve_separable, discrete_gaussian, scale_of_sigma,
 };
 use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
-use crate::pipeline::pipeline_cache::{CacheAddress, KeptSource};
 use crate::object::{Object, ObjectInit};
+use crate::pipeline::pipeline_cache::{CacheAddress, KeptSource};
 use bitvec::prelude::*;
 use evanalyzer_cfg::core_types::{
     CitationMetadata, ImageChannelIdx, InternalErrors, MemoryId, ObjectClass, ObjectId, PixelUnits,
@@ -1673,9 +1673,13 @@ mod tests {
                 .image_cache
                 .insert(CacheAddress::Kept((id, tile)), image);
         }
-        cache.image_cache.retain(|key| !matches!(key, CacheAddress::Channel(_)));
+        cache
+            .image_cache
+            .retain(|key| !matches!(key, CacheAddress::Channel(_)));
         for (channel, tile) in replaced.channel_keys() {
-            let image = replaced.get_image_from_channel_cache(channel, tile).unwrap();
+            let image = replaced
+                .get_image_from_channel_cache(channel, tile)
+                .unwrap();
             cache.add_to_channel_cache(image, channel, tile);
         }
     }

@@ -30,6 +30,9 @@
 // area from Transform Objects › Draw Circle (10 px) or Grow Regions (half
 // maximum, `--grow-reach` px (default 15), separate; `--grow-sigma N`
 // smooths the channel with a Gaussian of N px first).
+// `--grow-source channel|step|memory`: what Grow Regions grows through -
+// channel 0 (the default, as before), the pipeline's image at its step, or
+// memory slot 1 an Image Cache step stores right before it.
 
 use evanalyzer_cfg::core_types::{ImageAddress, SegmentationClass};
 use evanalyzer_cfg::core_types::{ObjectClass, SizeUnits};
@@ -375,6 +378,7 @@ fn spot_steps(how: &str) -> Vec<PipelineCommand> {
         }),
         "grow" => PipelineCommand::GrowRegions(GrowRegionsSettings {
             seeds: ObjectClass::Global(1),
+            growth_channel: grow_source(),
             max_distance: arg("--grow-reach", 15) as f32,
             output_class: ObjectClass::Global(2),
             // `--grow-sigma N`: smoothed with a Gaussian of N px (0: off).
@@ -389,6 +393,15 @@ fn spot_steps(how: &str) -> Vec<PipelineCommand> {
         }),
         other => panic!("--spot-size circle|grow, not {other}"),
     };
+    let store =
+        (how == "grow" && arg_text("--grow-source").as_deref() == Some("memory")).then(|| {
+            PipelineCommand::ImageCache(ImageCacheSettings {
+                mode: MathImageCacheImageCacheModeSettings::Store,
+                address: ImageAddress::Memory(
+                    evanalyzer_cfg::core_types::MemoryId::PipelineContext(1),
+                ),
+            })
+        });
     vec![
         PipelineCommand::FindMaxima(FindMaximaSettings {
             radius: 4.0,
@@ -400,8 +413,33 @@ fn spot_steps(how: &str) -> Vec<PipelineCommand> {
             max_objects_before_fail: 100000,
             ..Default::default()
         }),
-        area,
     ]
+    .into_iter()
+    .chain(store)
+    .chain([area])
+    .collect()
+}
+
+fn arg_text(name: &str) -> Option<String> {
+    let args: Vec<String> = std::env::args().collect();
+    args.iter()
+        .position(|a| a == name)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
+}
+
+/// `--grow-source channel|step|memory` (see the usage above).
+fn grow_source()
+-> evanalyzer_cfg::settings::pipeline_command_settings::ObjectGrowRegionsGrowChannelSettings {
+    use evanalyzer_cfg::settings::pipeline_command_settings::ObjectGrowRegionsGrowChannelSettings as Source;
+    match arg_text("--grow-source").as_deref() {
+        None | Some("channel") => {
+            Source::ImageChannel(evanalyzer_cfg::core_types::ImageChannelIdx(0))
+        }
+        Some("step") => Source::PipelineStep,
+        Some("memory") => Source::Memory(evanalyzer_cfg::core_types::MemoryId::PipelineContext(1)),
+        Some(other) => panic!("--grow-source channel|step|memory, not {other}"),
+    }
 }
 
 /// A module that reclassifies the larger objects into a local class and

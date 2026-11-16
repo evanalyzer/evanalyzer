@@ -1513,13 +1513,9 @@ mod tests {
         let definitions = [cell_reconstruction()];
         let step = module_step(4, "CELL_RECONSTRUCTION", &[]);
         let plain = expand_step(&step, &definitions, &mut ScopeCounter::default()).unwrap();
-        let empty = expand_step_breaking_at(
-            &step,
-            &definitions,
-            &mut ScopeCounter::default(),
-            Some(&[]),
-        )
-        .unwrap();
+        let empty =
+            expand_step_breaking_at(&step, &definitions, &mut ScopeCounter::default(), Some(&[]))
+                .unwrap();
         let unknown = expand_step_breaking_at(
             &step,
             &definitions,
@@ -1566,7 +1562,11 @@ mod tests {
             [0, inner, 4],
             "the nested module itself: after its last command"
         );
-        assert_eq!(expand(&[StepId(2)]), [0, 0, inner], "the outer module's blur");
+        assert_eq!(
+            expand(&[StepId(2)]),
+            [0, 0, inner],
+            "the outer module's blur"
+        );
     }
 
     #[test]

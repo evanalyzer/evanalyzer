@@ -9,8 +9,8 @@
 
 use crate::ImageDimensionality;
 use crate::image::Point2d;
-use crate::pipeline::scope::Scope;
 use crate::pipeline::pipeline_cache::KeptImage;
+use crate::pipeline::scope::Scope;
 use crate::{
     ImagePlane,
     image::{ImageContainer, ImageTypeMarker, ManagedImage, PixelSizes},
@@ -727,7 +727,7 @@ mod tests {
                 scope: Scope::Global,
                 role: None,
                 prediction: PredictionRequest::None,
-            kept_image: None,
+                kept_image: None,
                 image: Arc::new(image),
                 scratch_pad: Arc::new(empty_image),
                 segmentation_map: Some(
@@ -776,7 +776,7 @@ mod tests {
                 scope: Scope::Global,
                 role: None,
                 prediction: PredictionRequest::None,
-            kept_image: None,
+                kept_image: None,
                 image: Arc::new(image),
                 scratch_pad: Arc::new(empty_image),
                 segmentation_map: Some(
@@ -825,7 +825,7 @@ mod tests {
                 scope: Scope::Global,
                 role: None,
                 prediction: PredictionRequest::None,
-            kept_image: None,
+                kept_image: None,
                 image: Arc::new(image),
                 scratch_pad: Arc::new(empty_image),
                 segmentation_map: Some(
@@ -867,7 +867,7 @@ mod tests {
                 scope: Scope::Global,
                 role: None,
                 prediction: PredictionRequest::None,
-            kept_image: None,
+                kept_image: None,
                 image: Arc::new(T::create_container(
                     size,
                     Point2d { x: 0, y: 0 },
@@ -919,7 +919,7 @@ mod tests {
                 scope: Scope::Global,
                 role: None,
                 prediction: PredictionRequest::None,
-            kept_image: None,
+                kept_image: None,
                 image: Arc::new(T::create_container(
                     size,
                     offset,

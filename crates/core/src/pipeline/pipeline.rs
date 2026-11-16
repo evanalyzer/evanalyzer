@@ -7,8 +7,8 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use crate::pipeline::scope::Scope;
 use crate::pipeline::pipeline_cache::KeptImage;
+use crate::pipeline::scope::Scope;
 use crate::{
     ImageTile, ManagedImage,
     algos::ImageAlgorithm,
