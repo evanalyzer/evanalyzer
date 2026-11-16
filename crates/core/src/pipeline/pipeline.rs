@@ -8,6 +8,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::pipeline::scope::Scope;
+use crate::pipeline::pipeline_cache::KeptImage;
 use crate::{
     ImageTile, ManagedImage,
     algos::ImageAlgorithm,
@@ -149,6 +150,9 @@ pub struct StepPlace {
     /// `evanalyzer_cfg::settings::step_roles`) - `None` for a command that
     /// isn't a project step (e.g. `TileMerge`).
     pub role: Option<CommandCategory>,
+    /// The image the tile pass kept for this whole-image command
+    /// (`ImageAlgorithm::kept_image`) - `None` for every other command.
+    pub kept: Option<KeptImage>,
 }
 
 impl StepPlace {
@@ -156,6 +160,7 @@ impl StepPlace {
     pub const GLOBAL: StepPlace = StepPlace {
         scope: Scope::Global,
         role: None,
+        kept: None,
     };
 }
 
@@ -306,6 +311,7 @@ impl Pipeline {
             let step_id = *step_id;
             ctx.scope = place.scope;
             ctx.role = place.role;
+            ctx.kept_image = place.kept;
             let wants_prediction =
                 step_id != StepId::UNASSIGNED && prediction_step == Some(step_id);
             if wants_prediction {

@@ -320,6 +320,30 @@ pub enum FiltersColorToGrayscaleGrayscaleMethodSettings {
     Darkness,
 }
 
+/// The image [`GrowRegions`] grows its regions through.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ObjectGrowRegionsGrowChannelSettings {
+    /// The pipeline's image as it is at this step.
+    #[default]
+    #[serde(
+        alias = "pipeline-step",
+        alias = "pipelineStep",
+        alias = "pipeline_step"
+    )]
+    PipelineStep,
+    /// An image channel as it was read.
+    #[serde(
+        alias = "image-channel",
+        alias = "imageChannel",
+        alias = "image_channel"
+    )]
+    ImageChannel(ImageChannelIdx),
+    /// A memory slot as it is at this step (stored by Image Cache).
+    #[serde(alias = "memory")]
+    Memory(MemoryId),
+}
+
 /// Which neighbouring pixel joins a [`GrowRegions`] region next.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -3237,7 +3261,7 @@ pub struct ExtractClassMappingSettings {
     pub object_class: ObjectClass,
 }
 
-/// Grows a region from each seed object through a channel, like a magic
+/// Grows a region from each seed object through an image, like a magic
 /// wand: e.g. a spot's outline from its maximum, or a nucleus from a point
 /// inside it.
 ///
@@ -3256,9 +3280,10 @@ pub struct GrowRegionsSettings {
     /// Objects carrying this class are the seeds (e.g. the maxima of Find
     /// Maxima after Extract Objects, or nuclei): each grows into one region.
     pub seeds: ObjectClass,
-    /// The channel the regions grow through (the raw spot or nucleus
-    /// stain).
-    pub growth_channel: ImageChannelIdx,
+    /// The image the regions grow through: the pipeline's image at this
+    /// step (e.g. after a background subtraction), an image channel (the raw
+    /// spot or nucleus stain) or a memory slot.
+    pub growth_channel: ObjectGrowRegionsGrowChannelSettings,
     /// Smooths the growth channel before growing (noisy images): the
     /// growth order, stop level, background and noise then come from the
     /// smoothed pixels. The regions' intensities are still measured on the
@@ -3306,7 +3331,7 @@ impl Default for GrowRegionsSettings {
     fn default() -> Self {
         Self {
             seeds: ObjectClass::default(),
-            growth_channel: ImageChannelIdx::default(),
+            growth_channel: ObjectGrowRegionsGrowChannelSettings::PipelineStep,
             smoothing: ObjectGrowRegionsSmoothingSettings::default(),
             objects_are: ObjectGrowRegionsPolaritySettings::Bright,
             order: ObjectGrowRegionsGrowthOrderSettings::Intensity,

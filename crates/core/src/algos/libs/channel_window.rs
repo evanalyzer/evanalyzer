@@ -1,9 +1,10 @@
 //! # Channel windows
 //!
-//! Reads a rectangle of a channel out of its tiles in the cache - for
-//! whole-image commands that work window by window around objects (Grow
-//! Regions) and never hold the whole image. Trace Filaments and Propagation
-//! still have their own copies.
+//! Reads a rectangle of a channel - or of an image the tile pass kept
+//! ([`CacheAddress::Kept`]) - out of its tiles in the cache, for whole-image
+//! commands that work window by window around objects (Grow Regions) and
+//! never hold the whole image. Trace Filaments and Propagation still have
+//! their own copies.
 //!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-11-13
@@ -13,7 +14,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::pipeline::pipeline_cache::{
-    CacheAddress, GlobalPipelineCache, channel_pixel_slice, sample_channel_pixel,
+    CacheAddress, GlobalPipelineCache, KeptImage, channel_pixel_slice, sample_channel_pixel,
 };
 use evanalyzer_cfg::core_types::{ImageTile, InternalErrors};
 use std::collections::HashMap;
@@ -21,12 +22,28 @@ use std::collections::HashMap;
 /// `[x0, y0, x1, y1)` in image pixels.
 pub(crate) type Rect = [usize; 4];
 
-/// A channel's tiles in the cache and the part of the image they cover (the
-/// whole image in a run, the visible part in a preview) - no pixels: a
-/// window reads its own, one tile at a time.
+/// Which image a [`ChannelWindow`] reads.
+#[derive(Clone, Copy)]
+enum Source {
+    Channel(i32),
+    Kept(KeptImage),
+}
+
+impl Source {
+    fn address(self, tile: ImageTile) -> CacheAddress {
+        match self {
+            Source::Channel(channel) => CacheAddress::Channel((channel, tile)),
+            Source::Kept(id) => CacheAddress::Kept((id, tile)),
+        }
+    }
+}
+
+/// A channel's (or kept image's) tiles in the cache and the part of the
+/// image they cover (the whole image in a run, the visible part in a
+/// preview) - no pixels: a window reads its own, one tile at a time.
 pub(crate) struct ChannelWindow {
     command: &'static str,
-    channel: i32,
+    source: Source,
     tiles: Vec<ImageTile>,
     /// The tiles by the grid cells they cover (cell: the largest tile's
     /// size), so a small window doesn't look at every tile of a slide.
@@ -48,8 +65,34 @@ impl ChannelWindow {
             .filter(|(c, _)| *c == channel)
             .map(|(_, tile)| tile)
             .collect();
+        Self::over(Source::Channel(channel), tiles, command)
+    }
+
+    /// The tiles of the image the tile pass kept as `id`; `command` names
+    /// the command in the error when there are none.
+    pub fn kept(
+        cache: &GlobalPipelineCache,
+        id: KeptImage,
+        command: &'static str,
+    ) -> Result<Self, InternalErrors> {
+        let tiles: Vec<ImageTile> = cache
+            .image_cache
+            .keys()
+            .filter_map(|key| match key {
+                CacheAddress::Kept((kept, tile)) if kept == id => Some(tile),
+                _ => None,
+            })
+            .collect();
+        Self::over(Source::Kept(id), tiles, command)
+    }
+
+    fn over(
+        source: Source,
+        tiles: Vec<ImageTile>,
+        command: &'static str,
+    ) -> Result<Self, InternalErrors> {
         if tiles.is_empty() {
-            return Err(no_channel(command, channel));
+            return Err(missing(command, source));
         }
         let extent = [
             tiles.iter().map(|t| t.offset_x).min().unwrap_or(0),
@@ -82,7 +125,7 @@ impl ChannelWindow {
         }
         Ok(Self {
             command,
-            channel,
+            source,
             tiles,
             cells,
             cell,
@@ -130,8 +173,8 @@ impl ChannelWindow {
             }
             let container = cache
                 .image_cache
-                .get(&CacheAddress::Channel((self.channel, *tile)))
-                .ok_or_else(|| no_channel(self.command, self.channel))?;
+                .get(&self.source.address(*tile))
+                .ok_or_else(|| missing(self.command, self.source))?;
             let rgb = matches!(*container, crate::image::ImageContainer::F32Rgb(_));
             let slice = channel_pixel_slice(&container).unwrap_or_default();
             let len = if rgb { slice.len() / 3 } else { slice.len() };
@@ -149,6 +192,9 @@ impl ChannelWindow {
     }
 }
 
-fn no_channel(command: &str, channel: i32) -> InternalErrors {
-    InternalErrors::InvalidArgument(format!("{command}: the image has no channel {channel}"))
+fn missing(command: &str, source: Source) -> InternalErrors {
+    InternalErrors::InvalidArgument(match source {
+        Source::Channel(channel) => format!("{command}: the image has no channel {channel}"),
+        Source::Kept(_) => format!("{command}: the image of its step was not kept"),
+    })
 }

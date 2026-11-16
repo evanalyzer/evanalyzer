@@ -424,6 +424,7 @@ mod tests {
             scope: crate::pipeline::scope::Scope::Global,
             role: None,
             prediction: Default::default(),
+            kept_image: None,
             image: ImageContainer::new_f32_gray_from_image_test(gray_img).into(),
             scratch_pad: ImageContainer::new_f32_rgb_from_image_test(rgb_img).into(),
             instance_map: None,
@@ -576,6 +577,7 @@ mod tests {
             scope: crate::pipeline::scope::Scope::Global,
             role: None,
             prediction: Default::default(),
+            kept_image: None,
             image: ImageContainer::new_f32_gray_from_image_test(img).into(),
             scratch_pad: ImageContainer::new_f32_gray_from_image_test(wrong_scratch).into(), // Mismatched size!
             instance_map: None,

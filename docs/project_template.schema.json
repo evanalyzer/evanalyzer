@@ -1338,7 +1338,7 @@
       ]
     },
     "GrowRegionsSettings": {
-      "description": "Grows a region from each seed object through a channel, like a magic\nwand: e.g. a spot's outline from its maximum, or a nucleus from a point\ninside it.\n\n[Find Maxima] -> [Extract Objects] -> [Grow Regions]\n\nEvery seed gets its own stop level (relative to its own peak and\nbackground, so dim and bright objects keep the same shape); touching\nregions are split on the darkest line between them, may overlap, or are\nmerged. Each region keeps its seed's pixels; Relate Objects links it to\nits seed. Seeds 1024 px across or more (a tissue-sized object) don't\ngrow: their region is the seed.",
+      "description": "Grows a region from each seed object through an image, like a magic\nwand: e.g. a spot's outline from its maximum, or a nucleus from a point\ninside it.\n\n[Find Maxima] -> [Extract Objects] -> [Grow Regions]\n\nEvery seed gets its own stop level (relative to its own peak and\nbackground, so dim and bright objects keep the same shape); touching\nregions are split on the darkest line between them, may overlap, or are\nmerged. Each region keeps its seed's pixels; Relate Objects links it to\nits seed. Seeds 1024 px across or more (a tissue-sized object) don't\ngrow: their region is the seed.",
       "type": "object",
       "properties": {
         "distanceUnit": {
@@ -1352,9 +1352,9 @@
           "default": false
         },
         "growthChannel": {
-          "description": "The channel the regions grow through (the raw spot or nucleus\nstain).",
-          "$ref": "#/$defs/ImageChannelIdx",
-          "default": 0
+          "description": "The image the regions grow through: the pipeline's image at this\nstep (e.g. after a background subtraction), an image channel (the raw\nspot or nucleus stain) or a memory slot.",
+          "$ref": "#/$defs/ObjectGrowRegionsGrowChannelSettings",
+          "default": "PIPELINE_STEP"
         },
         "mask": {
           "description": "Regions only grow into pixels of objects carrying this class (e.g.\nthe thresholded cells). `Unset`: everywhere.",
@@ -2843,6 +2843,42 @@
           "additionalProperties": false,
           "required": [
             "MULTI_FOR"
+          ]
+        }
+      ]
+    },
+    "ObjectGrowRegionsGrowChannelSettings": {
+      "description": "The image [`GrowRegions`] grows its regions through.",
+      "oneOf": [
+        {
+          "description": "The pipeline's image as it is at this step.",
+          "type": "string",
+          "const": "PIPELINE_STEP"
+        },
+        {
+          "description": "An image channel as it was read.",
+          "type": "object",
+          "properties": {
+            "IMAGE_CHANNEL": {
+              "$ref": "#/$defs/ImageChannelIdx"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "IMAGE_CHANNEL"
+          ]
+        },
+        {
+          "description": "A memory slot as it is at this step (stored by Image Cache).",
+          "type": "object",
+          "properties": {
+            "MEMORY": {
+              "$ref": "#/$defs/MemoryId"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "MEMORY"
           ]
         }
       ]

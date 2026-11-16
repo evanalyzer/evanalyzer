@@ -185,6 +185,16 @@ impl From<FiltersColorToGrayscaleGrayscaleMethodSettings> for GrayscaleMethod {
     }
 }
 
+impl From<ObjectGrowRegionsGrowChannelSettings> for GrowChannel {
+    fn from(_s: ObjectGrowRegionsGrowChannelSettings) -> Self {
+        match _s {
+            ObjectGrowRegionsGrowChannelSettings::PipelineStep => GrowChannel::PipelineStep,
+            ObjectGrowRegionsGrowChannelSettings::ImageChannel(v) => GrowChannel::ImageChannel(v),
+            ObjectGrowRegionsGrowChannelSettings::Memory(v) => GrowChannel::Memory(v),
+        }
+    }
+}
+
 impl From<ObjectGrowRegionsGrowthOrderSettings> for GrowthOrder {
     fn from(_s: ObjectGrowRegionsGrowthOrderSettings) -> Self {
         match _s {
@@ -960,7 +970,7 @@ impl From<GrowRegionsSettings> for GrowRegions {
     fn from(_s: GrowRegionsSettings) -> Self {
         GrowRegions {
             seeds: _s.seeds,
-            growth_channel: _s.growth_channel,
+            growth_channel: GrowChannel::from(_s.growth_channel),
             smoothing: Smoothing::from(_s.smoothing),
             objects_are: Polarity::from(_s.objects_are),
             order: GrowthOrder::from(_s.order),

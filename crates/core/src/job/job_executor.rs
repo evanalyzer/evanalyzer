@@ -3563,7 +3563,11 @@ mod full_run_integration_tests {
             );
             post.add_step(
                 evanalyzer_cfg::core_types::StepId::UNASSIGNED,
-                crate::pipeline::pipeline::StepPlace { scope, role: None },
+                crate::pipeline::pipeline::StepPlace {
+                    scope,
+                    role: None,
+                    kept: None,
+                },
                 Box::new(ClassifyObjects {
                     // The extracted objects have no class, only this.
                     origin_segmentation: vec![SegmentationClass(1)],

@@ -9,7 +9,8 @@
 //!
 //! ## Overview
 //! Grows a region from each seed object (a maximum of Find Maxima, a
-//! nucleus, an annotation) through a channel - a "magic wand" per seed.
+//! nucleus, an annotation) through an image - the pipeline's at this step,
+//! a channel or a memory slot - a "magic wand" per seed.
 //! Pixels join in a priority order from the seed outwards (seeded region
 //! growing, Adams & Bischof 1994): the brightest first (Intensity, a
 //! flooding from markers as in Vincent & Soille 1991), or the most similar
@@ -46,16 +47,18 @@ use crate::algos::libs::scale_space::{
     LINDEBERG_1998, Tap, convolve_separable, discrete_gaussian, scale_of_sigma,
 };
 use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
+use crate::pipeline::pipeline_cache::{CacheAddress, KeptSource};
 use crate::object::{Object, ObjectInit};
 use bitvec::prelude::*;
 use evanalyzer_cfg::core_types::{
-    CitationMetadata, ImageChannelIdx, InternalErrors, ObjectClass, ObjectId, PixelUnits, SizeUnits,
+    CitationMetadata, ImageChannelIdx, InternalErrors, MemoryId, ObjectClass, ObjectId, PixelUnits,
+    SizeUnits,
 };
 use macros::CommandsMeta;
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BinaryHeap, HashMap};
 
-/// Grows a region from each seed object through a channel, like a magic
+/// Grows a region from each seed object through an image, like a magic
 /// wand: e.g. a spot's outline from its maximum, or a nucleus from a point
 /// inside it.
 ///
@@ -75,10 +78,11 @@ pub struct GrowRegions {
     #[cmdsmeta(summary = true)]
     pub seeds: ObjectClass,
 
-    /// The channel the regions grow through (the raw spot or nucleus
-    /// stain).
-    #[cmdsmeta(summary = true)]
-    pub growth_channel: ImageChannelIdx,
+    /// The image the regions grow through: the pipeline's image at this
+    /// step (e.g. after a background subtraction), an image channel (the raw
+    /// spot or nucleus stain) or a memory slot.
+    #[cmdsmeta(default = GrowChannel::PipelineStep, summary = true)]
+    pub growth_channel: GrowChannel,
 
     /// Smooths the growth channel before growing (noisy images): the
     /// growth order, stop level, background and noise then come from the
@@ -174,6 +178,17 @@ pub enum GrowthOrder {
     /// The one closest to the seed's value: a region covers what looks like
     /// its seed (evenly bright objects).
     Similarity,
+}
+
+/// The image [`GrowRegions`] grows its regions through.
+#[derive(Clone, Copy, PartialEq, Debug, CommandsMeta)]
+pub enum GrowChannel {
+    /// The pipeline's image as it is at this step.
+    PipelineStep,
+    /// An image channel as it was read.
+    ImageChannel(ImageChannelIdx),
+    /// A memory slot as it is at this step (stored by Image Cache).
+    Memory(MemoryId),
 }
 
 /// Which pixels may join a [`GrowRegions`] region. "Brighter"/"above"
@@ -286,7 +301,80 @@ impl ImageAlgorithm for GrowRegions {
                 "Grow regions: choose the seeds' class and the output class".into(),
             ));
         }
-        let channel = ChannelWindow::of(cache, self.growth_channel.0 as i32, "Grow regions")?;
+        // The tiles the tile pass kept for this step are only read here.
+        let kept = self.kept_image().and(ctx.kept_image);
+        let result = self.grow(ctx, cache);
+        if let Some(id) = kept {
+            cache
+                .image_cache
+                .retain(|key| !matches!(key, CacheAddress::Kept((k, _)) if *k == id));
+        }
+        result
+    }
+
+    fn name(&self) -> &'static str {
+        "Grow Regions"
+    }
+
+    /// Seeded region growing (Adams & Bischof 1994) in the order of a
+    /// flooding from markers (Vincent & Soille 1991); the tolerance below a
+    /// peak is the support of its h-dome (Vincent 1993); the noise is the
+    /// scaled median absolute deviation (Hampel 1974).
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        let mut papers = vec![&ADAMS_1994];
+        if matches!(self.smoothing, Smoothing::Gaussian { .. }) {
+            papers.push(&LINDEBERG_1998);
+        }
+        if self.order == GrowthOrder::Intensity {
+            papers.push(&VINCENT_SOILLE_1991);
+        }
+        match self.stop {
+            StopRule::Tolerance { .. } if self.order == GrowthOrder::Intensity => {
+                papers.push(&VINCENT_1993)
+            }
+            StopRule::Noise { .. } => papers.push(&HAMPEL_1974),
+            _ => {}
+        }
+        papers
+    }
+
+    /// A region may grow across tile borders.
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::WholeImage
+    }
+
+    /// The pipeline's image and the memory slots are gone when the
+    /// whole-image commands run: the tile pass keeps the one it reads.
+    fn kept_image(&self) -> Option<KeptSource> {
+        match self.growth_channel {
+            GrowChannel::PipelineStep => Some(KeptSource::PipelineStep),
+            GrowChannel::ImageChannel(_) => None,
+            GrowChannel::Memory(id) => Some(KeptSource::Memory(id)),
+        }
+    }
+}
+
+impl GrowRegions {
+    /// Grows the regions (see [`ImageAlgorithm::execute`]).
+    fn grow(
+        &self,
+        ctx: &mut PipelineContext,
+        cache: &mut GlobalPipelineCache,
+    ) -> Result<(), InternalErrors> {
+        let channel = match self.growth_channel {
+            GrowChannel::ImageChannel(channel) => {
+                ChannelWindow::of(cache, channel.0 as i32, "Grow regions")?
+            }
+            GrowChannel::PipelineStep | GrowChannel::Memory(_) => {
+                let id = ctx.kept_image.ok_or_else(|| {
+                    InternalErrors::InvalidArgument(
+                        "Grow regions: the image of its step was not kept".into(),
+                    )
+                })?;
+                ChannelWindow::kept(cache, id, "Grow regions")?
+            }
+        };
+
         let scope = ctx.scope;
         let mut seeds: Vec<&Object> = cache
             .object_cache
@@ -348,37 +436,6 @@ impl ImageAlgorithm for GrowRegions {
             cache.object_cache.insert(object.id.clone(), object);
         }
         Ok(())
-    }
-
-    fn name(&self) -> &'static str {
-        "Grow Regions"
-    }
-
-    /// Seeded region growing (Adams & Bischof 1994) in the order of a
-    /// flooding from markers (Vincent & Soille 1991); the tolerance below a
-    /// peak is the support of its h-dome (Vincent 1993); the noise is the
-    /// scaled median absolute deviation (Hampel 1974).
-    fn cite(&self) -> Vec<&'static CitationMetadata> {
-        let mut papers = vec![&ADAMS_1994];
-        if matches!(self.smoothing, Smoothing::Gaussian { .. }) {
-            papers.push(&LINDEBERG_1998);
-        }
-        if self.order == GrowthOrder::Intensity {
-            papers.push(&VINCENT_SOILLE_1991);
-        }
-        match self.stop {
-            StopRule::Tolerance { .. } if self.order == GrowthOrder::Intensity => {
-                papers.push(&VINCENT_1993)
-            }
-            StopRule::Noise { .. } => papers.push(&HAMPEL_1974),
-            _ => {}
-        }
-        papers
-    }
-
-    /// A region may grow across tile borders.
-    fn execution_scope(&self) -> ExecutionScope {
-        ExecutionScope::WholeImage
     }
 }
 
@@ -1447,6 +1504,7 @@ mod tests {
     use super::*;
     use crate::image::{ImageContainer, ManagedImage, Point2d};
     use crate::pipeline::pipeline::PipelineImageMeta;
+    use crate::pipeline::pipeline_cache::KeptImage;
     use crate::pipeline::scope::Scope;
     use evanalyzer_cfg::core_types::ImageTile;
     use kornia_image::{Image, ImageSize};
@@ -1532,7 +1590,7 @@ mod tests {
     fn command() -> GrowRegions {
         GrowRegions {
             seeds: SEED,
-            growth_channel: ImageChannelIdx(0),
+            growth_channel: GrowChannel::ImageChannel(ImageChannelIdx(0)),
             smoothing: Smoothing::None,
             objects_are: Polarity::Bright,
             order: GrowthOrder::Intensity,
@@ -1598,6 +1656,91 @@ mod tests {
             }
         }
         n
+    }
+
+    /// Moves channel 0's tiles of `cache` to kept image `id` (the
+    /// pipeline's image a tile pass kept) - channel 0 then is `channel`.
+    fn keep_channel(
+        cache: &mut GlobalPipelineCache,
+        id: KeptImage,
+        channel: impl Fn(usize, usize) -> f32,
+    ) {
+        let tiles: Vec<ImageTile> = cache.channel_keys().map(|(_, tile)| tile).collect();
+        let replaced = cache_with(channel, SIDE, Vec::new());
+        for tile in tiles {
+            let image = cache.get_image_from_channel_cache(0, tile).unwrap();
+            cache
+                .image_cache
+                .insert(CacheAddress::Kept((id, tile)), image);
+        }
+        cache.image_cache.retain(|key| !matches!(key, CacheAddress::Channel(_)));
+        for (channel, tile) in replaced.channel_keys() {
+            let image = replaced.get_image_from_channel_cache(channel, tile).unwrap();
+            cache.add_to_channel_cache(image, channel, tile);
+        }
+    }
+
+    #[test]
+    fn grows_through_the_image_kept_for_its_step() {
+        // The spot is only in the step's image (kept, in tiles); channel 0
+        // is flat - it would grow nothing.
+        let id = KeptImage(3);
+        let mut cache = cache_with(
+            |x, y| 0.1 + spot(x, y, (32.0, 32.0), 0.5, 2.5),
+            16,
+            vec![point(1, 32, 32)],
+        );
+        keep_channel(&mut cache, id, |_, _| 0.1);
+        let command = GrowRegions {
+            growth_channel: GrowChannel::PipelineStep,
+            ..command()
+        };
+        assert_eq!(command.kept_image(), Some(KeptSource::PipelineStep));
+        let mut ctx = ctx();
+        ctx.kept_image = Some(id);
+        command.execute(&mut ctx, &mut cache).unwrap();
+        let regions: Vec<&Object> = cache
+            .object_cache
+            .values()
+            .filter(|o| o.is_of(&REGION, Scope::Global))
+            .collect();
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].area, half_max_area(2.5));
+        // Read once: the kept tiles are freed, the channel stays.
+        assert!(
+            !cache
+                .image_cache
+                .keys()
+                .any(|key| matches!(key, CacheAddress::Kept(_)))
+        );
+        assert!(cache.channel_keys().next().is_some());
+    }
+
+    #[test]
+    fn a_memory_slot_is_kept_by_the_tile_pass_a_channel_is_not() {
+        let slot = MemoryId::ProjectCache(2);
+        let with = |growth_channel| GrowRegions {
+            growth_channel,
+            ..command()
+        };
+        assert_eq!(
+            with(GrowChannel::Memory(slot)).kept_image(),
+            Some(KeptSource::Memory(slot))
+        );
+        assert_eq!(
+            with(GrowChannel::ImageChannel(ImageChannelIdx(1))).kept_image(),
+            None
+        );
+    }
+
+    #[test]
+    fn the_step_image_without_a_kept_one_is_an_error() {
+        let mut cache = cache_with(|_, _| 0.1, SIDE, vec![point(1, 32, 32)]);
+        let command = GrowRegions {
+            growth_channel: GrowChannel::PipelineStep,
+            ..command()
+        };
+        assert!(command.execute(&mut ctx(), &mut cache).is_err());
     }
 
     #[test]

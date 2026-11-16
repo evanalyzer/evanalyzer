@@ -192,7 +192,7 @@ fn configured(command: &PipelineCommand) -> Option<PipelineCommand> {
         // large to grow kept as it is - never a window over the slide.
         C::GrowRegions(_) => C::GrowRegions(GrowRegionsSettings {
             seeds: CELL,
-            growth_channel: ImageChannelIdx(0),
+            growth_channel: ObjectGrowRegionsGrowChannelSettings::ImageChannel(ImageChannelIdx(0)),
             output_class: OUTPUT,
             ..Default::default()
         }),

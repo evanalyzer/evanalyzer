@@ -9,7 +9,7 @@
 
 use crate::{
     DuckDbExporter, MemoryExporter,
-    algos::{EndScope, ExecutionScope, TileMerge},
+    algos::{EndScope, ExecutionScope, KeepImage, TileMerge},
     dataset::DatasetAlgorithm,
     image::PixelSizes,
     job::{
@@ -19,6 +19,7 @@ use crate::{
         pipeline_step::PipelineStep,
     },
     pipeline::pipeline::{CorePipelineSettings, Pipeline, StepPlace},
+    pipeline::pipeline_cache::{KeptImage, KeptSource},
     storage::PipelineResultExporter,
 };
 use chrono::Utc;
@@ -643,6 +644,8 @@ fn generate_job_from_project_settings_intenal(
     let mut scopes = ScopeCounter::default();
     // The measurement steps' IDs, with their pipeline's: unique in the run.
     let mut measurement_ids: Vec<(String, &str)> = Vec::new();
+    // The images the tile pass keeps for whole-image commands: one id each.
+    let mut kept_images: u32 = 0;
     for pipeline_setting in &config.pipelines {
         if !pipeline_setting.enabled {
             continue;
@@ -691,9 +694,10 @@ fn generate_job_from_project_settings_intenal(
                     measurement_ids.push((name.to_string(), pipeline_setting.name.as_str()));
                 }
                 let loads = loads_image(&command);
-                let place = StepPlace {
+                let mut place = StepPlace {
                     scope,
                     role: Some(roles.run(&command)),
+                    kept: None,
                 };
                 match into_pipeline_step(command)? {
                     // Kept with its id: what a breakpoint targets.
@@ -713,6 +717,31 @@ fn generate_job_from_project_settings_intenal(
                             last_tile.extend(uses.iter().map(|id| (*id, index)));
                         }
                         ExecutionScope::WholeImage => {
+                            // Reads an image the tile pass drops: kept there,
+                            // tile by tile, at this place.
+                            if let Some(source) = algo.kept_image() {
+                                if needs_image && source == KeptSource::PipelineStep {
+                                    return Err(InternalErrors::InvalidArgument(format!(
+                                        "Pipeline \"{}\" has no image source, so its first \
+                                         step must load one (Load Image Channel) - \"{}\" \
+                                         grows through the pipeline's image",
+                                        pipeline_setting.name,
+                                        algo.name()
+                                    )));
+                                }
+                                let id = KeptImage(kept_images);
+                                kept_images += 1;
+                                pipeline_pre_process.add_step(
+                                    StepId::UNASSIGNED,
+                                    place,
+                                    Box::new(KeepImage {
+                                        id,
+                                        source,
+                                        command: algo.name(),
+                                    }),
+                                );
+                                place.kept = Some(id);
+                            }
                             pipeline_post_process.add_step(step_id, place, algo);
                             let index = pipeline_post_process.commands.len() - 1;
                             last_whole_image.extend(uses.iter().map(|id| (*id, index)));
@@ -1768,6 +1797,88 @@ mod tests {
                 Some(CommandCategory::InstanceSegmentation),
                 Some(CommandCategory::InstanceSegmentation),
             ]
+        );
+    }
+
+    /// Grow Regions on the pipeline's image (the default) or a memory slot
+    /// runs after every tile command: the tile pass keeps that image at the
+    /// step's place, under an id only this step reads. On a channel nothing
+    /// is kept.
+    #[test]
+    fn the_tile_pass_keeps_the_image_grow_regions_reads() {
+        use evanalyzer_cfg::core_types::{ImageChannelIdx, MemoryId};
+        use evanalyzer_cfg::settings::pipeline_command_settings::{
+            GrowRegionsSettings, ObjectGrowRegionsGrowChannelSettings as Source,
+        };
+        use evanalyzer_cfg::settings::pipeline_settings::StepContent;
+        let grow = |id: u32, growth_channel: Source| PipelineStepSettings {
+            id: evanalyzer_cfg::core_types::StepId(id),
+            enabled: true,
+            content: StepContent::Command(PipelineCommand::GrowRegions(GrowRegionsSettings {
+                growth_channel,
+                ..Default::default()
+            })),
+        };
+        assert_eq!(Source::default(), Source::PipelineStep);
+        let image_root = tempfile::tempdir().unwrap();
+        let project = project_with(
+            Some(image_root.path().to_path_buf()),
+            vec![pipeline(
+                1,
+                true,
+                vec![
+                    blur_step(true),
+                    grow(2, Source::PipelineStep),
+                    blur_step(true),
+                    grow(4, Source::ImageChannel(ImageChannelIdx(0))),
+                    grow(5, Source::Memory(MemoryId::ProjectCache(1))),
+                ],
+            )],
+        );
+        let project_dir = tempfile::tempdir().unwrap();
+        let (job, _) =
+            generate_preview_job_from_project_settings(project, project_dir.path().into()).unwrap();
+        let tiles = &job.pipelines_pre_process[&PipelineId(1)];
+        let whole_image = &job.pipelines_post_process[&PipelineId(1)];
+        assert_eq!(
+            command_names(tiles),
+            ["Blur", "Keep Image", "Blur", "Keep Image"]
+        );
+        assert!(tiles.commands.iter().all(|(_, place, _)| place.kept.is_none()));
+        let kept: Vec<_> = whole_image
+            .commands
+            .iter()
+            .map(|(_, place, _)| place.kept)
+            .collect();
+        assert_eq!(
+            kept,
+            [Some(KeptImage(0)), None, Some(KeptImage(1))],
+            "{:?}",
+            command_names(whole_image)
+        );
+    }
+
+    #[test]
+    fn grow_regions_on_the_pipelines_image_needs_an_image_source() {
+        use evanalyzer_cfg::settings::pipeline_settings::StepContent;
+        let image_root = tempfile::tempdir().unwrap();
+        let project_dir = tempfile::tempdir().unwrap();
+        let mut pipeline = named(1, "Spots", ImageAddress::None, true);
+        pipeline.steps = vec![PipelineStepSettings {
+            id: evanalyzer_cfg::core_types::StepId(1),
+            enabled: true,
+            content: StepContent::Command(PipelineCommand::default_for_key("grow_regions").unwrap()),
+        }];
+        let project = project_with(Some(image_root.path().to_path_buf()), vec![pipeline]);
+        let Err(error) =
+            generate_preview_job_from_project_settings(project, project_dir.path().into())
+        else {
+            panic!("growing through a pipeline without an image must be refused");
+        };
+        let error = error.to_string();
+        assert!(
+            error.contains("has no image source") && error.contains("\"Grow Regions\""),
+            "{error}"
         );
     }
 

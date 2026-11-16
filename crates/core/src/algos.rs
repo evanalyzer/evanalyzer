@@ -64,6 +64,7 @@ pub use self::filters::vesselness::Vesselness;
 pub use self::filters::wavelet_spots::WaveletSpots;
 pub use self::filters::weighted_deviation::WeightedDeviation;
 pub(crate) use self::flow_control::end_scope::EndScope;
+pub(crate) use self::flow_control::keep_image::KeepImage;
 pub use self::math::image_cache::ImageCache;
 pub use self::math::image_cache::ImageCacheMode;
 pub use self::math::image_math::ImageMath;
@@ -107,7 +108,7 @@ pub use self::object::coloc_objects::ColocMultiplicity;
 pub use self::object::coloc_objects::ColocalizeObjects;
 pub use self::object::extract_objects::{ExtractClassMapping, ExtractObjects};
 pub use self::object::grow_regions::{
-    GrowRegions, GrowthOrder, Meeting, Polarity, Smoothing, StopRule,
+    GrowChannel, GrowRegions, GrowthOrder, Meeting, Polarity, Smoothing, StopRule,
 };
 pub use self::object::load_annotaed_objects::{AnnotationUse, LoadAnnotatedObjects};
 pub use self::object::object_math::ObjectMath;
@@ -232,6 +233,16 @@ pub trait ImageAlgorithm: Send + Sync {
     /// (a `LoadChannel` step not on Auto) - the executor reads it beside the
     /// channels before the pipelines run. `None`: it reads none.
     fn channel_variant(&self) -> Option<crate::pipeline::pipeline_cache::ChannelVariant> {
+        None
+    }
+
+    /// The image a whole-image command reads that the tile pass would drop
+    /// (the pipeline's image at its step, a memory slot): the job then
+    /// keeps it tile by tile at the command's place
+    /// (`KeepImage`),
+    /// and the command finds it under `PipelineContext::kept_image`.
+    /// `None`: it reads none.
+    fn kept_image(&self) -> Option<crate::pipeline::pipeline_cache::KeptSource> {
         None
     }
 

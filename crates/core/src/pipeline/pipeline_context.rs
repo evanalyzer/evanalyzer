@@ -10,6 +10,7 @@
 use crate::ImageDimensionality;
 use crate::image::Point2d;
 use crate::pipeline::scope::Scope;
+use crate::pipeline::pipeline_cache::KeptImage;
 use crate::{
     ImagePlane,
     image::{ImageContainer, ImageTypeMarker, ManagedImage, PixelSizes},
@@ -48,6 +49,10 @@ pub struct PipelineContext {
     /// Set to `Asked` by the pipeline before the step a run wants the
     /// prediction of; a pixel classifier answers with `Captured`.
     pub prediction: PredictionRequest,
+    /// The image the tile pass kept for the running whole-image command
+    /// (`ImageAlgorithm::kept_image`) - set by the pipeline before each
+    /// command; `None` for every other command.
+    pub kept_image: Option<KeptImage>,
 }
 
 impl PipelineContext {
@@ -72,6 +77,7 @@ impl PipelineContext {
             scope: Scope::Global,
             role: None,
             prediction: PredictionRequest::None,
+            kept_image: None,
             image_meta,
             image: Arc::new(T::create_container(size, tile_offset, plane)?),
             scratch_pad: Arc::new(T::create_container(size, tile_offset, plane)?),
@@ -104,6 +110,7 @@ impl PipelineContext {
             scope: Scope::Global,
             role: None,
             prediction: PredictionRequest::None,
+            kept_image: None,
             image_meta,
             image,
             scratch_pad: Arc::new(empty_image),
@@ -156,6 +163,7 @@ impl PipelineContext {
             scope: Scope::Global,
             role: None,
             prediction: PredictionRequest::None,
+            kept_image: None,
             image: placeholder()?,
             scratch_pad: placeholder()?,
             segmentation_map: Some(
@@ -196,6 +204,7 @@ impl PipelineContext {
             scope: Scope::Global,
             role: None,
             prediction: PredictionRequest::None,
+            kept_image: None,
             image_meta: self.image_meta.clone(),
             image: placeholder(),
             scratch_pad: placeholder(),
@@ -718,6 +727,7 @@ mod tests {
                 scope: Scope::Global,
                 role: None,
                 prediction: PredictionRequest::None,
+            kept_image: None,
                 image: Arc::new(image),
                 scratch_pad: Arc::new(empty_image),
                 segmentation_map: Some(
@@ -766,6 +776,7 @@ mod tests {
                 scope: Scope::Global,
                 role: None,
                 prediction: PredictionRequest::None,
+            kept_image: None,
                 image: Arc::new(image),
                 scratch_pad: Arc::new(empty_image),
                 segmentation_map: Some(
@@ -814,6 +825,7 @@ mod tests {
                 scope: Scope::Global,
                 role: None,
                 prediction: PredictionRequest::None,
+            kept_image: None,
                 image: Arc::new(image),
                 scratch_pad: Arc::new(empty_image),
                 segmentation_map: Some(
@@ -855,6 +867,7 @@ mod tests {
                 scope: Scope::Global,
                 role: None,
                 prediction: PredictionRequest::None,
+            kept_image: None,
                 image: Arc::new(T::create_container(
                     size,
                     Point2d { x: 0, y: 0 },
@@ -906,6 +919,7 @@ mod tests {
                 scope: Scope::Global,
                 role: None,
                 prediction: PredictionRequest::None,
+            kept_image: None,
                 image: Arc::new(T::create_container(
                     size,
                     offset,

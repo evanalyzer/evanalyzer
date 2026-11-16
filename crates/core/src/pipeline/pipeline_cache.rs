@@ -49,6 +49,26 @@ pub enum CacheAddress {
     ChannelVariant((ChannelVariant, ImageTile)),
     /// A module instance's memory slot (`MemoryId::ModuleContext`).
     ModuleMemory(ScopeId, MemorySlot),
+    /// A tile of an image the tile pass keeps for a whole-image command
+    /// (see [`KeptSource`]) - by then the pipeline's image and its memory
+    /// slots are gone.
+    Kept((KeptImage, ImageTile)),
+}
+
+/// The id of an image the tile pass keeps for one whole-image command
+/// ([`CacheAddress::Kept`]), unique in a job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct KeptImage(pub u32);
+
+/// What the tile pass keeps for a whole-image command that reads an image
+/// other than a channel (`ImageAlgorithm::kept_image`): taken at the
+/// command's place in the pipeline, tile by tile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeptSource {
+    /// The pipeline's image as it is at the command's step.
+    PipelineStep,
+    /// A memory slot as it is at the command's step.
+    Memory(MemoryId),
 }
 
 impl CacheAddress {
@@ -181,11 +201,13 @@ impl GlobalPipelineCache {
     /// After a pipeline: what only it could use goes - its memory slots
     /// (`PipelineContext`), its modules' slots, the scratchpad. The image
     /// channels and the shared slots (`ProjectCache`) stay for the pipelines
-    /// after it; [`Self::clear_shared_slots`] frees those.
+    /// after it; [`Self::clear_shared_slots`] frees those. The kept images
+    /// stay for their whole-image commands, which free them.
     pub fn clear_pipeline_context(&mut self) {
         self.image_cache.retain(|key| match key {
             CacheAddress::Channel(_)
             | CacheAddress::ChannelVariant(_)
+            | CacheAddress::Kept(_)
             | CacheAddress::Memory(MemoryId::ProjectCache(_)) => true,
             CacheAddress::Memory(MemoryId::PipelineContext(_) | MemoryId::ModuleContext(_))
             | CacheAddress::ModuleMemory(..)
@@ -273,7 +295,9 @@ impl GlobalPipelineCache {
                 }))),
             },
             CacheAddress::Memory(memory_id) => self.get_image_from_memory_cache(memory_id.clone()),
-            CacheAddress::ModuleMemory(..) | CacheAddress::ChannelVariant(_) => {
+            CacheAddress::ModuleMemory(..)
+            | CacheAddress::ChannelVariant(_)
+            | CacheAddress::Kept(_) => {
                 self.image_cache.get(cache_slot)
             }
             CacheAddress::Channel(channel_idx) => {

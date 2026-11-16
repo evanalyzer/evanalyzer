@@ -10,3 +10,4 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 pub mod end_scope;
+pub mod keep_image;
