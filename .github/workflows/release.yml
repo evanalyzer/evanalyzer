@@ -64,6 +64,9 @@ jobs:
         password: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history and tags for the release notes below.
+          fetch-depth: 0
 
       - name: Trust the checked-out workspace
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -112,10 +115,18 @@ jobs:
       # Created here, before any build starts: each build-* job then adds
       # its own files the moment it's done, so users can download the
       # finished platforms while others are still building - or failed.
+      # From the feat/perf/fix commits since the previous version tag (see
+      # the script). The build-* jobs below upload files without a body, so
+      # the notes stay - and can be edited on GitHub afterwards.
+      - name: Release notes
+        if: startsWith(github.ref, 'refs/tags/')
+        run: .github/scripts/release-notes.sh "$GITHUB_REF_NAME" > release-notes.md
+
       - name: Create the GitHub release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          body_path: release-notes.md
           # Any pre-release version (1.0.0-beta.1, 0.1.0-test.11, ...) is
           # marked as such, so it never shows up as the "Latest" release.
           prerelease: ${{ contains(github.ref_name, '-') }}
