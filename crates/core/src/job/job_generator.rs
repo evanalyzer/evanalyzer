@@ -15,13 +15,14 @@ use crate::{
     job::{
         algos_from_config::into_pipeline_step,
         job_executor::{JobExecutor, TILE_MERGE_PIPELINE_ID},
-        modules::{ExpandedCommand, ScopeCounter, UseId, expand_step},
+        modules::{ExpandedCommand, ScopeCounter, UseId, expand_step, expand_step_breaking_at},
         pipeline_step::PipelineStep,
     },
     pipeline::pipeline::{CorePipelineSettings, Pipeline, StepPlace},
     storage::PipelineResultExporter,
 };
 use chrono::Utc;
+use evanalyzer_cfg::core_types::BreakpointSettings;
 use evanalyzer_cfg::{
     PROJECT_FILE_EXTENSIONS, RESULTS_FILE_EXTENSION,
     core_types::{ImageAddress, is_contained_rel_path, is_valid_measurement_id},
@@ -62,6 +63,19 @@ pub fn generate_preview_job_from_project_settings(
     config: ProjectSettings,
     project_path: PathBuf,
 ) -> Result<(JobExecutor, PreviewOutput), InternalErrors> {
+    generate_preview_job_with_breakpoint(config, project_path, None)
+}
+
+/// [`generate_preview_job_from_project_settings`] stopping at `breakpoint`:
+/// a breakpoint on a step inside a module (`BreakpointSettings::inner`)
+/// needs that command marked while the module is expanded - one on a plain
+/// step or a whole module works without it. The job's own `breakpoint`
+/// stays for the caller to set.
+pub fn generate_preview_job_with_breakpoint(
+    config: ProjectSettings,
+    project_path: PathBuf,
+    breakpoint: Option<&BreakpointSettings>,
+) -> Result<(JobExecutor, PreviewOutput), InternalErrors> {
     check_series(&config)?;
     check_pipeline_channels(&config)?;
     let output = PreviewOutput::default();
@@ -82,6 +96,7 @@ pub fn generate_preview_job_from_project_settings(
         project_path,
         output_path,
         memory_storage,
+        breakpoint,
     )?;
     // A preview analyses one frame of the visible tiles - too little for a
     // step over all images and frames, which would only show a misleading
@@ -157,7 +172,13 @@ pub fn generate_analyze_job_from_project_settings(
 
     write_project_snapshot(&config, &output_path, &job_name);
 
-    generate_job_from_project_settings_intenal(config, project_path, output_path, database_storage)
+    generate_job_from_project_settings_intenal(
+        config,
+        project_path,
+        output_path,
+        database_storage,
+        None,
+    )
 }
 
 /// Generates a job that runs only the dataset steps, on the objects of an
@@ -200,6 +221,7 @@ pub fn generate_dataset_job_from_project_settings(
             project_path,
             output_path.clone(),
             storage,
+            None,
         )?;
         job.skip_image_phase = true;
         Ok(job)
@@ -560,6 +582,7 @@ fn generate_job_from_project_settings_intenal(
     project_path: PathBuf,
     output_path: PathBuf,
     result_storage: Arc<dyn PipelineResultExporter>,
+    breakpoint: Option<&BreakpointSettings>,
 ) -> Result<JobExecutor, InternalErrors> {
     check_image_paths(&config)?;
     let Some(image_base_path) = config.images.root else {
@@ -654,7 +677,15 @@ fn generate_job_from_project_settings_intenal(
                 scope,
                 uses,
                 command,
-            } in step_commands(&pipeline_setting.name, step, &config.modules, &mut scopes)?
+            } in step_commands(
+                &pipeline_setting.name,
+                step,
+                &config.modules,
+                &mut scopes,
+                breakpoint
+                    .filter(|b| b.pipeline_id == pipeline_setting.id && b.step_id == step.id)
+                    .map(|b| b.inner.as_slice()),
+            )?
             {
                 if let Some(name) = command.measurement_id() {
                     measurement_ids.push((name.to_string(), pipeline_setting.name.as_str()));
@@ -783,8 +814,9 @@ fn step_commands(
     step: &PipelineStepSettings,
     definitions: &[ModuleDefinition],
     scopes: &mut ScopeCounter,
+    inner_breakpoint: Option<&[StepId]>,
 ) -> Result<Vec<ExpandedCommand>, InternalErrors> {
-    expand_step(step, definitions, scopes).map_err(|e| {
+    expand_step_breaking_at(step, definitions, scopes, inner_breakpoint).map_err(|e| {
         InternalErrors::InvalidArgument(format!(
             "Pipeline \"{pipeline_name}\", step {}: {e}",
             step.id
@@ -804,7 +836,7 @@ pub(crate) fn dataset_steps_from_project_settings(
     for pipeline in config.pipelines.iter().filter(|p| p.enabled) {
         for step in pipeline.steps.iter().filter(|s| s.enabled) {
             for ExpandedCommand { command, .. } in
-                step_commands(&pipeline.name, step, &config.modules, &mut scopes)?
+                step_commands(&pipeline.name, step, &config.modules, &mut scopes, None)?
             {
                 if !matches!(command.category(), CommandCategory::Dataset) {
                     continue;
@@ -1602,6 +1634,60 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_preview_with_a_breakpoint_inside_a_module_marks_that_command() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let image_root = tempfile::tempdir().unwrap();
+        let mut project = project_with(
+            Some(image_root.path().to_path_buf()),
+            vec![pipeline(1, true, vec![module_step("TWO_BLURS")])],
+        );
+        let blur = |id| PipelineStepSettings {
+            id: evanalyzer_cfg::core_types::StepId(id),
+            ..blur_step(true)
+        };
+        project
+            .modules
+            .push(evanalyzer_cfg::settings::modules::ModuleDefinition {
+                key: "TWO_BLURS".into(),
+                meta: Default::default(),
+                classes: vec![],
+                steps: vec![blur(1), blur(2)],
+                parameters: vec![],
+                origin: None,
+            });
+        let module_id = evanalyzer_cfg::core_types::StepId(4);
+        let breakpoint = BreakpointSettings {
+            pipeline_id: PipelineId(1),
+            step_id: module_id,
+            inner: vec![evanalyzer_cfg::core_types::StepId(1)],
+            mode: evanalyzer_cfg::core_types::BreakpointMode::Stop,
+        };
+
+        let (job, _) = generate_preview_job_with_breakpoint(
+            project,
+            project_dir.path().into(),
+            Some(&breakpoint),
+        )
+        .unwrap();
+
+        let ids: Vec<_> = job.pipelines_pre_process[&PipelineId(1)]
+            .commands
+            .iter()
+            .map(|(id, _, _)| *id)
+            .take(2)
+            .collect();
+        assert_eq!(
+            ids,
+            [evanalyzer_cfg::core_types::StepId::INNER_BREAKPOINT, module_id],
+            "the first blur is where it stops; the module keeps its id"
+        );
+        assert_eq!(
+            breakpoint.run_step(),
+            evanalyzer_cfg::core_types::StepId::INNER_BREAKPOINT
+        );
+    }
+
     fn command_names(pipeline: &Pipeline) -> Vec<&'static str> {
         pipeline.commands.iter().map(|(_, _, c)| c.name()).collect()
     }
@@ -1794,6 +1880,7 @@ mod tests {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
                 ..Default::default()
             }),
+            None,
         )
         .unwrap();
 

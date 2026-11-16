@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 
 use evanalyzer_cfg::{
-    core_types::{BreakpointMode, PipelineId, StepId},
+    core_types::BreakpointSettings,
     settings::project_settings::ProjectSettings,
 };
 
@@ -21,8 +21,8 @@ pub struct PipelineTask {
     pub preview: bool,
     /// A preview of the whole image, not just the part in view.
     pub whole_image: bool,
-    /// Optional breakpoint: (pipeline_id, step_id, mode).
-    pub breakpoint: Option<(PipelineId, StepId, BreakpointMode)>,
+    /// Optional breakpoint (a step inside a module: its path in `inner`).
+    pub breakpoint: Option<BreakpointSettings>,
     /// Optional user-chosen name for a full (non-preview) run, forwarded to
     /// `generate_analyze_job_from_project_settings`. Ignored for preview runs.
     pub job_name: Option<String>,

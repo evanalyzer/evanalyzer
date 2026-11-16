@@ -211,42 +211,43 @@ export component PipelineRow inherits Rectangle {
                     }
                 }
 
-                // Steps on/total; hovered, ⋯ takes its place - a plain icon
-                // as on a step. The column keeps its width, so nothing moves.
-                Rectangle {
+                // Steps on/total.
+                Text {
                     width: 36px;
-                    if !(root.hovered && !root.dragging): Text {
-                        width: 100%;
-                        text: "\{root.pipeline.enabled-step-count}/\{root.pipeline.total-step-count}";
-                        font-size: Ink.fs-caption;
-                        font-family: Ink.font-mono;
-                        color: root.mute;
-                        opacity: root.dim;
-                        horizontal-alignment: right;
-                        vertical-alignment: center;
-                    }
-                    if root.hovered && !root.dragging: InkIconButton {
-                        x: parent.width - self.width;
-                        y: (parent.height - self.height) / 2;
-                        size: 20px;
-                        icon: InkIcons.more;
-                        label: "Pipeline actions";
-                        clicked => {
-                            root.more-clicked();
-                        }
-                    }
+                    text: "\{root.pipeline.enabled-step-count}/\{root.pipeline.total-step-count}";
+                    font-size: Ink.fs-caption;
+                    font-family: Ink.font-mono;
+                    color: root.mute;
+                    opacity: root.dim;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
                 }
 
+                // The buttons in every list's order: eye, then ⋯ last.
                 // In the run: no icon (an eye on hover); not: a crossed eye.
                 Rectangle {
                     width: 20px;
-                    if !root.pipeline.enabled || root.hovered: InkIconButton {
+                    if !root.pipeline.enabled || (root.hovered && !root.dragging): InkIconButton {
                         y: (parent.height - self.height) / 2;
                         size: 20px;
                         icon: root.pipeline.enabled ? InkIcons.visible : InkIcons.hidden;
                         label: root.pipeline.enabled ? "Leave out of the run" : "Include in the run";
                         clicked => {
                             root.toggled();
+                        }
+                    }
+                }
+
+                // ⋯ on hover; its column keeps its width, so nothing moves.
+                Rectangle {
+                    width: 20px;
+                    if root.hovered && !root.dragging: InkIconButton {
+                        y: (parent.height - self.height) / 2;
+                        size: 20px;
+                        icon: InkIcons.more;
+                        label: "Pipeline actions";
+                        clicked => {
+                            root.more-clicked();
                         }
                     }
                 }

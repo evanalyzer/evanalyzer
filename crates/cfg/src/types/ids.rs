@@ -209,6 +209,10 @@ impl StepId {
     /// Not assigned yet - also the id of a command that isn't a project
     /// step (e.g. tile merging), which no breakpoint can target.
     pub const UNASSIGNED: StepId = StepId(0);
+    /// The one command of a module a breakpoint inside it targets (see
+    /// `BreakpointSettings::inner`) - given to it when the job is built,
+    /// never a project step's id.
+    pub const INNER_BREAKPOINT: StepId = StepId(u32::MAX);
 }
 
 impl fmt::Display for StepId {

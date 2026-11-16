@@ -190,8 +190,10 @@ export component InkListRow inherits Rectangle {
 
             Rectangle {
                 width: root.has-eye ? 22px : 0px;
+                // Every list's rule: an eye on hover (or selected), a crossed
+                // eye always while hidden; its column keeps its width.
                 eye := Rectangle {
-                    visible: root.has-eye;
+                    visible: root.has-eye && (!root.shown || ta.has-hover || eye-ta.has-hover || root.selected);
                     width: 22px;
                     height: 22px;
                     border-radius: Ink.radius-sm;

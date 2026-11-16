@@ -25,13 +25,31 @@ pub enum BreakpointMode {
     Snapshot,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct BreakpointSettings {
     pub pipeline_id: PipelineId,
     /// The step to act at - its id, so the breakpoint stays on that step
     /// when steps are inserted, moved or removed above it.
     pub step_id: StepId,
+    /// A step inside the module `step_id` is: its id in the module, then in
+    /// a module nested there, and so on. Empty: `step_id` itself (on a
+    /// module: after the whole module).
+    #[serde(default)]
+    pub inner: Vec<StepId>,
     pub mode: BreakpointMode,
+}
+
+impl BreakpointSettings {
+    /// The id the pipeline stops at: `step_id`, or for a step inside a
+    /// module the id the job gives that one command
+    /// ([`StepId::INNER_BREAKPOINT`]).
+    pub fn run_step(&self) -> StepId {
+        if self.inner.is_empty() {
+            self.step_id
+        } else {
+            StepId::INNER_BREAKPOINT
+        }
+    }
 }
 
 /// The pixel classifier step a preview run captures the prediction of, for

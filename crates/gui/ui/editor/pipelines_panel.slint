@@ -1253,43 +1253,58 @@ component ParamLabel inherits HorizontalLayout {
     alignment: start;
         // Inside an opened module: ◆ exposes the setting as a module
         // parameter (filled) or hides it again.
+        // Drawn, not a glyph: ◆/◇ come from a fallback font whose metrics
+        // put them off-centre; the box is centred on the row's height.
         if PipelinesPanelState.open-module-name != "" && !PipelinesPanelState.open-module-read-only && p.param-type != ParamType.group && p.param-type != ParamType.label: Rectangle {
         width: 16px;
-        height: 16px;
-        border-radius: 3px;
-        background: expose-ta.has-hover ? Ink.raised : transparent;
-        Text {
-            text: p.exposed ? "◆" : "◇";
-            font-size: Ink.fs-caption;
-            color: p.exposed ? Ink.cat-module : Ink.text-mute;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-        }
+        Rectangle {
+            y: (parent.height - self.height) / 2;
+            width: 16px;
+            height: 16px;
+            border-radius: 3px;
+            background: expose-ta.has-hover ? Ink.raised : transparent;
+            Path {
+                x: 4px;
+                y: 4px;
+                width: 8px;
+                height: 8px;
+                viewbox-width: 8;
+                viewbox-height: 8;
+                commands: "M 4 0.5 L 7.5 4 L 4 7.5 L 0.5 4 Z";
+                fill: p.exposed ? Ink.cat-module : transparent;
+                stroke: p.exposed ? Ink.cat-module : Ink.text-mute;
+                stroke-width: 1px;
+            }
 
-        expose-ta := TouchArea {
-            mouse-cursor: pointer;
-            clicked => {
-                root.toggle-exposed();
+            expose-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.toggle-exposed();
+                }
             }
         }
     }
     if PipelinesPanelState.open-module-name != "" && !PipelinesPanelState.open-module-read-only && p.exposed: Rectangle {
         width: 16px;
-        height: 16px;
-        border-radius: 3px;
-        background: edit-exposed-ta.has-hover ? Ink.raised : transparent;
-        Text {
-            text: "✎";
-            font-size: 10px;
-            color: Ink.cat-module;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-        }
+        Rectangle {
+            y: (parent.height - self.height) / 2;
+            width: 16px;
+            height: 16px;
+            border-radius: 3px;
+            background: edit-exposed-ta.has-hover ? Ink.raised : transparent;
+            Text {
+                text: "✎";
+                font-size: 10px;
+                color: Ink.cat-module;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
 
-        edit-exposed-ta := TouchArea {
-            mouse-cursor: pointer;
-            clicked => {
-                root.edit-exposed();
+            edit-exposed-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.edit-exposed();
+                }
             }
         }
     }
@@ -1951,27 +1966,6 @@ component StepValues inherits Text {
     overflow: elide;
 }
 
-// A step row's ⌖: its settings into the Tuning dock (again: out) -
-// highlighted while pinned.
-component StepPinButton inherits Rectangle {
-    in property <bool> pinned;
-    callback clicked;
-    width: 22px;
-    height: 22px;
-    border-radius: Ink.radius-md;
-    background: root.pinned ? Ink.info-tint : transparent;
-    InkIconButton {
-        size: 22px;
-        icon: InkIcons.tune;
-        tint: root.pinned ? Ink.focus : Ink.text-dim;
-        label: root.pinned ? "Unpin from Tuning" : "Pin its settings to Tuning";
-        active: false;
-        clicked => {
-            root.clicked();
-        }
-    }
-}
-
 component StepRow inherits Rectangle {
     in property <PipelineCommand> step;
     in property <int> idx;
@@ -1993,7 +1987,7 @@ component StepRow inherits Rectangle {
 
     // Collapsed: a line. Expanded: a card around the settings.
         property <bool> hovered: head-ta.has-hover;
-    // The buttons (eye, settings, ⋯, ⌖) float over the row's end on hover
+    // The buttons (settings, eye, ⋯) float over the row's end on hover
     // or while open; hidden they keep no room - the values get it.
     property <bool> controls-shown: root.hovered || step.expanded;
     // What's under them, so the values fade out beneath.
@@ -2002,7 +1996,9 @@ component StepRow inherits Rectangle {
     property <bool> values-below: LayoutState.step-values-below && step.summary != "";
     property <bool> editable: !PipelinesPanelState.steps-read-only;
         // 0 = off, 1 = stop, 2 = snapshot - for this step.
-        property <int> bp-state: (PipelinesPanelState.breakpoint-pipeline-id == root.pipeline-id && PipelinesPanelState.breakpoint-step-id == root.step.step-id) ? PipelinesPanelState.breakpoint-mode : 0;
+        property <int> bp-state: (PipelinesPanelState.breakpoint-pipeline-id == root.pipeline-id && PipelinesPanelState.breakpoint-step-id == PipelinesPanelState.breakpoint-prefix + root.step.step-id) ? PipelinesPanelState.breakpoint-mode : 0;
+        // A module whose breakpoint is on one of its own steps: a red ring.
+        property <bool> bp-inside: root.bp-state == 0 && PipelinesPanelState.breakpoint-pipeline-id == root.pipeline-id && PipelinesPanelState.breakpoint-inside-step != "" && PipelinesPanelState.breakpoint-inside-step == root.step.step-id;
 
     // Selected (what the step shortcuts act on): only a semibold name - no
     // fill, no edge.
@@ -2059,9 +2055,10 @@ component StepRow inherits Rectangle {
                     // The gutter: the step's id (what "#2 EV Detection"
                     // elsewhere refers to) - a click sets its breakpoint, like
                     // a source editor's line numbers: red stop, orange
-                    // snapshot, off. Not for a module's inner steps.
+                    // snapshot, off. In a module only when it's viewed from a
+                    // pipeline step; a closed module with one inside: a ring.
                     gutter := Rectangle {
-                        property <bool> can-break: PipelinesPanelState.open-module-name == "";
+                        property <bool> can-break: PipelinesPanelState.can-break;
                         width: 28px;
                         accessible-role: button;
                         accessible-label: "Breakpoint at step \{root.step.step-id}";
@@ -2071,16 +2068,16 @@ component StepRow inherits Rectangle {
                             height: 18px;
                             border-radius: 9px;
                             background: root.bp-state == 1 ? Ink.err : root.bp-state == 2 ? Ink.warn : transparent;
-                            border-width: root.bp-state == 0 && gutter-ta.has-hover ? 1px : 0px;
-                            border-color: Ink.err.with-alpha(0.7);
+                            border-width: root.bp-inside ? 2px : root.bp-state == 0 && gutter-ta.has-hover ? 1px : 0px;
+                            border-color: root.bp-inside ? Ink.err : Ink.err.with-alpha(0.7);
                             step-number := Text {
                                 width: 100%;
                                 height: 100%;
                                 text: root.step.step-id;
-                                color: root.bp-state != 0 ? #FFFFFF : gutter-ta.has-hover ? Ink.err : Ink.text-faint;
+                                color: root.bp-state != 0 ? #FFFFFF : root.bp-inside || gutter-ta.has-hover ? Ink.err : Ink.text-faint;
                                 font-size: Ink.fs-secondary;
                                 font-family: Ink.font-mono;
-                                font-weight: root.bp-state != 0 ? 600 : 400;
+                                font-weight: root.bp-state != 0 || root.bp-inside ? 600 : 400;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
                             }
@@ -2098,7 +2095,7 @@ component StepRow inherits Rectangle {
                             width: 100%;
                             height: 100%;
                             wanted: gutter-ta.has-hover && !gutter-ta.pressed;
-                            text: "Breakpoint at step \{root.step.step-id}";
+                            text: root.bp-inside ? PipelinesPanelState.breakpoint-inside-tip : "Breakpoint at step \{root.step.step-id}";
                         }
                     }
 
@@ -2144,6 +2141,16 @@ component StepRow inherits Rectangle {
                                 }
                             }
 
+                            // Its settings are pinned to Tuning (⋯ › Unpin).
+                            if step.pinned: Image {
+                                y: (parent.height - self.height) / 2;
+                                width: 11px;
+                                source: InkIcons.tune;
+                                colorize: Ink.text-faint;
+                                accessible-role: text;
+                                accessible-label: "Settings pinned to Tuning";
+                            }
+
                             if step.problems.length > 0: Rectangle {
                                 y: (parent.height - self.height) / 2;
                                 height: 16px;
@@ -2176,9 +2183,9 @@ component StepRow inherits Rectangle {
                         }
                     }
 
-                    // Hidden buttons that still say something: a switched-off
-                    // step's eye, a pinned step's ⌖.
-                    if !root.controls-shown && (!step.enabled || step.pinned): HorizontalLayout {
+                    // A hidden button that still says something: a switched-off
+                    // step's eye.
+                    if !root.controls-shown && !step.enabled: HorizontalLayout {
                         padding-right: 4px;
                         if !step.enabled: InkIconButton {
                             y: (parent.height - self.height) / 2;
@@ -2188,13 +2195,6 @@ component StepRow inherits Rectangle {
                             enabled: root.editable;
                             clicked => {
                                 root.toggle-enabled();
-                            }
-                        }
-                        if step.pinned: StepPinButton {
-                            y: (parent.height - self.height) / 2;
-                            pinned: true;
-                            clicked => {
-                                PipelinesPanelState.toggle-pin-step(root.idx);
                             }
                         }
                     }
@@ -2219,6 +2219,18 @@ component StepRow inherits Rectangle {
                             spacing: 0px;
                             padding-right: 4px;
 
+                            // The settings in the larger dialog.
+                            if step.parameters.length > 0 || step.advanced-count > 0: InkIconButton {
+                                y: (parent.height - self.height) / 2;
+                                size: 22px;
+                                icon: InkIcons.expand;
+                                label: "Open the settings";
+                                clicked => {
+                                    root.open-settings();
+                                }
+                            }
+
+                            // Every list's order: eye, then ⋯ last.
                             InkIconButton {
                                 y: (parent.height - self.height) / 2;
                                 size: 22px;
@@ -2231,17 +2243,6 @@ component StepRow inherits Rectangle {
                                 }
                             }
 
-                            // The settings in the larger dialog.
-                            if step.parameters.length > 0 || step.advanced-count > 0: InkIconButton {
-                                y: (parent.height - self.height) / 2;
-                                size: 22px;
-                                icon: InkIcons.expand;
-                                label: "Open the settings";
-                                clicked => {
-                                    root.open-settings();
-                                }
-                            }
-
                             InkIconButton {
                                 y: (parent.height - self.height) / 2;
                                 size: 22px;
@@ -2249,15 +2250,6 @@ component StepRow inherits Rectangle {
                                 label: "Step actions";
                                 clicked => {
                                     step-menu.show();
-                                }
-                            }
-
-                            // ⌖: its settings into the Tuning dock (again: out).
-                            if step.parameters.length > 0 || step.advanced-count > 0: StepPinButton {
-                                y: (parent.height - self.height) / 2;
-                                pinned: step.pinned;
-                                clicked => {
-                                    PipelinesPanelState.toggle-pin-step(root.idx);
                                 }
                             }
                         }
@@ -2564,6 +2556,18 @@ component StepRow inherits Rectangle {
                     root.toggle-breakpoint();
                 }
             }
+
+            // Its settings into the Tuning dock (again: out).
+            if root.step.parameters.length > 0 || root.step.advanced-count > 0: InkMenuSeparator { }
+            if root.step.parameters.length > 0 || root.step.advanced-count > 0: InkMenuItem {
+                icon: InkIcons.tune;
+                text: root.step.pinned ? "Unpin from Tuning" : "Pin settings to Tuning";
+                clicked => {
+                    PipelinesPanelState.toggle-pin-step(root.idx);
+                }
+            }
+
+            InkMenuSeparator { }
 
             InkMenuItem {
                 icon: InkIcons.copy;
@@ -3548,6 +3552,11 @@ export component PipelinesPanel inherits Rectangle {
                         vertical-alignment: center;
                     }
 
+                    Rectangle {
+                        width: 20px;
+                    }
+
+                    // The ⋯ column.
                     Rectangle {
                         width: 20px;
                     }

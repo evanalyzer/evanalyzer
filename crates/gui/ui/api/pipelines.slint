@@ -155,7 +155,7 @@ export struct PipelineCommand {
         // Position in the pipeline - what the step actions (remove, move,
         // change a parameter) refer to; the list is rebuilt after each change.
         id: int,
-        // A setting of it is pinned into the Tuning dock (its row's ⌖).
+        // A setting of it is pinned into the Tuning dock (⋯ › Pin settings to Tuning; a ⌖ after its name).
         pinned: bool,
         // The step's stable id - for what must stay with the step when steps
         // above it are inserted or removed (breakpoint, expanded state).
@@ -362,6 +362,18 @@ export global PipelinesPanelState {
     in-out property <int> breakpoint-mode: 0;
     // True once a breakpoint image has been captured (enables the toggle).
     in-out property <bool> has-breakpoint-image: false;
+    // A breakpoint's step is a path: "4" a step of the pipeline, "4/2" step
+    // 2 of the module that step 4 is (nested: "4/2/1"). The shown module's
+    // path with a "/" ("4/"), "" for the pipeline itself.
+    in property <string> breakpoint-prefix: "";
+    // Breakpoints can be set on the shown steps: always in a pipeline; in a
+    // module only "View"ed from a pipeline step (one use, its values).
+    in property <bool> module-can-break: false;
+    // The shown step (its id) a breakpoint is inside of - a module whose
+    // own step has it - and what its tip says ("Breakpoint inside: #3 › 2
+    // Threshold · stop"); "" for none.
+    in property <string> breakpoint-inside-step: "";
+    in property <string> breakpoint-inside-tip: "";
     // Which buffer the breakpoint preview renders: 0 = processed image,
     // 1 = segmentation map, 2 = instance map.
     in-out property <int> breakpoint-view-mode: 0;
@@ -473,7 +485,7 @@ export global PipelinesPanelState {
     // Pins / unpins the settings of a section of the step (a row of its
     // table): all pinned → all unpinned, else all pinned.
     callback toggle-pin-section(int, string);
-    // Pins all settings of the step at this index (its name's ⌖); again:
+    // Pins all settings of the step at this index (⋯ › Pin settings to Tuning); again:
     // unpins them.
     callback toggle-pin-step(int);
     // The Tuning dock's "Find a setting": only the pinned settings (or
@@ -518,15 +530,22 @@ export global PipelinesPanelState {
         in-out property <int> browse-result-token: -1;
         in-out property <string> browse-result-path;
 
-    // The breakpoint of step `step-id` (of the shown pipeline): off → stop
-    // → snapshot → off. The step's ● and F9.
-    public function toggle-breakpoint-at(step-id: string) {
-        if self.breakpoint-pipeline-id == self.active-pipeline-id && self.breakpoint-step-id == step-id {
+    // Whether breakpoints can be set on the shown steps.
+    out property <bool> can-break: self.open-module-name == "" || self.module-can-break;
+
+    // The breakpoint of step `step-id` (of the shown steps - in a module,
+    // the path to it): off → stop → snapshot → off. The step's ● and F9.
+    public function toggle-breakpoint-at(id: string) {
+        if !self.can-break {
+            return;
+        }
+        // (No local for the path: Slint's generated code moves it.)
+        if self.breakpoint-pipeline-id == self.active-pipeline-id && self.breakpoint-step-id == self.breakpoint-prefix + id {
             if self.breakpoint-mode == 1 {
                 // Stop → Snapshot (capture image, pipeline continues)
                 self.breakpoint-mode = 2;
                 self.has-breakpoint-image = false;
-                self.set-breakpoint(self.active-pipeline-id, step-id, 2);
+                self.set-breakpoint(self.active-pipeline-id, self.breakpoint-prefix + id, 2);
             } else {
                 // Snapshot → Off; captured image remains available.
                 self.breakpoint-pipeline-id = -1;
@@ -537,10 +556,10 @@ export global PipelinesPanelState {
         } else {
             // Off → Stop (pipeline halts at step)
             self.breakpoint-pipeline-id = self.active-pipeline-id;
-            self.breakpoint-step-id = step-id;
+            self.breakpoint-step-id = self.breakpoint-prefix + id;
             self.breakpoint-mode = 1;
             self.has-breakpoint-image = false;
-            self.set-breakpoint(self.active-pipeline-id, step-id, 1);
+            self.set-breakpoint(self.active-pipeline-id, self.breakpoint-prefix + id, 1);
         }
     }
 

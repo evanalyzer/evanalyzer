@@ -82,9 +82,12 @@ component ChannelRow inherits Rectangle {
                 color: Ink.text-mute;
                 vertical-alignment: center;
             }
+            // Every list's rule: an eye on hover, a crossed eye always while
+            // hidden (over the button the row's hover ends: its own counts).
             InkIconButton {
                 y: (parent.height - self.height) / 2;
                 size: 22px;
+                opacity: !root.active || root.selected || ta.has-hover || self.has-hover ? 1.0 : 0.0;
                 icon: root.active ? InkIcons.visible : InkIcons.hidden;
                 label: root.active ? "Hide " + root.name : "Show " + root.name;
                 clicked => {

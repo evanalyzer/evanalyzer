@@ -18,9 +18,10 @@ use log::{debug, error};
 /// final merged objects are returned by [`RunningJob::wait`] in
 /// [`JobOutput::preview_objects`](super::JobOutput::preview_objects).
 pub(crate) fn start_preview(request: PreviewRequest) -> Result<RunningJob, StartPreviewError> {
-    let (mut job, output) = evanalyzer_core::generate_preview_job_from_project_settings(
+    let (mut job, output) = evanalyzer_core::generate_preview_job_with_breakpoint(
         request.settings,
         request.project_path,
+        request.breakpoint.as_ref(),
     )?;
 
     let vp = request.viewport;

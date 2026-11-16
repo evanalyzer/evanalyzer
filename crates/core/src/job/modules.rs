@@ -118,12 +118,28 @@ impl Frame {
 /// own classes and memory slots numbered apart (see [`UseEnd::Nested`]).
 /// The last command carries the module step's id (a breakpoint on a
 /// module stops after the whole module), the others
-/// [`StepId::UNASSIGNED`] (inner steps can't be targeted).
+/// [`StepId::UNASSIGNED`] - inner steps only through
+/// [`expand_step_breaking_at`].
 pub fn expand_step(
     step: &PipelineStepSettings,
     definitions: &[ModuleDefinition],
     scopes: &mut ScopeCounter,
 ) -> Result<Vec<ExpandedCommand>, InternalErrors> {
+    expand_step_breaking_at(step, definitions, scopes, None)
+}
+
+/// [`expand_step`], with a breakpoint inside the module `step` is:
+/// `inner` is the path to its step (its id in the module, then in a module
+/// nested there, ...; see `BreakpointSettings::inner`). That one command
+/// gets [`StepId::INNER_BREAKPOINT`]; a path ending at a nested module
+/// stops after that module's last command. `None` or an empty path: none.
+pub fn expand_step_breaking_at(
+    step: &PipelineStepSettings,
+    definitions: &[ModuleDefinition],
+    scopes: &mut ScopeCounter,
+    inner: Option<&[StepId]>,
+) -> Result<Vec<ExpandedCommand>, InternalErrors> {
+    let inner = inner.filter(|path| !path.is_empty());
     match &step.content {
         StepContent::Command(command) => {
             if let Some(class) = command.local_classes().first() {
@@ -156,13 +172,16 @@ pub fn expand_step(
                 None,
                 &mut Vec::new(),
                 &mut Vec::new(),
+                inner,
             )?;
             let last = commands.len().saturating_sub(1);
             Ok(commands
                 .into_iter()
                 .enumerate()
-                .map(|(i, (scope, uses, command))| ExpandedCommand {
-                    step_id: if i == last {
+                .map(|(i, (scope, uses, command, target))| ExpandedCommand {
+                    step_id: if target {
+                        StepId::INNER_BREAKPOINT
+                    } else if i == last {
                         step.id
                     } else {
                         StepId::UNASSIGNED
@@ -194,6 +213,9 @@ fn only_inside_slot(slot: u64) -> InternalErrors {
 /// frame of the use in the pipeline this one is nested in - `None` for that
 /// use itself, which gets a new scope from `scopes`. `open` holds the keys
 /// of the modules being expanded around this one, `uses` their uses.
+/// `target`: the path to a breakpoint's step inside this module (see
+/// [`expand_step_breaking_at`]) - its command is marked `true`.
+#[allow(clippy::type_complexity)]
 fn expand_instance(
     instance: &ModuleInstance,
     definitions: &[ModuleDefinition],
@@ -201,7 +223,8 @@ fn expand_instance(
     around: Option<&mut Frame>,
     open: &mut Vec<String>,
     uses: &mut Vec<UseId>,
-) -> Result<Vec<(Scope, Vec<UseId>, PipelineCommand)>, InternalErrors> {
+    target: Option<&[StepId]>,
+) -> Result<Vec<(Scope, Vec<UseId>, PipelineCommand, bool)>, InternalErrors> {
     let raw = definition_of(instance, definitions)?;
     if open.contains(&instance.key) {
         return Err(module_error(&instance.key, "contains itself".into()));
@@ -264,16 +287,32 @@ fn expand_instance(
                         format!("step {} {why}", step.id),
                     ));
                 }
-                commands.push((frame.scope, uses.clone(), command.clone()))
+                let hit = target == Some(&[step.id][..]);
+                commands.push((frame.scope, uses.clone(), command.clone(), hit))
             }
-            StepContent::Module(inner) => commands.extend(expand_instance(
-                inner,
-                definitions,
-                scopes,
-                Some(&mut *frame),
-                open,
-                uses,
-            )?),
+            StepContent::Module(inner) => {
+                // The path goes on into this module - or ends at it: then
+                // after its last command.
+                let rest = target
+                    .and_then(|path| path.split_first())
+                    .filter(|(first, _)| **first == step.id)
+                    .map(|(_, rest)| rest);
+                let mut nested = expand_instance(
+                    inner,
+                    definitions,
+                    scopes,
+                    Some(&mut *frame),
+                    open,
+                    uses,
+                    rest.filter(|rest| !rest.is_empty()),
+                )?;
+                if rest.is_some_and(|rest| rest.is_empty())
+                    && let Some(last) = nested.last_mut()
+                {
+                    last.3 = true;
+                }
+                commands.extend(nested);
+            }
         }
     }
     open.pop();
@@ -1433,6 +1472,101 @@ mod tests {
                 slots: vec![],
             })
         );
+    }
+
+    // ---- breakpoints inside a module ----
+
+    fn breaking_ids(commands: &[ExpandedCommand]) -> Vec<u32> {
+        commands.iter().map(|c| c.step_id.0).collect()
+    }
+
+    #[test]
+    fn a_breakpoint_on_an_inner_step_marks_that_one_command() {
+        let commands = expand_step_breaking_at(
+            &module_step(4, "CELL_RECONSTRUCTION", &[]),
+            &[cell_reconstruction()],
+            &mut ScopeCounter::default(),
+            Some(&[StepId(1)]),
+        )
+        .unwrap();
+        assert_eq!(
+            breaking_ids(&commands),
+            [StepId::INNER_BREAKPOINT.0, 4],
+            "its blur stops; the module's id stays on its last command"
+        );
+    }
+
+    #[test]
+    fn an_inner_breakpoint_on_the_last_command_takes_its_id() {
+        let commands = expand_step_breaking_at(
+            &module_step(4, "CELL_RECONSTRUCTION", &[]),
+            &[cell_reconstruction()],
+            &mut ScopeCounter::default(),
+            Some(&[StepId(2)]),
+        )
+        .unwrap();
+        assert_eq!(breaking_ids(&commands), [0, StepId::INNER_BREAKPOINT.0]);
+    }
+
+    #[test]
+    fn without_a_path_a_module_expands_as_before() {
+        let definitions = [cell_reconstruction()];
+        let step = module_step(4, "CELL_RECONSTRUCTION", &[]);
+        let plain = expand_step(&step, &definitions, &mut ScopeCounter::default()).unwrap();
+        let empty = expand_step_breaking_at(
+            &step,
+            &definitions,
+            &mut ScopeCounter::default(),
+            Some(&[]),
+        )
+        .unwrap();
+        let unknown = expand_step_breaking_at(
+            &step,
+            &definitions,
+            &mut ScopeCounter::default(),
+            Some(&[StepId(9)]),
+        )
+        .unwrap();
+        assert_eq!(breaking_ids(&plain), [0, 4]);
+        assert_eq!(breaking_ids(&empty), [0, 4], "an empty path: none");
+        assert_eq!(breaking_ids(&unknown), [0, 4], "no such step: none");
+    }
+
+    #[test]
+    fn a_path_reaches_into_a_nested_module_or_stops_after_it() {
+        let outer = || {
+            definition(
+                "OUTER",
+                vec![
+                    module_step(1, "CELL_RECONSTRUCTION", &[]),
+                    command_step(2, PipelineCommand::Blur(BlurSettings::default())),
+                ],
+                vec![],
+            )
+        };
+        let expand = |path: &[StepId]| {
+            breaking_ids(
+                &expand_step_breaking_at(
+                    &module_step(4, "OUTER", &[]),
+                    &[cell_reconstruction(), outer()],
+                    &mut ScopeCounter::default(),
+                    Some(path),
+                )
+                .unwrap(),
+            )
+        };
+        let inner = StepId::INNER_BREAKPOINT.0;
+        assert_eq!(
+            expand(&[StepId(1), StepId(2)]),
+            [0, inner, 4],
+            "the nested module's voronoi"
+        );
+        assert_eq!(
+            expand(&[StepId(1)]),
+            [0, inner, 4],
+            "the nested module itself: after its last command"
+        );
+        assert_eq!(expand(&[StepId(2)]), [0, 0, inner], "the outer module's blur");
     }
 
     #[test]

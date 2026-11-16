@@ -954,7 +954,7 @@ impl<'a> JobExecutor {
                                 .breakpoint
                                 .as_ref()
                                 .filter(|b| b.pipeline_id == *pipe_id)
-                                .map(|b| (Some(b.step_id), b.mode == BreakpointMode::Snapshot))
+                                .map(|b| (Some(b.run_step()), b.mode == BreakpointMode::Snapshot))
                                 .unwrap_or((None, false));
                             let prediction_step = self
                                 .prediction
@@ -1200,7 +1200,7 @@ impl<'a> JobExecutor {
                             .breakpoint
                             .as_ref()
                             .filter(|b| b.pipeline_id == *pipe_id)
-                            .map(|b| (Some(b.step_id), b.mode == BreakpointMode::Snapshot))
+                            .map(|b| (Some(b.run_step()), b.mode == BreakpointMode::Snapshot))
                             .unwrap_or((None, false));
                         let prediction_step = self
                             .prediction
@@ -4505,6 +4505,7 @@ mod full_run_integration_tests {
         job.breakpoint = Some(BreakpointSettings {
             pipeline_id: PipelineId(1),
             step_id: threshold_step(&job), // right after Threshold
+            inner: vec![],
             mode,
         });
         let (tx, rx) = std::sync::mpsc::channel();
@@ -4644,6 +4645,7 @@ mod full_run_integration_tests {
         job.breakpoint = Some(BreakpointSettings {
             pipeline_id: PipelineId(1),
             step_id: threshold_step(&job), // right after Threshold, before ConnectedComponents/ExtractObjects
+            inner: vec![],
             mode: BreakpointMode::Stop,
         });
 
@@ -4677,6 +4679,7 @@ mod full_run_integration_tests {
         job.breakpoint = Some(BreakpointSettings {
             pipeline_id: PipelineId(1),
             step_id: threshold_step(&job),
+            inner: vec![],
             mode: BreakpointMode::Snapshot,
         });
 
@@ -5072,6 +5075,7 @@ mod full_run_integration_tests {
         job.breakpoint = Some(BreakpointSettings {
             pipeline_id: PipelineId(2),
             step_id: evanalyzer_cfg::core_types::StepId(20),
+            inner: vec![],
             mode: BreakpointMode::Stop,
         });
         let (tx, _rx) = std::sync::mpsc::channel();

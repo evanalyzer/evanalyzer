@@ -105,16 +105,9 @@ pub struct PipelinesController {
     /// An analysis (not a preview) is running - closing the window asks
     /// what to do with it.
     pub(crate) analysis_running: Arc<std::sync::atomic::AtomicBool>,
-    /// Currently active breakpoint: (pipeline_id, step_id, mode).  `None` = no breakpoint.
-    pub(crate) breakpoint: Arc<
-        Mutex<
-            Option<(
-                u32,
-                evanalyzer_cfg::core_types::StepId,
-                evanalyzer_cfg::core_types::BreakpointMode,
-            )>,
-        >,
-    >,
+    /// Currently active breakpoint (a step inside a module: its path in
+    /// `inner`).  `None` = no breakpoint.
+    pub(crate) breakpoint: Arc<Mutex<Option<evanalyzer_cfg::core_types::BreakpointSettings>>>,
 
     /// If true the trigger_pipeline_preview_execution is called on parameter change
     auto_preview_enabled: Mutex<bool>,
@@ -339,8 +332,16 @@ impl PipelinesController {
                     } else {
                         evanalyzer_cfg::core_types::BreakpointMode::Stop
                     };
-                    *manager.breakpoint.lock().unwrap() = parse_step_id(&step_id)
-                        .map(|step_id| (pipeline_id as u32, step_id, bp_mode));
+                    *manager.breakpoint.lock().unwrap() =
+                        parse_breakpoint_path(&step_id).map(|(step_id, inner)| {
+                            evanalyzer_cfg::core_types::BreakpointSettings {
+                                pipeline_id: PipelineId(pipeline_id as u32),
+                                step_id,
+                                inner,
+                                mode: bp_mode,
+                            }
+                        });
+                    manager.show_breakpoint_marks();
                     // Another step's image: its histogram window anew.
                     manager.viewport_controller.set_breakpoint_histogram(None);
                     // ...and, with auto preview on, the image itself, so a
@@ -354,6 +355,7 @@ impl PipelinesController {
             ui.global::<PipelinesPanelState>()
                 .on_clear_breakpoint(move || {
                     *manager.breakpoint.lock().unwrap() = None;
+                    manager.show_breakpoint_marks();
                     // Its images go too (up to ~190 MB a tile).
                     manager.viewport_controller.clear_breakpoint();
                 });
@@ -1012,8 +1014,8 @@ impl PipelinesController {
                                 // (the highest + 1) - the breakpoint must not move
                                 // there.
                                 let mut breakpoint = manager.breakpoint.lock().unwrap();
-                                if breakpoint.is_some_and(|(p, step, _)| {
-                                    p == pipeline_id && step == removed.id
+                                if breakpoint.as_ref().is_some_and(|b| {
+                                    b.pipeline_id.0 == pipeline_id && b.step_id == removed.id
                                 }) {
                                     *breakpoint = None;
                                     drop(breakpoint);
@@ -3046,11 +3048,7 @@ impl PipelinesController {
             current_image_settings.clone(),
         );
 
-        let breakpoint = self
-            .breakpoint
-            .lock()
-            .unwrap()
-            .map(|(pid, sid, mode)| (evanalyzer_cfg::core_types::PipelineId(pid), sid, mode));
+        let breakpoint = self.breakpoint.lock().unwrap().clone();
 
         let task: PipelineTask = PipelineTask {
             project_settings: project_tmp,
@@ -3783,6 +3781,58 @@ impl PipelinesController {
         self.open_module_path(pipeline_id)
             .pop()
             .map(|level| level.key)
+    }
+
+    /// The ids of the module steps opened from pipeline `pipeline_id` down to
+    /// the shown steps (empty: the pipeline itself) - `None` where a module
+    /// isn't viewed from a pipeline step (opened to edit: no one use, so no
+    /// breakpoint).
+    fn shown_step_path(
+        &self,
+        project: &ProjectSettings,
+        pipeline_id: u32,
+    ) -> Option<Vec<evanalyzer_cfg::core_types::StepId>> {
+        let path = self.open_module_path(pipeline_id);
+        let mut steps = &project.pipelines.iter().find(|p| p.id.0 == pipeline_id)?.steps;
+        let mut ids = Vec::new();
+        for level in &path {
+            let step = steps.get(level.viewing_from?)?;
+            let StepContent::Module(instance) = &step.content else {
+                return None;
+            };
+            if instance.key != level.key {
+                return None;
+            }
+            ids.push(step.id);
+            steps = &project.modules.iter().find(|d| d.key == level.key)?.steps;
+        }
+        Some(ids)
+    }
+
+    /// [`breakpoint_marks`] of the shown pipeline's steps.
+    fn current_breakpoint_marks(&self, pipeline_id: u32) -> BreakpointMarks {
+        let project = self.app_state.get_project();
+        let Some(pipeline) = project.pipelines.iter().find(|p| p.id.0 == pipeline_id) else {
+            return BreakpointMarks::default();
+        };
+        let shown = self.shown_step_path(&project, pipeline_id);
+        breakpoint_marks(
+            &project,
+            pipeline,
+            shown.as_deref(),
+            self.breakpoint.lock().unwrap().as_ref(),
+        )
+    }
+
+    /// Puts the breakpoint's marks on the shown steps (after it changed;
+    /// the step list sets them with each update).
+    fn show_breakpoint_marks(&self) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let state = ui.global::<PipelinesPanelState>();
+        let marks = self.current_breakpoint_marks(state.get_active_pipeline_id() as u32);
+        set_breakpoint_marks(&state, marks);
     }
 
     /// Whether pipeline `pipeline_id`'s panel shows a module only to look at.
@@ -5349,6 +5399,7 @@ impl PipelinesController {
         // The pipeline step it's looked at from - whose problems mark its settings.
         let viewed_from = self.viewed_from(pipeline_id);
         let read_only = open_module.is_some() && self.viewing(pipeline_id.0);
+        let breakpoint_marks = self.current_breakpoint_marks(pipeline_id.0);
         let open_module_values: String = match (&viewed_steps, path.first()) {
             (Some(_), Some(level)) => level
                 .viewing_from
@@ -6047,6 +6098,7 @@ impl PipelinesController {
                         .collect::<Vec<_>>(),
                 )));
                 state.set_open_module_read_only(read_only);
+                set_breakpoint_marks(&state, breakpoint_marks);
                 state.set_active_pipeline_image_source(pipeline_image_source.into());
                 // In place where the steps are the same: a field being
                 // edited keeps the focus (see `step_model_patch`).
@@ -7346,6 +7398,106 @@ fn parse_step_id(text: &str) -> Option<evanalyzer_cfg::core_types::StepId> {
     text.parse().ok().map(evanalyzer_cfg::core_types::StepId)
 }
 
+/// A breakpoint's step as the panel keeps it ("4", "4/2", "4/2/1" - see
+/// `PipelinesPanelState.breakpoint-prefix`): the pipeline step and the path
+/// inside its module.
+fn set_breakpoint_marks(state: &PipelinesPanelState<'_>, marks: BreakpointMarks) {
+    state.set_breakpoint_prefix(marks.prefix.into());
+    state.set_module_can_break(marks.can_break);
+    state.set_breakpoint_inside_step(marks.inside_step.into());
+    state.set_breakpoint_inside_tip(marks.inside_tip.into());
+}
+
+fn parse_breakpoint_path(
+    text: &str,
+) -> Option<(
+    evanalyzer_cfg::core_types::StepId,
+    Vec<evanalyzer_cfg::core_types::StepId>,
+)> {
+    let mut ids = text.split('/').map(parse_step_id);
+    let first = ids.next()??;
+    let inner = ids.collect::<Option<Vec<_>>>()?;
+    Some((first, inner))
+}
+
+/// The marks a breakpoint puts on the shown steps (see
+/// [`PipelinesController::breakpoint_marks`]).
+#[derive(Debug, Default, PartialEq)]
+struct BreakpointMarks {
+    /// The shown module's path with a "/" ("4/"), "" for the pipeline.
+    prefix: String,
+    /// Breakpoints can be set on the shown steps.
+    can_break: bool,
+    /// The shown step the breakpoint is inside of (a module), "" for none.
+    inside_step: String,
+    /// Its tip: "Breakpoint inside: #4 › 2 Threshold · stop".
+    inside_tip: String,
+}
+
+/// [`BreakpointMarks`] for the steps shown at `shown` (the ids of the
+/// module steps opened from the pipeline down to them; `None`: a module
+/// not viewed from a pipeline step, where no breakpoint can be set), with
+/// `breakpoint` in that pipeline.
+fn breakpoint_marks(
+    project: &ProjectSettings,
+    pipeline: &PipelineSettings,
+    shown: Option<&[evanalyzer_cfg::core_types::StepId]>,
+    breakpoint: Option<&evanalyzer_cfg::core_types::BreakpointSettings>,
+) -> BreakpointMarks {
+    let Some(shown) = shown else {
+        return BreakpointMarks::default();
+    };
+    let prefix: String = shown.iter().map(|id| format!("{id}/")).collect();
+    let mut marks = BreakpointMarks {
+        prefix,
+        can_break: true,
+        ..Default::default()
+    };
+    let Some(breakpoint) = breakpoint.filter(|b| b.pipeline_id == pipeline.id) else {
+        return marks;
+    };
+    let full: Vec<_> = std::iter::once(breakpoint.step_id)
+        .chain(breakpoint.inner.iter().copied())
+        .collect();
+    if full.len() <= shown.len() + 1 || !full.starts_with(shown) {
+        return marks;
+    }
+    marks.inside_step = full[shown.len()].to_string();
+    // The name of the step it's at, down through the modules.
+    let mut steps = &pipeline.steps;
+    let mut name = None;
+    for (i, id) in full.iter().enumerate() {
+        let Some(step) = steps.iter().find(|s| s.id == *id) else {
+            break;
+        };
+        if i + 1 == full.len() {
+            name = Some(step_label(project, step));
+            break;
+        }
+        let StepContent::Module(instance) = &step.content else {
+            break;
+        };
+        let Some(definition) = project.modules.iter().find(|d| d.key == instance.key) else {
+            break;
+        };
+        steps = &definition.steps;
+    }
+    let path = full
+        .iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(" › ");
+    let mode = match breakpoint.mode {
+        evanalyzer_cfg::core_types::BreakpointMode::Stop => "stop",
+        evanalyzer_cfg::core_types::BreakpointMode::Snapshot => "snapshot",
+    };
+    marks.inside_tip = match name {
+        Some(name) => format!("Breakpoint inside: #{path} {name} · {mode}"),
+        None => format!("Breakpoint inside: #{path} · {mode}"),
+    };
+    marks
+}
+
 fn filter_for_display(params: Vec<ParameterDef>, show_advanced: bool) -> Vec<ParameterDef> {
     params
         .into_iter()
@@ -8625,22 +8777,31 @@ mod tests {
         let step = evanalyzer_cfg::core_types::StepId(0x2a);
         ui.global::<PipelinesPanelState>()
             .invoke_set_breakpoint(7, step_id_text(step), 1);
+        let at = |mode| evanalyzer_cfg::core_types::BreakpointSettings {
+            pipeline_id: PipelineId(7),
+            step_id: step,
+            inner: vec![],
+            mode,
+        };
         assert_eq!(
             *controller.breakpoint.lock().unwrap(),
-            Some((7, step, evanalyzer_cfg::core_types::BreakpointMode::Stop))
+            Some(at(evanalyzer_cfg::core_types::BreakpointMode::Stop))
         );
 
         ui.global::<PipelinesPanelState>()
             .invoke_set_breakpoint(7, step_id_text(step), 2);
         assert_eq!(
             *controller.breakpoint.lock().unwrap(),
-            Some((
-                7,
-                step,
-                evanalyzer_cfg::core_types::BreakpointMode::Snapshot
-            )),
+            Some(at(evanalyzer_cfg::core_types::BreakpointMode::Snapshot)),
             "mode 2 must map to Snapshot"
         );
+
+        // A step inside a module: its path.
+        ui.global::<PipelinesPanelState>()
+            .invoke_set_breakpoint(7, "42/3".into(), 1);
+        let inside = controller.breakpoint.lock().unwrap().clone().unwrap();
+        assert_eq!(inside.step_id, step);
+        assert_eq!(inside.inner, [evanalyzer_cfg::core_types::StepId(3)]);
 
         ui.global::<PipelinesPanelState>().invoke_clear_breakpoint();
         assert!(controller.breakpoint.lock().unwrap().is_none());
@@ -12544,11 +12705,13 @@ mod tests {
             with_image.settings.pipelines = project.settings.pipelines.clone();
             *project = with_image;
         }
-        *controller.breakpoint.lock().unwrap() = Some((
-            1,
-            evanalyzer_cfg::core_types::StepId(0),
-            evanalyzer_cfg::core_types::BreakpointMode::Stop,
-        ));
+        *controller.breakpoint.lock().unwrap() =
+            Some(evanalyzer_cfg::core_types::BreakpointSettings {
+                pipeline_id: PipelineId(1),
+                step_id: evanalyzer_cfg::core_types::StepId(0),
+                inner: vec![],
+                mode: evanalyzer_cfg::core_types::BreakpointMode::Stop,
+            });
         dry_run();
         let task = controller
             .task_request
@@ -14089,5 +14252,122 @@ mod color_filter_range_tests {
         );
         assert!(color_filter_range("Threshold", &defs).is_empty());
         assert!(color_filter_range(COLOR_FILTER_COMMAND_NAME, &defs[..5]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod breakpoint_path_tests {
+    use super::*;
+    use evanalyzer_cfg::core_types::{BreakpointMode, BreakpointSettings, StepId};
+    use evanalyzer_cfg::settings::modules::{ModuleDefinition, ModuleInstance};
+    use evanalyzer_cfg::settings::pipeline_command_settings::BlurSettings;
+
+    fn blur(id: u32) -> PipelineStepSettings {
+        PipelineStepSettings {
+            id: StepId(id),
+            enabled: true,
+            content: StepContent::Command(PipelineCommand::Blur(BlurSettings::default())),
+        }
+    }
+
+    fn module(id: u32, key: &str) -> PipelineStepSettings {
+        PipelineStepSettings {
+            id: StepId(id),
+            enabled: true,
+            content: StepContent::Module(ModuleInstance {
+                key: key.into(),
+                values: Default::default(),
+            }),
+        }
+    }
+
+    /// Pipeline 1: step 3 a module "SMOOTH" (named "Smooth") of two blurs.
+    fn project() -> ProjectSettings {
+        let mut project = ProjectSettings::default();
+        project.pipelines.push(PipelineSettings {
+            id: PipelineId(1),
+            name: "Detect".into(),
+            description: None,
+            image_source: evanalyzer_cfg::core_types::ImageAddress::Channel(0),
+            enabled: true,
+            steps: vec![blur(1), module(3, "SMOOTH")],
+        });
+        let mut definition = ModuleDefinition {
+            key: "SMOOTH".into(),
+            meta: Default::default(),
+            classes: vec![],
+            steps: vec![blur(1), blur(2)],
+            parameters: vec![],
+            origin: None,
+        };
+        definition.meta.name = "Smooth".into();
+        project.modules.push(definition);
+        project
+    }
+
+    fn at(step: u32, inner: &[u32]) -> BreakpointSettings {
+        BreakpointSettings {
+            pipeline_id: PipelineId(1),
+            step_id: StepId(step),
+            inner: inner.iter().map(|id| StepId(*id)).collect(),
+            mode: BreakpointMode::Stop,
+        }
+    }
+
+    #[test]
+    fn a_breakpoint_path_is_the_step_and_the_ids_inside_its_module() {
+        assert_eq!(parse_breakpoint_path("4"), Some((StepId(4), vec![])));
+        assert_eq!(
+            parse_breakpoint_path("4/2/1"),
+            Some((StepId(4), vec![StepId(2), StepId(1)]))
+        );
+        assert_eq!(parse_breakpoint_path(""), None);
+        assert_eq!(parse_breakpoint_path("4/x"), None);
+    }
+
+    #[test]
+    fn a_closed_module_with_a_breakpoint_inside_gets_the_ring_and_its_tip() {
+        let project = project();
+        let pipeline = &project.pipelines[0];
+        let marks = breakpoint_marks(&project, pipeline, Some(&[]), Some(&at(3, &[2])));
+        assert_eq!(
+            marks,
+            BreakpointMarks {
+                prefix: String::new(),
+                can_break: true,
+                inside_step: "3".into(),
+                inside_tip: "Breakpoint inside: #3 › 2 Blur · stop".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn inside_the_viewed_module_its_steps_are_addressed_by_the_path() {
+        let project = project();
+        let pipeline = &project.pipelines[0];
+        let marks = breakpoint_marks(&project, pipeline, Some(&[StepId(3)]), Some(&at(3, &[2])));
+        assert_eq!(marks.prefix, "3/");
+        assert!(marks.can_break);
+        assert_eq!(marks.inside_step, "", "the step itself shows the dot");
+    }
+
+    #[test]
+    fn a_module_opened_to_edit_takes_no_breakpoints() {
+        let project = project();
+        let marks = breakpoint_marks(&project, &project.pipelines[0], None, None);
+        assert_eq!(marks, BreakpointMarks::default());
+        assert!(!marks.can_break);
+    }
+
+    #[test]
+    fn a_plain_or_other_pipelines_breakpoint_puts_no_ring() {
+        let project = project();
+        let pipeline = &project.pipelines[0];
+        let on_module = breakpoint_marks(&project, pipeline, Some(&[]), Some(&at(3, &[])));
+        assert_eq!(on_module.inside_step, "", "on the module: its own dot");
+        let mut other = at(3, &[2]);
+        other.pipeline_id = PipelineId(2);
+        let elsewhere = breakpoint_marks(&project, pipeline, Some(&[]), Some(&other));
+        assert_eq!(elsewhere.inside_step, "");
     }
 }

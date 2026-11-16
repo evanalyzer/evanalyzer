@@ -24,7 +24,7 @@ use evanalyzer_app::preview::PreviewRequest;
 use evanalyzer_app::preview::PreviewViewport;
 use evanalyzer_app::preview::StartPreviewError;
 use evanalyzer_app::project::ProjectExt;
-use evanalyzer_cfg::core_types::{BreakpointSettings, InternalErrors, PipelineId, StepId};
+use evanalyzer_cfg::core_types::{InternalErrors, PipelineId, StepId};
 use evanalyzer_cfg::settings::pipeline_settings::StepContent;
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 use log::{error, info};
@@ -174,13 +174,7 @@ impl PipelineWorker {
                         zoom: vp.zoom,
                     }
                 };
-                let breakpoint =
-                    task.breakpoint
-                        .map(|(pipeline_id, step_id, mode)| BreakpointSettings {
-                            pipeline_id,
-                            step_id,
-                            mode,
-                        });
+                let breakpoint = task.breakpoint.clone();
                 // The prediction overlay: the classifier step it shows sends
                 // each tile's prediction (pixels) or its objects'.
                 let overlay = self.viewport_controller.prediction.settings();
