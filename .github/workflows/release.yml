@@ -12,15 +12,15 @@ on:
       sign:
         description: Sign the Windows binaries (Certum SimplySign)
         type: boolean
-        default: false
+        default: true
 
 env:
   # Windows code signing (see "Sign the Windows binaries" in build-windows).
-  # Default off: the "sign" input only exists on a manual run, so pushes
-  # (tags, pipeline_start) fall back to the 'false' at the end - change it
-  # to 'true' to sign every pushed build (needs the CERTUM_* secrets). A
-  # manual run follows its "sign" input.
-  SIGN_WINDOWS: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.sign) || 'false' }}
+  # On by default: the "sign" input only exists on a manual run, so pushes
+  # (tags, pipeline_start) fall back to the 'true' at the end and every
+  # pushed build is signed (needs the CERTUM_* secrets) - change it to
+  # 'false' to build unsigned. A manual run follows its "sign" input.
+  SIGN_WINDOWS: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.sign) || 'true' }}
 
 # Every build job uploads its own files to the release (see "Create the
 # GitHub release" in the templates job).
