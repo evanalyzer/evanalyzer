@@ -1035,6 +1035,8 @@ component ScalarControls inherits Rectangle {
             kind: p.options[0];
             number: p.options[1].to-float();
             in-module: PipelinesPanelState.open-module-name != "";
+            // A `MemoryId` setting: a third option "memory".
+            memory-only: p.options.length > 2 && p.options[2] == "memory";
             changed(v) => {
                 root.changed(v);
             }

@@ -10,7 +10,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use evanalyzer_cfg::settings::parameter_def::ParameterDef;
+use evanalyzer_cfg::settings::parameter_def::{ParamType, ParameterDef};
 use evanalyzer_cfg::settings::pipeline_command::{all_command_meta, default_command};
 
 fn all_params(params: &[ParameterDef], out: &mut Vec<ParameterDef>) {
@@ -129,4 +129,49 @@ fn the_color_filter_shows_only_the_hue() {
     let (basic, advanced) = basic_and_advanced("Color Filter");
     assert_eq!(basic, ["range.min_h", "range.max_h"]);
     assert_eq!(advanced.len(), 4);
+}
+
+/// The command named `name` as fresh, by its display name.
+fn command_named(name: &str) -> evanalyzer_cfg::settings::pipeline_command::PipelineCommand {
+    let meta = all_command_meta()
+        .into_iter()
+        .find(|m| m.name == name)
+        .unwrap_or_else(|| panic!("no command {name}"));
+    default_command(meta.id).unwrap()
+}
+
+fn param<'a>(params: &'a [ParameterDef], name: &str) -> Option<&'a ParameterDef> {
+    params.iter().find(|p| p.name == name)
+}
+
+#[test]
+fn grow_regions_memory_shows_its_memory_slot() {
+    let mut command = command_named("Grow Regions");
+    command.apply_param_change("growth_channel", "Memory");
+    let params = command.to_parameters();
+    let slot = param(&params, "growth_channel.0").expect("a memory slot picker");
+    assert_eq!(slot.param_type, ParamType::ImageAddress);
+    assert_eq!(slot.value, "memory:1");
+    assert_eq!(slot.options, ["memory", "1", "memory"]);
+
+    command.apply_param_change("growth_channel.0", "cache:3");
+    let params = command.to_parameters();
+    assert_eq!(param(&params, "growth_channel.0").unwrap().value, "cache:3");
+    // Not a memory slot: ignored.
+    command.apply_param_change("growth_channel.0", "channel:2");
+    let params = command.to_parameters();
+    assert_eq!(param(&params, "growth_channel.0").unwrap().value, "cache:3");
+}
+
+#[test]
+fn threshold_value_source_memory_shows_its_memory_slot() {
+    let mut command = command_named("Threshold");
+    command.add_group_item("thresholds");
+    command.apply_param_change("thresholds.0.value_source", "Memory");
+    command.apply_param_change("thresholds.0.value_source.0", "memory:4");
+    let params = command.to_parameters();
+    let entry = &param(&params, "thresholds").unwrap().groups[0];
+    let slot = param(entry, "value_source.0").expect("a memory slot picker");
+    assert_eq!(slot.param_type, ParamType::ImageAddress);
+    assert_eq!(slot.value, "memory:4");
 }

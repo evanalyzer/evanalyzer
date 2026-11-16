@@ -2187,6 +2187,21 @@ fn leaf_parts(
             0.0_f32,
             0.0_f32,
         ),
+        // A memory slot alone (e.g. Grow Regions' `Memory(MemoryId)` growth
+        // channel): the image-address picker, limited to memory kinds by the
+        // third option `"memory"`. Same value format, so module insights,
+        // slot renaming and script checks treat it like any image address.
+        "MemoryId" => (
+            "ParamType::ImageAddress",
+            format!(
+                "ImageAddress::Memory({{ let __m: &MemoryId = &{access}; *__m }}).to_param_value()"
+            ),
+            format!(
+                "{{ let (kind, nr) = ImageAddress::Memory({{ let __m: &MemoryId = &{access}; *__m }}).param_parts(); vec![kind.to_string(), nr.to_string(), \"memory\".to_string()] }}"
+            ),
+            0.0_f32,
+            0.0_f32,
+        ),
         "PixelUnits" => (
             "ParamType::PixelUnits",
             format!(
@@ -3038,6 +3053,9 @@ fn leaf_apply_change_branch(
         "ImageChannelIdx" => {
             format!("if let Ok(v) = value.parse::<u32>() {{ {assign} = ImageChannelIdx(v); }}")
         }
+        "MemoryId" => format!(
+            "if let Some(ImageAddress::Memory(v)) = ImageAddress::from_param_value(value) {{ {assign} = v; }}"
+        ),
         "PixelUnits" => format!(
             "{assign} = match value {{ \"bit\" => PixelUnits::Bit, \"%\" => PixelUnits::Percent, _ => PixelUnits::Relative }};"
         ),

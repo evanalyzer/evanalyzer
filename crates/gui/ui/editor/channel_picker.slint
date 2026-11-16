@@ -138,17 +138,22 @@ export component ChannelPicker inherits Rectangle {
 // "scratchpad"). Inside a module (`in-module`) "Module memory" - slots
 // of each use of the module alone ("module:1") - comes first; outside one a
 // module slot (only possible in an old file) shows as "Memory" and stays a
-// module slot when its number changes.
+// module slot when its number changes. `memory-only`: a setting that holds
+// a memory slot alone (a `MemoryId`, e.g. Grow Regions' growth channel
+// "Memory") - only the memory kinds are offered.
 export component ImageAddressPicker inherits HorizontalLayout {
     in property <string> kind;
     in property <int> number;
     in property <bool> in-module: false;
+    in property <bool> memory-only: false;
     in property <bool> enabled: true;
     callback changed(string);
 
     // The kinds offered, and which one `kind` is.
-    property <[string]> kinds: root.in-module ? ["Channel", "Module memory", "Memory", "Shared", "Scratchpad"] : ["Channel", "Memory", "Shared", "Scratchpad"];
+    property <[string]> kinds: root.memory-only ? (root.in-module ? ["Module memory", "Memory", "Shared"] : ["Memory", "Shared"]) : root.in-module ? ["Channel", "Module memory", "Memory", "Shared", "Scratchpad"] : ["Channel", "Memory", "Shared", "Scratchpad"];
     property <int> module-offset: root.in-module ? 1 : 0;
+    // Index of the first memory kind in `kinds` (after "Channel").
+    property <int> channel-offset: root.memory-only ? 0 : 1;
 
     spacing: 4px;
 
@@ -158,7 +163,7 @@ export component ImageAddressPicker inherits HorizontalLayout {
         // "Memory": this pipeline's slots; "Shared": slots every pipeline
         // after this one can read (a module's slots show as "Memory").
         model: root.kinds;
-        current-index: root.kind == "channel" ? 0 : root.kind == "module" && root.in-module ? 1 : root.kind == "cache" ? 2 + root.module-offset : root.kind == "scratchpad" ? 3 + root.module-offset : 1 + root.module-offset;
+        current-index: root.kind == "channel" ? 0 : root.kind == "module" && root.in-module ? root.channel-offset : root.kind == "cache" ? 1 + root.channel-offset + root.module-offset : root.kind == "scratchpad" ? 2 + root.channel-offset + root.module-offset : root.channel-offset + root.module-offset;
         selected(v) => {
             if v == "Channel" {
                 root.changed("channel:" + (root.kind == "channel" ? root.number : 0));
