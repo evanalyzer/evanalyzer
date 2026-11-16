@@ -12,7 +12,7 @@
 pub use evanalyzer_gui_slint::*;
 
 use evanalyzer_app::backends::{Backend, ConnectionSecurity};
-use evanalyzer_app::global::{AppHandle, ColorScheme, Frontend};
+use evanalyzer_app::global::{AppHandle, ColorScheme, Frontend, InterfaceSize};
 use evanalyzer_app::images::ImageMeta;
 use evanalyzer_app::images::ImageSource;
 use evanalyzer_app::project::{ProjectOwner, ProjectWithRuntime};
@@ -428,6 +428,31 @@ impl UiState {
         }
     }
 
+    /// How big the GUI draws buttons and text - always this computer's
+    /// setting, as it is about this computer's screen.
+    pub fn interface_size(&self) -> evanalyzer_app::global::InterfaceSize {
+        self.local_backend
+            .load_app_settings()
+            .map(|settings| settings.interface_size)
+            .unwrap_or_default()
+    }
+
+    /// Saves the interface size on this computer.
+    pub fn save_interface_size(&self, size: evanalyzer_app::global::InterfaceSize) {
+        // As `save_viewport_memory_settings`: the cached preferences too.
+        self.app_settings.lock().unwrap().interface_size = size;
+        let result = self
+            .local_backend
+            .load_app_settings()
+            .and_then(|mut settings| {
+                settings.interface_size = size;
+                self.local_backend.save_app_settings(&settings)
+            });
+        if let Err(e) = result {
+            log::warn!("Could not save the interface size: {e}");
+        }
+    }
+
     /// The file dialog's places: the folders the user added are kept in the
     /// user settings.
     pub fn attach_file_browser(self: &Arc<Self>, ui: &AppWindow) {
@@ -820,12 +845,16 @@ fn run(
     owner: ProjectOwner,
     project: Option<std::path::PathBuf>,
 ) -> Result<(), slint::PlatformError> {
+    // The user's interface size (EVA › View › Size), not the screen's own
+    // scale: set before the window exists, so Slint creates it at that
+    // scale and ignores the screen's scale from then on. Later changes go
+    // through `apply_interface_size`.
+    let interface_size = evanalyzer_app::backends::local::LocalBackend::default()
+        .load_app_settings()
+        .map(|settings| settings.interface_size)
+        .unwrap_or_default();
     unsafe {
-        // Skia has documented first-frame rendering glitches on this backend
-        // path (see https://github.com/slint-ui/slint/issues/7845) that
-        // FemtoVG doesn't share - left unset so Slint's normal fallback order
-        // (Skia -> FemtoVG -> software) picks the more stable renderer instead.
-        std::env::set_var("SLINT_SCALE_FACTOR", "1.0");
+        std::env::set_var("SLINT_SCALE_FACTOR", interface_size.factor().to_string());
     }
 
     startup_phase("GUI start");
@@ -1090,11 +1119,41 @@ fn apply_user_settings(ui: &AppWindow, ui_state: &Arc<UiState>) {
         });
     }
 
+    {
+        let ui_state = Arc::clone(ui_state);
+        let ui_weak = ui.as_weak();
+        ui.global::<Appearance>().on_size_changed(move |index| {
+            let size = InterfaceSize::from_index(index.max(0) as usize);
+            ui_state.save_interface_size(size);
+            if let Some(ui) = ui_weak.upgrade() {
+                apply_interface_size(ui.window(), size);
+            }
+        });
+    }
+
     let ui_state = Arc::clone(ui_state);
     ui.global::<Appearance>().on_scheme_changed(move |scheme| {
         ui_state
             .update_app_settings(|settings| settings.color_scheme = color_scheme_from_ui(scheme));
     });
+}
+
+/// Draws `window` at `size` from now on: the window keeps its size on the
+/// screen, its content is laid out again for the new scale.
+fn apply_interface_size(window: &slint::Window, size: InterfaceSize) {
+    use slint::platform::WindowEvent;
+    let scale_factor = size.factor();
+    let physical = window.size();
+    let dispatched = window
+        .dispatch_event_with_result(WindowEvent::ScaleFactorChanged { scale_factor })
+        .and_then(|_| {
+            window.dispatch_event_with_result(WindowEvent::Resized {
+                size: physical.to_logical(scale_factor),
+            })
+        });
+    if let Err(e) = dispatched {
+        log::warn!("Could not change the interface size: {e}");
+    }
 }
 
 /// The panels as the user left them: shown, folded, the image bar, the
@@ -1148,6 +1207,10 @@ fn panels_from_ui(ui: &AppWindow) -> evanalyzer_app::global::PanelSettings {
 pub(crate) fn apply_appearance(ui: &AppWindow, ui_state: &UiState) {
     let scheme = color_scheme_to_ui(ui_state.load_app_settings().color_scheme);
     ui.global::<Appearance>().invoke_apply(scheme);
+    // The window is already at this size (`run` set it before creating
+    // it) - only the menu's selection.
+    ui.global::<Appearance>()
+        .set_size_index(ui_state.interface_size().index() as i32);
 }
 
 fn color_scheme_to_ui(scheme: ColorScheme) -> InkScheme {
@@ -1810,6 +1873,51 @@ mod ui_state_tests {
         }
         ui.global::<Appearance>().invoke_pick(InkScheme::Dark);
         assert_eq!(ui_state.load_app_settings().color_scheme, ColorScheme::Dark);
+    }
+
+    /// EVA › View › Size and Ctrl + / - / 0: saved on this computer, the
+    /// window drawn at the new scale while it keeps its size on the screen;
+    /// stepping stops at 100 % and 200 %.
+    #[test]
+    fn a_picked_interface_size_is_remembered_and_applied_to_the_window() {
+        let ui = crate::editor::test_support::test_ui_window();
+        let ui_state =
+            crate::editor::test_support::ui_state_with_window(&ui, ProjectWithRuntime::default());
+        apply_user_settings(&ui, &ui_state);
+        ui.window().set_size(slint::PhysicalSize::new(1500, 900));
+        let appearance = ui.global::<Appearance>();
+        assert_eq!(appearance.get_size_index(), 0);
+
+        appearance.invoke_pick_size(2);
+        assert_eq!(ui_state.interface_size().percent(), 150);
+        assert_eq!(ui_state.load_app_settings().interface_size.percent(), 150);
+        assert_eq!(ui.window().scale_factor(), 1.5);
+        assert_eq!(ui.window().size(), slint::PhysicalSize::new(1500, 900));
+
+        appearance.invoke_bigger();
+        appearance.invoke_bigger();
+        appearance.invoke_bigger();
+        assert_eq!(appearance.get_size_index(), 4);
+        assert_eq!(ui_state.interface_size().percent(), 200);
+        assert_eq!(ui.window().scale_factor(), 2.0);
+
+        appearance.invoke_pick_size(0);
+        appearance.invoke_smaller();
+        assert_eq!(appearance.get_size_index(), 0);
+        assert_eq!(ui_state.interface_size().percent(), 100);
+        assert_eq!(ui.window().scale_factor(), 1.0);
+    }
+
+    #[test]
+    fn the_remembered_interface_size_is_shown_in_the_menu_at_start() {
+        let ui = crate::editor::test_support::test_ui_window();
+        let ui_state =
+            crate::editor::test_support::ui_state_with_window(&ui, ProjectWithRuntime::default());
+        ui_state.save_interface_size(InterfaceSize::from_index(3));
+
+        apply_user_settings(&ui, &ui_state);
+
+        assert_eq!(ui.global::<Appearance>().get_size_index(), 3);
     }
 
     #[test]

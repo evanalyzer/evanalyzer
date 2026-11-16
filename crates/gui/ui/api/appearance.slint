@@ -1,9 +1,10 @@
 // Copyright 2026 Joachim Danmayr.
 // Licensed under the PolyForm Noncommercial License 1.0.0.
 
-// api/appearance.slint — the color scheme. Rust applies the remembered one
-// at start (`apply`), the views report a change (`scheme-changed`) and
-// apply it themselves.
+// api/appearance.slint — the color scheme and the interface size. Rust
+// applies the remembered ones at start (`apply`, `size-index`), the views
+// report a change (`scheme-changed`, `size-changed`); a new size Rust
+// applies to the window.
 
 import { Palette } from "std-widgets.slint";
 import { Ink, InkScheme } from "../ink/palette.slint";
@@ -24,5 +25,24 @@ export global Appearance {
     public function pick(scheme: InkScheme) {
         self.apply(scheme);
         self.scheme-changed(scheme);
+    }
+
+    // The interface size: an index into `sizes` (100 % … 200 %).
+    in-out property <int> size-index: 0;
+    out property <[string]> sizes: ["100", "125", "150", "175", "200"];
+    // The user picked another size - for Rust to remember and apply it.
+    callback size-changed(int);
+
+    public function pick-size(index: int) {
+        if index >= 0 && index < self.sizes.length && index != self.size-index {
+            self.size-index = index;
+            self.size-changed(index);
+        }
+    }
+    public function bigger() {
+        self.pick-size(self.size-index + 1);
+    }
+    public function smaller() {
+        self.pick-size(self.size-index - 1);
     }
 }

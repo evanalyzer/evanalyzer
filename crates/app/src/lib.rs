@@ -85,6 +85,7 @@ pub mod global {
     pub use crate::workspace::crash_log;
     pub use crate::workspace::settings::AppSettings;
     pub use crate::workspace::settings::ColorScheme;
+    pub use crate::workspace::settings::InterfaceSize;
     pub use crate::workspace::settings::NavigatorMode;
     pub use crate::workspace::settings::PanelSettings;
     pub use crate::workspace::settings::PerformanceSettings;

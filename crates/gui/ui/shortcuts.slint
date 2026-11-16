@@ -45,6 +45,7 @@ import { ClassificationSettingsState } from "api/classification_class_edit.slint
 import { CommandPickerState } from "api/command_selection.slint";
 import { ProjectTemplateState } from "api/project_template.slint";
 import { ShortcutsDoc } from "api/shortcuts.slint";
+import { Appearance } from "api/appearance.slint";
 import { ExportDialogState } from "api/export.slint";
 import { ResultsState } from "api/results.slint";
 
@@ -108,6 +109,21 @@ export component GlobalShortcuts inherits FocusScope {
         // -- The command palette --
         if (e.modifiers.control && e.text == "k") {
             CommandPaletteState.open = true;
+            return accept;
+        }
+
+        // -- Interface size -- Ctrl + / Ctrl - / Ctrl 0, as browsers zoom.
+        // "=" is "+" without Shift on US keyboards.
+        if (e.modifiers.control && (e.text == "+" || e.text == "=")) {
+            Appearance.bigger();
+            return accept;
+        }
+        if (e.modifiers.control && e.text == "-") {
+            Appearance.smaller();
+            return accept;
+        }
+        if (e.modifiers.control && e.text == "0") {
+            Appearance.pick-size(0);
             return accept;
         }
 

@@ -97,6 +97,55 @@ pub struct AppSettings {
     /// Performance) - read at startup; `--max-threads` / `--max-ram` win.
     #[serde(default)]
     pub performance: PerformanceSettings,
+
+    /// How big the GUI draws buttons and text (EVA › View › Size) - this
+    /// computer's, as it is about its screen, so the GUI keeps it in this
+    /// computer's settings even when connected to a server. The screen's
+    /// own scale (Windows display scaling, …) is not used.
+    #[serde(default)]
+    pub interface_size: InterfaceSize,
+}
+
+/// The GUI's size in percent: one of [`InterfaceSize::PRESETS`]. A value
+/// edited by hand into the file is taken as the nearest preset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct InterfaceSize(u16);
+
+impl Default for InterfaceSize {
+    fn default() -> Self {
+        Self(100)
+    }
+}
+
+impl InterfaceSize {
+    /// The sizes the GUI offers, in percent.
+    pub const PRESETS: [u16; 5] = [100, 125, 150, 175, 200];
+
+    /// The preset at `index` in [`Self::PRESETS`] (clamped).
+    pub fn from_index(index: usize) -> Self {
+        Self(Self::PRESETS[index.min(Self::PRESETS.len() - 1)])
+    }
+
+    /// Which of [`Self::PRESETS`] this is - the nearest one for a value
+    /// that isn't one.
+    pub fn index(self) -> usize {
+        Self::PRESETS
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, p)| p.abs_diff(self.0))
+            .map_or(0, |(i, _)| i)
+    }
+
+    /// The preset in percent.
+    pub fn percent(self) -> u16 {
+        Self::PRESETS[self.index()]
+    }
+
+    /// The GUI's scale factor: 1.0 for 100 %.
+    pub fn factor(self) -> f32 {
+        f32::from(self.percent()) / 100.0
+    }
 }
 
 /// How much of this computer EVAnalyzer may use - for a computer that also
@@ -845,6 +894,33 @@ mod tests {
         let json = serde_json::to_string(&settings).unwrap();
         let parsed: AppSettings = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.color_scheme, ColorScheme::Dim);
+    }
+
+    /// 100 % when nothing is saved; a saved size comes back; a value edited
+    /// by hand is taken as the nearest preset.
+    #[test]
+    fn the_interface_size_defaults_to_100_and_round_trips() {
+        assert_eq!(AppSettings::default().interface_size.percent(), 100);
+        let parsed: AppSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(parsed.interface_size.factor(), 1.0);
+
+        let settings = AppSettings {
+            interface_size: InterfaceSize::from_index(2),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        assert!(json.contains("\"interfaceSize\":150"), "{json}");
+        let parsed: AppSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.interface_size.percent(), 150);
+        assert_eq!(parsed.interface_size.factor(), 1.5);
+
+        let edited: AppSettings = serde_json::from_str(r#"{"interfaceSize":160}"#).unwrap();
+        assert_eq!(edited.interface_size.percent(), 150);
+        let edited: AppSettings = serde_json::from_str(r#"{"interfaceSize":10}"#).unwrap();
+        assert_eq!(edited.interface_size.percent(), 100);
+        let edited: AppSettings = serde_json::from_str(r#"{"interfaceSize":900}"#).unwrap();
+        assert_eq!(edited.interface_size.percent(), 200);
+        assert_eq!(InterfaceSize::from_index(99).percent(), 200);
     }
 
     #[test]

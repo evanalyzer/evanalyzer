@@ -880,7 +880,8 @@ export component TopBar inherits Rectangle {
             // The menu, a gap, and room for the widest submenu beside it.
             property <length> gap: 4px;
             property <length> sub-x: main.width + box.gap;
-            property <length> sub-width: 280px;
+            // 300: the View menu's Size row (five presets) needs ~290.
+            property <length> sub-width: 300px;
             property <length> recent-y: recent-item.y - 5px;
             property <length> view-y: view-item.y - 5px;
             property <length> help-y: help-item.y - 5px;
@@ -1237,6 +1238,31 @@ export component TopBar inherits Rectangle {
                         selected: Ink.scheme == InkScheme.dark ? 1 : Ink.scheme == InkScheme.dim ? 2 : 0;
                         picked(i) => {
                             Appearance.pick(i == 1 ? InkScheme.dark : i == 2 ? InkScheme.dim : InkScheme.light);
+                        }
+                    }
+                }
+                // The interface size (Ctrl + / Ctrl - / Ctrl 0), in percent.
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    padding-top: 4px;
+                    padding-bottom: 4px;
+                    spacing: 10px;
+                    Text {
+                        width: 70px;
+                        text: "Size";
+                        font-size: Ink.fs-body;
+                        color: Ink.text;
+                        vertical-alignment: center;
+                    }
+
+                    InkSegmented {
+                        horizontal-stretch: 1;
+                        label: "Size in percent";
+                        model: Appearance.sizes;
+                        selected: Appearance.size-index;
+                        picked(i) => {
+                            Appearance.pick-size(i);
                         }
                     }
                 }

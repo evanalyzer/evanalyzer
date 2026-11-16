@@ -43,6 +43,9 @@ const ACTIONS: &[(&str, &str, &str)] = &[
     ("scheme-light", "Colors: light", ""),
     ("scheme-dark", "Colors: dark", ""),
     ("scheme-dim", "Colors: dim", ""),
+    ("size-bigger", "Size: bigger", "Ctrl +"),
+    ("size-smaller", "Size: smaller", "Ctrl -"),
+    ("size-reset", "Size: 100 %", "Ctrl 0"),
     ("shortcuts", "Keyboard shortcuts", "F1"),
 ];
 
@@ -237,6 +240,9 @@ fn run(ui: &AppWindow, id: &str) {
             "scheme-light" => ui.global::<Appearance>().invoke_pick(InkScheme::Light),
             "scheme-dark" => ui.global::<Appearance>().invoke_pick(InkScheme::Dark),
             "scheme-dim" => ui.global::<Appearance>().invoke_pick(InkScheme::Dim),
+            "size-bigger" => ui.global::<Appearance>().invoke_bigger(),
+            "size-smaller" => ui.global::<Appearance>().invoke_smaller(),
+            "size-reset" => ui.global::<Appearance>().invoke_pick_size(0),
             "shortcuts" => ui
                 .global::<GlobalAppState>()
                 .set_active_dialog(DialogType::ShortcutsHelp),
