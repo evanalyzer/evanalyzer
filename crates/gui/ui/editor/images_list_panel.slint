@@ -23,10 +23,12 @@ component ImageRow inherits Rectangle {
     accessible-label: root.data.name;
     accessible-item-selected: root.selected;
 
-    background: root.selected ? Ink.row-lift : ta.has-hover ? Ink.hover : transparent;
+    // Every list's rule (ink/row.slint): hovered `row-hover`, selected the
+    // lifted row with a ring.
+    background: root.selected ? Ink.row-lift : ta.has-hover ? Ink.row-hover : transparent;
     border-width: root.selected ? 1px : 0px;
     border-color: Ink.row-lift-ring;
-    border-radius: Ink.radius-md;
+    border-radius: Ink.radius-sm;
 
     ta := TouchArea {
         mouse-cursor: pointer;
@@ -62,7 +64,7 @@ component ImageRow inherits Rectangle {
             Text {
                 text: root.data.name;
                 font-size: Ink.fs-body;
-                font-weight: 600;
+                font-weight: root.selected ? 600 : 400;
                 color: Ink.text;
                 overflow: elide;
             }

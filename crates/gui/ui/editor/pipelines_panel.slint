@@ -1987,11 +1987,14 @@ component StepRow inherits Rectangle {
 
     // Collapsed: a line. Expanded: a card around the settings.
         property <bool> hovered: head-ta.has-hover;
-    // The buttons (settings, eye, ⋯) float over the row's end on hover
-    // or while open; hidden they keep no room - the values get it.
-    property <bool> controls-shown: root.hovered || step.expanded;
-    // What's under them, so the values fade out beneath.
-    property <color> line-bg: step.expanded ? Ink.panel : root.hovered ? Ink.hover : Ink.panel;
+    // The buttons (settings, eye, ⋯) on hover, selected or open - every
+    // list's rule; hidden they keep no room, the values get it. A
+    // switched-off step keeps its crossed eye in the same slot, so it
+    // doesn't move when the others appear.
+    property <bool> controls-shown: root.hovered || root.selected || step.expanded;
+    // Switched off: every list's rule - the line's content at 50 %, the
+    // buttons (the crossed eye) in full.
+    property <float> dim: step.enabled ? 1.0 : 0.5;
     // EVA › View › "Step values on a second line": the values under the name.
     property <bool> values-below: LayoutState.step-values-below && step.summary != "";
     property <bool> editable: !PipelinesPanelState.steps-read-only;
@@ -2000,12 +2003,12 @@ component StepRow inherits Rectangle {
         // A module whose breakpoint is on one of its own steps: a red ring.
         property <bool> bp-inside: root.bp-state == 0 && PipelinesPanelState.breakpoint-pipeline-id == root.pipeline-id && PipelinesPanelState.breakpoint-inside-step != "" && PipelinesPanelState.breakpoint-inside-step == root.step.step-id;
 
-    // Selected (what the step shortcuts act on): only a semibold name - no
-    // fill, no edge.
+    // Selected (what the step shortcuts act on): every list's lifted row
+    // with a ring and a semibold name; hovered `row-hover`.
     property <bool> selected: PipelinesPanelState.selected-step-id == root.idx;
-    background: step.expanded ? Ink.panel : head-ta.has-hover ? Ink.hover : transparent;
-    border-width: step.expanded ? 1px : 0px;
-    border-color: root.selected ? Ink.text-faint : Ink.border;
+    background: step.expanded ? Ink.panel : root.selected ? Ink.row-lift : head-ta.has-hover ? Ink.row-hover : transparent;
+    border-width: step.expanded || root.selected ? 1px : 0px;
+    border-color: step.expanded ? (root.selected ? Ink.text-faint : Ink.border) : Ink.row-lift-ring;
     border-radius: Ink.radius-md;
     clip: true;
 
@@ -2015,7 +2018,6 @@ component StepRow inherits Rectangle {
         // -- The line --
             Rectangle {
             height: root.values-below ? 48px : 34px;
-            opacity: step.enabled ? 1.0 : 0.5;
                 // The keyboard's ring (a click doesn't focus it).
                 border-radius: Ink.radius-md;
             border-width: line-keys.has-focus ? 2px : 0px;
@@ -2060,6 +2062,7 @@ component StepRow inherits Rectangle {
                     gutter := Rectangle {
                         property <bool> can-break: PipelinesPanelState.can-break;
                         width: 28px;
+                        opacity: root.dim;
                         accessible-role: button;
                         accessible-label: "Breakpoint at step \{root.step.step-id}";
                         // A circle (a pill for longer ids), the number inside it.
@@ -2102,6 +2105,7 @@ component StepRow inherits Rectangle {
                     // Category stripe.
                     Rectangle {
                         width: 3px;
+                        opacity: root.dim;
                         Rectangle {
                             height: root.values-below ? 32px : 18px;
                             width: 3px;
@@ -2125,6 +2129,7 @@ component StepRow inherits Rectangle {
 
                             step-name := Text {
                                 text: step.name;
+                                opacity: root.dim;
                                 // Locked while an analysis runs: grey.
                                 color: PipelinesPanelState.run-locked ? Ink.text-dim : Ink.text;
                                 font-size: Ink.fs-body;
@@ -2144,6 +2149,7 @@ component StepRow inherits Rectangle {
                             // Its settings are pinned to Tuning (⋯ › Unpin).
                             if step.pinned: Image {
                                 y: (parent.height - self.height) / 2;
+                                opacity: root.dim;
                                 width: 11px;
                                 source: InkIcons.tune;
                                 colorize: Ink.text-faint;
@@ -2171,6 +2177,7 @@ component StepRow inherits Rectangle {
                             if !root.values-below: StepValues {
                                 horizontal-stretch: 1;
                                 text: step.summary;
+                                opacity: root.dim;
                             }
                             if root.values-below: Rectangle {
                                 horizontal-stretch: 1;
@@ -2180,72 +2187,52 @@ component StepRow inherits Rectangle {
                         // Or on a line of their own, the row's whole width.
                         if root.values-below: StepValues {
                             text: step.summary;
+                            opacity: root.dim;
                         }
                     }
 
-                    // A hidden button that still says something: a switched-off
-                    // step's eye.
-                    if !root.controls-shown && !step.enabled: HorizontalLayout {
+                    // -- The buttons: ⤢, eye, ⋯ last, each slot 22 px --
+                    // Shown on hover, selected or open; a switched-off step
+                    // keeps only its crossed eye, in the same slot.
+                    if root.controls-shown || !step.enabled: HorizontalLayout {
+                        spacing: 0px;
+                        padding-left: 4px;
                         padding-right: 4px;
-                        if !step.enabled: InkIconButton {
-                            y: (parent.height - self.height) / 2;
-                            size: 22px;
-                            icon: InkIcons.hidden;
-                            label: "Switch the step on";
-                            enabled: root.editable;
-                            clicked => {
-                                root.toggle-enabled();
-                            }
-                        }
-                    }
-                }
 
-                // -- The buttons, over the row's end --
-                if root.controls-shown: HorizontalLayout {
-                    x: parent.width - self.width;
-                    width: self.preferred-width;
-                    height: parent.height;
-                    spacing: 0px;
-
-                    // The values fade out under them.
-                    Rectangle {
-                        width: 20px;
-                        background: @linear-gradient(90deg, root.line-bg.transparentize(100%) 0%, root.line-bg 100%);
-                    }
-
-                    Rectangle {
-                        background: root.line-bg;
-                        HorizontalLayout {
-                            spacing: 0px;
-                            padding-right: 4px;
-
-                            // The settings in the larger dialog.
-                            if step.parameters.length > 0 || step.advanced-count > 0: InkIconButton {
+                        // The settings in the larger dialog.
+                        if step.parameters.length > 0 || step.advanced-count > 0: Rectangle {
+                            width: 22px;
+                            if root.controls-shown: InkIconButton {
                                 y: (parent.height - self.height) / 2;
                                 size: 22px;
+                                on-row: true;
                                 icon: InkIcons.expand;
                                 label: "Open the settings";
                                 clicked => {
                                     root.open-settings();
                                 }
                             }
+                        }
 
-                            // Every list's order: eye, then ⋯ last.
-                            InkIconButton {
-                                y: (parent.height - self.height) / 2;
-                                size: 22px;
-                                icon: step.enabled ? InkIcons.visible : InkIcons.hidden;
-                                label: step.enabled ? "Switch the step off" : "Switch the step on";
-                                enabled: root.editable;
-                                disabled-reason: PipelinesPanelState.run-locked ? "Steps are locked while the analysis runs" : "This module is only viewed";
-                                clicked => {
-                                    root.toggle-enabled();
-                                }
+                        InkIconButton {
+                            y: (parent.height - self.height) / 2;
+                            size: 22px;
+                            on-row: true;
+                            icon: step.enabled ? InkIcons.visible : InkIcons.hidden;
+                            label: step.enabled ? "Switch the step off" : "Switch the step on";
+                            enabled: root.editable;
+                            disabled-reason: PipelinesPanelState.run-locked ? "Steps are locked while the analysis runs" : "This module is only viewed";
+                            clicked => {
+                                root.toggle-enabled();
                             }
+                        }
 
-                            InkIconButton {
+                        Rectangle {
+                            width: 22px;
+                            if root.controls-shown: InkIconButton {
                                 y: (parent.height - self.height) / 2;
                                 size: 22px;
+                                on-row: true;
                                 icon: InkIcons.more;
                                 label: "Step actions";
                                 clicked => {
@@ -2514,15 +2501,18 @@ component StepRow inherits Rectangle {
     }
 
     step-menu := PopupWindow {
-        x: root.width - 220px;
+        x: root.width - 250px;
         y: 32px;
         InkMenuFrame {
             open-y: root.absolute-position.y + 32px;
-            menu-width: 220px;
+            // "Pin settings to Tuning" and its shortcuts fit.
+            menu-width: 250px;
             InkMenuCaption {
                 text: root.step.name;
             }
 
+            // Every ⋯ menu's order (canvas "Menus", A): open / edit · state ·
+            // duplicate / save · move · add · delete last; one icon per action.
             if root.step.help != "": InkMenuItem {
                 icon: InkIcons.info;
                 text: "Help";
@@ -2540,7 +2530,32 @@ component StepRow inherits Rectangle {
                 }
             }
 
+            if root.step.category == StepCategory.module: InkMenuItem {
+                icon: InkIcons.search;
+                text: "Look into module";
+                clicked => {
+                    root.view-module();
+                }
+            }
+            if root.step.category == StepCategory.module && root.editable: InkMenuItem {
+                icon: InkIcons.edit;
+                text: "Edit this module";
+                clicked => {
+                    root.edit-in-place();
+                }
+            }
+            if root.step.category == StepCategory.module && root.editable: InkMenuItem {
+                icon: InkIcons.open-external;
+                text: "Edit modules";
+                clicked => {
+                    root.open-module();
+                }
+            }
+
+            InkMenuSeparator { }
+
             InkMenuItem {
+                icon: root.step.enabled ? InkIcons.hidden : InkIcons.visible;
                 text: root.step.enabled ? "Disable" : "Enable";
                 shortcut: "Ctrl /";
                 enabled: root.editable;
@@ -2550,6 +2565,7 @@ component StepRow inherits Rectangle {
             }
 
             InkMenuItem {
+                icon: InkIcons.breakpoint;
                 text: root.bp-state == 0 ? "Breakpoint" : root.bp-state == 1 ? "Breakpoint: snapshot" : "No breakpoint";
                 shortcut: "F9";
                 clicked => {
@@ -2558,7 +2574,6 @@ component StepRow inherits Rectangle {
             }
 
             // Its settings into the Tuning dock (again: out).
-            if root.step.parameters.length > 0 || root.step.advanced-count > 0: InkMenuSeparator { }
             if root.step.parameters.length > 0 || root.step.advanced-count > 0: InkMenuItem {
                 icon: InkIcons.tune;
                 text: root.step.pinned ? "Unpin from Tuning" : "Pin settings to Tuning";
@@ -2578,6 +2593,33 @@ component StepRow inherits Rectangle {
                     root.duplicate();
                 }
             }
+
+            InkMenuItem {
+                icon: InkIcons.module;
+                text: "Create module";
+                enabled: root.editable;
+                clicked => {
+                    root.create-module();
+                }
+            }
+
+            if root.step.category == StepCategory.module && PipelinesPanelState.open-module-name == "": InkMenuItem {
+                icon: InkIcons.save;
+                text: "Save as";
+                clicked => {
+                    root.save-to-library();
+                }
+            }
+
+            if root.step.category == StepCategory.module && root.editable: InkMenuItem {
+                icon: InkIcons.steps;
+                text: "Expand";
+                clicked => {
+                    root.expand-module();
+                }
+            }
+
+            InkMenuSeparator { }
 
             InkMenuItem {
                 icon: InkIcons.caret-up;
@@ -2603,55 +2645,31 @@ component StepRow inherits Rectangle {
 
             InkMenuSeparator { }
 
-            if root.step.category == StepCategory.module: InkMenuItem {
-                text: "Look into module";
-                clicked => {
-                    root.view-module();
-                }
-            }
-            if root.step.category == StepCategory.module && root.editable: InkMenuItem {
-                text: "Edit this module";
-                clicked => {
-                    root.edit-in-place();
-                }
-            }
-
-            InkMenuSeparator { }
-
+            // As the pipelines' ⋯ (New pipeline above / below): without
+            // aiming at the insert line's +. "Add step" as the button.
             InkMenuItem {
-                icon: InkIcons.module;
-                text: "Create module";
+                icon: InkIcons.insert-above;
+                text: "Add step above";
                 enabled: root.editable;
                 clicked => {
-                    root.create-module();
+                    PipelinesPanelState.insert-step(root.pipeline-id, root.idx - 1);
                 }
             }
 
-            if root.step.category == StepCategory.module && root.editable: InkMenuItem {
-                text: "Edit modules";
+            InkMenuItem {
+                icon: InkIcons.insert-below;
+                text: "Add step below";
+                enabled: root.editable;
                 clicked => {
-                    root.open-module();
-                }
-            }
-            if root.step.category == StepCategory.module && root.editable: InkMenuItem {
-                text: "Expand";
-                clicked => {
-                    root.expand-module();
+                    PipelinesPanelState.insert-step(root.pipeline-id, root.idx);
                 }
             }
 
-            if root.step.category == StepCategory.module && PipelinesPanelState.open-module-name == "": InkMenuItem {
-                icon: InkIcons.save;
-                text: "Save as";
-                clicked => {
-                    root.save-to-library();
-                }
-            }
             InkMenuSeparator { }
 
             InkMenuItem {
                 icon: InkIcons.delete;
-                text: "Remove step";
+                text: "Delete step";
                 shortcut: "Del";
                 danger: true;
                 enabled: root.editable;
@@ -2835,7 +2853,7 @@ export component PipelinesPanel inherits Rectangle {
                             for p[i] in PipelinesPanelState.pipelines: InsertBar {
                                 y: 5px + i * root.pipeline-row-h;
                                 height: 0px;
-                                reach: 5px;
+                                reach: 6px;
                                 dot-x: 12px;
                                 tag: "New pipeline · \{i + 1}";
                                 insert => {
@@ -2845,7 +2863,7 @@ export component PipelinesPanel inherits Rectangle {
                             if PipelinesPanelState.pipelines.length > 0: InsertBar {
                                 y: 5px + PipelinesPanelState.pipelines.length * root.pipeline-row-h;
                                 height: 0px;
-                                reach: 5px;
+                                reach: 6px;
                                 dot-x: 12px;
                                 tag: "New pipeline · \{PipelinesPanelState.pipelines.length + 1}";
                                 insert => {
@@ -3257,8 +3275,31 @@ export component PipelinesPanel inherits Rectangle {
                     }
 
                     InkHint {
-                        text: root.has-pipeline ? "Add a step below - it runs on every image." : "A pipeline is a list of steps run on every image - make one with + above.";
+                        text: root.has-pipeline ? "Its steps run on every image, top to bottom." : "A pipeline is a list of steps run on every image.";
                         horizontal-alignment: center;
+                    }
+
+                    // The action under the text (the footer's Add step is
+                    // hidden while the list is empty).
+                    HorizontalLayout {
+                        alignment: center;
+                        padding-top: 6px;
+                        if root.has-pipeline && !PipelinesPanelState.steps-read-only: InkButton {
+                            kind: InkButtonKind.primary;
+                            icon: InkIcons.add;
+                            text: "Add step";
+                            clicked => {
+                                PipelinesPanelState.insert-step(PipelinesPanelState.active-pipeline-id, -1);
+                            }
+                        }
+                        if !root.has-pipeline: InkButton {
+                            kind: InkButtonKind.primary;
+                            icon: InkIcons.add;
+                            text: "New pipeline";
+                            clicked => {
+                                PipelinesPanelState.new-pipeline();
+                            }
+                        }
                     }
                 }
 
@@ -3329,7 +3370,9 @@ export component PipelinesPanel inherits Rectangle {
 
                     if !PipelinesPanelState.steps-read-only: InsertBar {
                         height: 8px;
-                        reach: 4px;
+                        // The step number (the breakpoint's circle) starts
+                        // 8 px into the 34 px line: 5 px stay off it.
+                        reach: 5px;
                         dot-x: 14px;
                         tag: "Insert step · \{i + 2}";
                         insert => {
@@ -3380,7 +3423,7 @@ export component PipelinesPanel inherits Rectangle {
             // Add a step, the palette, focus mode, the time per image.
             HorizontalLayout {
                 spacing: 8px;
-                if root.pipeline-selected && !PipelinesPanelState.steps-read-only: InkButton {
+                if root.pipeline-selected && !PipelinesPanelState.steps-read-only && PipelinesPanelState.active-commands.length > 0: InkButton {
                     small: true;
                     icon: InkIcons.add;
                     text: "Add step";
@@ -3685,13 +3728,25 @@ export component PipelinesPanel inherits Rectangle {
                 text: root.menu-pipeline-name;
             }
 
+            // Every ⋯ menu's order (canvas "Menus", A): open / edit · state ·
+            // duplicate / save · move · add · delete last; one icon per action.
             InkMenuItem {
                 icon: InkIcons.edit;
-                text: "Edit pipeline …";
+                text: "Edit pipeline…";
                 clicked => {
                     PipelinesPanelState.pipeline-more(root.menu-pipeline-id);
                 }
             }
+
+            InkMenuItem {
+                icon: InkIcons.focus;
+                text: "Focus on this pipeline";
+                clicked => {
+                    PipelineFocusState.toggle-pipeline-focus(root.menu-pipeline-id);
+                }
+            }
+
+            InkMenuSeparator { }
 
             InkMenuItem {
                 icon: InkIcons.copy;
@@ -3712,24 +3767,7 @@ export component PipelinesPanel inherits Rectangle {
             InkMenuSeparator { }
 
             InkMenuItem {
-                icon: InkIcons.add;
-                text: "New pipeline above";
-                clicked => {
-                    PipelinesPanelState.insert-pipeline(root.menu-pipeline-index);
-                }
-            }
-
-            InkMenuItem {
-                icon: InkIcons.add;
-                text: "New pipeline below";
-                clicked => {
-                    PipelinesPanelState.insert-pipeline(root.menu-pipeline-index + 1);
-                }
-            }
-
-            InkMenuSeparator { }
-
-            InkMenuItem {
+                icon: InkIcons.caret-up;
                 text: "Move up";
                 enabled: root.menu-pipeline-index > 0;
                 clicked => {
@@ -3738,6 +3776,7 @@ export component PipelinesPanel inherits Rectangle {
             }
 
             InkMenuItem {
+                icon: InkIcons.caret-down;
                 text: "Move down";
                 enabled: root.menu-pipeline-index < PipelinesPanelState.pipelines.length - 1;
                 clicked => {
@@ -3746,6 +3785,7 @@ export component PipelinesPanel inherits Rectangle {
             }
 
             InkMenuItem {
+                icon: InkIcons.move-top;
                 text: "Move to top";
                 enabled: root.menu-pipeline-index > 0;
                 clicked => {
@@ -3754,6 +3794,7 @@ export component PipelinesPanel inherits Rectangle {
             }
 
             InkMenuItem {
+                icon: InkIcons.move-bottom;
                 text: "Move to bottom";
                 enabled: root.menu-pipeline-index < PipelinesPanelState.pipelines.length - 1;
                 clicked => {
@@ -3764,12 +3805,22 @@ export component PipelinesPanel inherits Rectangle {
             InkMenuSeparator { }
 
             InkMenuItem {
-                icon: InkIcons.focus;
-                text: "Focus on this pipeline";
+                icon: InkIcons.insert-above;
+                text: "New pipeline above";
                 clicked => {
-                    PipelineFocusState.toggle-pipeline-focus(root.menu-pipeline-id);
+                    PipelinesPanelState.insert-pipeline(root.menu-pipeline-index);
                 }
             }
+
+            InkMenuItem {
+                icon: InkIcons.insert-below;
+                text: "New pipeline below";
+                clicked => {
+                    PipelinesPanelState.insert-pipeline(root.menu-pipeline-index + 1);
+                }
+            }
+
+            InkMenuSeparator { }
 
             InkMenuItem {
                 icon: InkIcons.delete;

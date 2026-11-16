@@ -47,8 +47,14 @@ export global Ink {
     out property <color> raised: root.pick(#F1F1F3, #27272A, #36363D);
     /// Text fields, spinners, pickers.
     out property <color> field: root.pick(#FAFAFA, #1F1F23, #303037);
-    /// Hover over a row or a quiet button.
+    /// Hover over a quiet button (not a list row: see `row-hover`).
     out property <color> hover: root.pick(#F4F4F5, #232327, #34343B);
+    /// A hovered list row in every list: the text color at 7 % over
+    /// whatever is below - the glass panels (where `hover` is the panel's
+    /// own color), the pipelines area, a dialog.
+    out property <color> row-hover: root.pick(#1A1A1E12, #F4F4F512, #E8E8EA12);
+    /// A row's eye / ⋯ / ⤢ hovered: the same 8 % once more over the row.
+    out property <color> row-button-hover: root.pick(#1A1A1E14, #F4F4F514, #E8E8EA14);
     /// The selected row, the active tab or chip.
     out property <color> selection: root.pick(#F1F1F3, #26262B, #3A3A42);
     /// A tint of `focus` - no longer the list selection (see `row-lift`;

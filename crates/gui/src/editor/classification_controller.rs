@@ -259,6 +259,18 @@ impl ClassificationController {
                     manager.sync_classification_to_slint();
                 });
 
+            // Duplicate (⋯ › Duplicate): a copy right below it.
+            let manager = self.clone();
+            ui.global::<ClassificationState>()
+                .on_class_copy(move |class_id| {
+                    let mut project = manager.app_state.get_project_write();
+                    project
+                        .classification
+                        .duplicate_class(AssignObjectClass!(class_id));
+                    drop(project);
+                    manager.sync_classification_to_slint();
+                });
+
             // Move down
             let manager = self.clone();
             ui.global::<ClassificationState>()
@@ -606,6 +618,37 @@ mod tests {
         dialog.invoke_apply_classification_settings(settings(-1, "Spots"));
         assert_eq!(dialog.get_created_count(), 2);
         assert_ne!(dialog.get_last_created_id(), first);
+    }
+
+    /// Class ⋯ › Duplicate: a copy right below the class, in the list too.
+    #[test]
+    fn duplicate_in_the_class_menu_adds_a_copy_below_the_class() {
+        let ui = crate::editor::test_support::test_ui_window();
+        let project = crate::editor::test_support::project_with_one_image();
+        let (ui_state, controller) = classification_on_windows(&ui, project);
+        controller.attach_callbacks();
+        let dialog = ui.global::<ClassificationSettingsState>();
+        dialog.invoke_apply_classification_settings(settings(-1, "Nuclei"));
+        dialog.invoke_apply_classification_settings(settings(-1, "Spots"));
+        let nuclei = ui_state.get_project().classification.classes()[1].id as i32;
+
+        ui.global::<ClassificationState>().invoke_class_copy(nuclei);
+        crate::helper::ui_thread::drain_ui_queue();
+
+        let names: Vec<String> = ui_state
+            .get_project()
+            .classification
+            .classes()
+            .iter()
+            .map(|c| c.name.clone())
+            .collect();
+        assert_eq!(names[1..], ["Nuclei", "Nuclei copy", "Spots"]);
+        assert_eq!(
+            ui.global::<ClassificationState>()
+                .get_classes_list()
+                .row_count(),
+            4
+        );
     }
 
     #[test]

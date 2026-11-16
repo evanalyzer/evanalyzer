@@ -93,7 +93,9 @@ export component PipelineRow inherits Rectangle {
     property <length> drag-dy: 0px;
     property <int> drag-rows: round(root.drag-dy / root.height);
     property <color> mute: root.on-tray ? Ink.text-dim : Ink.text-mute;
-    property <float> dim: root.pipeline.enabled ? 1.0 : 0.45;
+    // Not in the run: every list's rule, the content at 50 %, the buttons
+    // (the crossed eye) in full.
+    property <float> dim: root.pipeline.enabled ? 1.0 : 0.5;
 
     height: 30px;
     accessible-role: list-item;
@@ -117,7 +119,7 @@ export component PipelineRow inherits Rectangle {
         // class - one look for 'in use' in every list.
         background: root.dragging ? Ink.panel
             : root.active ? Ink.row-lift
-            : root.hovered || root.cursor ? (root.on-tray ? Ink.tray-hover : Ink.hover) : transparent;
+            : root.hovered || root.cursor ? Ink.row-hover : transparent;
         border-width: root.cursor || root.active ? 1px : 0px;
         border-color: root.cursor ? Ink.focus : root.on-tray ? Ink.tray-lift-ring : Ink.row-lift-ring;
         drop-shadow-blur: root.dragging ? 12px : 0px;
@@ -152,6 +154,7 @@ export component PipelineRow inherits Rectangle {
                         font-size: Ink.fs-caption;
                         font-family: Ink.font-mono;
                         color: root.mute;
+                        opacity: root.dim;
                         horizontal-alignment: right;
                         vertical-alignment: center;
                     }
@@ -224,12 +227,13 @@ export component PipelineRow inherits Rectangle {
                 }
 
                 // The buttons in every list's order: eye, then ⋯ last.
-                // In the run: no icon (an eye on hover); not: a crossed eye.
+                // In the run: an eye on hover or selected; not: a crossed eye.
                 Rectangle {
-                    width: 20px;
-                    if !root.pipeline.enabled || (root.hovered && !root.dragging): InkIconButton {
+                    width: 22px;
+                    if !root.pipeline.enabled || ((root.hovered || root.active) && !root.dragging): InkIconButton {
                         y: (parent.height - self.height) / 2;
-                        size: 20px;
+                        size: 22px;
+                        on-row: true;
                         icon: root.pipeline.enabled ? InkIcons.visible : InkIcons.hidden;
                         label: root.pipeline.enabled ? "Leave out of the run" : "Include in the run";
                         clicked => {
@@ -238,12 +242,14 @@ export component PipelineRow inherits Rectangle {
                     }
                 }
 
-                // ⋯ on hover; its column keeps its width, so nothing moves.
+                // ⋯ on hover or selected; its column keeps its width, so
+                // nothing moves.
                 Rectangle {
-                    width: 20px;
-                    if root.hovered && !root.dragging: InkIconButton {
+                    width: 22px;
+                    if (root.hovered || root.active) && !root.dragging: InkIconButton {
                         y: (parent.height - self.height) / 2;
-                        size: 20px;
+                        size: 22px;
+                        on-row: true;
                         icon: InkIcons.more;
                         label: "Pipeline actions";
                         clicked => {
@@ -258,15 +264,19 @@ export component PipelineRow inherits Rectangle {
 
 // Where a new step or pipeline goes: hovered, a blue line, a round + in
 // the number column and a tag on the line ("Insert step · 4"); a click
-// inserts there. Its hit area reaches `reach` into the rows above and
-// below, so a thin (or zero) gap is enough - nothing opens up, no tooltip
-// covers the next row. Between pipeline rows it sits in a layer above
-// them, or the next row would cover it.
+// inserts there. Its hit area is only the number column (`zone-width`)
+// between two rows, reaching `reach` into them - the rest of a row's
+// width always selects the row, right to its edge, and passing over the
+// list shows no line. In the steps the number is the breakpoint: `reach`
+// stays short of its circle. Between pipeline rows it sits in a layer
+// above them, or the next row would cover it.
 export component InsertBar inherits Rectangle {
     in property <string> tag;
     // x of the + (its centre), the number column.
     in property <length> dot-x: 16px;
     in property <length> reach: 4px;
+    // The hit area's width from the left: the number column.
+    in property <length> zone-width: 28px;
     callback insert;
 
     property <bool> shown: ta.has-hover;
@@ -279,6 +289,8 @@ export component InsertBar inherits Rectangle {
     }
 
     ta := TouchArea {
+        x: 0px;
+        width: root.zone-width;
         y: -root.reach;
         height: root.height + 2 * root.reach;
         mouse-cursor: pointer;

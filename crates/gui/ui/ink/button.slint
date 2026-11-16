@@ -131,6 +131,9 @@ export component InkIconButton inherits Rectangle {
     in property <[string]> keys;
     in property <string> disabled-reason;
     in property <InkTipSide> tip-side: InkTipSide.below;
+    /// A list row's eye / ⋯ / ⤢: hovered it darkens the row's hover
+    /// (`row-button-hover`) instead of the opaque `hover`.
+    in property <bool> on-row: false;
     /// The pointer is over it - e.g. to keep a button shown only on hover.
     out property <bool> has-hover: ta.has-hover;
     callback clicked;
@@ -149,10 +152,10 @@ export component InkIconButton inherits Rectangle {
     }
 
     face := Rectangle {
-        border-radius: Ink.radius-md;
+        border-radius: root.on-row ? Ink.radius-sm : Ink.radius-md;
         border-width: keys.has-focus ? 2px : 0px;
         border-color: Ink.focus;
-        background: root.active ? Ink.selection : (ta.has-hover && root.enabled ? Ink.hover : transparent);
+        background: root.active ? Ink.selection : (ta.has-hover && root.enabled ? (root.on-row ? Ink.row-button-hover : Ink.hover) : transparent);
         opacity: root.enabled ? 1.0 : 0.4;
         animate background { duration: 80ms; }
 

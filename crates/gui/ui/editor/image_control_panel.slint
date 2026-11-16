@@ -25,7 +25,7 @@ component ChannelRow inherits Rectangle {
     callback select;
     callback toggle;
 
-    height: 24px;
+    height: Ink.row-h;
     accessible-role: list-item;
     accessible-label: root.name;
     accessible-item-selected: root.selected;
@@ -33,65 +33,73 @@ component ChannelRow inherits Rectangle {
 
     face := Rectangle {
         border-radius: Ink.radius-sm;
-        background: root.selected ? Ink.row-lift : ta.has-hover ? Ink.hover : transparent;
+        // Every list's rule (ink/row.slint).
+        background: root.selected ? Ink.row-lift : ta.has-hover ? Ink.row-hover : transparent;
         border-width: root.selected ? 1px : 0px;
         border-color: Ink.row-lift-ring;
 
+        // The swatch and the eye inside it: over them the row stays hovered.
         ta := TouchArea {
             clicked => {
                 root.select();
             }
-        }
 
-        HorizontalLayout {
-            padding-left: 6px;
-            padding-right: 4px;
-            spacing: 8px;
-            swatch := Rectangle {
-                y: (parent.height - self.height) / 2;
-                width: 12px;
-                height: 12px;
-                border-radius: 3px;
-                background: root.active ? root.tint : transparent;
-                border-width: 1px;
-                border-color: root.active ? Ink.shadow.with-alpha(0.2) : Ink.text-faint;
-                accessible-role: checkbox;
-                accessible-label: "Show " + root.name;
-                accessible-checked: root.active;
-                TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.toggle();
+            HorizontalLayout {
+                padding-left: 6px;
+                padding-right: 4px;
+                spacing: 8px;
+                swatch := Rectangle {
+                    y: (parent.height - self.height) / 2;
+                    width: 12px;
+                    height: 12px;
+                    border-radius: 3px;
+                    background: root.active ? root.tint : transparent;
+                    border-width: 1px;
+                    border-color: root.active ? Ink.shadow.with-alpha(0.2) : Ink.text-faint;
+                    accessible-role: checkbox;
+                    accessible-label: "Show " + root.name;
+                    accessible-checked: root.active;
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.toggle();
+                        }
                     }
                 }
-            }
-            Text {
-                horizontal-stretch: 1;
-                text: root.name;
-                font-size: Ink.fs-body;
-                font-weight: root.selected ? 600 : 400;
-                color: root.active ? Ink.text : Ink.text-mute;
-                vertical-alignment: center;
-                overflow: elide;
-                accessible-role: none;
-            }
-            Text {
-                text: "ch " + root.idx;
-                font-size: Ink.fs-secondary;
-                font-family: Ink.font-mono;
-                color: Ink.text-mute;
-                vertical-alignment: center;
-            }
-            // Every list's rule: an eye on hover, a crossed eye always while
-            // hidden (over the button the row's hover ends: its own counts).
-            InkIconButton {
-                y: (parent.height - self.height) / 2;
-                size: 22px;
-                opacity: !root.active || root.selected || ta.has-hover || self.has-hover ? 1.0 : 0.0;
-                icon: root.active ? InkIcons.visible : InkIcons.hidden;
-                label: root.active ? "Hide " + root.name : "Show " + root.name;
-                clicked => {
-                    root.toggle();
+                Text {
+                    horizontal-stretch: 1;
+                    text: root.name;
+                    font-size: Ink.fs-body;
+                    font-weight: root.selected ? 600 : 400;
+                    // Hidden: every list's rule, the content at 50 %.
+                    color: Ink.text;
+                    opacity: root.active ? 1.0 : 0.5;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    accessible-role: none;
+                }
+                Text {
+                    text: "ch " + root.idx;
+                    font-size: Ink.fs-secondary;
+                    font-family: Ink.font-mono;
+                    color: Ink.text-mute;
+                    opacity: root.active ? 1.0 : 0.5;
+                    vertical-alignment: center;
+                }
+                // Every list's rule: the eye on hover or selected, a crossed
+                // eye always while hidden; its slot keeps its width.
+                Rectangle {
+                    width: 22px;
+                    if !root.active || root.selected || ta.has-hover: InkIconButton {
+                        y: (parent.height - self.height) / 2;
+                        size: 22px;
+                        on-row: true;
+                        icon: root.active ? InkIcons.visible : InkIcons.hidden;
+                        label: root.active ? "Hide " + root.name : "Show " + root.name;
+                        clicked => {
+                            root.toggle();
+                        }
+                    }
                 }
             }
         }
@@ -340,11 +348,11 @@ export component ImageControlPanel inherits Rectangle {
         // view.
         if !root.folded: ScrollView {
             vertical-stretch: 1;
-            min-height: min(channels.preferred-height, 3 * 24px + 12px);
+            min-height: min(channels.preferred-height, 3 * Ink.row-h + 12px);
             // Objects open below: about five rows, the list takes the rest;
             // else every channel.
             preferred-height: LayoutState.objects-open && !LayoutState.objects-folded && !LayoutState.objects-as-table && !root.in-split
-                ? min(channels.preferred-height, 5 * 24px + 12px) : channels.preferred-height;
+                ? min(channels.preferred-height, 5 * Ink.row-h + 12px) : channels.preferred-height;
 
             channels := VerticalLayout {
                 padding-left: Ink.pad-panel;

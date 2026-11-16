@@ -453,7 +453,10 @@ export component ResultsBarNav inherits HorizontalLayout {
 
             InkMenuSeparator { }
 
+            // Actions: every ⋯ menu's order and icons (canvas "Menus", A);
+            // the choices above carry no icon, only a ✓.
             InkMenuItem {
+                icon: InkIcons.edit;
                 text: "Rename…";
                 clicked => {
                     ResultsState.renaming-view = root.menu-id;
@@ -461,6 +464,26 @@ export component ResultsBarNav inherits HorizontalLayout {
             }
 
             InkMenuItem {
+                icon: InkIcons.copy;
+                text: "Duplicate";
+                clicked => {
+                    ResultsState.view-duplicate(root.menu-id);
+                }
+            }
+
+            InkMenuItem {
+                icon: InkIcons.undo;
+                text: "Back to how it was saved";
+                enabled: root.menu-index >= 0 && root.menu-index < ResultsState.views-revertable.length && ResultsState.views-revertable[root.menu-index];
+                clicked => {
+                    ResultsState.view-revert(root.menu-id);
+                }
+            }
+
+            InkMenuSeparator { }
+
+            InkMenuItem {
+                icon: InkIcons.caret-left;
                 text: "Move left";
                 enabled: root.menu-index > 0;
                 clicked => {
@@ -469,6 +492,7 @@ export component ResultsBarNav inherits HorizontalLayout {
             }
 
             InkMenuItem {
+                icon: InkIcons.caret-right;
                 text: "Move right";
                 enabled: root.menu-index >= 0 && root.menu-index < ResultsState.views.length - 1;
                 clicked => {
@@ -476,22 +500,10 @@ export component ResultsBarNav inherits HorizontalLayout {
                 }
             }
 
-            InkMenuItem {
-                text: "Duplicate";
-                clicked => {
-                    ResultsState.view-duplicate(root.menu-id);
-                }
-            }
+            InkMenuSeparator { }
 
             InkMenuItem {
-                text: "Back to how it was saved";
-                enabled: root.menu-index >= 0 && root.menu-index < ResultsState.views-revertable.length && ResultsState.views-revertable[root.menu-index];
-                clicked => {
-                    ResultsState.view-revert(root.menu-id);
-                }
-            }
-
-            InkMenuItem {
+                icon: InkIcons.delete;
                 text: "Delete";
                 danger: true;
                 enabled: ResultsState.views.length > 1;
@@ -512,8 +524,8 @@ export component ResultsBarNav inherits HorizontalLayout {
                 text: "ANALYSES · \{ResultsListState.results_list.length}";
             }
 
+            // A choice: no icon, the open one a ✓.
             for data[index] in ResultsListState.results_list: InkMenuItem {
-                icon: InkIcons.table;
                 text: data.name;
                 shortcut: data.modified;
                 checked: ResultsListState.selected_result_index == index;
@@ -551,6 +563,7 @@ export component ResultsBarNav inherits HorizontalLayout {
             // The open analysis: the others' from the results panel's ⋯.
             if ResultsListState.selected_result_index >= 0 && ResultsListState.selected_result_index < ResultsListState.results_list.length: InkMenuSeparator { }
             if ResultsListState.selected_result_index >= 0 && ResultsListState.selected_result_index < ResultsListState.results_list.length: InkMenuItem {
+                icon: InkIcons.delete;
                 text: "Delete “\{ResultsListState.results_list[ResultsListState.selected_result_index].name}”";
                 danger: true;
                 clicked => {

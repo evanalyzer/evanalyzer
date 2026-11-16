@@ -139,6 +139,7 @@ export component ClassificationPanel inherits Rectangle {
                             has-eye: true;
                             shown: data.visible;
                             has-more: data.id > 0 && !root.in-split;
+                            more-slot: !root.in-split;
                             clicked => {
                                 if root.in-split {
                                     ResultsState.split-class-selected(data.id);
@@ -234,20 +235,11 @@ export component ClassificationPanel inherits Rectangle {
             }
 
             InkMenuItem {
+                icon: InkIcons.merge;
                 text: "Merge classes from image";
                 enabled: ImagesListState.images_list.length > 0;
                 clicked => {
                     ClassificationState.class_auto_add_and_merge();
-                }
-            }
-
-            InkMenuItem {
-                icon: InkIcons.delete;
-                text: "Delete all classes…";
-                danger: true;
-                enabled: ClassificationState.classes_list.length > 1;
-                clicked => {
-                    GlobalAppState.active_dialog = DialogType.classification_confirm_delete_all;
                 }
             }
 
@@ -260,6 +252,19 @@ export component ClassificationPanel inherits Rectangle {
                 clicked => {
                     ClassificationState.hide_unclassified_objects = !ClassificationState.hide_unclassified_objects;
                     ClassificationState.hide_unclassified_toggled();
+                }
+            }
+
+            // Delete last, after a line (canvas "Menus", A).
+            InkMenuSeparator { }
+
+            InkMenuItem {
+                icon: InkIcons.delete;
+                text: "Delete all classes…";
+                danger: true;
+                enabled: ClassificationState.classes_list.length > 1;
+                clicked => {
+                    GlobalAppState.active_dialog = DialogType.classification_confirm_delete_all;
                 }
             }
         }
@@ -285,13 +290,17 @@ export component ClassificationPanel inherits Rectangle {
                 }
             }
 
+            InkMenuSeparator { }
+
             InkMenuItem {
                 icon: InkIcons.copy;
-                text: "Copy";
+                text: "Duplicate";
                 clicked => {
                     ClassificationState.class_copy(root.menu-class-id);
                 }
             }
+
+            InkMenuSeparator { }
 
             InkMenuItem {
                 icon: InkIcons.caret-up;

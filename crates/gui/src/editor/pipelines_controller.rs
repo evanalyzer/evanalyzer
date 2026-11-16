@@ -10032,6 +10032,55 @@ mod tests {
         assert!(ui_param(&ui, 0, "kernel_size").pinned);
     }
 
+    /// The insert line between two steps takes a click only in the number
+    /// column: at the same height further right, just inside the row above,
+    /// a click selects that step instead of adding one.
+    #[test]
+    fn the_insert_line_between_steps_takes_a_click_only_in_the_number_column() {
+        use i_slint_backend_testing::ElementHandle;
+        use slint::platform::{PointerEventButton, WindowEvent};
+        let (ui, _ui_state, _controller) = selected(vec![step("Blur"), step("Threshold")]);
+        ui.window().set_size(slint::LogicalSize::new(1280.0, 900.0));
+        ui.global::<crate::LayoutState>()
+            .set_mode(crate::WorkspaceMode::Pipelines);
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.set_selected_step_id(1);
+        drain_ui_queue();
+        let bar = ElementHandle::find_by_accessible_label(&ui, "Insert step · 2")
+            .find(|e| e.size().width > 0.0)
+            .expect("the insert line between the two steps");
+        let (at, size) = (bar.absolute_position(), bar.size());
+        let window = ui.window();
+        let click = |x: f32, y: f32| {
+            let position = slint::LogicalPosition::new(x, y);
+            window.dispatch_event(WindowEvent::PointerMoved { position });
+            window.dispatch_event(WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            });
+            window.dispatch_event(WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            });
+            drain_ui_queue();
+        };
+
+        // 3 px into the first step, mid-width: the step, not a new one.
+        click(at.x + size.width / 2.0, at.y - 3.0);
+        assert_ne!(active_dialog(&ui), DialogType::CommandSelectionDialog);
+        assert_eq!(panel.get_selected_step_id(), 0);
+
+        // The click also opened the step: the line moved down with it.
+        let bar = ElementHandle::find_by_accessible_label(&ui, "Insert step · 2")
+            .find(|e| e.size().width > 0.0)
+            .expect("the insert line below the opened step");
+        let at = bar.absolute_position();
+        // The same height in the number column: insert after the first.
+        click(at.x + 14.0, at.y - 3.0);
+        assert_eq!(active_dialog(&ui), DialogType::CommandSelectionDialog);
+        assert_eq!(ui.global::<CommandPickerState>().get_insert_after_idx(), 0);
+    }
+
     /// A setting's ⓘ shows while its row is hovered; its card, once
     /// open, stays open when the mouse leaves the row (the ⓘ hides).
     #[test]

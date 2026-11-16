@@ -688,6 +688,8 @@ Decided 2026-10-25: the existing commands are extended to volumes (as scipy.ndim
 ## Usability
 
 - [x] Allow to open evanalyzer modules using the open dialog
+- [ ] Later (2026-11-16, canvas "List rows" https://claude.ai/artifact/DrDB6Z4Hi8MiWmkDko5b8k): exclude images from the analysis - an eye on each image row (the shared list row's eye slot), a crossed eye = left out of the run.
+- [ ] Later (2026-11-16, same canvas): exclude objects - an eye on each object row, a crossed eye = left out of the results (needs deciding: per analysis, kept in the results database, what it does to counts and measurements).
 
 ---
 

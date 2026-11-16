@@ -56,6 +56,13 @@ pub trait ClassificationExt {
     ///
     /// No-op if no class with that ID exists.
     fn delete_class(&mut self, class_id: ObjectClass);
+
+    /// A copy of the class right below it: a new id (as [`Self::add_class`]),
+    /// its name with " copy", the same color, notes and results setting.
+    ///
+    /// # Returns
+    /// The copy's id; `None` for the background or an unknown id.
+    fn duplicate_class(&mut self, class_id: ObjectClass) -> Option<ObjectClass>;
 }
 
 impl ClassificationExt for ClassificationSettings {
@@ -109,6 +116,19 @@ impl ClassificationExt for ClassificationSettings {
         }
     }
 
+    fn duplicate_class(&mut self, class_id: ObjectClass) -> Option<ObjectClass> {
+        if class_id == ObjectClass::BACKGROUND {
+            return None;
+        }
+        let index = self.classes().iter().position(|c| c.global() == class_id)?;
+        let mut copy = self.classes()[index].clone();
+        copy.id = crate::workspace::class_ids::next_class_id(self);
+        copy.name = format!("{} copy", copy.name);
+        let id = copy.global();
+        self.classes_mut().insert(index + 1, copy);
+        Some(id)
+    }
+
     fn delete_class(&mut self, class_id: ObjectClass) {
         if class_id == ObjectClass::BACKGROUND {
             // Background class is not allowed to be deleted
@@ -132,6 +152,38 @@ mod tests {
 
     fn settings(classes: Vec<Class>) -> ClassificationSettings {
         ClassificationSettings::new_from_existing(classes)
+    }
+
+    // ---- duplicate_class ----
+
+    /// The copy sits right below the original, with a new id, " copy" after
+    /// the name and the rest the same.
+    #[test]
+    fn duplicate_class_puts_a_renamed_copy_with_a_new_id_below_it() {
+        let mut s = settings(vec![class(1, "A"), class(5, "B")]);
+        let mut a = s.get_class(ObjectClass::Global(1)).unwrap().clone();
+        a.color = 0x00FF_0000;
+        a.notes = "kept".into();
+        s.update_class(a).unwrap();
+
+        let id = s.duplicate_class(ObjectClass::Global(1));
+
+        assert_eq!(id, Some(ObjectClass::Global(6)));
+        let names: Vec<&str> = s.classes().iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names[1..], ["A", "A copy", "B"]);
+        let copy = &s.classes()[2];
+        assert_eq!(
+            (copy.id, copy.color, copy.notes.as_str()),
+            (6, 0x00FF_0000, "kept")
+        );
+    }
+
+    #[test]
+    fn duplicate_class_leaves_the_background_and_unknown_ids_alone() {
+        let mut s = settings(vec![class(1, "A")]);
+        assert_eq!(s.duplicate_class(ObjectClass::BACKGROUND), None);
+        assert_eq!(s.duplicate_class(ObjectClass::Global(42)), None);
+        assert_eq!(s.classes().len(), 2);
     }
 
     // ---- add_class / next_class_id ----
