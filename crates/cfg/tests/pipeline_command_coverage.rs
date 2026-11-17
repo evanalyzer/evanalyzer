@@ -405,7 +405,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         Measure,
         Dataset,
     ];
-    let expected: [(&str, &[CommandCategory]); 73] = [
+    let expected: [(&str, &[CommandCategory]); 74] = [
         ("AI Object Classifier", &[Object, Measure, Dataset]),
         ("Bandpass", &[Segment, Preprocess]),
         ("Blur", &[Segment, Preprocess]),
@@ -447,6 +447,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         ("LoadAnnotatedObjects", &[Object, Measure, Dataset]),
         ("MedianSubtract", &[Segment, Preprocess]),
         ("Translate Image", &[Segment, Preprocess]),
+        ("Subtract Reference Channel", &[Segment, Preprocess]),
         ("MorphologicalCommand", &[Segment, Preprocess]),
         // Measurements first, then dataset steps (which run after every image).
         ("Measure Image Area Occupied", &[Measure, Dataset]),
@@ -831,6 +832,8 @@ fn apply_param_change_dropdown_fields_ignore_unknown_values() {
         ("StructureTensor", "mode", "Coherence"),
         ("Translate Image", "interpolation", "Cubic"),
         ("Translate Image", "padding", "Reflect"),
+        ("Subtract Reference Channel", "estimation_scope", "Tile"),
+        ("Subtract Reference Channel", "output", "Scaled Reference"),
         (
             "AI UNet Segmentation",
             "output_mode",
@@ -1110,6 +1113,19 @@ fn apply_param_change_numeric_fields_ignore_unparsable_values() {
     cmd.apply_param_change("radius", "12.5");
     cmd.apply_param_change("radius", "not_a_number");
     assert_eq!(param_value(&cmd, "radius"), "12.5");
+
+    let mut cmd = default_command(id_of("Subtract Reference Channel")).unwrap(); // f32
+    cmd.apply_param_change("smoothing_sigma", "1.5");
+    cmd.apply_param_change("smoothing_sigma", "not_a_number");
+    assert_eq!(param_value(&cmd, "smoothing_sigma"), "1.5");
+    // A data-carrying option: switched, then its own field set.
+    cmd.apply_param_change("factor", "Fixed");
+    cmd.apply_param_change("factor.factor", "0.37");
+    assert_eq!(param_value(&cmd, "factor"), "Fixed");
+    assert_eq!(param_value(&cmd, "factor.factor"), "0.37");
+    cmd.apply_param_change("alignment", "Fixed");
+    cmd.apply_param_change("alignment.dy", "-0.8");
+    assert_eq!(param_value(&cmd, "alignment.dy"), "-0.8");
 
     let mut cmd = default_command(id_of("Translate Image")).unwrap(); // dy, dx: f64
     cmd.apply_param_change("dy", "-0.75");

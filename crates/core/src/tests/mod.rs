@@ -17,5 +17,6 @@
 
 pub(crate) mod counting_allocator;
 mod spot_pipeline;
+mod subtract_reference_channel;
 mod tile_ram;
 mod whole_image_ram;

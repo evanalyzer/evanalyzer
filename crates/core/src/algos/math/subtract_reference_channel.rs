@@ -1,0 +1,1129 @@
+//! # Subtract Reference Channel
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-11-17
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+//!
+//! ## Overview
+//! Removes a signal from the target with a channel showing only that signal
+//! (the reference): `residual = S − (a · align(T) + b)`, the scale `a`, the
+//! offset `b` and the shift set by hand or estimated from the image -
+//! bleed-through or autofluorescence correction (linear unmixing,
+//! Zimmermann 2005) with the factor fitted per image (as the subtraction of
+//! an autofluorescence-only image, van de Lest et al. 1995).
+//!
+//! ## Implementation
+//! Plane by plane, on `f32` buffers of the plane: the backgrounds with Rank
+//! Filter's median or Rolling Ball, the shift with phase correlation
+//! (`libs::phase_correlation`) and applied with `libs::translate`, the
+//! Gaussians with the discrete Gaussian of `libs::scale_space`, the fit a
+//! Huber M-estimate (Huber 1964) by iteratively reweighted least squares.
+//!
+//! Runs per tile: the estimates are made on the tile, which is the whole
+//! image up to 4096 px (see [`EstimationScope`]).
+
+use crate::algos::filters::rank_filter::{RankFilter, RankFilterType};
+use crate::algos::libs::phase_correlation::{GUIZAR_SICAIROS_2008, estimate_shift};
+use crate::algos::libs::robust_stats::{MAD_TO_SIGMA, median_in_place};
+use crate::algos::libs::scale_space::{convolve_separable, discrete_gaussian};
+use crate::algos::libs::translate::{KEYS_1981, Translation};
+use crate::algos::math::load_channel::missing_channel;
+use crate::algos::{
+    BallType, ExecutionScope, GlobalPipelineCache, ImageAlgorithm, Interpolation, Padding,
+    PipelineContext, RollingBall,
+};
+use crate::image::{ImageContainer, ManagedImage};
+use crate::pipeline::pipeline::PipelineImageMeta;
+use crate::pipeline::pipeline_cache::CacheAddress;
+use crate::pipeline::pipeline_measure::{MeasurementRegion, Outputs};
+use evanalyzer_cfg::core_types::{
+    CitationMetadata, ImageChannelIdx, InternalErrors, MeasurementInfo, MeasurementUnit,
+};
+use kornia_image::{Image, ImageSize};
+use log::{debug, warn};
+use macros::CommandsMeta;
+use std::sync::Arc;
+
+/// Removes a signal from the image with a channel that shows only that
+/// signal (the reference) - e.g. serum filaments or autofluorescence in an
+/// EV spot channel: `residual = S − (a · align(T) + b)`. The scale `a`, the
+/// offset `b` and the shift are set by hand or estimated from the image.
+/// Typically the first step of a pipeline, before the spot detection.
+///
+/// **Order:** camera offset → background (both channels) → alignment (the
+/// reference shifted onto the target - before the fit: a wrong shift gives
+/// a wrong `a` and leaves a relief) → extra blur of the sharper channel →
+/// the same smoothing of both (unsmoothed, noise in the reference biases
+/// `a` low) → factor → subtraction.
+///
+/// **Assumption:** estimating the factor from the image assumes the target's
+/// own signal is not correlated with the reference. If it binds the
+/// reference structure (e.g. a protein on the filaments), use a Fixed
+/// factor measured on single-stain controls.
+///
+/// **Reading the residual:** a relief (bright on one side, dark on the
+/// other) → alignment. A bright centre line with dark sides → raise the
+/// target's extra blur; a dark centre line with bright sides → raise the
+/// reference's. The whole structure too bright or too dark → Factor scale.
+///
+/// Measures per image: the factor, offset, shift, alignment quality, R²,
+/// the parts of fit and saturated pixels and whether a fallback was used
+/// (on an image split into tiles: the median over the tiles). Exclude
+/// Image can leave images out by them - e.g. "Fallback used" above 0.5.
+///
+/// Runs per tile, the whole image up to 4096 px: on a larger image each
+/// tile has its own estimates for now (Image scope logs a warning), and the
+/// shift pads the tile borders with their edge pixels (no overlap with the
+/// neighbouring tiles).
+///
+/// The EV-in-serum assay - spots in the current image, the serum channel 4,
+/// everything else at its default:
+///
+/// ```json
+/// { "type": "SUBTRACT_REFERENCE_CHANNEL", "id": "reference", "referenceChannel": 4 }
+/// ```
+#[derive(CommandsMeta)]
+#[cmdsmeta(
+    category = "Preprocessing",
+    display_name = "Subtract Reference Channel"
+)]
+pub struct SubtractReferenceChannel {
+    /// Names the step's measurements (factor, shift, …) in the results.
+    #[cmdsmeta(measurement_id = "reference", display_name = "ID")]
+    pub id: String,
+
+    /// Image to correct: the current pipeline image, or a channel.
+    pub target: TargetSource,
+
+    /// Channel containing only the signal to remove.
+    #[cmdsmeta(default = ImageChannelIdx(1), summary = true)]
+    pub reference_channel: ImageChannelIdx,
+
+    /// Camera offset subtracted from target and reference before anything
+    /// else.
+    #[cmdsmeta(visibility = Advanced)]
+    pub camera_offset: CameraOffset,
+
+    /// Pixels at or above this level (in either channel) are left out of
+    /// all estimates - and their neighbours as far as the blurs and the
+    /// shift reach.
+    #[cmdsmeta(visibility = Advanced)]
+    pub saturation: Saturation,
+
+    /// Slowly varying background, removed from both channels.
+    pub background: Background,
+
+    /// How the reference is shifted onto the target.
+    #[cmdsmeta(summary = true)]
+    pub alignment: Alignment,
+
+    /// Interpolation for the shift.
+    #[cmdsmeta(default = ShiftInterpolation::Cubic, visibility = Advanced)]
+    pub interpolation: ShiftInterpolation,
+
+    /// Extra blur (σ, px) for the target if it is sharper than the
+    /// reference (0 = off).
+    #[cmdsmeta(default = 0.0, min = 0.0, max = 20.0, step = 0.1, visibility = Advanced)]
+    pub target_extra_sigma: f32,
+
+    /// Extra blur (σ, px) for the reference if it is sharper than the
+    /// target (0 = off).
+    #[cmdsmeta(default = 0.0, min = 0.0, max = 20.0, step = 0.1, visibility = Advanced)]
+    pub reference_extra_sigma: f32,
+
+    /// Gaussian smoothing (σ, px) applied identically to both channels (0 =
+    /// off).
+    #[cmdsmeta(default = 1.0, min = 0.0, max = 20.0, step = 0.1)]
+    pub smoothing_sigma: f32,
+
+    /// How the scale factor `a` is set.
+    #[cmdsmeta(summary = true)]
+    pub factor: Factor,
+
+    /// Multiplies `a` after it is set (fine tuning, 1 = unchanged).
+    #[cmdsmeta(default = 1.0, min = 0.0, max = 100.0, step = 0.01)]
+    pub factor_scale: f32,
+
+    /// Area the estimates (shift, factor) are computed over.
+    #[cmdsmeta(default = EstimationScope::Image, visibility = Advanced)]
+    pub estimation_scope: EstimationScope,
+
+    /// Local maximum of the reference over this radius (px) before
+    /// subtracting; tolerates a small leftover shift or edge mismatch (0 =
+    /// off).
+    #[cmdsmeta(default = 0.0, min = 0.0, max = 10.0, step = 0.5, visibility = Advanced)]
+    pub edge_tolerance: f32,
+
+    /// Set negative residual values to 0.
+    #[cmdsmeta(default = true)]
+    pub clip_negative: bool,
+
+    /// Output: the residual, or the scaled aligned reference (for
+    /// inspection).
+    #[cmdsmeta(default = OutputImage::Residual)]
+    pub output: OutputImage,
+}
+
+/// The image [`SubtractReferenceChannel`] corrects.
+#[derive(Clone, Copy, PartialEq, Debug, CommandsMeta)]
+pub enum TargetSource {
+    /// The pipeline's image at this step.
+    CurrentImage,
+    /// An image channel as it was read.
+    Channel {
+        /// The channel to correct.
+        channel: ImageChannelIdx,
+    },
+}
+
+/// The camera's offset (its black level).
+#[derive(Clone, Copy, PartialEq, Debug, CommandsMeta)]
+pub enum CameraOffset {
+    /// No offset subtracted.
+    None,
+    /// Fixed offsets per channel.
+    Manual {
+        /// Offset of the target.
+        #[cmdsmeta(default = 100.0, min = 0.0, max = 65535.0, step = 1.0)]
+        target: f32,
+        /// Offset of the reference.
+        #[cmdsmeta(default = 100.0, min = 0.0, max = 65535.0, step = 1.0)]
+        reference: f32,
+    },
+}
+
+/// The level from which a pixel counts as saturated.
+#[derive(Clone, Copy, PartialEq, Debug, CommandsMeta)]
+pub enum Saturation {
+    /// The image's largest value (255 for 8 bit, 65535 for 16 bit, …).
+    Auto,
+    /// A fixed level.
+    Manual {
+        /// Pixels at or above it are saturated.
+        #[cmdsmeta(default = 65535.0, min = 0.0, max = 1.0e9, step = 1.0)]
+        level: f32,
+    },
+    /// No pixel is left out.
+    Off,
+}
+
+/// The background removed from both channels.
+#[derive(Clone, Copy, PartialEq, Debug, CommandsMeta)]
+pub enum Background {
+    /// The median over a circle (as Median Subtract).
+    Median {
+        /// Radius (px): a little larger than the structures.
+        #[cmdsmeta(default = 30.0, min = 1.0, max = 200.0, step = 1.0)]
+        radius: f32,
+    },
+    /// Rolling Ball.
+    RollingBall {
+        /// Radius of the ball (px).
+        #[cmdsmeta(default = 30.0, min = 1.0, max = 200.0, step = 1.0)]
+        radius: f32,
+    },
+    /// No background removed.
+    None,
+}
+
+/// How the reference is shifted onto the target.
+#[derive(Clone, Copy, PartialEq, Debug, CommandsMeta)]
+pub enum Alignment {
+    /// Estimated per image (phase correlation).
+    Auto {
+        /// Larger shifts (px) are not believed: the fallback is used.
+        #[cmdsmeta(default = 5.0, min = 0.0, max = 100.0, step = 0.5)]
+        max_shift: f32,
+        /// Below this quality (0 - 1) the fallback is used.
+        #[cmdsmeta(default = 0.3, min = 0.0, max = 1.0, step = 0.05)]
+        min_quality: f32,
+        /// Shift right (+) used when the estimate isn't believed (px).
+        #[cmdsmeta(default = 0.0, min = -100.0, max = 100.0, step = 0.1)]
+        fallback_dx: f32,
+        /// Shift down (+) used when the estimate isn't believed (px).
+        #[cmdsmeta(default = 0.0, min = -100.0, max = 100.0, step = 0.1)]
+        fallback_dy: f32,
+    },
+    /// A fixed shift of the reference.
+    Fixed {
+        /// Shift right (+) or left (−) in pixels.
+        #[cmdsmeta(default = 0.0, min = -100.0, max = 100.0, step = 0.1)]
+        dx: f32,
+        /// Shift down (+) or up (−) in pixels.
+        #[cmdsmeta(default = 0.0, min = -100.0, max = 100.0, step = 0.1)]
+        dy: f32,
+    },
+    /// Not shifted.
+    None,
+}
+
+/// How [`SubtractReferenceChannel`] interpolates the shifted reference.
+#[derive(Clone, Copy, PartialEq, Debug, CommandsMeta)]
+pub enum ShiftInterpolation {
+    /// Bicubic (Keys, a = −0.5).
+    Cubic,
+    /// Bilinear: a little smoother.
+    Linear,
+}
+
+/// How the scale factor `a` is set.
+#[derive(Clone, Copy, PartialEq, Debug, CommandsMeta)]
+pub enum Factor {
+    /// Fitted per image: a robust line through the structure's pixels
+    /// (reference above its noise), EVs (bright in the target only) left
+    /// out.
+    RobustFit {
+        /// Fit pixels: reference above its median + this × its noise.
+        #[cmdsmeta(default = 4.0, min = 0.0, max = 100.0, step = 0.5)]
+        noise_factor: f32,
+        /// Fit pixels: reference also above this percentile.
+        #[cmdsmeta(default = 50.0, min = 0.0, max = 100.0, step = 1.0)]
+        min_percentile: f32,
+        /// Pixels this many times the noise above the line (EVs) are left
+        /// out.
+        #[cmdsmeta(default = 3.0, min = 0.5, max = 100.0, step = 0.5)]
+        outlier_k: f32,
+        /// Fit the offset `b` too; otherwise the line goes through 0.
+        #[cmdsmeta(default = true)]
+        fit_offset: bool,
+        /// Below this R² the fallback is used.
+        #[cmdsmeta(default = 0.5, min = 0.0, max = 1.0, step = 0.05)]
+        min_r2: f32,
+        /// The factor used when the fit fails.
+        #[cmdsmeta(default = 1.0, min = 0.0, max = 1000.0, step = 0.01)]
+        fallback: f32,
+        /// A fitted factor below this uses the fallback.
+        #[cmdsmeta(default = 0.0, min = 0.0, max = 1000.0, step = 0.01)]
+        min_value: f32,
+        /// A fitted factor above this uses the fallback.
+        #[cmdsmeta(default = 100.0, min = 0.0, max = 1000.0, step = 0.01)]
+        max_value: f32,
+    },
+    /// A fixed factor (e.g. measured on single-stain controls).
+    Fixed {
+        /// The factor `a`. (Not named `value`: the generated settings code
+        /// has a parameter of that name.)
+        #[cmdsmeta(default = 1.0, min = 0.0, max = 1000.0, step = 0.01)]
+        factor: f32,
+    },
+    /// From the exposure times: `a = calibration · t_target / t_reference`.
+    ExposureRatio {
+        /// The factor at equal exposure times.
+        #[cmdsmeta(default = 1.0, min = 0.0, max = 1000.0, step = 0.01)]
+        calibration: f32,
+        /// Exposure time of the target (ms).
+        #[cmdsmeta(default = 100.0, min = 0.001, max = 1.0e6, step = 1.0)]
+        exposure_target_ms: f32,
+        /// Exposure time of the reference (ms).
+        #[cmdsmeta(default = 100.0, min = 0.001, max = 1.0e6, step = 1.0)]
+        exposure_reference_ms: f32,
+    },
+}
+
+/// The area the shift and factor are estimated over.
+#[derive(Clone, Copy, PartialEq, Debug, CommandsMeta)]
+pub enum EstimationScope {
+    /// The whole image - per tile for now on an image larger than 4096 px
+    /// (logged).
+    Image,
+    /// Each tile on its own.
+    Tile,
+}
+
+/// What [`SubtractReferenceChannel`] puts out.
+#[derive(Clone, Copy, PartialEq, Debug, CommandsMeta)]
+pub enum OutputImage {
+    /// The target without the reference's signal.
+    Residual,
+    /// The scaled, aligned reference `a · align(T) + b` (to inspect the
+    /// estimate).
+    ScaledReference,
+}
+
+/// Fewer fit pixels use the fallback factor.
+const MIN_FIT_PIXELS: usize = 1000;
+/// Huber's tuning constant (95 % efficiency for normal errors).
+const HUBER_K: f64 = 1.345;
+const MAX_ITERATIONS: usize = 20;
+const TOLERANCE: f64 = 1e-6;
+
+impl ImageAlgorithm for SubtractReferenceChannel {
+    /// Corrects the target plane by plane (see the struct's docs); the
+    /// residual (or the scaled reference) becomes the pipeline's image.
+    ///
+    /// # Errors
+    /// A missing channel, a target and reference of different size, label
+    /// or colour images.
+    fn execute(
+        &self,
+        ctx: &mut PipelineContext,
+        cache: &mut GlobalPipelineCache,
+    ) -> Result<(), InternalErrors> {
+        let tile = ctx.image_meta.image_tile_info;
+        let channel = |index: i32| -> Result<Arc<ImageContainer>, InternalErrors> {
+            cache
+                .image_cache
+                .get(&CacheAddress::Channel((index, tile)))
+                .ok_or_else(|| missing_channel(cache, index, tile))
+        };
+        let target = match self.target {
+            TargetSource::CurrentImage => ctx.image.clone(),
+            TargetSource::Channel { channel: c } => channel(c.0 as i32)?,
+        };
+        let reference = channel(self.reference_channel.0 as i32)?;
+        let (target_image, reference_image) = match (target.as_ref(), reference.as_ref()) {
+            (ImageContainer::F32Gray(t), ImageContainer::F32Gray(r)) => (t, r),
+            (ImageContainer::U32(_), _) | (_, ImageContainer::U32(_)) => {
+                return Err(InternalErrors::InvalidArgument(
+                    "Subtract Reference Channel: label images can't be corrected".into(),
+                ));
+            }
+            _ => {
+                return Err(InternalErrors::InvalidArgument(
+                    "Subtract Reference Channel: target and reference must be grey images".into(),
+                ));
+            }
+        };
+        let depth = target_image.dimensionality.depth().max(1) as usize;
+        if target_image.data.size() != reference_image.data.size()
+            || reference_image.dimensionality.depth().max(1) as usize != depth
+        {
+            let size = target_image.data.size();
+            let other = reference_image.data.size();
+            return Err(InternalErrors::InvalidArgument(format!(
+                "Subtract Reference Channel: the target ({} x {}) and the reference channel {} \
+                 ({} x {}) differ in size",
+                size.width, size.height, self.reference_channel.0, other.width, other.height
+            )));
+        }
+        let plane = target_image.plane_size();
+        let full = ctx.image_meta.full_image_width;
+        if self.estimation_scope == EstimationScope::Image
+            && (plane.width < full.width || plane.height * depth < full.height)
+            && tile.offset_x == 0
+            && tile.offset_y == 0
+        {
+            warn!(
+                "{}: Subtract Reference Channel estimates per tile - image-wide estimates \
+                 on an image split into tiles are not supported yet",
+                cache.image_rel_path.display()
+            );
+        }
+
+        let saturation = match self.saturation {
+            Saturation::Auto if ctx.image_meta.nr_of_bits < 32 => {
+                Some(((1u64 << ctx.image_meta.nr_of_bits) - 1) as f32)
+            }
+            Saturation::Auto | Saturation::Off => None,
+            Saturation::Manual { level } => Some(level),
+        };
+        // The result goes into the scratch pad (prepared at the pipeline
+        // image's size; a channel target of another size gets its own).
+        let size = target_image.data.size();
+        if !matches!(ctx.scratch_pad.as_ref(), ImageContainer::F32Gray(img) if img.data.size() == size)
+        {
+            ctx.scratch_pad = Arc::new(ImageContainer::F32Gray(ManagedImage {
+                data: Image::new(size, vec![0f32; size.width * size.height])
+                    .map_err(InternalErrors::from_kornia)?,
+                tile_offset: target_image.tile_offset,
+                plane: target_image.plane,
+                dimensionality: target_image.dimensionality,
+            }));
+        }
+        let ImageContainer::F32Gray(result) = Arc::make_mut(&mut ctx.scratch_pad) else {
+            unreachable!("the scratch pad was made a grey image above");
+        };
+        result.tile_offset = target_image.tile_offset;
+        result.plane = target_image.plane;
+        result.dimensionality = target_image.dimensionality;
+        let output = result.data.as_slice_mut();
+        let mut estimates = Vec::with_capacity(depth);
+        let len = plane.width * plane.height;
+        for z in 0..depth {
+            let planes = PlaneInput {
+                target: target_image.plane_slice(z),
+                reference: reference_image.plane_slice(z),
+                size: plane,
+                saturation,
+            };
+            let out = &mut output[z * len..(z + 1) * len];
+            estimates.push(self.correct_plane(&planes, out, &ctx.image_meta, cache)?);
+        }
+
+        for (z, e) in estimates.iter().enumerate() {
+            debug!(
+                "{} tile ({}, {}) plane {z}: a {:.4}, b {:.3}, shift ({:.3}, {:.3}), quality {:.3}, \
+                 R² {:.3}, fallback {}",
+                cache.image_rel_path.display(),
+                tile.offset_x,
+                tile.offset_y,
+                e.a,
+                e.b,
+                e.dy,
+                e.dx,
+                e.quality,
+                e.r2,
+                e.fallback
+            );
+        }
+        for (info, value) in self
+            .measurement_outputs()
+            .into_iter()
+            .zip(median_of(&estimates))
+        {
+            cache.add_image_measurement(
+                info,
+                value
+                    .is_finite()
+                    .then_some((MeasurementRegion::Image, value)),
+            );
+        }
+
+        ctx.swap()
+    }
+
+    fn name(&self) -> &'static str {
+        "Subtract Reference Channel"
+    }
+
+    /// Measured by `tests::tile_ram` (see the trait method): both channels'
+    /// planes, two blur buffers, the median's output and the alignment's
+    /// spectra (bounded beyond 1024 × 1024 px).
+    fn ram_per_tile_pixel(&self) -> f64 {
+        28.0
+    }
+
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        let mut papers = vec![&VAN_DE_LEST_1995, &ZIMMERMANN_2005];
+        if matches!(self.alignment, Alignment::Auto { .. }) {
+            papers.push(&GUIZAR_SICAIROS_2008);
+        }
+        if !matches!(self.alignment, Alignment::None)
+            && self.interpolation == ShiftInterpolation::Cubic
+        {
+            papers.push(&KEYS_1981);
+        }
+        if matches!(self.factor, Factor::RobustFit { .. }) {
+            papers.push(&HUBER_1964);
+        }
+        papers
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
+    }
+
+    fn measures(&self) -> bool {
+        true
+    }
+
+    fn measurement_outputs(&self) -> Vec<MeasurementInfo> {
+        let outputs = Outputs::of(&self.id);
+        vec![
+            outputs.image("factor", "Factor", MeasurementUnit::None),
+            outputs.image("offset", "Offset", MeasurementUnit::Intensity),
+            outputs.image("shift_x", "Shift X", MeasurementUnit::Pixels),
+            outputs.image("shift_y", "Shift Y", MeasurementUnit::Pixels),
+            outputs.image(
+                "alignment_quality",
+                "Alignment quality",
+                MeasurementUnit::None,
+            ),
+            outputs.image("r2", "R²", MeasurementUnit::None),
+            outputs.image(
+                "fit_pixel_fraction",
+                "Fit pixel fraction",
+                MeasurementUnit::Fraction,
+            ),
+            outputs.image(
+                "saturated_fraction",
+                "Saturated fraction",
+                MeasurementUnit::Fraction,
+            ),
+            outputs.image("fallback_used", "Fallback used", MeasurementUnit::None),
+        ]
+    }
+}
+
+/// One plane of both channels.
+struct PlaneInput<'a> {
+    target: &'a [f32],
+    reference: &'a [f32],
+    size: ImageSize,
+    saturation: Option<f32>,
+}
+
+impl PlaneInput<'_> {
+    #[inline]
+    fn saturated(&self, i: usize) -> bool {
+        self.saturation
+            .is_some_and(|level| self.target[i] >= level || self.reference[i] >= level)
+    }
+}
+
+/// What one plane was corrected with - NaN where it doesn't apply (no
+/// quality without Auto alignment, no R² without a fit).
+#[derive(Debug, Clone, Copy)]
+struct PlaneEstimate {
+    a: f64,
+    b: f64,
+    dy: f64,
+    dx: f64,
+    quality: f64,
+    r2: f64,
+    fit_fraction: f64,
+    saturated_fraction: f64,
+    fallback: bool,
+}
+
+/// The planes' (and so a tile's) values in the order of the measurement
+/// outputs: their medians.
+fn median_of(estimates: &[PlaneEstimate]) -> [f64; 9] {
+    let median = |f: &dyn Fn(&PlaneEstimate) -> f64| -> f64 {
+        let mut values: Vec<f64> = estimates.iter().map(f).filter(|v| v.is_finite()).collect();
+        if values.is_empty() {
+            return f64::NAN;
+        }
+        values.sort_by(f64::total_cmp);
+        let mid = values.len() / 2;
+        if values.len() % 2 == 1 {
+            values[mid]
+        } else {
+            (values[mid - 1] + values[mid]) / 2.0
+        }
+    };
+    [
+        median(&|e| e.a),
+        median(&|e| e.b),
+        median(&|e| e.dx),
+        median(&|e| e.dy),
+        median(&|e| e.quality),
+        median(&|e| e.r2),
+        median(&|e| e.fit_fraction),
+        median(&|e| e.saturated_fraction),
+        // Any plane falling back counts.
+        estimates.iter().any(|e| e.fallback) as u8 as f64,
+    ]
+}
+
+/// The result of the robust fit.
+struct Fit {
+    a: f64,
+    b: f64,
+    r2: f64,
+    /// Pixels in the final fit.
+    kept: usize,
+}
+
+impl SubtractReferenceChannel {
+    /// Corrects one plane into `out` (see the struct's docs for the order).
+    fn correct_plane(
+        &self,
+        input: &PlaneInput,
+        out: &mut [f32],
+        meta: &PipelineImageMeta,
+        cache: &GlobalPipelineCache,
+    ) -> Result<PlaneEstimate, InternalErrors> {
+        let (w, h) = (input.size.width, input.size.height);
+        let len = w * h;
+        let image_name = || cache.image_rel_path.display().to_string();
+
+        // 1. Camera offset.
+        let (offset_t, offset_r) = match self.camera_offset {
+            CameraOffset::None => (0.0, 0.0),
+            CameraOffset::Manual { target, reference } => (target, reference),
+        };
+        let mut s: Vec<f32> = input.target.iter().map(|v| v - offset_t).collect();
+        let mut t: Vec<f32> = input.reference.iter().map(|v| v - offset_r).collect();
+
+        // 2. Background.
+        self.remove_background(&mut s, input.size, meta)?;
+        self.remove_background(&mut t, input.size, meta)?;
+
+        // 3. Alignment, before anything is fitted.
+        let mut fallback = false;
+        let (dy, dx, quality) = match self.alignment {
+            Alignment::None => (0.0, 0.0, f64::NAN),
+            Alignment::Fixed { dx, dy } => (dy as f64, dx as f64, f64::NAN),
+            Alignment::Auto {
+                max_shift,
+                min_quality,
+                fallback_dx,
+                fallback_dy,
+            } => match estimate_shift(&s, &t, w, h) {
+                Some(e)
+                    if e.quality >= min_quality as f64
+                        && e.dy.abs() <= max_shift as f64
+                        && e.dx.abs() <= max_shift as f64 =>
+                {
+                    (e.dy, e.dx, e.quality)
+                }
+                estimate => {
+                    warn!(
+                        "{}: Subtract Reference Channel: shift ({}) not believed (quality \
+                         minimum {min_quality}, largest shift {max_shift} px) - using the \
+                         fallback ({fallback_dy}, {fallback_dx})",
+                        image_name(),
+                        estimate.map_or("too small to estimate".to_string(), |e| format!(
+                            "{:.2}, {:.2}, quality {:.2}",
+                            e.dy, e.dx, e.quality
+                        )),
+                    );
+                    fallback = true;
+                    (
+                        fallback_dy as f64,
+                        fallback_dx as f64,
+                        estimate.map_or(f64::NAN, |e| e.quality),
+                    )
+                }
+            },
+        };
+        if dy.abs() >= h as f64 || dx.abs() >= w as f64 {
+            return Err(InternalErrors::InvalidArgument(format!(
+                "Subtract Reference Channel: a shift of ({dy}, {dx}) px is larger than the \
+                 {w} x {h} px tile"
+            )));
+        }
+        let mut work = vec![0f32; len];
+        if dy != 0.0 || dx != 0.0 {
+            let interpolation = match self.interpolation {
+                ShiftInterpolation::Cubic => Interpolation::Cubic,
+                ShiftInterpolation::Linear => Interpolation::Linear,
+            };
+            Translation::new(dy, dx, interpolation, Padding::Replicate, w, h)
+                .apply::<1>(&t, &mut work, 1, 0.0);
+            std::mem::swap(&mut t, &mut work);
+        }
+
+        // 4. Sharpness matching, 5. the same smoothing of both.
+        let mut tmp = vec![0f32; len];
+        gaussian(
+            &mut s,
+            &mut work,
+            &mut tmp,
+            input.size,
+            self.target_extra_sigma,
+        );
+        gaussian(
+            &mut t,
+            &mut work,
+            &mut tmp,
+            input.size,
+            self.reference_extra_sigma,
+        );
+        gaussian(
+            &mut s,
+            &mut work,
+            &mut tmp,
+            input.size,
+            self.smoothing_sigma,
+        );
+        gaussian(
+            &mut t,
+            &mut work,
+            &mut tmp,
+            input.size,
+            self.smoothing_sigma,
+        );
+        drop(tmp);
+
+        // 6. Factor - not from saturated pixels nor the strip the shift
+        // padded.
+        let margin = if dy != 0.0 || dx != 0.0 {
+            dy.abs().max(dx.abs()).ceil() as usize + 1
+        } else {
+            0
+        };
+        let saturated = (0..len).filter(|&i| input.saturated(i)).count();
+        // The blurs spread a saturated value into its neighbours, the shift
+        // moves the reference's: those are left out too.
+        let blur = |extra: f32| (extra * extra + self.smoothing_sigma.powi(2)).sqrt();
+        let reach = (3.0 * blur(self.target_extra_sigma).max(blur(self.reference_extra_sigma)))
+            .ceil() as usize
+            + margin;
+        let near_saturated = (saturated > 0).then(|| {
+            let mask: Vec<bool> = (0..len).map(|i| input.saturated(i)).collect();
+            dilate(&mask, w, h, reach)
+        });
+        let usable = |i: usize| {
+            let (x, y) = (i % w, i / w);
+            x >= margin
+                && y >= margin
+                && x + margin < w
+                && y + margin < h
+                && !near_saturated.as_ref().is_some_and(|m| m[i])
+        };
+        let (mut a, b, r2, fit_fraction) = match self.factor {
+            Factor::Fixed { factor } => (factor as f64, 0.0, f64::NAN, f64::NAN),
+            Factor::ExposureRatio {
+                calibration,
+                exposure_target_ms,
+                exposure_reference_ms,
+            } => (
+                calibration as f64 * exposure_target_ms as f64 / exposure_reference_ms as f64,
+                0.0,
+                f64::NAN,
+                f64::NAN,
+            ),
+            Factor::RobustFit {
+                noise_factor,
+                min_percentile,
+                outlier_k,
+                fit_offset,
+                min_r2,
+                fallback: fallback_value,
+                min_value,
+                max_value,
+            } => {
+                let fit = robust_fit(
+                    &s,
+                    &t,
+                    &usable,
+                    &mut work,
+                    noise_factor,
+                    min_percentile,
+                    outlier_k,
+                    fit_offset,
+                );
+                let fraction = fit.as_ref().map_or(0.0, |f| f.kept as f64 / len as f64);
+                match fit {
+                    Some(f)
+                        if f.kept >= MIN_FIT_PIXELS
+                            && f.r2 >= min_r2 as f64
+                            && f.a >= min_value as f64
+                            && f.a <= max_value as f64 =>
+                    {
+                        (f.a, f.b, f.r2, fraction)
+                    }
+                    fit => {
+                        warn!(
+                            "{}: Subtract Reference Channel: factor fit not believed ({}) - \
+                             using the fallback {fallback_value}",
+                            image_name(),
+                            fit.as_ref()
+                                .map_or("no structure above the noise".to_string(), |f| {
+                                    format!("a {:.4}, R² {:.3}, {} pixels", f.a, f.r2, f.kept)
+                                }),
+                        );
+                        fallback = true;
+                        (
+                            fallback_value as f64,
+                            0.0,
+                            fit.as_ref().map_or(f64::NAN, |f| f.r2),
+                            fraction,
+                        )
+                    }
+                }
+            }
+        };
+        a *= self.factor_scale as f64;
+        drop(work);
+
+        // 7. Subtraction.
+        if self.edge_tolerance > 0.0 {
+            let filter = RankFilter {
+                radius: self.edge_tolerance as f64,
+                filter_type: RankFilterType::Max,
+            };
+            let image = Image::new(input.size, t).map_err(InternalErrors::from_kornia)?;
+            t = filter.process_image::<1>(&image)?.into_vec();
+        }
+        let (a32, b32) = (a as f32, b as f32);
+        for ((o, sv), tv) in out.iter_mut().zip(&s).zip(&t) {
+            let scaled = a32 * tv + b32;
+            *o = match self.output {
+                OutputImage::ScaledReference => scaled,
+                OutputImage::Residual if self.clip_negative => (sv - scaled).max(0.0),
+                OutputImage::Residual => sv - scaled,
+            };
+        }
+
+        Ok(PlaneEstimate {
+            a,
+            b,
+            dy,
+            dx,
+            quality,
+            r2,
+            fit_fraction,
+            saturated_fraction: saturated as f64 / len as f64,
+            fallback,
+        })
+    }
+
+    /// Removes the background from `plane` (see [`Background`]).
+    fn remove_background(
+        &self,
+        plane: &mut Vec<f32>,
+        size: ImageSize,
+        meta: &PipelineImageMeta,
+    ) -> Result<(), InternalErrors> {
+        match self.background {
+            Background::None => Ok(()),
+            Background::Median { radius } => {
+                let filter = RankFilter {
+                    radius: radius as f64,
+                    filter_type: RankFilterType::Median,
+                };
+                let image =
+                    Image::from_size_slice(size, plane).map_err(InternalErrors::from_kornia)?;
+                let background = filter.process_image::<1>(&image)?;
+                for (v, b) in plane.iter_mut().zip(background.as_slice()) {
+                    *v -= b;
+                }
+                Ok(())
+            }
+            Background::RollingBall { radius } => {
+                // Rolling Ball works on a context (it needs the bit depth).
+                let image = ImageContainer::F32Gray(ManagedImage {
+                    data: Image::new(size, std::mem::take(plane))
+                        .map_err(InternalErrors::from_kornia)?,
+                    tile_offset: Default::default(),
+                    plane: None,
+                    dimensionality: Default::default(),
+                });
+                let mut meta = meta.clone();
+                meta.image_tile_info.width = size.width;
+                meta.image_tile_info.height = size.height;
+                let mut plane_ctx =
+                    PipelineContext::new_from_image(Default::default(), meta, Arc::new(image))?;
+                RollingBall {
+                    radius: radius as f64,
+                    ball_type: BallType::Ball,
+                    pre_smooth: false,
+                }
+                .run(&mut plane_ctx, &mut GlobalPipelineCache::default())?;
+                *plane = match Arc::try_unwrap(plane_ctx.image) {
+                    Ok(ImageContainer::F32Gray(img)) => img.data.into_vec(),
+                    Ok(_) => unreachable!("Rolling Ball keeps a grey image grey"),
+                    Err(shared) => shared
+                        .as_f32_slice()
+                        .map(<[f32]>::to_vec)
+                        .unwrap_or_default(),
+                };
+                Ok(())
+            }
+        }
+    }
+}
+
+/// `mask` (`w × h`) grown by `reach` px in every direction (a square).
+fn dilate(mask: &[bool], w: usize, h: usize, reach: usize) -> Vec<bool> {
+    let mut rows = vec![false; mask.len()];
+    for y in 0..h {
+        let row = &mask[y * w..(y + 1) * w];
+        for (x, set) in row.iter().enumerate() {
+            if *set {
+                let (from, to) = (x.saturating_sub(reach), (x + reach).min(w - 1));
+                rows[y * w + from..=y * w + to].fill(true);
+            }
+        }
+    }
+    let mut out = vec![false; mask.len()];
+    for y in 0..h {
+        for x in 0..w {
+            if rows[y * w + x] {
+                for yy in y.saturating_sub(reach)..=(y + reach).min(h - 1) {
+                    out[yy * w + x] = true;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Blurs `plane` with the discrete Gaussian of `sigma` px (nothing for 0);
+/// `work` and `tmp` are plane-sized buffers.
+fn gaussian(
+    plane: &mut Vec<f32>,
+    work: &mut Vec<f32>,
+    tmp: &mut [f32],
+    size: ImageSize,
+    sigma: f32,
+) {
+    if sigma <= 0.0 {
+        return;
+    }
+    let taps = discrete_gaussian((sigma as f64) * (sigma as f64));
+    convolve_separable(plane, work, tmp, size.width, size.height, &taps);
+    std::mem::swap(plane, work);
+}
+
+/// The Huber fit of `s ≈ a·t + b` over the structure's pixels (see
+/// [`Factor::RobustFit`]); `None` without any. `work`: a plane-sized
+/// buffer.
+#[allow(clippy::too_many_arguments)]
+fn robust_fit(
+    s: &[f32],
+    t: &[f32],
+    usable: &dyn Fn(usize) -> bool,
+    work: &mut Vec<f32>,
+    noise_factor: f32,
+    min_percentile: f32,
+    outlier_k: f32,
+    fit_offset: bool,
+) -> Option<Fit> {
+    // The reference's level: median, noise and percentile of its usable
+    // pixels.
+    work.clear();
+    work.extend(
+        (0..t.len())
+            .filter(|&i| usable(i))
+            .map(|i| t[i])
+            .filter(|v| !v.is_nan()),
+    );
+    if work.is_empty() {
+        return None;
+    }
+    let n = work.len();
+    let rank = ((min_percentile as f64 / 100.0 * (n - 1) as f64).round() as usize).min(n - 1);
+    let percentile = *work.select_nth_unstable_by(rank, f32::total_cmp).1;
+    let median = median_in_place(work);
+    for v in work.iter_mut() {
+        *v = (*v - median).abs();
+    }
+    let noise = median_in_place(work) * MAD_TO_SIGMA;
+    let level = (median + noise_factor * noise).max(percentile);
+
+    let pairs: Vec<(f32, f32)> = (0..t.len())
+        .filter(|&i| usable(i) && t[i] > level && t[i] > 0.0 && s[i].is_finite())
+        .map(|i| (s[i], t[i]))
+        .collect();
+    if pairs.is_empty() {
+        return None;
+    }
+
+    // Start: the median ratio (and the median offset left by it).
+    work.clear();
+    work.extend(pairs.iter().map(|(sv, tv)| sv / tv));
+    let mut a = median_in_place(work) as f64;
+    let mut b = 0.0f64;
+    if fit_offset {
+        work.clear();
+        work.extend(pairs.iter().map(|(sv, tv)| sv - a as f32 * tv));
+        b = median_in_place(work) as f64;
+    }
+    let scale = pairs.iter().map(|(sv, _)| sv.abs() as f64).sum::<f64>() / pairs.len() as f64;
+
+    for _ in 0..MAX_ITERATIONS {
+        // Robust sigma of the residuals.
+        work.clear();
+        work.extend(pairs.iter().map(|(sv, tv)| sv - (a as f32 * tv + b as f32)));
+        let centre = median_in_place(work);
+        for v in work.iter_mut() {
+            *v = (*v - centre).abs();
+        }
+        let sigma = ((median_in_place(work) * MAD_TO_SIGMA) as f64).max(1e-12 * scale.max(1e-30));
+        let cutoff = outlier_k as f64 * sigma;
+
+        // Weighted least squares, the EVs (far above the line) left out.
+        let (mut sw, mut st, mut ss, mut stt, mut sst) = (0.0f64, 0.0, 0.0, 0.0, 0.0);
+        let mut kept = 0usize;
+        for &(sv, tv) in &pairs {
+            let (sv, tv) = (sv as f64, tv as f64);
+            let residual = sv - (a * tv + b);
+            if residual > cutoff {
+                continue;
+            }
+            kept += 1;
+            let u = (residual / sigma).abs();
+            let weight = if u <= HUBER_K { 1.0 } else { HUBER_K / u };
+            sw += weight;
+            st += weight * tv;
+            ss += weight * sv;
+            stt += weight * tv * tv;
+            sst += weight * sv * tv;
+        }
+        if kept == 0 {
+            return None;
+        }
+        let (new_a, new_b) = if fit_offset {
+            let det = sw * stt - st * st;
+            if det.abs() < 1e-300 {
+                return None;
+            }
+            ((sw * sst - st * ss) / det, (stt * ss - st * sst) / det)
+        } else {
+            (sst / stt, 0.0)
+        };
+        let done = (new_a - a).abs() <= TOLERANCE * new_a.abs().max(1e-12)
+            && (new_b - b).abs() <= TOLERANCE * new_b.abs().max(scale).max(1e-12);
+        a = new_a;
+        b = new_b;
+        if done {
+            break;
+        }
+    }
+
+    // R² over the pixels kept (the EVs left out as in the last step).
+    work.clear();
+    work.extend(pairs.iter().map(|(sv, tv)| sv - (a as f32 * tv + b as f32)));
+    let centre = median_in_place(work);
+    for v in work.iter_mut() {
+        *v = (*v - centre).abs();
+    }
+    let cutoff = outlier_k as f64 * ((median_in_place(work) * MAD_TO_SIGMA) as f64).max(1e-30);
+    let in_fit: Vec<(f64, f64)> = pairs
+        .iter()
+        .map(|&(sv, tv)| (sv as f64, tv as f64))
+        .filter(|&(sv, tv)| sv - (a * tv + b) <= cutoff)
+        .collect();
+    let mean = in_fit.iter().map(|(sv, _)| sv).sum::<f64>() / in_fit.len().max(1) as f64;
+    let (mut residual, mut total) = (0.0f64, 0.0f64);
+    for &(sv, tv) in &in_fit {
+        residual += (sv - (a * tv + b)).powi(2);
+        total += (sv - mean).powi(2);
+    }
+    let r2 = if total > 0.0 {
+        1.0 - residual / total
+    } else {
+        0.0
+    };
+    Some(Fit {
+        a,
+        b,
+        r2,
+        kept: in_fit.len(),
+    })
+}
+
+static VAN_DE_LEST_1995: CitationMetadata = CitationMetadata {
+    cite_key: "vandelest1995elimination",
+    title: "Elimination of autofluorescence in immunofluorescence microscopy with digital image processing",
+    authors: &[
+        "C. H. A. van de Lest",
+        "E. M. M. Versteeg",
+        "J. H. Veerkamp",
+        "T. H. van Kuppevelt",
+    ],
+    year: 1995,
+    container: Some("Journal of Histochemistry & Cytochemistry"),
+    doi: Some("10.1177/43.7.7608528"),
+    url: None,
+    pages: Some("727-730"),
+};
+
+static ZIMMERMANN_2005: CitationMetadata = CitationMetadata {
+    cite_key: "zimmermann2005spectral",
+    title: "Spectral imaging and linear unmixing in light microscopy",
+    authors: &["Timo Zimmermann"],
+    year: 2005,
+    container: Some("Advances in Biochemical Engineering/Biotechnology"),
+    doi: None,
+    url: None,
+    pages: Some("245-265"),
+};
+
+static HUBER_1964: CitationMetadata = CitationMetadata {
+    cite_key: "huber1964robust",
+    title: "Robust estimation of a location parameter",
+    authors: &["Peter J. Huber"],
+    year: 1964,
+    container: Some("The Annals of Mathematical Statistics"),
+    doi: Some("10.1214/aoms/1177703732"),
+    url: None,
+    pages: Some("73-101"),
+};

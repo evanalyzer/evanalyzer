@@ -7,6 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::pipeline::pipeline_measure::combine_tile_measurements;
 use crate::pipeline::scope::Scope;
 use crate::{
     ImageContainer, ImageInfo, ZProjection,
@@ -841,9 +842,12 @@ impl<'a> JobExecutor {
         // The user's hand-annotated objects of this image, for
         // `LoadAnnotatedObjects` - only gathered when a pipeline uses them.
         // A measurement step measures every image, also one without objects.
+        // Also a tile step (Subtract Reference Channel): its measurements
+        // are exported for an image without objects too.
         let measures = self
-            .pipelines_post_process
+            .pipelines_pre_process
             .values()
+            .chain(self.pipelines_post_process.values())
             .any(|p| p.commands.iter().any(|(_, _, c)| c.measures()));
         let loads_annotations = self.pipelines_post_process.values().any(|p| {
             p.commands
@@ -1096,8 +1100,12 @@ impl<'a> JobExecutor {
                 let merged = Mutex::new({
                     let mut merged = global_cache.clone();
                     merged.image_cache.set_capacity_bytes(merged_cache_bytes);
-                    (merged, 0u64)
+                    (merged, 0u64, Vec::new())
                 });
+                // Image measurements of tile steps (e.g. Subtract Reference
+                // Channel's factor): each tile's own - beyond what every tile
+                // starts with - combined once all tiles are done.
+                let inherited_measurements = global_cache.measurements.measurements.len();
                 // A whole slide's objects stay in RAM until its export: what
                 // they take comes off the cache's cap as tiles finish, so the
                 // channel tiles spill instead (down to the cache's floor).
@@ -1114,8 +1122,14 @@ impl<'a> JobExecutor {
                             .sum(),
                         false => 0,
                     };
+                    let measured = cache.measurements.measurements.split_off(
+                        inherited_measurements.min(cache.measurements.measurements.len()),
+                    );
                     let mut guard = merged.lock().expect("Poisoned");
-                    let (merged, objects_bytes) = &mut *guard;
+                    let (merged, objects_bytes, tile_measurements) = &mut *guard;
+                    if !measured.is_empty() {
+                        tile_measurements.push((tile, measured));
+                    }
                     merged.object_cache.append(&mut cache.object_cache);
                     merged.image_cache.extend(cache.image_cache);
                     if added > 0 {
@@ -1138,7 +1152,13 @@ impl<'a> JobExecutor {
                             .try_for_each(|&tile| merge_tile(tile))
                     })
                     .map(|()| {
-                        let (merged, objects_bytes) = merged.into_inner().expect("Poisoned");
+                        let (mut merged, objects_bytes, mut tile_measurements) =
+                            merged.into_inner().expect("Poisoned");
+                        // In image order, however the tiles finished.
+                        tile_measurements.sort_by_key(|(tile, _)| (tile.offset_y, tile.offset_x));
+                        merged.measurements.measurements.extend(combine_tile_measurements(
+                            tile_measurements.into_iter().map(|(_, m)| m).collect(),
+                        ));
                         if objects_count {
                             debug!(
                                 "{image_rel_path:?} t={t} z={z}: objects {} ({}), image cache cap {}",
@@ -3287,6 +3307,111 @@ mod full_run_integration_tests {
                 panic!("plane {plane:?}: one value, got {values:?}");
             };
             assert!((-1.0..=1.0).contains(&r), "plane {plane:?}: {r}");
+        }
+    }
+
+    /// What reaches the exporter: per plane, the image measurements (by
+    /// key) and why it was excluded.
+    type ExportedPlane = (BTreeMap<String, f64>, Option<String>);
+    struct ImageValuesRecorder(Mutex<Vec<ExportedPlane>>);
+
+    impl PipelineResultExporter for ImageValuesRecorder {
+        fn export(&self, cache: &GlobalPipelineCache) -> Result<(), InternalErrors> {
+            use crate::pipeline::pipeline_measure::MeasurementValues;
+            let values = cache
+                .measurements
+                .measurements
+                .iter()
+                .filter_map(|m| match &m.values {
+                    MeasurementValues::Image(values) => {
+                        values.first().map(|(_, v)| (m.info.key.clone(), *v))
+                    }
+                    MeasurementValues::Objects(_) => None,
+                })
+                .collect();
+            self.0
+                .lock()
+                .unwrap()
+                .push((values, cache.measurements.excluded.clone()));
+            Ok(())
+        }
+    }
+
+    /// A tile step's image measurements (Subtract Reference Channel's
+    /// factor) reach the export, once per plane, and Exclude Image can
+    /// judge an image by them.
+    #[test]
+    fn a_tile_steps_measurements_reach_the_export_and_exclude_image() {
+        use crate::algos::*;
+        let run = |rule_value: f64| {
+            let recorder = Arc::new(ImageValuesRecorder(Mutex::new(Vec::new())));
+            let mut job = make_single_image_job(Arc::new(Mutex::new(Vec::new())));
+            job.result_storage = recorder.clone();
+            job.pipelines_pre_process.clear();
+            let mut pipeline = Pipeline::new(
+                PipelineId(1),
+                CorePipelineSettings {
+                    start_image: ImageAddress::Channel(0),
+                },
+            );
+            pipeline.add_command(Box::new(SubtractReferenceChannel {
+                id: "reference".into(),
+                target: TargetSource::CurrentImage,
+                reference_channel: evanalyzer_cfg::core_types::ImageChannelIdx(1),
+                camera_offset: CameraOffset::None,
+                saturation: Saturation::Off,
+                background: Background::None,
+                alignment: Alignment::None,
+                interpolation: ShiftInterpolation::Linear,
+                target_extra_sigma: 0.0,
+                reference_extra_sigma: 0.0,
+                smoothing_sigma: 0.0,
+                factor: Factor::Fixed { factor: 0.5 },
+                factor_scale: 1.0,
+                estimation_scope: EstimationScope::Image,
+                edge_tolerance: 0.0,
+                clip_negative: true,
+                output: OutputImage::Residual,
+            }));
+            job.add_pre_process_pipeline(pipeline);
+            // The step's whole-image half, as the job generator splits it.
+            let mut whole_image = Pipeline::new(
+                PipelineId(1),
+                CorePipelineSettings {
+                    start_image: ImageAddress::Scratchpad,
+                },
+            );
+            whole_image.add_command(Box::new(ExcludeImage {
+                exclude_when: ExcludeWhen::AnyRule,
+                rules: vec![ExcludeRule {
+                    measurement: "reference/factor".into(),
+                    comparison: RuleComparison::Above,
+                    value: rule_value,
+                }],
+            }));
+            job.add_post_process_pipeline(whole_image);
+            let (tx, _rx) = std::sync::mpsc::channel();
+            job.run(1, tx, Arc::new(AtomicBool::new(false))).unwrap();
+            recorder.0.lock().unwrap().clone()
+        };
+
+        let kept = run(0.6);
+        assert!(!kept.is_empty(), "no plane exported");
+        for (values, excluded) in &kept {
+            assert_eq!(values.get("reference/factor"), Some(&0.5), "{values:?}");
+            assert_eq!(
+                values.get("reference/fallback_used"),
+                Some(&0.0),
+                "{values:?}"
+            );
+            // One value per key, not one per tile; no quality, R² or fit
+            // pixels without alignment and fit.
+            assert_eq!(values.len(), 6, "{values:?}");
+            assert!(!values.contains_key("reference/r2"), "{values:?}");
+            assert_eq!(excluded, &None);
+        }
+        for (_, excluded) in run(0.4) {
+            assert!(excluded.is_some_and(|reason| reason.contains("Factor")));
         }
     }
 

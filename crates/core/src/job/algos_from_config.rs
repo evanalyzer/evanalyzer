@@ -22,6 +22,29 @@ impl From<ObjectAiObjectClassifierAiClassifyMatchHandlingSettings> for AiClassif
     }
 }
 
+impl From<MathSubtractReferenceChannelAlignmentSettings> for Alignment {
+    fn from(_s: MathSubtractReferenceChannelAlignmentSettings) -> Self {
+        match _s {
+            MathSubtractReferenceChannelAlignmentSettings::Auto {
+                max_shift,
+                min_quality,
+                fallback_dx,
+                fallback_dy,
+            } => Alignment::Auto {
+                max_shift: max_shift.clamp(0.0, 100.0),
+                min_quality: min_quality.clamp(0.0, 1.0),
+                fallback_dx: fallback_dx.clamp(-100.0, 100.0),
+                fallback_dy: fallback_dy.clamp(-100.0, 100.0),
+            },
+            MathSubtractReferenceChannelAlignmentSettings::Fixed { dx, dy } => Alignment::Fixed {
+                dx: dx.clamp(-100.0, 100.0),
+                dy: dy.clamp(-100.0, 100.0),
+            },
+            MathSubtractReferenceChannelAlignmentSettings::None => Alignment::None,
+        }
+    }
+}
+
 impl From<ObjectLoadAnnotaedObjectsAnnotationUseSettings> for AnnotationUse {
     fn from(_s: ObjectLoadAnnotaedObjectsAnnotationUseSettings) -> Self {
         match _s {
@@ -52,11 +75,43 @@ impl From<SegmentationThresholdAveragingSettings> for Averaging {
     }
 }
 
+impl From<MathSubtractReferenceChannelBackgroundSettings> for Background {
+    fn from(_s: MathSubtractReferenceChannelBackgroundSettings) -> Self {
+        match _s {
+            MathSubtractReferenceChannelBackgroundSettings::Median { radius } => {
+                Background::Median {
+                    radius: radius.clamp(1.0, 200.0),
+                }
+            }
+            MathSubtractReferenceChannelBackgroundSettings::RollingBall { radius } => {
+                Background::RollingBall {
+                    radius: radius.clamp(1.0, 200.0),
+                }
+            }
+            MathSubtractReferenceChannelBackgroundSettings::None => Background::None,
+        }
+    }
+}
+
 impl From<FiltersRollingBallBallTypeSettings> for BallType {
     fn from(_s: FiltersRollingBallBallTypeSettings) -> Self {
         match _s {
             FiltersRollingBallBallTypeSettings::Ball => BallType::Ball,
             FiltersRollingBallBallTypeSettings::Paraboloid => BallType::Paraboloid,
+        }
+    }
+}
+
+impl From<MathSubtractReferenceChannelCameraOffsetSettings> for CameraOffset {
+    fn from(_s: MathSubtractReferenceChannelCameraOffsetSettings) -> Self {
+        match _s {
+            MathSubtractReferenceChannelCameraOffsetSettings::None => CameraOffset::None,
+            MathSubtractReferenceChannelCameraOffsetSettings::Manual { target, reference } => {
+                CameraOffset::Manual {
+                    target: target.clamp(0.0, 65535.0),
+                    reference: reference.clamp(0.0, 65535.0),
+                }
+            }
         }
     }
 }
@@ -160,11 +215,58 @@ impl From<MeasureColocalizationCostesMethodSettings> for CostesMethod {
     }
 }
 
+impl From<MathSubtractReferenceChannelEstimationScopeSettings> for EstimationScope {
+    fn from(_s: MathSubtractReferenceChannelEstimationScopeSettings) -> Self {
+        match _s {
+            MathSubtractReferenceChannelEstimationScopeSettings::Image => EstimationScope::Image,
+            MathSubtractReferenceChannelEstimationScopeSettings::Tile => EstimationScope::Tile,
+        }
+    }
+}
+
 impl From<MeasureExcludeImageExcludeWhenSettings> for ExcludeWhen {
     fn from(_s: MeasureExcludeImageExcludeWhenSettings) -> Self {
         match _s {
             MeasureExcludeImageExcludeWhenSettings::AnyRule => ExcludeWhen::AnyRule,
             MeasureExcludeImageExcludeWhenSettings::AllRules => ExcludeWhen::AllRules,
+        }
+    }
+}
+
+impl From<MathSubtractReferenceChannelFactorSettings> for Factor {
+    fn from(_s: MathSubtractReferenceChannelFactorSettings) -> Self {
+        match _s {
+            MathSubtractReferenceChannelFactorSettings::RobustFit {
+                noise_factor,
+                min_percentile,
+                outlier_k,
+                fit_offset,
+                min_r2,
+                fallback,
+                min_value,
+                max_value,
+            } => Factor::RobustFit {
+                noise_factor: noise_factor.clamp(0.0, 100.0),
+                min_percentile: min_percentile.clamp(0.0, 100.0),
+                outlier_k: outlier_k.clamp(0.5, 100.0),
+                fit_offset: fit_offset,
+                min_r2: min_r2.clamp(0.0, 1.0),
+                fallback: fallback.clamp(0.0, 1000.0),
+                min_value: min_value.clamp(0.0, 1000.0),
+                max_value: max_value.clamp(0.0, 1000.0),
+            },
+            MathSubtractReferenceChannelFactorSettings::Fixed { factor } => Factor::Fixed {
+                factor: factor.clamp(0.0, 1000.0),
+            },
+            MathSubtractReferenceChannelFactorSettings::ExposureRatio {
+                calibration,
+                exposure_target_ms,
+                exposure_reference_ms,
+            } => Factor::ExposureRatio {
+                calibration: calibration.clamp(0.0, 1000.0),
+                exposure_target_ms: exposure_target_ms.clamp(0.001, 1000000.0),
+                exposure_reference_ms: exposure_reference_ms.clamp(0.001, 1000000.0),
+            },
         }
     }
 }
@@ -410,6 +512,17 @@ impl From<SegmentationThresholdOtsuMiddleClassSettings> for OtsuMiddleClass {
     }
 }
 
+impl From<MathSubtractReferenceChannelOutputImageSettings> for OutputImage {
+    fn from(_s: MathSubtractReferenceChannelOutputImageSettings) -> Self {
+        match _s {
+            MathSubtractReferenceChannelOutputImageSettings::Residual => OutputImage::Residual,
+            MathSubtractReferenceChannelOutputImageSettings::ScaledReference => {
+                OutputImage::ScaledReference
+            }
+        }
+    }
+}
+
 impl From<SpartialTransformTranslateImagePaddingSettings> for Padding {
     fn from(_s: SpartialTransformTranslateImagePaddingSettings) -> Self {
         match _s {
@@ -470,11 +583,38 @@ impl From<MeasureExcludeImageRuleComparisonSettings> for RuleComparison {
     }
 }
 
+impl From<MathSubtractReferenceChannelSaturationSettings> for Saturation {
+    fn from(_s: MathSubtractReferenceChannelSaturationSettings) -> Self {
+        match _s {
+            MathSubtractReferenceChannelSaturationSettings::Auto => Saturation::Auto,
+            MathSubtractReferenceChannelSaturationSettings::Manual { level } => {
+                Saturation::Manual {
+                    level: level.clamp(0.0, 1000000000.0),
+                }
+            }
+            MathSubtractReferenceChannelSaturationSettings::Off => Saturation::Off,
+        }
+    }
+}
+
 impl From<SegmentationWatershedSeedSourceSettings> for SeedSource {
     fn from(_s: SegmentationWatershedSeedSourceSettings) -> Self {
         match _s {
             SegmentationWatershedSeedSourceSettings::DistanceMap => SeedSource::DistanceMap,
             SegmentationWatershedSeedSourceSettings::Intensity => SeedSource::Intensity,
+        }
+    }
+}
+
+impl From<MathSubtractReferenceChannelShiftInterpolationSettings> for ShiftInterpolation {
+    fn from(_s: MathSubtractReferenceChannelShiftInterpolationSettings) -> Self {
+        match _s {
+            MathSubtractReferenceChannelShiftInterpolationSettings::Cubic => {
+                ShiftInterpolation::Cubic
+            }
+            MathSubtractReferenceChannelShiftInterpolationSettings::Linear => {
+                ShiftInterpolation::Linear
+            }
         }
     }
 }
@@ -570,6 +710,19 @@ impl From<ObjectGrowRegionsStopRuleSettings> for StopRule {
             ObjectGrowRegionsStopRuleSettings::Noise { noise_factor } => StopRule::Noise {
                 noise_factor: noise_factor.clamp(0.0, 100.0),
             },
+        }
+    }
+}
+
+impl From<MathSubtractReferenceChannelTargetSourceSettings> for TargetSource {
+    fn from(_s: MathSubtractReferenceChannelTargetSourceSettings) -> Self {
+        match _s {
+            MathSubtractReferenceChannelTargetSourceSettings::CurrentImage => {
+                TargetSource::CurrentImage
+            }
+            MathSubtractReferenceChannelTargetSourceSettings::Channel { channel } => {
+                TargetSource::Channel { channel: channel }
+            }
         }
     }
 }
@@ -1445,6 +1598,30 @@ impl From<StructureTensorSettings> for StructureTensor {
     }
 }
 
+impl From<SubtractReferenceChannelSettings> for SubtractReferenceChannel {
+    fn from(_s: SubtractReferenceChannelSettings) -> Self {
+        SubtractReferenceChannel {
+            id: _s.id,
+            target: TargetSource::from(_s.target),
+            reference_channel: _s.reference_channel,
+            camera_offset: CameraOffset::from(_s.camera_offset),
+            saturation: Saturation::from(_s.saturation),
+            background: Background::from(_s.background),
+            alignment: Alignment::from(_s.alignment),
+            interpolation: ShiftInterpolation::from(_s.interpolation),
+            target_extra_sigma: _s.target_extra_sigma.clamp(0.0, 20.0),
+            reference_extra_sigma: _s.reference_extra_sigma.clamp(0.0, 20.0),
+            smoothing_sigma: _s.smoothing_sigma.clamp(0.0, 20.0),
+            factor: Factor::from(_s.factor),
+            factor_scale: _s.factor_scale.clamp(0.0, 100.0),
+            estimation_scope: EstimationScope::from(_s.estimation_scope),
+            edge_tolerance: _s.edge_tolerance.clamp(0.0, 10.0),
+            clip_negative: _s.clip_negative,
+            output: OutputImage::from(_s.output),
+        }
+    }
+}
+
 impl From<ThresholdSettings> for Threshold {
     fn from(_s: ThresholdSettings) -> Self {
         Threshold {
@@ -1855,6 +2032,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         ))),
         PipelineCommand::StructureTensor(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::StructureTensor::from(settings),
+        ))),
+        PipelineCommand::SubtractReferenceChannel(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::SubtractReferenceChannel::from(settings),
         ))),
         PipelineCommand::Threshold(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::Threshold::from(settings),

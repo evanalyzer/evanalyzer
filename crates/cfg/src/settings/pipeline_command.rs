@@ -403,6 +403,12 @@ pub enum PipelineCommand {
         alias = "structure_tensor"
     )]
     StructureTensor(StructureTensorSettings),
+    #[serde(
+        alias = "subtract-reference-channel",
+        alias = "subtractReferenceChannel",
+        alias = "subtract_reference_channel"
+    )]
+    SubtractReferenceChannel(SubtractReferenceChannelSettings),
     #[serde(alias = "threshold")]
     Threshold(ThresholdSettings),
     #[serde(
@@ -946,6 +952,14 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
         },
         CommandMeta {
             id: 58,
+            name: "Subtract Reference Channel",
+            category: CommandCategory::Preprocess,
+            categories: &[CommandCategory::Preprocess],
+            summary: "Removes a signal from the image with a channel that shows only that signal (the reference) - e.g. serum filaments or autofluorescence in an EV spot channel: `residual = S − (a · align(T) + b)`.",
+            description: "The scale `a`, the offset `b` and the shift are set by hand or estimated from the image. Typically the first step of a pipeline, before the spot detection.\n\n**Order:** camera offset → background (both channels) → alignment (the\nreference shifted onto the target - before the fit: a wrong shift gives\na wrong `a` and leaves a relief) → extra blur of the sharper channel →\nthe same smoothing of both (unsmoothed, noise in the reference biases\n`a` low) → factor → subtraction.\n\n**Assumption:** estimating the factor from the image assumes the target's\nown signal is not correlated with the reference. If it binds the\nreference structure (e.g. a protein on the filaments), use a Fixed\nfactor measured on single-stain controls.\n\n**Reading the residual:** a relief (bright on one side, dark on the\nother) → alignment. A bright centre line with dark sides → raise the\ntarget's extra blur; a dark centre line with bright sides → raise the\nreference's. The whole structure too bright or too dark → Factor scale.\n\nMeasures per image: the factor, offset, shift, alignment quality, R²,\nthe parts of fit and saturated pixels and whether a fallback was used\n(on an image split into tiles: the median over the tiles). Exclude\nImage can leave images out by them - e.g. \"Fallback used\" above 0.5.\n\nRuns per tile, the whole image up to 4096 px: on a larger image each\ntile has its own estimates for now (Image scope logs a warning), and the\nshift pads the tile borders with their edge pixels (no overlap with the\nneighbouring tiles).\n\nThe EV-in-serum assay - spots in the current image, the serum channel 4,\neverything else at its default:",
+        },
+        CommandMeta {
+            id: 59,
             name: "Threshold",
             category: CommandCategory::Segment,
             categories: &[CommandCategory::Segment],
@@ -953,7 +967,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "This supports \"Multi-Otsu\" style behavior by allowing several\nthresholds. Each pixel is evaluated against them to determine which\nsegmentation class it belongs to.",
         },
         CommandMeta {
-            id: 59,
+            id: 60,
             name: "Trace Filaments",
             category: CommandCategory::Object,
             categories: &[CommandCategory::Object],
@@ -961,7 +975,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "[Skeletonize Objects (end points)] -> [Trace Filaments] -> [Measure Filament Tree]\n\nEach segment is a 1-pixel-wide object of the output class, linked to the\nnext segment towards the soma (a root segment: none) and to its soma.",
         },
         CommandMeta {
-            id: 60,
+            id: 61,
             name: "Track Kalman",
             category: CommandCategory::Dataset,
             categories: &[CommandCategory::Dataset],
@@ -969,7 +983,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "Objects of `object_class` in two consecutive frames of the same image and\nz-plane are linked so that the sum of the squared distances to the\npredicted positions is smallest, each object once. Each track's velocity\nis followed by a Kalman filter. Then track ends are linked to starts up\nto `max_gap_frames` later, and - if switched on - track ends into other\ntracks (merge) and starts out of them (split), as in Track LAP.",
         },
         CommandMeta {
-            id: 61,
+            id: 62,
             name: "Track LAP",
             category: CommandCategory::Dataset,
             categories: &[CommandCategory::Dataset],
@@ -977,7 +991,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "Objects of `object_class` in two consecutive frames of the same image and\nz-plane are linked so that the sum of the squared distances is smallest,\neach object once (Jaqaman et al., 2008). Then track ends are linked to\nstarts up to `max_gap_frames` later (an object missed by the\nsegmentation), and - if switched on - track ends into other tracks\n(merge) and starts out of them (split). A merge or split starts new\ntracks, with the old ones as parents.",
         },
         CommandMeta {
-            id: 62,
+            id: 63,
             name: "TrackNearestNeighbor",
             category: CommandCategory::Dataset,
             categories: &[CommandCategory::Dataset],
@@ -985,7 +999,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "Objects of `object_class` in two consecutive frames of the same image and\nz-plane are linked closest pair first, each object once, if they are at\nmost `max_distance` apart. Every object gets a track id; one that can't\nbe linked starts a new track.",
         },
         CommandMeta {
-            id: 63,
+            id: 64,
             name: "Track Overlap",
             category: CommandCategory::Dataset,
             categories: &[CommandCategory::Dataset],
@@ -993,7 +1007,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "Objects of `object_class` in two consecutive frames of the same image and\nz-plane are linked so that they overlap the most in total, each object\nonce - two objects can be linked if their intersection over union is\nat least `min_overlap`. Then track ends are linked to starts up to\n`max_gap_frames` later, and - if switched on - track ends into other\ntracks (merge) and starts out of them (split). A merge or split starts\nnew tracks, with the old ones as parents.",
         },
         CommandMeta {
-            id: 64,
+            id: 65,
             name: "TransformObjects",
             category: CommandCategory::Object,
             categories: &[CommandCategory::Object],
@@ -1001,7 +1015,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "This command applies a geometric transform (scale, circle, fitted ellipse) to every object\ncarrying `input_class`. The transformed shape keeps the original object's bounding-box center.\nIf `output_class` is unset (or equal to `input_class`) the input object is replaced in place;\notherwise a new object carrying `output_class` is created alongside the untouched input object.\n\nA transformed shape with no pixels left (e.g. `Shrink` by more than the object's own\nsize) is not an object: no new object is created, and in place the input object is removed.",
         },
         CommandMeta {
-            id: 65,
+            id: 66,
             name: "Translate Image",
             category: CommandCategory::Preprocess,
             categories: &[CommandCategory::Preprocess],
@@ -1009,7 +1023,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "Positive `dy` moves the content down, positive `dx` to the right:\n`output(y, x) = input(y − dy, x − dx)` - as `scipy.ndimage.shift`, so\nshifts measured in Python can be used as they are. The strip the shift\nempties at the edge is filled as set under Padding. A volume is shifted\nplane by plane; a colour image the same in every colour.\n\nCubic is Keys' cubic convolution with a = −0.5 (Catmull-Rom). Whole-pixel\nshifts copy the pixels, whatever the interpolation. Label images can\nonly be shifted with Nearest.\n\nRuns per tile: on an image split into tiles (larger than 4096 px) the\npadding also fills the strip at the inner tile borders - as wide as the\nshift.\n\nA fixed channel shift as a step of a module:",
         },
         CommandMeta {
-            id: 66,
+            id: 67,
             name: "AI UNet Segmentation",
             category: CommandCategory::Segment,
             categories: &[CommandCategory::Segment],
@@ -1017,7 +1031,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return either a\n`[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already\napplies its final sigmoid) or a `[1, C, H, W]` tensor with more than one\nchannel, in which case `output_mode` and `foreground_channel` decide how the\nforeground probability is extracted. Runs on GPU\nautomatically if CUDA is available in the linked libtorch build, otherwise\nfalls back to CPU.\n\nAny tile size works: the tile is mirror-padded to a multiple of 16 (U-Nets\nhalve the image 4 times and fail otherwise) plus a 16 px border (context\nfor the pixels at the tile edge, the \"halo\" bioimage.io models declare),\nand the prediction is cropped back to the tile.",
         },
         CommandMeta {
-            id: 67,
+            id: 68,
             name: "Vesselness",
             category: CommandCategory::Preprocess,
             categories: &[CommandCategory::Preprocess],
@@ -1025,7 +1039,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "[Vesselness] -> [Threshold] -> [Connected Components] -> [Extract Objects] -> [Skeletonize Objects]\n\nThe result is 0..1: high in the middle of a line, low for the\nbackground, blobs and flat areas.",
         },
         CommandMeta {
-            id: 68,
+            id: 69,
             name: "Voronoi",
             category: CommandCategory::Object,
             categories: &[CommandCategory::Object],
@@ -1033,7 +1047,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "Each seed center expands outward until it reaches another region, the optional mask\nboundary, or the maximum radius. The resulting areas are stored as new ROIs labeled\nwith `output_class` and linked to their originating center object.",
         },
         CommandMeta {
-            id: 69,
+            id: 70,
             name: "Watershed",
             category: CommandCategory::InstanceSegmentation,
             categories: &[CommandCategory::InstanceSegmentation],
@@ -1041,7 +1055,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "[Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]\n\nThis is a faithful port of ImageJ's `Process > Binary > Watershed`\n(`MaximumFinder` applied to the Euclidean distance map). Touching objects that\n`ConnectedComponents` merged into a single blob are split at their \"necks\":\nthe distance map's local maxima are the seeds, maxima protruding less than\n`maximum_finder_tolerance` above the ridge connecting them to a higher maximum\nare merged, and a constrained flood draws 1-pixel watershed lines between the\nsurviving basins. The split blob is then re-labeled into separate instances.",
         },
         CommandMeta {
-            id: 70,
+            id: 71,
             name: "Wavelet Spots",
             category: CommandCategory::Preprocess,
             categories: &[CommandCategory::Preprocess],
@@ -1049,7 +1063,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "[Wavelet Spots] -> [Find Maxima] -> [Extract Objects]\n\nThe result is positive at bright spots and exactly 0 everywhere else\n(background, dark spots, what stands out at one level only). With output\nProduct it is the paper's multiscale product: the image's intensities to\nthe power of the number of combined levels, so a manual cut-off in Find\nMaxima is the paper's detection level in these units. With output\nIntensity it is in the image's units. Measure intensities on the\noriginal channel, not on this image.",
         },
         CommandMeta {
-            id: 71,
+            id: 72,
             name: "WeightedDeviation",
             category: CommandCategory::Preprocess,
             categories: &[CommandCategory::Preprocess],
@@ -1057,7 +1071,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             description: "Unlike a standard deviation filter which treats all pixels in a window equally,\nthe Weighted Deviation uses a Gaussian kernel to give more importance to\npixels closer to the center. This is particularly effective for edge-preserving\nnoise analysis and local contrast enhancement.\n\nThis algorithm evaluates local variance by calculating two distinct Gaussian-blurred\nbaselines across the image: the weighted average of the pixel intensities, and the\nweighted average of the squared intensities. By subtracting the squared mean from\nthe mean of squares, it yields a localized, smooth statistical variance map that\nhighlights micro-textures and subtle surface boundaries without producing blocky artifacts.",
         },
         CommandMeta {
-            id: 72,
+            id: 73,
             name: "AI YOLOv5 Segmentation",
             category: CommandCategory::Segment,
             categories: &[CommandCategory::Segment],
@@ -1208,35 +1222,38 @@ pub fn default_command(id: i32) -> Option<PipelineCommand> {
         57 => Some(PipelineCommand::StructureTensor(
             StructureTensorSettings::default(),
         )),
-        58 => Some(PipelineCommand::Threshold(ThresholdSettings::default())),
-        59 => Some(PipelineCommand::TraceFilaments(
+        58 => Some(PipelineCommand::SubtractReferenceChannel(
+            SubtractReferenceChannelSettings::default(),
+        )),
+        59 => Some(PipelineCommand::Threshold(ThresholdSettings::default())),
+        60 => Some(PipelineCommand::TraceFilaments(
             TraceFilamentsSettings::default(),
         )),
-        60 => Some(PipelineCommand::TrackKalman(TrackKalmanSettings::default())),
-        61 => Some(PipelineCommand::TrackLap(TrackLapSettings::default())),
-        62 => Some(PipelineCommand::TrackNearestNeighbor(
+        61 => Some(PipelineCommand::TrackKalman(TrackKalmanSettings::default())),
+        62 => Some(PipelineCommand::TrackLap(TrackLapSettings::default())),
+        63 => Some(PipelineCommand::TrackNearestNeighbor(
             TrackNearestNeighborSettings::default(),
         )),
-        63 => Some(PipelineCommand::TrackOverlap(
+        64 => Some(PipelineCommand::TrackOverlap(
             TrackOverlapSettings::default(),
         )),
-        64 => Some(PipelineCommand::TransformObjects(
+        65 => Some(PipelineCommand::TransformObjects(
             TransformObjectsSettings::default(),
         )),
-        65 => Some(PipelineCommand::TranslateImage(
+        66 => Some(PipelineCommand::TranslateImage(
             TranslateImageSettings::default(),
         )),
-        66 => Some(PipelineCommand::UNet(UNetSettings::default())),
-        67 => Some(PipelineCommand::Vesselness(VesselnessSettings::default())),
-        68 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
-        69 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
-        70 => Some(PipelineCommand::WaveletSpots(
+        67 => Some(PipelineCommand::UNet(UNetSettings::default())),
+        68 => Some(PipelineCommand::Vesselness(VesselnessSettings::default())),
+        69 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
+        70 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
+        71 => Some(PipelineCommand::WaveletSpots(
             WaveletSpotsSettings::default(),
         )),
-        71 => Some(PipelineCommand::WeightedDeviation(
+        72 => Some(PipelineCommand::WeightedDeviation(
             WeightedDeviationSettings::default(),
         )),
-        72 => Some(PipelineCommand::Yolov5(Yolov5Settings::default())),
+        73 => Some(PipelineCommand::Yolov5(Yolov5Settings::default())),
         _ => None,
     }
 }
@@ -1304,6 +1321,7 @@ impl PipelineCommand {
         "skeletonize_objects",
         "stardist",
         "structure_tensor",
+        "subtract_reference_channel",
         "threshold",
         "trace_filaments",
         "track_kalman",
@@ -1382,6 +1400,7 @@ impl PipelineCommand {
             Self::SkeletonizeObjects(_) => "skeletonize_objects",
             Self::Stardist(_) => "stardist",
             Self::StructureTensor(_) => "structure_tensor",
+            Self::SubtractReferenceChannel(_) => "subtract_reference_channel",
             Self::Threshold(_) => "threshold",
             Self::TraceFilaments(_) => "trace_filaments",
             Self::TrackKalman(_) => "track_kalman",
@@ -1521,6 +1540,9 @@ impl PipelineCommand {
             )),
             "stardist" => Some(Self::Stardist(StardistSettings::default())),
             "structure_tensor" => Some(Self::StructureTensor(StructureTensorSettings::default())),
+            "subtract_reference_channel" => Some(Self::SubtractReferenceChannel(
+                SubtractReferenceChannelSettings::default(),
+            )),
             "threshold" => Some(Self::Threshold(ThresholdSettings::default())),
             "trace_filaments" => Some(Self::TraceFilaments(TraceFilamentsSettings::default())),
             "track_kalman" => Some(Self::TrackKalman(TrackKalmanSettings::default())),
@@ -1606,6 +1628,7 @@ impl PipelineCommand {
             Self::SkeletonizeObjects(_) => "Skeletonize Objects",
             Self::Stardist(_) => "AI Stardist Segmentation",
             Self::StructureTensor(_) => "StructureTensor",
+            Self::SubtractReferenceChannel(_) => "Subtract Reference Channel",
             Self::Threshold(_) => "Threshold",
             Self::TraceFilaments(_) => "Trace Filaments",
             Self::TrackKalman(_) => "Track Kalman",
@@ -1690,6 +1713,7 @@ impl PipelineCommand {
             Self::SkeletonizeObjects(_) => &CommandCategory::Object,
             Self::Stardist(_) => &CommandCategory::Segment,
             Self::StructureTensor(_) => &CommandCategory::Preprocess,
+            Self::SubtractReferenceChannel(_) => &CommandCategory::Preprocess,
             Self::Threshold(_) => &CommandCategory::Segment,
             Self::TraceFilaments(_) => &CommandCategory::Object,
             Self::TrackKalman(_) => &CommandCategory::Dataset,
@@ -1774,6 +1798,7 @@ impl PipelineCommand {
             Self::SkeletonizeObjects(_) => &[CommandCategory::Object],
             Self::Stardist(_) => &[CommandCategory::Segment],
             Self::StructureTensor(_) => &[CommandCategory::Preprocess],
+            Self::SubtractReferenceChannel(_) => &[CommandCategory::Preprocess],
             Self::Threshold(_) => &[CommandCategory::Segment],
             Self::TraceFilaments(_) => &[CommandCategory::Object],
             Self::TrackKalman(_) => &[CommandCategory::Dataset],
@@ -1940,6 +1965,9 @@ impl PipelineCommand {
             ],
             Self::Stardist(_) => &[CommandCategory::Extract],
             Self::StructureTensor(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
+            Self::SubtractReferenceChannel(_) => {
+                &[CommandCategory::Segment, CommandCategory::Preprocess]
+            }
             Self::Threshold(_) => &[CommandCategory::InstanceSegmentation],
             Self::TraceFilaments(_) => &[
                 CommandCategory::Object,
@@ -2030,6 +2058,7 @@ impl PipelineCommand {
             Self::SkeletonizeObjects(_s) => [vec![ParameterDef { name: "input_class".to_string(), display_name: "Input Class".to_string(), description: "Objects carrying this class are skeletonized (e.g. the thresholded\nneurites).".to_string(), value: _s.input_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "skeleton_class".to_string(), display_name: "Skeleton Class".to_string(), description: "The class the skeletons get (one per input object).".to_string(), value: _s.skeleton_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "branch_point_class".to_string(), display_name: "Branch Point Class".to_string(), description: "The class the branch points get (one 1-pixel object each). Unset:\nnone are created.".to_string(), value: _s.branch_point_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass :: Unset).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "end_point_class".to_string(), display_name: "End Point Class".to_string(), description: "The class the end points get (one 1-pixel object each). Unset: none\nare created.".to_string(), value: _s.end_point_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass :: Unset).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "min_branch_length".to_string(), display_name: "Min Branch Length".to_string(), description: "Side branches shorter than this (from their end point to the branch\npoint) are removed - the spurs a ragged outline leaves. 0: none are\nremoved.".to_string(), value: format!("{}", _s.min_branch_length), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 100000.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (5.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "length_unit".to_string(), display_name: "Length Unit".to_string(), description: "Unit `min_branch_length` is expressed in.".to_string(), value: match _s.length_unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SizeUnits :: Pixels) { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::Stardist(_s) => [vec![ParameterDef { name: "model_path".to_string(), display_name: "Model Path".to_string(), description: "Path to a TorchScript-exported StarDist model (`torch.jit.script`/`torch.jit.trace`).".to_string(), value: _s.model_path.display().to_string(), param_type: ParamType::FilePath, options: vec!["pt,pth".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (PathBuf::default()).display().to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "segmentation_class".to_string(), display_name: "Segmentation Class".to_string(), description: "The class assigned to pixels of every detected object. All other\npixels are assigned `SegmentationClass::BACKGROUND`.".to_string(), value: format!("{}", _s.segmentation_class.as_u32()), param_type: ParamType::SegClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (SegmentationClass (1)).as_u32()), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "probability_threshold".to_string(), display_name: "Probability Threshold".to_string(), description: "Probability above which a grid cell is considered a candidate object center.".to_string(), value: format!("{}", _s.probability_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.0100f32, groups: vec![], default_value: format!("{}", (0.5f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "nms_threshold".to_string(), display_name: "Nms Threshold".to_string(), description: "Pixel-overlap ratio (intersection / union) above which a lower-scoring\ncandidate polygon is suppressed in favor of an overlapping higher-scoring one.".to_string(), value: format!("{}", _s.nms_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.0100f32, groups: vec![], default_value: format!("{}", (0.3f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "piece_size".to_string(), display_name: "Piece Size".to_string(), description: "How large the pieces are that a large tile runs through the network\nin: smaller ones take less RAM, larger ones are faster.".to_string(), value: match _s.piece_size { AiSegmentationPieceSizePieceSizeSettings::Auto => "Auto".to_string(), AiSegmentationPieceSizePieceSizeSettings::Fixed { .. } => "Fixed".to_string() }, param_type: ParamType::Dropdown, options: vec!["Auto".to_string(), "Fixed".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (AiSegmentationPieceSizePieceSizeSettings :: Auto) { AiSegmentationPieceSizePieceSizeSettings::Auto => "Auto".to_string(), AiSegmentationPieceSizePieceSizeSettings::Fixed { .. } => "Fixed".to_string() }, advanced: true, option_advanced: vec![false, false], section: String::new() }], match &_s.piece_size { AiSegmentationPieceSizePieceSizeSettings::Auto => vec![], AiSegmentationPieceSizePieceSizeSettings::Fixed { side } => vec![ParameterDef { name: "piece_size.side".to_string(), display_name: "Side".to_string(), description: "Pixels per side of a piece.".to_string(), value: format!("{}", side), param_type: ParamType::Spinner, options: vec![], min: 256.0f32, max: 4096.0f32, step: 256.0000f32, groups: vec![], default_value: format!("{}", (1024i32)), advanced: false, option_advanced: vec![], section: String::new() }] }].concat(),
             Self::StructureTensor(_s) => [vec![ParameterDef { name: "mode".to_string(), display_name: "Mode".to_string(), description: "The mathematical output to be produced by the algorithm.".to_string(), value: match _s.mode { FiltersStructureTensorTensorModeSettings::EigenvaluesX => "Eigenvalues X".to_string(), FiltersStructureTensorTensorModeSettings::EigenvaluesY => "Eigenvalues Y".to_string(), FiltersStructureTensorTensorModeSettings::Coherence => "Coherence".to_string() }, param_type: ParamType::Dropdown, options: vec!["Eigenvalues X".to_string(), "Eigenvalues Y".to_string(), "Coherence".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (FiltersStructureTensorTensorModeSettings::default()) { FiltersStructureTensorTensorModeSettings::EigenvaluesX => "Eigenvalues X".to_string(), FiltersStructureTensorTensorModeSettings::EigenvaluesY => "Eigenvalues Y".to_string(), FiltersStructureTensorTensorModeSettings::Coherence => "Coherence".to_string() }, advanced: false, option_advanced: vec![false, false, false], section: String::new() }], vec![ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel Size".to_string(), description: "The size of the integration window used to average the local gradients.\n\nLarger windows provide more stability against noise but reduce\nspatial resolution.".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (usize::default())), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "sigma".to_string(), display_name: "Sigma".to_string(), description: "The standard deviation for the Gaussian weighting of the integration window.\n\nControls the spatial \"reach\" of the neighborhood analysis.".to_string(), value: format!("{}", _s.sigma), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (f32::default())), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
+            Self::SubtractReferenceChannel(_s) => [vec![ParameterDef { name: "id".to_string(), display_name: "ID".to_string(), description: "Names the step's measurements (factor, shift, …) in the results.".to_string(), value: _s.id.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "target".to_string(), display_name: "Target".to_string(), description: "Image to correct: the current pipeline image, or a channel.".to_string(), value: match _s.target { MathSubtractReferenceChannelTargetSourceSettings::CurrentImage => "Current Image".to_string(), MathSubtractReferenceChannelTargetSourceSettings::Channel { .. } => "Channel".to_string() }, param_type: ParamType::Dropdown, options: vec!["Current Image".to_string(), "Channel".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MathSubtractReferenceChannelTargetSourceSettings::default()) { MathSubtractReferenceChannelTargetSourceSettings::CurrentImage => "Current Image".to_string(), MathSubtractReferenceChannelTargetSourceSettings::Channel { .. } => "Channel".to_string() }, advanced: false, option_advanced: vec![false, false], section: String::new() }], match &_s.target { MathSubtractReferenceChannelTargetSourceSettings::CurrentImage => vec![], MathSubtractReferenceChannelTargetSourceSettings::Channel { channel } => vec![ParameterDef { name: "target.channel".to_string(), display_name: "Channel".to_string(), description: "The channel to correct.".to_string(), value: channel.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx::default()).to_string(), advanced: false, option_advanced: vec![], section: String::new() }] }, vec![ParameterDef { name: "reference_channel".to_string(), display_name: "Reference Channel".to_string(), description: "Channel containing only the signal to remove.".to_string(), value: _s.reference_channel.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx (1)).to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "camera_offset".to_string(), display_name: "Camera Offset".to_string(), description: "Camera offset subtracted from target and reference before anything\nelse.".to_string(), value: match _s.camera_offset { MathSubtractReferenceChannelCameraOffsetSettings::None => "None".to_string(), MathSubtractReferenceChannelCameraOffsetSettings::Manual { .. } => "Manual".to_string() }, param_type: ParamType::Dropdown, options: vec!["None".to_string(), "Manual".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MathSubtractReferenceChannelCameraOffsetSettings::default()) { MathSubtractReferenceChannelCameraOffsetSettings::None => "None".to_string(), MathSubtractReferenceChannelCameraOffsetSettings::Manual { .. } => "Manual".to_string() }, advanced: true, option_advanced: vec![false, false], section: String::new() }], match &_s.camera_offset { MathSubtractReferenceChannelCameraOffsetSettings::None => vec![], MathSubtractReferenceChannelCameraOffsetSettings::Manual { target, reference } => [vec![ParameterDef { name: "camera_offset.target".to_string(), display_name: "Target".to_string(), description: "Offset of the target.".to_string(), value: format!("{}", target), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 65535.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (100.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "camera_offset.reference".to_string(), display_name: "Reference".to_string(), description: "Offset of the reference.".to_string(), value: format!("{}", reference), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 65535.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (100.0f32)), advanced: false, option_advanced: vec![], section: String::new() }]].concat() }, vec![ParameterDef { name: "saturation".to_string(), display_name: "Saturation".to_string(), description: "Pixels at or above this level (in either channel) are left out of\nall estimates - and their neighbours as far as the blurs and the\nshift reach.".to_string(), value: match _s.saturation { MathSubtractReferenceChannelSaturationSettings::Auto => "Auto".to_string(), MathSubtractReferenceChannelSaturationSettings::Manual { .. } => "Manual".to_string(), MathSubtractReferenceChannelSaturationSettings::Off => "Off".to_string() }, param_type: ParamType::Dropdown, options: vec!["Auto".to_string(), "Manual".to_string(), "Off".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MathSubtractReferenceChannelSaturationSettings::default()) { MathSubtractReferenceChannelSaturationSettings::Auto => "Auto".to_string(), MathSubtractReferenceChannelSaturationSettings::Manual { .. } => "Manual".to_string(), MathSubtractReferenceChannelSaturationSettings::Off => "Off".to_string() }, advanced: true, option_advanced: vec![false, false, false], section: String::new() }], match &_s.saturation { MathSubtractReferenceChannelSaturationSettings::Auto => vec![], MathSubtractReferenceChannelSaturationSettings::Manual { level } => vec![ParameterDef { name: "saturation.level".to_string(), display_name: "Level".to_string(), description: "Pixels at or above it are saturated.".to_string(), value: format!("{}", level), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1000000000.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (65535.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], MathSubtractReferenceChannelSaturationSettings::Off => vec![] }, vec![ParameterDef { name: "background".to_string(), display_name: "Background".to_string(), description: "Slowly varying background, removed from both channels.".to_string(), value: match _s.background { MathSubtractReferenceChannelBackgroundSettings::Median { .. } => "Median".to_string(), MathSubtractReferenceChannelBackgroundSettings::RollingBall { .. } => "Rolling Ball".to_string(), MathSubtractReferenceChannelBackgroundSettings::None => "None".to_string() }, param_type: ParamType::Dropdown, options: vec!["Median".to_string(), "Rolling Ball".to_string(), "None".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MathSubtractReferenceChannelBackgroundSettings::default()) { MathSubtractReferenceChannelBackgroundSettings::Median { .. } => "Median".to_string(), MathSubtractReferenceChannelBackgroundSettings::RollingBall { .. } => "Rolling Ball".to_string(), MathSubtractReferenceChannelBackgroundSettings::None => "None".to_string() }, advanced: false, option_advanced: vec![false, false, false], section: String::new() }], match &_s.background { MathSubtractReferenceChannelBackgroundSettings::Median { radius } => vec![ParameterDef { name: "background.radius".to_string(), display_name: "Radius".to_string(), description: "Radius (px): a little larger than the structures.".to_string(), value: format!("{}", radius), param_type: ParamType::Spinner, options: vec![], min: 1.0f32, max: 200.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (30.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], MathSubtractReferenceChannelBackgroundSettings::RollingBall { radius } => vec![ParameterDef { name: "background.radius".to_string(), display_name: "Radius".to_string(), description: "Radius of the ball (px).".to_string(), value: format!("{}", radius), param_type: ParamType::Spinner, options: vec![], min: 1.0f32, max: 200.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (30.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], MathSubtractReferenceChannelBackgroundSettings::None => vec![] }, vec![ParameterDef { name: "alignment".to_string(), display_name: "Alignment".to_string(), description: "How the reference is shifted onto the target.".to_string(), value: match _s.alignment { MathSubtractReferenceChannelAlignmentSettings::Auto { .. } => "Auto".to_string(), MathSubtractReferenceChannelAlignmentSettings::Fixed { .. } => "Fixed".to_string(), MathSubtractReferenceChannelAlignmentSettings::None => "None".to_string() }, param_type: ParamType::Dropdown, options: vec!["Auto".to_string(), "Fixed".to_string(), "None".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MathSubtractReferenceChannelAlignmentSettings::default()) { MathSubtractReferenceChannelAlignmentSettings::Auto { .. } => "Auto".to_string(), MathSubtractReferenceChannelAlignmentSettings::Fixed { .. } => "Fixed".to_string(), MathSubtractReferenceChannelAlignmentSettings::None => "None".to_string() }, advanced: false, option_advanced: vec![false, false, false], section: String::new() }], match &_s.alignment { MathSubtractReferenceChannelAlignmentSettings::Auto { max_shift, min_quality, fallback_dx, fallback_dy } => [vec![ParameterDef { name: "alignment.max_shift".to_string(), display_name: "Max Shift".to_string(), description: "Larger shifts (px) are not believed: the fallback is used.".to_string(), value: format!("{}", max_shift), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 100.0f32, step: 0.5000f32, groups: vec![], default_value: format!("{}", (5.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "alignment.min_quality".to_string(), display_name: "Min Quality".to_string(), description: "Below this quality (0 - 1) the fallback is used.".to_string(), value: format!("{}", min_quality), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.0500f32, groups: vec![], default_value: format!("{}", (0.3f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "alignment.fallback_dx".to_string(), display_name: "Fallback Dx".to_string(), description: "Shift right (+) used when the estimate isn't believed (px).".to_string(), value: format!("{}", fallback_dx), param_type: ParamType::Spinner, options: vec![], min: -100.0f32, max: 100.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "alignment.fallback_dy".to_string(), display_name: "Fallback Dy".to_string(), description: "Shift down (+) used when the estimate isn't believed (px).".to_string(), value: format!("{}", fallback_dy), param_type: ParamType::Spinner, options: vec![], min: -100.0f32, max: 100.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: false, option_advanced: vec![], section: String::new() }]].concat(), MathSubtractReferenceChannelAlignmentSettings::Fixed { dx, dy } => [vec![ParameterDef { name: "alignment.dx".to_string(), display_name: "Dx".to_string(), description: "Shift right (+) or left (−) in pixels.".to_string(), value: format!("{}", dx), param_type: ParamType::Spinner, options: vec![], min: -100.0f32, max: 100.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "alignment.dy".to_string(), display_name: "Dy".to_string(), description: "Shift down (+) or up (−) in pixels.".to_string(), value: format!("{}", dy), param_type: ParamType::Spinner, options: vec![], min: -100.0f32, max: 100.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: false, option_advanced: vec![], section: String::new() }]].concat(), MathSubtractReferenceChannelAlignmentSettings::None => vec![] }, vec![ParameterDef { name: "interpolation".to_string(), display_name: "Interpolation".to_string(), description: "Interpolation for the shift.".to_string(), value: match _s.interpolation { MathSubtractReferenceChannelShiftInterpolationSettings::Cubic => "Cubic".to_string(), MathSubtractReferenceChannelShiftInterpolationSettings::Linear => "Linear".to_string() }, param_type: ParamType::Dropdown, options: vec!["Cubic".to_string(), "Linear".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MathSubtractReferenceChannelShiftInterpolationSettings :: Cubic) { MathSubtractReferenceChannelShiftInterpolationSettings::Cubic => "Cubic".to_string(), MathSubtractReferenceChannelShiftInterpolationSettings::Linear => "Linear".to_string() }, advanced: true, option_advanced: vec![false, false], section: String::new() }], vec![ParameterDef { name: "target_extra_sigma".to_string(), display_name: "Target Extra Sigma".to_string(), description: "Extra blur (σ, px) for the target if it is sharper than the\nreference (0 = off).".to_string(), value: format!("{}", _s.target_extra_sigma), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 20.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "reference_extra_sigma".to_string(), display_name: "Reference Extra Sigma".to_string(), description: "Extra blur (σ, px) for the reference if it is sharper than the\ntarget (0 = off).".to_string(), value: format!("{}", _s.reference_extra_sigma), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 20.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "smoothing_sigma".to_string(), display_name: "Smoothing Sigma".to_string(), description: "Gaussian smoothing (σ, px) applied identically to both channels (0 =\noff).".to_string(), value: format!("{}", _s.smoothing_sigma), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 20.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (1.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "factor".to_string(), display_name: "Factor".to_string(), description: "How the scale factor `a` is set.".to_string(), value: match _s.factor { MathSubtractReferenceChannelFactorSettings::RobustFit { .. } => "Robust Fit".to_string(), MathSubtractReferenceChannelFactorSettings::Fixed { .. } => "Fixed".to_string(), MathSubtractReferenceChannelFactorSettings::ExposureRatio { .. } => "Exposure Ratio".to_string() }, param_type: ParamType::Dropdown, options: vec!["Robust Fit".to_string(), "Fixed".to_string(), "Exposure Ratio".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MathSubtractReferenceChannelFactorSettings::default()) { MathSubtractReferenceChannelFactorSettings::RobustFit { .. } => "Robust Fit".to_string(), MathSubtractReferenceChannelFactorSettings::Fixed { .. } => "Fixed".to_string(), MathSubtractReferenceChannelFactorSettings::ExposureRatio { .. } => "Exposure Ratio".to_string() }, advanced: false, option_advanced: vec![false, false, false], section: String::new() }], match &_s.factor { MathSubtractReferenceChannelFactorSettings::RobustFit { noise_factor, min_percentile, outlier_k, fit_offset, min_r2, fallback, min_value, max_value } => [vec![ParameterDef { name: "factor.noise_factor".to_string(), display_name: "Noise Factor".to_string(), description: "Fit pixels: reference above its median + this × its noise.".to_string(), value: format!("{}", noise_factor), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 100.0f32, step: 0.5000f32, groups: vec![], default_value: format!("{}", (4.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "factor.min_percentile".to_string(), display_name: "Min Percentile".to_string(), description: "Fit pixels: reference also above this percentile.".to_string(), value: format!("{}", min_percentile), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 100.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (50.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "factor.outlier_k".to_string(), display_name: "Outlier K".to_string(), description: "Pixels this many times the noise above the line (EVs) are left\nout.".to_string(), value: format!("{}", outlier_k), param_type: ParamType::Spinner, options: vec![], min: 0.5f32, max: 100.0f32, step: 0.5000f32, groups: vec![], default_value: format!("{}", (3.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "factor.fit_offset".to_string(), display_name: "Fit Offset".to_string(), description: "Fit the offset `b` too; otherwise the line goes through 0.".to_string(), value: format!("{}", fit_offset), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (true)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "factor.min_r2".to_string(), display_name: "Min R2".to_string(), description: "Below this R² the fallback is used.".to_string(), value: format!("{}", min_r2), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.0500f32, groups: vec![], default_value: format!("{}", (0.5f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "factor.fallback".to_string(), display_name: "Fallback".to_string(), description: "The factor used when the fit fails.".to_string(), value: format!("{}", fallback), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1000.0f32, step: 0.0100f32, groups: vec![], default_value: format!("{}", (1.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "factor.min_value".to_string(), display_name: "Min Value".to_string(), description: "A fitted factor below this uses the fallback.".to_string(), value: format!("{}", min_value), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1000.0f32, step: 0.0100f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "factor.max_value".to_string(), display_name: "Max Value".to_string(), description: "A fitted factor above this uses the fallback.".to_string(), value: format!("{}", max_value), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1000.0f32, step: 0.0100f32, groups: vec![], default_value: format!("{}", (100.0f32)), advanced: false, option_advanced: vec![], section: String::new() }]].concat(), MathSubtractReferenceChannelFactorSettings::Fixed { factor } => vec![ParameterDef { name: "factor.factor".to_string(), display_name: "Factor".to_string(), description: "The factor `a`. (Not named `value`: the generated settings code\nhas a parameter of that name.)".to_string(), value: format!("{}", factor), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1000.0f32, step: 0.0100f32, groups: vec![], default_value: format!("{}", (1.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], MathSubtractReferenceChannelFactorSettings::ExposureRatio { calibration, exposure_target_ms, exposure_reference_ms } => [vec![ParameterDef { name: "factor.calibration".to_string(), display_name: "Calibration".to_string(), description: "The factor at equal exposure times.".to_string(), value: format!("{}", calibration), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1000.0f32, step: 0.0100f32, groups: vec![], default_value: format!("{}", (1.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "factor.exposure_target_ms".to_string(), display_name: "Exposure Target Ms".to_string(), description: "Exposure time of the target (ms).".to_string(), value: format!("{}", exposure_target_ms), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1000000.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (100.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "factor.exposure_reference_ms".to_string(), display_name: "Exposure Reference Ms".to_string(), description: "Exposure time of the reference (ms).".to_string(), value: format!("{}", exposure_reference_ms), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1000000.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (100.0f32)), advanced: false, option_advanced: vec![], section: String::new() }]].concat() }, vec![ParameterDef { name: "factor_scale".to_string(), display_name: "Factor Scale".to_string(), description: "Multiplies `a` after it is set (fine tuning, 1 = unchanged).".to_string(), value: format!("{}", _s.factor_scale), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 100.0f32, step: 0.0100f32, groups: vec![], default_value: format!("{}", (1.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "estimation_scope".to_string(), display_name: "Estimation Scope".to_string(), description: "Area the estimates (shift, factor) are computed over.".to_string(), value: match _s.estimation_scope { MathSubtractReferenceChannelEstimationScopeSettings::Image => "Image".to_string(), MathSubtractReferenceChannelEstimationScopeSettings::Tile => "Tile".to_string() }, param_type: ParamType::Dropdown, options: vec!["Image".to_string(), "Tile".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MathSubtractReferenceChannelEstimationScopeSettings :: Image) { MathSubtractReferenceChannelEstimationScopeSettings::Image => "Image".to_string(), MathSubtractReferenceChannelEstimationScopeSettings::Tile => "Tile".to_string() }, advanced: true, option_advanced: vec![false, false], section: String::new() }], vec![ParameterDef { name: "edge_tolerance".to_string(), display_name: "Edge Tolerance".to_string(), description: "Local maximum of the reference over this radius (px) before\nsubtracting; tolerates a small leftover shift or edge mismatch (0 =\noff).".to_string(), value: format!("{}", _s.edge_tolerance), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 10.0f32, step: 0.5000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "clip_negative".to_string(), display_name: "Clip Negative".to_string(), description: "Set negative residual values to 0.".to_string(), value: format!("{}", _s.clip_negative), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (true)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "output".to_string(), display_name: "Output".to_string(), description: "Output: the residual, or the scaled aligned reference (for\ninspection).".to_string(), value: match _s.output { MathSubtractReferenceChannelOutputImageSettings::Residual => "Residual".to_string(), MathSubtractReferenceChannelOutputImageSettings::ScaledReference => "Scaled Reference".to_string() }, param_type: ParamType::Dropdown, options: vec!["Residual".to_string(), "Scaled Reference".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MathSubtractReferenceChannelOutputImageSettings :: Residual) { MathSubtractReferenceChannelOutputImageSettings::Residual => "Residual".to_string(), MathSubtractReferenceChannelOutputImageSettings::ScaledReference => "Scaled Reference".to_string() }, advanced: false, option_advanced: vec![false, false], section: String::new() }]].concat(),
             Self::Threshold(_s) => vec![ParameterDef { name: "thresholds".to_string(), display_name: "Thresholds".to_string(), description: "A list of thresholding layers. Overlapping ranges are resolved\nby the order of the vector (last-in priority).".to_string(), value: String::new(), param_type: ParamType::Group, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: _s.thresholds.iter().map(|__item| [vec![ParameterDef { name: "method".to_string(), display_name: "Method".to_string(), description: "The algorithm to use (Manual or Automatic).".to_string(), value: match __item.method { SegmentationThresholdThresholdMethodSettings::None => "None".to_string(), SegmentationThresholdThresholdMethodSettings::Manual => "Manual".to_string(), SegmentationThresholdThresholdMethodSettings::Li => "Li".to_string(), SegmentationThresholdThresholdMethodSettings::MinError => "Min Error".to_string(), SegmentationThresholdThresholdMethodSettings::Triangle => "Triangle".to_string(), SegmentationThresholdThresholdMethodSettings::Moments => "Moments".to_string(), SegmentationThresholdThresholdMethodSettings::Huang => "Huang".to_string(), SegmentationThresholdThresholdMethodSettings::Intermodes => "Intermodes".to_string(), SegmentationThresholdThresholdMethodSettings::IsoData => "Iso Data".to_string(), SegmentationThresholdThresholdMethodSettings::MaxEntropy => "Max Entropy".to_string(), SegmentationThresholdThresholdMethodSettings::Mean => "Mean".to_string(), SegmentationThresholdThresholdMethodSettings::Minimum => "Minimum".to_string(), SegmentationThresholdThresholdMethodSettings::Otsu { .. } => "Otsu".to_string(), SegmentationThresholdThresholdMethodSettings::Percentile => "Percentile".to_string(), SegmentationThresholdThresholdMethodSettings::RenyiEntropy => "Renyi Entropy".to_string(), SegmentationThresholdThresholdMethodSettings::Shanbhag => "Shanbhag".to_string(), SegmentationThresholdThresholdMethodSettings::Yen => "Yen".to_string(), SegmentationThresholdThresholdMethodSettings::RobustBackground { .. } => "Robust Background".to_string() }, param_type: ParamType::Dropdown, options: vec!["None".to_string(), "Manual".to_string(), "Li".to_string(), "Min Error".to_string(), "Triangle".to_string(), "Moments".to_string(), "Huang".to_string(), "Intermodes".to_string(), "Iso Data".to_string(), "Max Entropy".to_string(), "Mean".to_string(), "Minimum".to_string(), "Otsu".to_string(), "Percentile".to_string(), "Renyi Entropy".to_string(), "Shanbhag".to_string(), "Yen".to_string(), "Robust Background".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SegmentationThresholdThresholdMethodSettings :: Manual) { SegmentationThresholdThresholdMethodSettings::None => "None".to_string(), SegmentationThresholdThresholdMethodSettings::Manual => "Manual".to_string(), SegmentationThresholdThresholdMethodSettings::Li => "Li".to_string(), SegmentationThresholdThresholdMethodSettings::MinError => "Min Error".to_string(), SegmentationThresholdThresholdMethodSettings::Triangle => "Triangle".to_string(), SegmentationThresholdThresholdMethodSettings::Moments => "Moments".to_string(), SegmentationThresholdThresholdMethodSettings::Huang => "Huang".to_string(), SegmentationThresholdThresholdMethodSettings::Intermodes => "Intermodes".to_string(), SegmentationThresholdThresholdMethodSettings::IsoData => "Iso Data".to_string(), SegmentationThresholdThresholdMethodSettings::MaxEntropy => "Max Entropy".to_string(), SegmentationThresholdThresholdMethodSettings::Mean => "Mean".to_string(), SegmentationThresholdThresholdMethodSettings::Minimum => "Minimum".to_string(), SegmentationThresholdThresholdMethodSettings::Otsu { .. } => "Otsu".to_string(), SegmentationThresholdThresholdMethodSettings::Percentile => "Percentile".to_string(), SegmentationThresholdThresholdMethodSettings::RenyiEntropy => "Renyi Entropy".to_string(), SegmentationThresholdThresholdMethodSettings::Shanbhag => "Shanbhag".to_string(), SegmentationThresholdThresholdMethodSettings::Yen => "Yen".to_string(), SegmentationThresholdThresholdMethodSettings::RobustBackground { .. } => "Robust Background".to_string() }, advanced: false, option_advanced: vec![false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false], section: String::new() }], match &__item.method { SegmentationThresholdThresholdMethodSettings::None => vec![], SegmentationThresholdThresholdMethodSettings::Manual => vec![], SegmentationThresholdThresholdMethodSettings::Li => vec![], SegmentationThresholdThresholdMethodSettings::MinError => vec![], SegmentationThresholdThresholdMethodSettings::Triangle => vec![], SegmentationThresholdThresholdMethodSettings::Moments => vec![], SegmentationThresholdThresholdMethodSettings::Huang => vec![], SegmentationThresholdThresholdMethodSettings::Intermodes => vec![], SegmentationThresholdThresholdMethodSettings::IsoData => vec![], SegmentationThresholdThresholdMethodSettings::MaxEntropy => vec![], SegmentationThresholdThresholdMethodSettings::Mean => vec![], SegmentationThresholdThresholdMethodSettings::Minimum => vec![], SegmentationThresholdThresholdMethodSettings::Otsu { classes } => [vec![ParameterDef { name: "method.classes".to_string(), display_name: "Classes".to_string(), description: "".to_string(), value: match classes { SegmentationThresholdOtsuClassesSettings::Two => "Two".to_string(), SegmentationThresholdOtsuClassesSettings::Three { .. } => "Three".to_string() }, param_type: ParamType::Dropdown, options: vec!["Two".to_string(), "Three".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SegmentationThresholdOtsuClassesSettings :: Two) { SegmentationThresholdOtsuClassesSettings::Two => "Two".to_string(), SegmentationThresholdOtsuClassesSettings::Three { .. } => "Three".to_string() }, advanced: false, option_advanced: vec![false, false], section: String::new() }], match &classes { SegmentationThresholdOtsuClassesSettings::Two => vec![], SegmentationThresholdOtsuClassesSettings::Three { middle_class } => vec![ParameterDef { name: "method.classes.middle_class".to_string(), display_name: "Middle Class".to_string(), description: "".to_string(), value: match middle_class { SegmentationThresholdOtsuMiddleClassSettings::Foreground => "Foreground".to_string(), SegmentationThresholdOtsuMiddleClassSettings::Background => "Background".to_string() }, param_type: ParamType::Dropdown, options: vec!["Foreground".to_string(), "Background".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SegmentationThresholdOtsuMiddleClassSettings :: Background) { SegmentationThresholdOtsuMiddleClassSettings::Foreground => "Foreground".to_string(), SegmentationThresholdOtsuMiddleClassSettings::Background => "Background".to_string() }, advanced: false, option_advanced: vec![false, false], section: String::new() }] }].concat(), SegmentationThresholdThresholdMethodSettings::Percentile => vec![], SegmentationThresholdThresholdMethodSettings::RenyiEntropy => vec![], SegmentationThresholdThresholdMethodSettings::Shanbhag => vec![], SegmentationThresholdThresholdMethodSettings::Yen => vec![], SegmentationThresholdThresholdMethodSettings::RobustBackground { lower_outlier_fraction, upper_outlier_fraction, averaging_method, deviations_above_average } => [vec![ParameterDef { name: "method.lower_outlier_fraction".to_string(), display_name: "Lower Outlier Fraction".to_string(), description: "".to_string(), value: format!("{}", lower_outlier_fraction), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.05f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "method.upper_outlier_fraction".to_string(), display_name: "Upper Outlier Fraction".to_string(), description: "".to_string(), value: format!("{}", upper_outlier_fraction), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.05f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "method.averaging_method".to_string(), display_name: "Averaging Method".to_string(), description: "".to_string(), value: match averaging_method { SegmentationThresholdAveragingSettings::Mean => "Mean".to_string(), SegmentationThresholdAveragingSettings::Median => "Median".to_string() }, param_type: ParamType::Dropdown, options: vec!["Mean".to_string(), "Median".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SegmentationThresholdAveragingSettings :: Mean) { SegmentationThresholdAveragingSettings::Mean => "Mean".to_string(), SegmentationThresholdAveragingSettings::Median => "Median".to_string() }, advanced: false, option_advanced: vec![false, false], section: String::new() }], vec![ParameterDef { name: "method.deviations_above_average".to_string(), display_name: "Deviations Above Average".to_string(), description: "".to_string(), value: format!("{}", deviations_above_average), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (2.0f32)), advanced: false, option_advanced: vec![], section: String::new() }]].concat() }, vec![ParameterDef { name: "min_threshold".to_string(), display_name: "Min Threshold".to_string(), description: "The lower intensity bound. Used directly in `Manual` mode, or as a\nfloor for auto-methods.".to_string(), value: format!("{}", __item.min_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 65535.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_threshold".to_string(), display_name: "Max Threshold".to_string(), description: "The upper intensity bound. Used directly in `Manual` mode, or as a\nceiling for auto-methods.".to_string(), value: format!("{}", __item.max_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 65535.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (65535.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "unit".to_string(), display_name: "Unit".to_string(), description: "Unit used for the threshold value.\n\nbit: 0 - 255/65535\n%: 0 - 100.0\nrel: 0 - 1.0".to_string(), value: match __item.unit { PixelUnits::Bit => "bit".to_string(), PixelUnits::Percent => "%".to_string(), PixelUnits::Relative => "rel".to_string() }, param_type: ParamType::PixelUnits, options: vec!["bit".to_string(), "%".to_string(), "rel".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (PixelUnits :: Bit) { PixelUnits::Bit => "bit".to_string(), PixelUnits::Percent => "%".to_string(), PixelUnits::Relative => "rel".to_string() }, advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "segmentation_class".to_string(), display_name: "Segmentation Class".to_string(), description: "The classification ID assigned to pixels falling within this threshold range.".to_string(), value: format!("{}", __item.segmentation_class.as_u32()), param_type: ParamType::SegClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (SegmentationClass::default()).as_u32()), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "value_source".to_string(), display_name: "Value Source".to_string(), description: "Defines which image should be taken for calculating the threhold value.\n\nThis is the source which is used to calculate the threshold value.\nThe value itself is applied to the actual image the pipeline stands.".to_string(), value: match __item.value_source { SegmentationThresholdThresholdValueSourceSettings::ActualImage => "Actual Image".to_string(), SegmentationThresholdThresholdValueSourceSettings::RawImage => "Raw Image".to_string(), SegmentationThresholdThresholdValueSourceSettings::Memory(_) => "Memory".to_string() }, param_type: ParamType::Dropdown, options: vec!["Actual Image".to_string(), "Raw Image".to_string(), "Memory".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SegmentationThresholdThresholdValueSourceSettings :: ActualImage) { SegmentationThresholdThresholdValueSourceSettings::ActualImage => "Actual Image".to_string(), SegmentationThresholdThresholdValueSourceSettings::RawImage => "Raw Image".to_string(), SegmentationThresholdThresholdValueSourceSettings::Memory(_) => "Memory".to_string() }, advanced: true, option_advanced: vec![false, false, false], section: String::new() }], match &__item.value_source { SegmentationThresholdThresholdValueSourceSettings::ActualImage => vec![], SegmentationThresholdThresholdValueSourceSettings::RawImage => vec![], SegmentationThresholdThresholdValueSourceSettings::Memory(__inner) => vec![ParameterDef { name: "value_source.0".to_string(), display_name: "Memory".to_string(), description: "Calculate the threshold from a user-defined snapshot stored earlier in\nthe pipeline (e.g. via the `ImageCache` command), addressed by\n`MemoryId`.".to_string(), value: ImageAddress::Memory({ let __m: &MemoryId = &__inner; *__m }).to_param_value(), param_type: ParamType::ImageAddress, options: { let (kind, nr) = ImageAddress::Memory({ let __m: &MemoryId = &__inner; *__m }).param_parts(); vec![kind.to_string(), nr.to_string(), "memory".to_string()] }, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: String::new(), advanced: false, option_advanced: vec![], section: String::new() }] }].concat()).collect(), default_value: String::new(), advanced: false, option_advanced: vec![], section: String::new() }],
             Self::TraceFilaments(_s) => [vec![ParameterDef { name: "seeds".to_string(), display_name: "Seeds".to_string(), description: "The somata: each the root of one tree.".to_string(), value: _s.seeds.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "targets".to_string(), display_name: "Targets".to_string(), description: "The tips to reach (e.g. the end points of Skeletonize Objects).".to_string(), value: _s.targets.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "output_class".to_string(), display_name: "Output Class".to_string(), description: "The class the segments get.".to_string(), value: _s.output_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "channel".to_string(), display_name: "Channel".to_string(), description: "The channel the neurites are in (their stain).".to_string(), value: _s.channel.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx::default()).to_string(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "follow_fibres".to_string(), display_name: "Follow Fibres".to_string(), description: "Follow tube-shaped structures (vesselness of the channel at the\nfibre widths) - else the brightness alone, which also follows blobs\nand debris.".to_string(), value: format!("{}", _s.follow_fibres), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (true)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "min_width".to_string(), display_name: "Min Width".to_string(), description: "The thinnest fibres to follow.".to_string(), value: format!("{}", _s.min_width), param_type: ParamType::Spinner, options: vec![], min: 0.5f32, max: 1000.0f32, step: 0.5000f32, groups: vec![], default_value: format!("{}", (2.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_width".to_string(), display_name: "Max Width".to_string(), description: "The widest fibres to follow.".to_string(), value: format!("{}", _s.max_width), param_type: ParamType::Spinner, options: vec![], min: 0.5f32, max: 1000.0f32, step: 0.5000f32, groups: vec![], default_value: format!("{}", (6.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_reach".to_string(), display_name: "Max Reach".to_string(), description: "How far from its soma a tip may be: the search window (soma box grown\nby this) - its RAM grows with its area (about 25 bytes per pixel,\na window per thread).".to_string(), value: format!("{}", _s.max_reach), param_type: ParamType::Spinner, options: vec![], min: 1.0f32, max: 100000.0f32, step: 10.0000f32, groups: vec![], default_value: format!("{}", (300.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "min_branch_length".to_string(), display_name: "Min Branch Length".to_string(), description: "Side branches shorter than this are removed.".to_string(), value: format!("{}", _s.min_branch_length), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 100000.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (5.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "unit".to_string(), display_name: "Unit".to_string(), description: "Unit of the widths, the reach and the branch length.".to_string(), value: match _s.unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SizeUnits :: Pixels) { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, advanced: false, option_advanced: vec![], section: String::new() }]].concat(),
             Self::TrackKalman(_s) => [vec![ParameterDef { name: "object_class".to_string(), display_name: "Object Class".to_string(), description: "Object class to track.".to_string(), value: _s.object_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "unit".to_string(), display_name: "Unit".to_string(), description: "Unit of the distances (e.g. pixels, nm).".to_string(), value: match _s.unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SizeUnits::default()) { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "initial_max_distance".to_string(), display_name: "Initial Max Distance".to_string(), description: "How far a new track's second object may be from its first - the\nfastest an object moves per frame.".to_string(), value: format!("{}", _s.initial_max_distance), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 0.0f32, step: 100.0000f32, groups: vec![], default_value: format!("{}", (15000.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_distance".to_string(), display_name: "Max Distance".to_string(), description: "How far an object may be from where its track predicts it - also\nthe farthest a merge or split partner may be.".to_string(), value: format!("{}", _s.max_distance), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 0.0f32, step: 100.0000f32, groups: vec![], default_value: format!("{}", (5000.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_gap_frames".to_string(), display_name: "Max Gap Frames".to_string(), description: "How many frames in a row an object may be missing and its track\nstill continue. 0: no gap closing.".to_string(), value: format!("{}", _s.max_gap_frames), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 100.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (2usize)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "max_gap_distance".to_string(), display_name: "Max Gap Distance".to_string(), description: "How far an object may be from where its track predicts it after a\ngap.".to_string(), value: format!("{}", _s.max_gap_distance), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 0.0f32, step: 100.0000f32, groups: vec![], default_value: format!("{}", (10000.0f32)), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "position_noise".to_string(), display_name: "Position Noise".to_string(), description: "How exactly an object's position is known (its standard deviation)\n- the larger, the more the predictions follow the velocity rather\nthan the last position.".to_string(), value: format!("{}", _s.position_noise), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 0.0f32, step: 10.0000f32, groups: vec![], default_value: format!("{}", (200.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "velocity_noise".to_string(), display_name: "Velocity Noise".to_string(), description: "How much the velocity changes from one frame to the next (standard\ndeviation) - the larger, the faster a track follows a turn.".to_string(), value: format!("{}", _s.velocity_noise), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 0.0f32, step: 10.0000f32, groups: vec![], default_value: format!("{}", (1000.0f32)), advanced: true, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "merging".to_string(), display_name: "Merging".to_string(), description: "Detect two objects merging into one (e.g. vesicle fusion).".to_string(), value: format!("{}", _s.merging), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "splitting".to_string(), display_name: "Splitting".to_string(), description: "Detect one object splitting into two (e.g. a vesicle budding off).".to_string(), value: format!("{}", _s.splitting), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: false, option_advanced: vec![], section: String::new() }], vec![ParameterDef { name: "merge_split_amount".to_string(), display_name: "Merge Split Amount".to_string(), description: "What a merge adds up and a split divides.".to_string(), value: match _s.merge_split_amount { LibsLinkingMergeSplitAmountSettings::Area => "Area".to_string(), LibsLinkingMergeSplitAmountSettings::Intensity => "Intensity".to_string() }, param_type: ParamType::Dropdown, options: vec!["Area".to_string(), "Intensity".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (LibsLinkingMergeSplitAmountSettings :: Intensity) { LibsLinkingMergeSplitAmountSettings::Area => "Area".to_string(), LibsLinkingMergeSplitAmountSettings::Intensity => "Intensity".to_string() }, advanced: true, option_advanced: vec![false, false], section: String::new() }], vec![ParameterDef { name: "channel".to_string(), display_name: "Channel".to_string(), description: "The channel of the intensity, if `merge_split_amount` is the\nintensity.".to_string(), value: _s.channel.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ImageChannelIdx::default()).to_string(), advanced: true, option_advanced: vec![], section: String::new() }]].concat(),
@@ -2222,6 +2251,23 @@ impl PipelineCommand {
             ),
             Self::Stardist(_) => String::new(),
             Self::StructureTensor(_) => String::new(),
+            Self::SubtractReferenceChannel(s) => format!(
+                "Alignment: {} · Factor: {}",
+                match s.alignment {
+                    MathSubtractReferenceChannelAlignmentSettings::Auto { .. } =>
+                        "Auto".to_string(),
+                    MathSubtractReferenceChannelAlignmentSettings::Fixed { .. } =>
+                        "Fixed".to_string(),
+                    MathSubtractReferenceChannelAlignmentSettings::None => "None".to_string(),
+                },
+                match s.factor {
+                    MathSubtractReferenceChannelFactorSettings::RobustFit { .. } =>
+                        "Robust Fit".to_string(),
+                    MathSubtractReferenceChannelFactorSettings::Fixed { .. } => "Fixed".to_string(),
+                    MathSubtractReferenceChannelFactorSettings::ExposureRatio { .. } =>
+                        "Exposure Ratio".to_string(),
+                }
+            ),
             Self::Threshold(_) => String::new(),
             Self::TraceFilaments(s) => format!("Max Reach: {}", format!("{:.3}", s.max_reach)),
             Self::TrackKalman(_) => String::new(),
@@ -2303,6 +2349,7 @@ impl PipelineCommand {
             Self::MeasureObjectSkeleton(s) => Some(s.id.as_str()),
             Self::MeasureObjectTexture(s) => Some(s.id.as_str()),
             Self::MeasureTrackMotion(s) => Some(s.id.as_str()),
+            Self::SubtractReferenceChannel(s) => Some(s.id.as_str()),
             _ => None,
         }
     }
@@ -2324,6 +2371,7 @@ impl PipelineCommand {
             Self::MeasureObjectSkeleton(s) => Some(&mut s.id),
             Self::MeasureObjectTexture(s) => Some(&mut s.id),
             Self::MeasureTrackMotion(s) => Some(&mut s.id),
+            Self::SubtractReferenceChannel(s) => Some(&mut s.id),
             _ => None,
         }
     }
@@ -2346,6 +2394,7 @@ impl PipelineCommand {
             Self::MeasureObjectSkeleton(_) => Some("skeleton"),
             Self::MeasureObjectTexture(_) => Some("object_texture"),
             Self::MeasureTrackMotion(_) => Some("motion"),
+            Self::SubtractReferenceChannel(_) => Some("reference"),
             _ => None,
         }
     }
@@ -2525,6 +2574,7 @@ impl PipelineCommand {
                 classes.push(ObjectClass::from_segmentation_class(s.segmentation_class));
             }
             Self::StructureTensor(_) => {}
+            Self::SubtractReferenceChannel(_) => {}
             Self::Threshold(s) => {
                 for item0 in s.thresholds.iter() {
                     classes.push(ObjectClass::from_segmentation_class(
@@ -4429,6 +4479,332 @@ impl PipelineCommand {
                     }
                 }
             }
+            Self::SubtractReferenceChannel(s) => {
+                if param_name == "id" {
+                    s.id = value.to_string();
+                }
+                if param_name == "target" {
+                    s.target = match value {
+                        "Current Image" => {
+                            MathSubtractReferenceChannelTargetSourceSettings::CurrentImage
+                        }
+                        "Channel" => MathSubtractReferenceChannelTargetSourceSettings::Channel {
+                            channel: ImageChannelIdx::default(),
+                        },
+                        _ => (s.target).clone(),
+                    };
+                }
+                if let MathSubtractReferenceChannelTargetSourceSettings::Channel {
+                    ref mut channel,
+                } = s.target
+                {
+                    if param_name == "target.channel" {
+                        if let Ok(v) = value.parse::<u32>() {
+                            *channel = ImageChannelIdx(v);
+                        }
+                    }
+                }
+                if param_name == "reference_channel" {
+                    if let Ok(v) = value.parse::<u32>() {
+                        s.reference_channel = ImageChannelIdx(v);
+                    }
+                }
+                if param_name == "camera_offset" {
+                    s.camera_offset = match value {
+                        "None" => MathSubtractReferenceChannelCameraOffsetSettings::None,
+                        "Manual" => MathSubtractReferenceChannelCameraOffsetSettings::Manual {
+                            target: 100.0f32,
+                            reference: 100.0f32,
+                        },
+                        _ => (s.camera_offset).clone(),
+                    };
+                }
+                if let MathSubtractReferenceChannelCameraOffsetSettings::Manual {
+                    ref mut target,
+                    ref mut reference,
+                } = s.camera_offset
+                {
+                    if param_name == "camera_offset.target" {
+                        if let Ok(v) = value.parse::<f32>() {
+                            *target = v;
+                        }
+                    }
+                    if param_name == "camera_offset.reference" {
+                        if let Ok(v) = value.parse::<f32>() {
+                            *reference = v;
+                        }
+                    }
+                }
+                if param_name == "saturation" {
+                    s.saturation = match value {
+                        "Auto" => MathSubtractReferenceChannelSaturationSettings::Auto,
+                        "Manual" => MathSubtractReferenceChannelSaturationSettings::Manual {
+                            level: 65535.0f32,
+                        },
+                        "Off" => MathSubtractReferenceChannelSaturationSettings::Off,
+                        _ => (s.saturation).clone(),
+                    };
+                }
+                if let MathSubtractReferenceChannelSaturationSettings::Manual { ref mut level } =
+                    s.saturation
+                {
+                    if param_name == "saturation.level" {
+                        if let Ok(v) = value.parse::<f32>() {
+                            *level = v;
+                        }
+                    }
+                }
+                if param_name == "background" {
+                    s.background = match value {
+                        "Median" => MathSubtractReferenceChannelBackgroundSettings::Median {
+                            radius: 30.0f32,
+                        },
+                        "Rolling Ball" => {
+                            MathSubtractReferenceChannelBackgroundSettings::RollingBall {
+                                radius: 30.0f32,
+                            }
+                        }
+                        "None" => MathSubtractReferenceChannelBackgroundSettings::None,
+                        _ => (s.background).clone(),
+                    };
+                }
+                if let MathSubtractReferenceChannelBackgroundSettings::Median { ref mut radius } =
+                    s.background
+                {
+                    if param_name == "background.radius" {
+                        if let Ok(v) = value.parse::<f32>() {
+                            *radius = v;
+                        }
+                    }
+                }
+                if let MathSubtractReferenceChannelBackgroundSettings::RollingBall {
+                    ref mut radius,
+                } = s.background
+                {
+                    if param_name == "background.radius" {
+                        if let Ok(v) = value.parse::<f32>() {
+                            *radius = v;
+                        }
+                    }
+                }
+                if param_name == "alignment" {
+                    s.alignment = match value {
+                        "Auto" => MathSubtractReferenceChannelAlignmentSettings::Auto {
+                            max_shift: 5.0f32,
+                            min_quality: 0.3f32,
+                            fallback_dx: 0.0f32,
+                            fallback_dy: 0.0f32,
+                        },
+                        "Fixed" => MathSubtractReferenceChannelAlignmentSettings::Fixed {
+                            dx: 0.0f32,
+                            dy: 0.0f32,
+                        },
+                        "None" => MathSubtractReferenceChannelAlignmentSettings::None,
+                        _ => (s.alignment).clone(),
+                    };
+                }
+                if let MathSubtractReferenceChannelAlignmentSettings::Auto {
+                    ref mut max_shift,
+                    ref mut min_quality,
+                    ref mut fallback_dx,
+                    ref mut fallback_dy,
+                } = s.alignment
+                {
+                    if param_name == "alignment.max_shift" {
+                        if let Ok(v) = value.parse::<f32>() {
+                            *max_shift = v;
+                        }
+                    }
+                    if param_name == "alignment.min_quality" {
+                        if let Ok(v) = value.parse::<f32>() {
+                            *min_quality = v;
+                        }
+                    }
+                    if param_name == "alignment.fallback_dx" {
+                        if let Ok(v) = value.parse::<f32>() {
+                            *fallback_dx = v;
+                        }
+                    }
+                    if param_name == "alignment.fallback_dy" {
+                        if let Ok(v) = value.parse::<f32>() {
+                            *fallback_dy = v;
+                        }
+                    }
+                }
+                if let MathSubtractReferenceChannelAlignmentSettings::Fixed {
+                    ref mut dx,
+                    ref mut dy,
+                } = s.alignment
+                {
+                    if param_name == "alignment.dx" {
+                        if let Ok(v) = value.parse::<f32>() {
+                            *dx = v;
+                        }
+                    }
+                    if param_name == "alignment.dy" {
+                        if let Ok(v) = value.parse::<f32>() {
+                            *dy = v;
+                        }
+                    }
+                }
+                if param_name == "interpolation" {
+                    s.interpolation = match value {
+                        "Cubic" => MathSubtractReferenceChannelShiftInterpolationSettings::Cubic,
+                        "Linear" => MathSubtractReferenceChannelShiftInterpolationSettings::Linear,
+                        _ => (s.interpolation).clone(),
+                    };
+                }
+                if param_name == "target_extra_sigma" {
+                    if let Ok(v) = value.parse::<f32>() {
+                        s.target_extra_sigma = v;
+                    }
+                }
+                if param_name == "reference_extra_sigma" {
+                    if let Ok(v) = value.parse::<f32>() {
+                        s.reference_extra_sigma = v;
+                    }
+                }
+                if param_name == "smoothing_sigma" {
+                    if let Ok(v) = value.parse::<f32>() {
+                        s.smoothing_sigma = v;
+                    }
+                }
+                if param_name == "factor" {
+                    s.factor = match value {
+                        "Robust Fit" => MathSubtractReferenceChannelFactorSettings::RobustFit {
+                            noise_factor: 4.0f32,
+                            min_percentile: 50.0f32,
+                            outlier_k: 3.0f32,
+                            fit_offset: true,
+                            min_r2: 0.5f32,
+                            fallback: 1.0f32,
+                            min_value: 0.0f32,
+                            max_value: 100.0f32,
+                        },
+                        "Fixed" => {
+                            MathSubtractReferenceChannelFactorSettings::Fixed { factor: 1.0f32 }
+                        }
+                        "Exposure Ratio" => {
+                            MathSubtractReferenceChannelFactorSettings::ExposureRatio {
+                                calibration: 1.0f32,
+                                exposure_target_ms: 100.0f32,
+                                exposure_reference_ms: 100.0f32,
+                            }
+                        }
+                        _ => (s.factor).clone(),
+                    };
+                }
+                if let MathSubtractReferenceChannelFactorSettings::RobustFit {
+                    ref mut noise_factor,
+                    ref mut min_percentile,
+                    ref mut outlier_k,
+                    ref mut fit_offset,
+                    ref mut min_r2,
+                    ref mut fallback,
+                    ref mut min_value,
+                    ref mut max_value,
+                } = s.factor
+                {
+                    if param_name == "factor.noise_factor" {
+                        if let Ok(v) = value.parse::<f32>() {
+                            *noise_factor = v;
+                        }
+                    }
+                    if param_name == "factor.min_percentile" {
+                        if let Ok(v) = value.parse::<f32>() {
+                            *min_percentile = v;
+                        }
+                    }
+                    if param_name == "factor.outlier_k" {
+                        if let Ok(v) = value.parse::<f32>() {
+                            *outlier_k = v;
+                        }
+                    }
+                    if param_name == "factor.fit_offset" {
+                        *fit_offset = value == "true";
+                    }
+                    if param_name == "factor.min_r2" {
+                        if let Ok(v) = value.parse::<f32>() {
+                            *min_r2 = v;
+                        }
+                    }
+                    if param_name == "factor.fallback" {
+                        if let Ok(v) = value.parse::<f32>() {
+                            *fallback = v;
+                        }
+                    }
+                    if param_name == "factor.min_value" {
+                        if let Ok(v) = value.parse::<f32>() {
+                            *min_value = v;
+                        }
+                    }
+                    if param_name == "factor.max_value" {
+                        if let Ok(v) = value.parse::<f32>() {
+                            *max_value = v;
+                        }
+                    }
+                }
+                if let MathSubtractReferenceChannelFactorSettings::Fixed { ref mut factor } =
+                    s.factor
+                {
+                    if param_name == "factor.factor" {
+                        if let Ok(v) = value.parse::<f32>() {
+                            *factor = v;
+                        }
+                    }
+                }
+                if let MathSubtractReferenceChannelFactorSettings::ExposureRatio {
+                    ref mut calibration,
+                    ref mut exposure_target_ms,
+                    ref mut exposure_reference_ms,
+                } = s.factor
+                {
+                    if param_name == "factor.calibration" {
+                        if let Ok(v) = value.parse::<f32>() {
+                            *calibration = v;
+                        }
+                    }
+                    if param_name == "factor.exposure_target_ms" {
+                        if let Ok(v) = value.parse::<f32>() {
+                            *exposure_target_ms = v;
+                        }
+                    }
+                    if param_name == "factor.exposure_reference_ms" {
+                        if let Ok(v) = value.parse::<f32>() {
+                            *exposure_reference_ms = v;
+                        }
+                    }
+                }
+                if param_name == "factor_scale" {
+                    if let Ok(v) = value.parse::<f32>() {
+                        s.factor_scale = v;
+                    }
+                }
+                if param_name == "estimation_scope" {
+                    s.estimation_scope = match value {
+                        "Image" => MathSubtractReferenceChannelEstimationScopeSettings::Image,
+                        "Tile" => MathSubtractReferenceChannelEstimationScopeSettings::Tile,
+                        _ => (s.estimation_scope).clone(),
+                    };
+                }
+                if param_name == "edge_tolerance" {
+                    if let Ok(v) = value.parse::<f32>() {
+                        s.edge_tolerance = v;
+                    }
+                }
+                if param_name == "clip_negative" {
+                    s.clip_negative = value == "true";
+                }
+                if param_name == "output" {
+                    s.output = match value {
+                        "Residual" => MathSubtractReferenceChannelOutputImageSettings::Residual,
+                        "Scaled Reference" => {
+                            MathSubtractReferenceChannelOutputImageSettings::ScaledReference
+                        }
+                        _ => (s.output).clone(),
+                    };
+                }
+            }
             Self::Threshold(s) => {
                 if param_name.starts_with("thresholds.") {
                     let rest = &param_name[11..];
@@ -5316,6 +5692,7 @@ impl PipelineCommand {
             Self::SkeletonizeObjects(_) => {}
             Self::Stardist(_) => {}
             Self::StructureTensor(_) => {}
+            Self::SubtractReferenceChannel(_) => {}
             Self::Threshold(s) => {
                 if param_name == "thresholds" {
                     if let Some(last) = s.thresholds.last().cloned() {
@@ -5430,6 +5807,7 @@ impl PipelineCommand {
             Self::SkeletonizeObjects(_) => {}
             Self::Stardist(_) => {}
             Self::StructureTensor(_) => {}
+            Self::SubtractReferenceChannel(_) => {}
             Self::Threshold(s) => {
                 if param_name == "thresholds" && idx < s.thresholds.len() {
                     s.thresholds.remove(idx);

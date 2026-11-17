@@ -50,6 +50,16 @@ fn configured(command: PipelineCommand) -> PipelineCommand {
             sigma: 1.0,
             ..s
         }),
+        // The median's RAM doesn't depend on its radius; 30 px would take
+        // minutes in a debug build.
+        C::SubtractReferenceChannel(s) => {
+            C::SubtractReferenceChannel(SubtractReferenceChannelSettings {
+                background: MathSubtractReferenceChannelBackgroundSettings::Median { radius: 5.0 },
+                // The test image has one channel: its own reference.
+                reference_channel: evanalyzer_cfg::core_types::ImageChannelIdx(0),
+                ..s
+            })
+        }
         // The defaults shift by 0 (a copy): measure the interpolation.
         C::TranslateImage(s) => C::TranslateImage(TranslateImageSettings {
             dy: 0.5,

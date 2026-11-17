@@ -85,13 +85,15 @@ pub use crate::job::algos_from_config::{into_algorithm, into_pipeline_step};
 
 /// What `command` measures (its `ImageAlgorithm::measurement_outputs`) -
 /// none for a step that doesn't measure, nor for a dataset step (its values
-/// come after every image: no image step can use them). The settings become the step for
-/// it: a plain copy, nothing is loaded.
+/// come after every image: no image step can use them). A step of another
+/// category may measure too (Subtract Reference Channel: its factor and
+/// shift). The settings become the step for it: a plain copy, nothing is
+/// loaded.
 pub fn measurement_outputs(
     command: &evanalyzer_cfg::settings::pipeline_command::PipelineCommand,
 ) -> Vec<evanalyzer_cfg::core_types::MeasurementInfo> {
     use evanalyzer_cfg::settings::pipeline_command::CommandCategory;
-    if *command.category() != CommandCategory::Measure {
+    if *command.category() == CommandCategory::Dataset {
         return Vec::new();
     }
     into_algorithm(command.clone())

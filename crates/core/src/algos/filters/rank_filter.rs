@@ -139,7 +139,7 @@ impl RankFilter {
     /// Filters `img` (1 or 3 channels): the median (and outliers, which
     /// need it) of gray values - raw or scaled to 0..1 - with a sliding
     /// histogram, everything else by gathering each window.
-    fn process_image<const C: usize>(
+    pub(crate) fn process_image<const C: usize>(
         &self,
         img: &Image<f32, C>,
     ) -> Result<Image<f32, C>, InternalErrors> {

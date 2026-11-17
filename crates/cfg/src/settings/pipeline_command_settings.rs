@@ -38,6 +38,54 @@ pub enum ObjectAiObjectClassifierAiClassifyMatchHandlingSettings {
     ReclassifyIfMatch,
 }
 
+/// How the reference is shifted onto the target.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MathSubtractReferenceChannelAlignmentSettings {
+    /// Estimated per image (phase correlation).
+    #[serde(rename_all = "camelCase")]
+    #[serde(alias = "auto")]
+    Auto {
+        /// Larger shifts (px) are not believed: the fallback is used.
+        #[schemars(range(min = 0, max = 100))]
+        max_shift: f32,
+        /// Below this quality (0 - 1) the fallback is used.
+        #[schemars(range(min = 0, max = 1))]
+        min_quality: f32,
+        /// Shift right (+) used when the estimate isn't believed (px).
+        #[schemars(range(min = -100, max = 100))]
+        fallback_dx: f32,
+        /// Shift down (+) used when the estimate isn't believed (px).
+        #[schemars(range(min = -100, max = 100))]
+        fallback_dy: f32,
+    },
+    /// A fixed shift of the reference.
+    #[serde(rename_all = "camelCase")]
+    #[serde(alias = "fixed")]
+    Fixed {
+        /// Shift right (+) or left (−) in pixels.
+        #[schemars(range(min = -100, max = 100))]
+        dx: f32,
+        /// Shift down (+) or up (−) in pixels.
+        #[schemars(range(min = -100, max = 100))]
+        dy: f32,
+    },
+    /// Not shifted.
+    #[serde(alias = "none")]
+    None,
+}
+
+impl Default for MathSubtractReferenceChannelAlignmentSettings {
+    fn default() -> Self {
+        Self::Auto {
+            max_shift: 5.0f32,
+            min_quality: 0.3f32,
+            fallback_dx: 0.0f32,
+            fallback_dy: 0.0f32,
+        }
+    }
+}
+
 /// On which planes an annotation is used.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -87,6 +135,37 @@ pub enum SegmentationThresholdAveragingSettings {
     Median,
 }
 
+/// The background removed from both channels.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MathSubtractReferenceChannelBackgroundSettings {
+    /// The median over a circle (as Median Subtract).
+    #[serde(rename_all = "camelCase")]
+    #[serde(alias = "median")]
+    Median {
+        /// Radius (px): a little larger than the structures.
+        #[schemars(range(min = 1, max = 200))]
+        radius: f32,
+    },
+    /// Rolling Ball.
+    #[serde(rename_all = "camelCase")]
+    #[serde(alias = "rolling-ball", alias = "rollingBall", alias = "rolling_ball")]
+    RollingBall {
+        /// Radius of the ball (px).
+        #[schemars(range(min = 1, max = 200))]
+        radius: f32,
+    },
+    /// No background removed.
+    #[serde(alias = "none")]
+    None,
+}
+
+impl Default for MathSubtractReferenceChannelBackgroundSettings {
+    fn default() -> Self {
+        Self::Median { radius: 30.0f32 }
+    }
+}
+
 /// The geometric shape used to probe the image intensity surface.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -104,6 +183,32 @@ pub enum FiltersRollingBallBallTypeSettings {
     /// resulting in fewer artifacts on complex gradients.
     #[serde(alias = "paraboloid")]
     Paraboloid,
+}
+
+/// The camera's offset (its black level).
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MathSubtractReferenceChannelCameraOffsetSettings {
+    /// No offset subtracted.
+    #[serde(alias = "none")]
+    None,
+    /// Fixed offsets per channel.
+    #[serde(rename_all = "camelCase")]
+    #[serde(alias = "manual")]
+    Manual {
+        /// Offset of the target.
+        #[schemars(range(min = 0, max = 65535))]
+        target: f32,
+        /// Offset of the reference.
+        #[schemars(range(min = 0, max = 65535))]
+        reference: f32,
+    },
+}
+
+impl Default for MathSubtractReferenceChannelCameraOffsetSettings {
+    fn default() -> Self {
+        Self::None {}
+    }
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
@@ -275,6 +380,20 @@ pub enum MeasureColocalizationCostesMethodSettings {
     Accurate,
 }
 
+/// The area the shift and factor are estimated over.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MathSubtractReferenceChannelEstimationScopeSettings {
+    /// The whole image - per tile for now on an image larger than 4096 px
+    /// (logged).
+    #[default]
+    #[serde(alias = "image")]
+    Image,
+    /// Each tile on its own.
+    #[serde(alias = "tile")]
+    Tile,
+}
+
 /// How the rules combine.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -286,6 +405,85 @@ pub enum MeasureExcludeImageExcludeWhenSettings {
     /// Every rule must be met.
     #[serde(alias = "all-rules", alias = "allRules", alias = "all_rules")]
     AllRules,
+}
+
+/// How the scale factor `a` is set.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MathSubtractReferenceChannelFactorSettings {
+    /// Fitted per image: a robust line through the structure's pixels
+    /// (reference above its noise), EVs (bright in the target only) left
+    /// out.
+    #[serde(rename_all = "camelCase")]
+    #[serde(alias = "robust-fit", alias = "robustFit", alias = "robust_fit")]
+    RobustFit {
+        /// Fit pixels: reference above its median + this × its noise.
+        #[schemars(range(min = 0, max = 100))]
+        noise_factor: f32,
+        /// Fit pixels: reference also above this percentile.
+        #[schemars(range(min = 0, max = 100))]
+        min_percentile: f32,
+        /// Pixels this many times the noise above the line (EVs) are left
+        /// out.
+        #[schemars(range(min = 0.5, max = 100))]
+        outlier_k: f32,
+        /// Fit the offset `b` too; otherwise the line goes through 0.
+        fit_offset: bool,
+        /// Below this R² the fallback is used.
+        #[schemars(range(min = 0, max = 1))]
+        min_r2: f32,
+        /// The factor used when the fit fails.
+        #[schemars(range(min = 0, max = 1000))]
+        fallback: f32,
+        /// A fitted factor below this uses the fallback.
+        #[schemars(range(min = 0, max = 1000))]
+        min_value: f32,
+        /// A fitted factor above this uses the fallback.
+        #[schemars(range(min = 0, max = 1000))]
+        max_value: f32,
+    },
+    /// A fixed factor (e.g. measured on single-stain controls).
+    #[serde(rename_all = "camelCase")]
+    #[serde(alias = "fixed")]
+    Fixed {
+        /// The factor `a`. (Not named `value`: the generated settings code
+        /// has a parameter of that name.)
+        #[schemars(range(min = 0, max = 1000))]
+        factor: f32,
+    },
+    /// From the exposure times: `a = calibration · t_target / t_reference`.
+    #[serde(rename_all = "camelCase")]
+    #[serde(
+        alias = "exposure-ratio",
+        alias = "exposureRatio",
+        alias = "exposure_ratio"
+    )]
+    ExposureRatio {
+        /// The factor at equal exposure times.
+        #[schemars(range(min = 0, max = 1000))]
+        calibration: f32,
+        /// Exposure time of the target (ms).
+        #[schemars(range(min = 0.001, max = 1000000))]
+        exposure_target_ms: f32,
+        /// Exposure time of the reference (ms).
+        #[schemars(range(min = 0.001, max = 1000000))]
+        exposure_reference_ms: f32,
+    },
+}
+
+impl Default for MathSubtractReferenceChannelFactorSettings {
+    fn default() -> Self {
+        Self::RobustFit {
+            noise_factor: 4.0f32,
+            min_percentile: 50.0f32,
+            outlier_k: 3.0f32,
+            fit_offset: true,
+            min_r2: 0.5f32,
+            fallback: 1.0f32,
+            min_value: 0.0f32,
+            max_value: 100.0f32,
+        }
+    }
 }
 
 /// How the red, green and blue of a pixel become one gray value.
@@ -771,6 +969,24 @@ pub enum SegmentationThresholdOtsuMiddleClassSettings {
     Background,
 }
 
+/// What [`SubtractReferenceChannel`] puts out.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MathSubtractReferenceChannelOutputImageSettings {
+    /// The target without the reference's signal.
+    #[default]
+    #[serde(alias = "residual")]
+    Residual,
+    /// The scaled, aligned reference `a · align(T) + b` (to inspect the
+    /// estimate).
+    #[serde(
+        alias = "scaled-reference",
+        alias = "scaledReference",
+        alias = "scaled_reference"
+    )]
+    ScaledReference,
+}
+
 /// What fills the strip [`TranslateImage`] empties at the image edge.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -896,6 +1112,32 @@ pub enum MeasureExcludeImageRuleComparisonSettings {
     Above,
 }
 
+/// The level from which a pixel counts as saturated.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MathSubtractReferenceChannelSaturationSettings {
+    /// The image's largest value (255 for 8 bit, 65535 for 16 bit, …).
+    #[serde(alias = "auto")]
+    Auto,
+    /// A fixed level.
+    #[serde(rename_all = "camelCase")]
+    #[serde(alias = "manual")]
+    Manual {
+        /// Pixels at or above it are saturated.
+        #[schemars(range(min = 0, max = 1000000000))]
+        level: f32,
+    },
+    /// No pixel is left out.
+    #[serde(alias = "off")]
+    Off,
+}
+
+impl Default for MathSubtractReferenceChannelSaturationSettings {
+    fn default() -> Self {
+        Self::Auto {}
+    }
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SegmentationWatershedSeedSourceSettings {
@@ -904,6 +1146,19 @@ pub enum SegmentationWatershedSeedSourceSettings {
     DistanceMap,
     #[serde(alias = "intensity")]
     Intensity,
+}
+
+/// How [`SubtractReferenceChannel`] interpolates the shifted reference.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MathSubtractReferenceChannelShiftInterpolationSettings {
+    /// Bicubic (Keys, a = −0.5).
+    #[default]
+    #[serde(alias = "cubic")]
+    Cubic,
+    /// Bilinear: a little smoother.
+    #[serde(alias = "linear")]
+    Linear,
 }
 
 /// How [`GrowRegions`] smooths its growth channel before growing.
@@ -1095,6 +1350,32 @@ pub enum ObjectGrowRegionsStopRuleSettings {
 impl Default for ObjectGrowRegionsStopRuleSettings {
     fn default() -> Self {
         Self::Relative { fraction: 0.5f32 }
+    }
+}
+
+/// The image [`SubtractReferenceChannel`] corrects.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MathSubtractReferenceChannelTargetSourceSettings {
+    /// The pipeline's image at this step.
+    #[serde(
+        alias = "current-image",
+        alias = "currentImage",
+        alias = "current_image"
+    )]
+    CurrentImage,
+    /// An image channel as it was read.
+    #[serde(rename_all = "camelCase")]
+    #[serde(alias = "channel")]
+    Channel {
+        /// The channel to correct.
+        channel: ImageChannelIdx,
+    },
+}
+
+impl Default for MathSubtractReferenceChannelTargetSourceSettings {
+    fn default() -> Self {
+        Self::CurrentImage {}
     }
 }
 
@@ -2091,6 +2372,122 @@ pub struct StructureTensorSettings {
     ///
     /// Controls the spatial "reach" of the neighborhood analysis.
     pub sigma: f32,
+}
+
+/// Removes a signal from the image with a channel that shows only that
+/// signal (the reference) - e.g. serum filaments or autofluorescence in an
+/// EV spot channel: `residual = S − (a · align(T) + b)`. The scale `a`, the
+/// offset `b` and the shift are set by hand or estimated from the image.
+/// Typically the first step of a pipeline, before the spot detection.
+///
+/// **Order:** camera offset → background (both channels) → alignment (the
+/// reference shifted onto the target - before the fit: a wrong shift gives
+/// a wrong `a` and leaves a relief) → extra blur of the sharper channel →
+/// the same smoothing of both (unsmoothed, noise in the reference biases
+/// `a` low) → factor → subtraction.
+///
+/// **Assumption:** estimating the factor from the image assumes the target's
+/// own signal is not correlated with the reference. If it binds the
+/// reference structure (e.g. a protein on the filaments), use a Fixed
+/// factor measured on single-stain controls.
+///
+/// **Reading the residual:** a relief (bright on one side, dark on the
+/// other) → alignment. A bright centre line with dark sides → raise the
+/// target's extra blur; a dark centre line with bright sides → raise the
+/// reference's. The whole structure too bright or too dark → Factor scale.
+///
+/// Measures per image: the factor, offset, shift, alignment quality, R²,
+/// the parts of fit and saturated pixels and whether a fallback was used
+/// (on an image split into tiles: the median over the tiles). Exclude
+/// Image can leave images out by them - e.g. "Fallback used" above 0.5.
+///
+/// Runs per tile, the whole image up to 4096 px: on a larger image each
+/// tile has its own estimates for now (Image scope logs a warning), and the
+/// shift pads the tile borders with their edge pixels (no overlap with the
+/// neighbouring tiles).
+///
+/// The EV-in-serum assay - spots in the current image, the serum channel 4,
+/// everything else at its default:
+///
+/// ```json
+/// { "type": "SUBTRACT_REFERENCE_CHANNEL", "id": "reference", "referenceChannel": 4 }
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[serde(default)]
+#[serde(rename_all = "camelCase")]
+pub struct SubtractReferenceChannelSettings {
+    /// Names the step's measurements (factor, shift, …) in the results.
+    pub id: String,
+    /// Image to correct: the current pipeline image, or a channel.
+    pub target: MathSubtractReferenceChannelTargetSourceSettings,
+    /// Channel containing only the signal to remove.
+    pub reference_channel: ImageChannelIdx,
+    /// Camera offset subtracted from target and reference before anything
+    /// else.
+    pub camera_offset: MathSubtractReferenceChannelCameraOffsetSettings,
+    /// Pixels at or above this level (in either channel) are left out of
+    /// all estimates - and their neighbours as far as the blurs and the
+    /// shift reach.
+    pub saturation: MathSubtractReferenceChannelSaturationSettings,
+    /// Slowly varying background, removed from both channels.
+    pub background: MathSubtractReferenceChannelBackgroundSettings,
+    /// How the reference is shifted onto the target.
+    pub alignment: MathSubtractReferenceChannelAlignmentSettings,
+    /// Interpolation for the shift.
+    pub interpolation: MathSubtractReferenceChannelShiftInterpolationSettings,
+    /// Extra blur (σ, px) for the target if it is sharper than the
+    /// reference (0 = off).
+    #[schemars(range(min = 0, max = 20))]
+    pub target_extra_sigma: f32,
+    /// Extra blur (σ, px) for the reference if it is sharper than the
+    /// target (0 = off).
+    #[schemars(range(min = 0, max = 20))]
+    pub reference_extra_sigma: f32,
+    /// Gaussian smoothing (σ, px) applied identically to both channels (0 =
+    /// off).
+    #[schemars(range(min = 0, max = 20))]
+    pub smoothing_sigma: f32,
+    /// How the scale factor `a` is set.
+    pub factor: MathSubtractReferenceChannelFactorSettings,
+    /// Multiplies `a` after it is set (fine tuning, 1 = unchanged).
+    #[schemars(range(min = 0, max = 100))]
+    pub factor_scale: f32,
+    /// Area the estimates (shift, factor) are computed over.
+    pub estimation_scope: MathSubtractReferenceChannelEstimationScopeSettings,
+    /// Local maximum of the reference over this radius (px) before
+    /// subtracting; tolerates a small leftover shift or edge mismatch (0 =
+    /// off).
+    #[schemars(range(min = 0, max = 10))]
+    pub edge_tolerance: f32,
+    /// Set negative residual values to 0.
+    pub clip_negative: bool,
+    /// Output: the residual, or the scaled aligned reference (for
+    /// inspection).
+    pub output: MathSubtractReferenceChannelOutputImageSettings,
+}
+
+impl Default for SubtractReferenceChannelSettings {
+    fn default() -> Self {
+        Self {
+            id: String::default(),
+            target: MathSubtractReferenceChannelTargetSourceSettings::default(),
+            reference_channel: ImageChannelIdx(1),
+            camera_offset: MathSubtractReferenceChannelCameraOffsetSettings::default(),
+            saturation: MathSubtractReferenceChannelSaturationSettings::default(),
+            background: MathSubtractReferenceChannelBackgroundSettings::default(),
+            alignment: MathSubtractReferenceChannelAlignmentSettings::default(),
+            interpolation: MathSubtractReferenceChannelShiftInterpolationSettings::Cubic,
+            target_extra_sigma: 0.0f32,
+            reference_extra_sigma: 0.0f32,
+            smoothing_sigma: 1.0f32,
+            factor: MathSubtractReferenceChannelFactorSettings::default(),
+            factor_scale: 1.0f32,
+            estimation_scope: MathSubtractReferenceChannelEstimationScopeSettings::Image,
+            edge_tolerance: 0.0f32,
+            clip_negative: true,
+            output: MathSubtractReferenceChannelOutputImageSettings::Residual,
+        }
+    }
 }
 
 /// Shifts the image by a fraction of a pixel; it keeps its size.

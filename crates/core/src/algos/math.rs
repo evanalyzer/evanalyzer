@@ -12,3 +12,4 @@ pub mod image_math;
 pub mod load_channel;
 pub mod median_subtract;
 pub mod save_image;
+pub mod subtract_reference_channel;

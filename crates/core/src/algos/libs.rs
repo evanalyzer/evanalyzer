@@ -15,8 +15,10 @@ pub(crate) mod channel_window;
 /// For every pixel the nearest marked pixel (SciPy's exact Euclidean
 /// feature transform).
 pub(crate) mod feature_transform;
+pub(crate) mod phase_correlation;
 pub(crate) mod robust_stats;
 pub(crate) mod row_runs;
 pub(crate) mod scale_space;
 /// A uniform grid over bounding boxes, to find the objects near one.
 pub(crate) mod spatial_grid;
+pub(crate) mod translate;

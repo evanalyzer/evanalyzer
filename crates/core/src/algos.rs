@@ -74,6 +74,10 @@ pub use self::math::load_channel::LoadChannel;
 pub use self::math::median_subtract::MedianSubtract;
 pub use self::math::save_image::ImageSource;
 pub use self::math::save_image::SaveImage;
+pub use self::math::subtract_reference_channel::{
+    Alignment, Background, CameraOffset, EstimationScope, Factor, OutputImage, Saturation,
+    ShiftInterpolation, SubtractReferenceChannel, TargetSource,
+};
 pub use self::measure::colocalization::CostesMethod;
 pub use self::measure::exclude_image::{ExcludeImage, ExcludeRule, ExcludeWhen, RuleComparison};
 pub use self::measure::image_area_occupied::MeasureImageAreaOccupied;

@@ -1,0 +1,678 @@
+//! # Subtract Reference Channel: tests
+//!
+//! On synthetic scenes as the Python reference builds them: a filament
+//! network (thresholded smoothed noise, then a Gaussian of σ = 1.2 px),
+//! EV spots (σ = 1.3 px) only in the target - half of them on the network -
+//! photon noise and an offset of 100; target = 0.37 × network + spots +
+//! background, the reference the network shifted by (0.8, −1.3) px. The
+//! network is periodic, so the reference's shift is exact (in the
+//! frequency domain).
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-11-17
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
+use crate::algos::TranslateImage;
+use crate::algos::libs::phase_correlation::test_support::{Lcg, fourier_blur, fourier_shift};
+use crate::algos::{
+    Alignment, Background, EstimationScope, Factor, ImageAlgorithm, Interpolation, Padding,
+    SubtractReferenceChannel,
+};
+use crate::image::{ImageContainer, ManagedImage};
+use crate::pipeline::pipeline_cache::{CacheAddress, GlobalPipelineCache};
+use crate::pipeline::pipeline_context::PipelineContext;
+use crate::pipeline::pipeline_measure::MeasurementValues;
+use evanalyzer_cfg::core_types::{ImageChannelIdx, InternalErrors};
+use evanalyzer_cfg::settings::pipeline_command_settings::SubtractReferenceChannelSettings;
+use kornia_image::{Image, ImageSize};
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+const SIDE: usize = 256;
+/// The true factor: target structure / reference structure.
+const A: f32 = 0.37;
+/// The network's brightness in the reference (photons).
+const NETWORK: f32 = 400.0;
+/// The spots' peak (photons).
+const SPOT: f32 = 300.0;
+const SPOT_SIGMA: f32 = 1.3;
+/// The camera offset of both channels.
+const OFFSET: f32 = 100.0;
+/// The reference channel's index.
+const REFERENCE: u32 = 4;
+/// The reference's shift against the target (dy, dx).
+const SHIFT: (f64, f64) = (0.8, -1.3);
+
+/// A synthetic image pair.
+struct Scene {
+    /// The network as it lies in the target, 0 - 1.
+    network: Vec<f32>,
+    /// The spots' centres (x, y).
+    spots: Vec<(f32, f32)>,
+    target: Vec<f32>,
+    reference: Vec<f32>,
+}
+
+/// What a scene is built with.
+#[derive(Clone, Copy)]
+struct Recipe {
+    /// The reference's shift against the target.
+    shift: (f64, f64),
+    /// The reference shows the network (else only background and noise).
+    structure: bool,
+    /// The target shows the network.
+    target_network: bool,
+    noise: bool,
+}
+
+impl Default for Recipe {
+    fn default() -> Self {
+        Recipe {
+            shift: SHIFT,
+            structure: true,
+            target_network: true,
+            noise: true,
+        }
+    }
+}
+
+fn scene(recipe: Recipe) -> Scene {
+    let (w, h) = (SIDE, SIDE);
+    let mut rng = Lcg(42);
+    // The network: smoothed noise, its brightest quarter, smoothed again.
+    let noise: Vec<f32> = (0..w * h).map(|_| rng.next() - 0.5).collect();
+    let smooth = fourier_blur(&noise, w, h, 3.0);
+    let mut sorted = smooth.clone();
+    sorted.sort_by(f32::total_cmp);
+    let level = sorted[sorted.len() * 3 / 4];
+    let binary: Vec<f32> = smooth.iter().map(|v| (*v > level) as u8 as f32).collect();
+    let network = fourier_blur(&binary, w, h, 1.2);
+    let shifted = fourier_shift(&network, w, h, recipe.shift.0, recipe.shift.1);
+
+    // 50 spots, half of them on the network.
+    let mut spots = Vec::new();
+    while spots.len() < 50 {
+        let (x, y) = (
+            4.0 + rng.next() * (w - 8) as f32,
+            4.0 + rng.next() * (h - 8) as f32,
+        );
+        let on_network = network[y as usize * w + x as usize] > 0.6;
+        if (spots.len() % 2 == 0) == on_network {
+            spots.push((x, y));
+        }
+    }
+    let mut spot_image = vec![0f32; w * h];
+    for &(cx, cy) in &spots {
+        for y in (cy as usize).saturating_sub(6)..(cy as usize + 7).min(h) {
+            for x in (cx as usize).saturating_sub(6)..(cx as usize + 7).min(w) {
+                let d2 = (x as f32 - cx).powi(2) + (y as f32 - cy).powi(2);
+                spot_image[y * w + x] += SPOT * (-d2 / (2.0 * SPOT_SIGMA * SPOT_SIGMA)).exp();
+            }
+        }
+    }
+
+    let mut photons = |mean: f32| -> f32 {
+        if recipe.noise {
+            mean + mean.max(0.0).sqrt() * rng.normal()
+        } else {
+            mean
+        }
+    };
+    let ramp = |x: usize, y: usize, a: f32, b: f32| {
+        30.0 + a * x as f32 / w as f32 + b * y as f32 / h as f32
+    };
+    let mut target = vec![0f32; w * h];
+    let mut reference = vec![0f32; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let i = y * w + x;
+            let structure = if recipe.target_network {
+                A * NETWORK * network[i]
+            } else {
+                0.0
+            };
+            target[i] = OFFSET + photons(structure + spot_image[i] + ramp(x, y, 40.0, 20.0));
+            let reference_structure = if recipe.structure {
+                NETWORK * shifted[i]
+            } else {
+                0.0
+            };
+            reference[i] = OFFSET + photons(reference_structure + ramp(x, y, -20.0, 30.0));
+        }
+    }
+    Scene {
+        network,
+        spots,
+        target,
+        reference,
+    }
+}
+
+/// The command with its defaults (but a 10 px median), reading the
+/// reference from channel 4.
+fn command() -> SubtractReferenceChannel {
+    let mut command = SubtractReferenceChannel::from(SubtractReferenceChannelSettings::default());
+    command.id = "reference".into();
+    command.reference_channel = ImageChannelIdx(REFERENCE);
+    // A smaller median than the default 30 px: the same path, a debug
+    // build's tests stay fast (the ramps are slower still).
+    command.background = Background::Median { radius: 10.0 };
+    command
+}
+
+/// The result image and the measurements (by their key's end).
+struct Run {
+    image: Vec<f32>,
+    values: BTreeMap<String, f64>,
+}
+
+impl Run {
+    fn value(&self, key: &str) -> f64 {
+        *self
+            .values
+            .get(key)
+            .unwrap_or_else(|| panic!("no measurement {key}: {:?}", self.values))
+    }
+}
+
+fn gray(width: usize, height: usize, values: Vec<f32>) -> Arc<ImageContainer> {
+    Arc::new(ImageContainer::F32Gray(ManagedImage {
+        data: Image::new(ImageSize { width, height }, values).unwrap(),
+        tile_offset: Default::default(),
+        plane: None,
+        dimensionality: Default::default(),
+    }))
+}
+
+fn try_run(
+    command: &SubtractReferenceChannel,
+    target: Arc<ImageContainer>,
+    reference: Arc<ImageContainer>,
+) -> Result<Run, InternalErrors> {
+    let size = target.size();
+    let mut ctx = PipelineContext::new_from_image_test(
+        Image::new(size, vec![0.0; size.width * size.height]).unwrap(),
+    )
+    .unwrap();
+    ctx.image = target;
+    ctx.image_meta.nr_of_bits = 16;
+    let mut cache = GlobalPipelineCache::default();
+    cache.image_cache.insert(
+        CacheAddress::Channel((REFERENCE as i32, ctx.image_meta.image_tile_info)),
+        reference,
+    );
+    command.run(&mut ctx, &mut cache)?;
+    let image = ctx.image.as_f32_slice().unwrap().to_vec();
+    let values = cache
+        .measurements
+        .measurements
+        .iter()
+        .filter_map(|m| match &m.values {
+            MeasurementValues::Image(values) => values
+                .first()
+                .map(|(_, v)| (m.info.key.rsplit('/').next().unwrap().to_string(), *v)),
+            MeasurementValues::Objects(_) => None,
+        })
+        .collect();
+    Ok(Run { image, values })
+}
+
+fn run(command: &SubtractReferenceChannel, scene: &Scene) -> Run {
+    try_run(
+        command,
+        gray(SIDE, SIDE, scene.target.clone()),
+        gray(SIDE, SIDE, scene.reference.clone()),
+    )
+    .unwrap()
+}
+
+/// The pixels on the network (> 0.5) at least 6 px from every spot and 8
+/// px from the border.
+fn network_pixels(scene: &Scene) -> Vec<usize> {
+    (0..SIDE * SIDE)
+        .filter(|&i| {
+            let (x, y) = ((i % SIDE) as f32, (i / SIDE) as f32);
+            scene.network[i] > 0.5
+                && (8.0..SIDE as f32 - 8.0).contains(&x)
+                && (8.0..SIDE as f32 - 8.0).contains(&y)
+                && scene
+                    .spots
+                    .iter()
+                    .all(|(sx, sy)| (sx - x).powi(2) + (sy - y).powi(2) > 36.0)
+        })
+        .collect()
+}
+
+fn mean_at(image: &[f32], pixels: &[usize]) -> f64 {
+    pixels.iter().map(|&i| image[i] as f64).sum::<f64>() / pixels.len() as f64
+}
+
+fn rms_at(image: &[f32], pixels: &[usize]) -> f64 {
+    (pixels
+        .iter()
+        .map(|&i| (image[i] as f64).powi(2))
+        .sum::<f64>()
+        / pixels.len() as f64)
+        .sqrt()
+}
+
+/// The largest value within 1 px of each spot's centre.
+fn spot_peaks(image: &[f32], scene: &Scene) -> Vec<f32> {
+    scene
+        .spots
+        .iter()
+        .filter(|(x, y)| {
+            (8.0..SIDE as f32 - 8.0).contains(x) && (8.0..SIDE as f32 - 8.0).contains(y)
+        })
+        .map(|&(x, y)| {
+            let (cx, cy) = (x.round() as usize, y.round() as usize);
+            (cy - 1..=cy + 1)
+                .flat_map(|yy| (cx - 1..=cx + 1).map(move |xx| image[yy * SIDE + xx]))
+                .fold(f32::NEG_INFINITY, f32::max)
+        })
+        .collect()
+}
+
+#[test]
+fn the_factor_is_fitted_on_aligned_channels() {
+    let aligned = scene(Recipe {
+        shift: (0.0, 0.0),
+        ..Default::default()
+    });
+    let mut cmd = command();
+    cmd.alignment = Alignment::None;
+    // The default median: 10 px eats into the wider filaments (-2 %).
+    cmd.background = Background::Median { radius: 30.0 };
+    let result = run(&cmd, &aligned);
+    let a = result.value("factor");
+    assert!((a - A as f64).abs() < 0.02 * A as f64, "a = {a}");
+    assert!(result.value("r2") > 0.95, "{:?}", result.values);
+}
+
+#[test]
+fn the_shift_is_found() {
+    let result = run(&command(), &scene(Recipe::default()));
+    // The reference lies (0.8, -1.3) off: it is shifted back.
+    let (dy, dx) = (result.value("shift_y"), result.value("shift_x"));
+    assert!(
+        (dy + SHIFT.0).abs() < 0.05 && (dx + SHIFT.1).abs() < 0.05,
+        "({dy}, {dx})"
+    );
+    assert!(
+        result.value("alignment_quality") > 0.3,
+        "{:?}",
+        result.values
+    );
+    assert_eq!(result.value("fallback_used"), 0.0);
+}
+
+#[test]
+fn the_structure_goes_and_the_spots_stay() {
+    let scene = scene(Recipe::default());
+    let mut cmd = command();
+    cmd.clip_negative = false;
+    let corrected = run(&cmd, &scene);
+    // Factor 0: the target as processed (background, smoothing), nothing
+    // subtracted.
+    cmd.factor = Factor::Fixed { factor: 0.0 };
+    let uncorrected = run(&cmd, &scene);
+
+    let network = network_pixels(&scene);
+    let before = mean_at(&uncorrected.image, &network);
+    let after = mean_at(&corrected.image, &network);
+    assert!(
+        after.abs() < 0.1 * before,
+        "structure {before:.1} -> {after:.1}"
+    );
+
+    // The spots as the same processing shows them without any network.
+    let spots_only = self::scene(Recipe {
+        target_network: false,
+        noise: false,
+        ..Default::default()
+    });
+    let reference_peaks = spot_peaks(&run(&cmd, &spots_only).image, &spots_only);
+    let peaks = spot_peaks(&corrected.image, &scene);
+    let kept = peaks.iter().sum::<f32>() / reference_peaks.iter().sum::<f32>();
+    assert!(kept > 0.85, "spots keep {kept:.2}");
+}
+
+#[test]
+fn aligning_before_fitting_matters() {
+    let scene = scene(Recipe::default());
+    let network = network_pixels(&scene);
+    let mut cmd = command();
+    cmd.clip_negative = false;
+    let aligned = rms_at(&run(&cmd, &scene).image, &network);
+    cmd.alignment = Alignment::None;
+    let unaligned = rms_at(&run(&cmd, &scene).image, &network);
+    assert!(
+        unaligned > 1.5 * aligned,
+        "leftover {aligned:.1} aligned, {unaligned:.1} not"
+    );
+}
+
+#[test]
+fn smoothing_keeps_the_factor_from_being_biased_low() {
+    let aligned = scene(Recipe {
+        shift: (0.0, 0.0),
+        ..Default::default()
+    });
+    let mut cmd = command();
+    cmd.alignment = Alignment::None;
+    let smoothed = run(&cmd, &aligned).value("factor");
+    cmd.smoothing_sigma = 0.0;
+    let raw = run(&cmd, &aligned).value("factor");
+    assert!(
+        raw < smoothed,
+        "a {raw:.4} unsmoothed, {smoothed:.4} smoothed"
+    );
+    assert!(
+        (A as f64 - raw).abs() > (A as f64 - smoothed).abs(),
+        "a {raw:.4} unsmoothed, {smoothed:.4} smoothed"
+    );
+}
+
+#[test]
+fn a_reference_without_structure_falls_back() {
+    let flat = scene(Recipe {
+        structure: false,
+        ..Default::default()
+    });
+    let mut cmd = command();
+    cmd.alignment = Alignment::None;
+    let result = run(&cmd, &flat);
+    assert_eq!(result.value("factor"), 1.0);
+    assert_eq!(result.value("fallback_used"), 1.0);
+}
+
+#[test]
+fn a_shift_beyond_the_largest_falls_back() {
+    let far = scene(Recipe {
+        shift: (8.0, 0.0),
+        ..Default::default()
+    });
+    let mut cmd = command();
+    cmd.alignment = Alignment::Auto {
+        max_shift: 5.0,
+        min_quality: 0.3,
+        fallback_dx: 0.5,
+        fallback_dy: -0.5,
+    };
+    let result = run(&cmd, &far);
+    assert_eq!(
+        (result.value("shift_y"), result.value("shift_x")),
+        (-0.5, 0.5)
+    );
+    assert_eq!(result.value("fallback_used"), 1.0);
+}
+
+#[test]
+fn fixed_factor_and_shift_subtract_exactly() {
+    let scene = scene(Recipe::default());
+    let mut cmd = command();
+    cmd.background = Background::None;
+    cmd.smoothing_sigma = 0.0;
+    cmd.clip_negative = false;
+    cmd.alignment = Alignment::Fixed { dx: 1.3, dy: -0.8 };
+    cmd.factor = Factor::Fixed { factor: A };
+    let result = run(&cmd, &scene);
+
+    // Translate Image on the reference, then target - a · shifted.
+    let mut ctx = PipelineContext::new_from_image_test(
+        Image::new(
+            ImageSize {
+                width: SIDE,
+                height: SIDE,
+            },
+            scene.reference.clone(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    TranslateImage {
+        dy: -0.8f32 as f64,
+        dx: 1.3f32 as f64,
+        interpolation: Interpolation::Cubic,
+        padding: Padding::Replicate,
+        pad_value: 0.0,
+    }
+    .run(&mut ctx, &mut GlobalPipelineCache::default())
+    .unwrap();
+    let shifted = ctx.image.as_f32_slice().unwrap();
+    let expected: Vec<f32> = scene
+        .target
+        .iter()
+        .zip(shifted)
+        .map(|(s, t)| s - (A * t + 0.0))
+        .collect();
+    assert_eq!(result.image, expected);
+    assert_eq!(result.value("factor"), A as f64);
+}
+
+#[test]
+fn the_exposure_ratio_sets_the_factor() {
+    let mut cmd = command();
+    cmd.alignment = Alignment::None;
+    cmd.factor = Factor::ExposureRatio {
+        calibration: 2.0,
+        exposure_target_ms: 50.0,
+        exposure_reference_ms: 200.0,
+    };
+    let result = run(&cmd, &scene(Recipe::default()));
+    assert_eq!(result.value("factor"), 0.5);
+}
+
+#[test]
+fn saturated_pixels_dont_move_the_factor() {
+    let mut aligned = scene(Recipe {
+        shift: (0.0, 0.0),
+        ..Default::default()
+    });
+    let mut cmd = command();
+    cmd.alignment = Alignment::None;
+    let clean = run(&cmd, &aligned);
+    // 300 saturated pixels on the network.
+    for &i in network_pixels(&aligned).iter().step_by(20).take(300) {
+        aligned.target[i] = 65535.0;
+    }
+    let saturated = run(&cmd, &aligned);
+    let (a, b) = (clean.value("factor"), saturated.value("factor"));
+    assert!((a - b).abs() < 0.01 * a, "a {a:.4} -> {b:.4}");
+    assert!(saturated.value("saturated_fraction") > 0.0);
+    assert_eq!(clean.value("saturated_fraction"), 0.0);
+}
+
+#[test]
+fn edge_tolerance_dims_the_fringe_of_a_leftover_shift() {
+    let scene = scene(Recipe::default());
+    // One pixel off in y (0.2 instead of -0.8): a bright fringe on one side
+    // of every filament.
+    let near_network: Vec<usize> = (0..SIDE * SIDE)
+        .filter(|&i| scene.network[i] > 0.1)
+        .collect();
+    let fringe = |tolerance: f32| {
+        let mut cmd = command();
+        cmd.alignment = Alignment::Fixed { dx: 1.3, dy: 0.2 };
+        cmd.factor = Factor::Fixed { factor: A };
+        cmd.edge_tolerance = tolerance;
+        mean_at(&run(&cmd, &scene).image, &near_network)
+    };
+    let (without, with) = (fringe(0.0), fringe(1.0));
+    assert!(with < without, "fringe {without:.1} -> {with:.1}");
+}
+
+#[test]
+fn every_measurement_is_written() {
+    let result = run(&command(), &scene(Recipe::default()));
+    for key in [
+        "factor",
+        "offset",
+        "shift_x",
+        "shift_y",
+        "alignment_quality",
+        "r2",
+        "fit_pixel_fraction",
+        "saturated_fraction",
+        "fallback_used",
+    ] {
+        assert!(
+            result.values.contains_key(key),
+            "{key}: {:?}",
+            result.values
+        );
+    }
+    let fraction = result.value("fit_pixel_fraction");
+    assert!(fraction > 0.01 && fraction < 0.5, "{fraction}");
+    assert!(result.value("offset").abs() < 20.0, "{:?}", result.values);
+    assert_eq!(result.value("saturated_fraction"), 0.0);
+}
+
+#[test]
+fn both_scopes_agree_on_one_tile() {
+    let scene = scene(Recipe::default());
+    let mut cmd = command();
+    let image = run(&cmd, &scene).value("factor");
+    cmd.estimation_scope = EstimationScope::Tile;
+    let tile = run(&cmd, &scene).value("factor");
+    assert_eq!(image, tile);
+}
+
+#[test]
+fn a_volume_is_corrected_plane_by_plane() {
+    let scene = scene(Recipe::default());
+    let single = run(&command(), &scene);
+    let volume = |values: &[f32]| {
+        Arc::new(ImageContainer::F32Gray(ManagedImage {
+            data: Image::new(
+                ImageSize {
+                    width: SIDE,
+                    height: 2 * SIDE,
+                },
+                [values, values].concat(),
+            )
+            .unwrap(),
+            tile_offset: Default::default(),
+            plane: None,
+            dimensionality: crate::ImageDimensionality::Volume { depth: 2 },
+        }))
+    };
+    let stacked = try_run(&command(), volume(&scene.target), volume(&scene.reference)).unwrap();
+    assert_eq!(stacked.image[..SIDE * SIDE], single.image[..]);
+    assert_eq!(stacked.image[SIDE * SIDE..], single.image[..]);
+    assert_eq!(stacked.value("factor"), single.value("factor"));
+}
+
+#[test]
+fn what_doesnt_fit_is_refused() {
+    let target = gray(32, 32, vec![1.0; 32 * 32]);
+    // No channel 7.
+    let mut cmd = command();
+    cmd.reference_channel = ImageChannelIdx(7);
+    let err = try_run(&cmd, target.clone(), gray(32, 32, vec![1.0; 32 * 32]))
+        .err()
+        .unwrap();
+    assert!(err.to_string().contains('7'), "{err}");
+
+    let err = try_run(&command(), target.clone(), gray(32, 16, vec![1.0; 32 * 16]))
+        .err()
+        .unwrap();
+    assert!(err.to_string().contains("differ in size"), "{err}");
+
+    let labels = Arc::new(ImageContainer::U32(ManagedImage {
+        data: Image::new(
+            ImageSize {
+                width: 32,
+                height: 32,
+            },
+            vec![1u32; 32 * 32],
+        )
+        .unwrap(),
+        tile_offset: Default::default(),
+        plane: None,
+        dimensionality: Default::default(),
+    }));
+    let err = try_run(&command(), labels, gray(32, 32, vec![1.0; 32 * 32]))
+        .err()
+        .unwrap();
+    assert!(err.to_string().contains("label images"), "{err}");
+}
+
+/// The doc comment's short step and the task's full example load, both
+/// with the defaults.
+#[test]
+fn the_documented_module_json_loads() {
+    use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+    let short: PipelineCommand = serde_json::from_str(
+        r#"{ "type": "SUBTRACT_REFERENCE_CHANNEL", "id": "reference", "referenceChannel": 4 }"#,
+    )
+    .unwrap();
+    let full: PipelineCommand = serde_json::from_str(
+        r#"{
+          "type": "SUBTRACT_REFERENCE_CHANNEL",
+          "target": { "type": "CURRENT_IMAGE" },
+          "referenceChannel": 4,
+          "cameraOffset": { "type": "NONE" },
+          "saturation": { "type": "AUTO" },
+          "background": { "type": "MEDIAN", "radius": 30.0 },
+          "alignment": { "type": "AUTO", "maxShift": 5.0, "minQuality": 0.3, "fallbackDx": 0.0, "fallbackDy": 0.0 },
+          "interpolation": "CUBIC",
+          "targetExtraSigma": 0.0,
+          "referenceExtraSigma": 0.0,
+          "smoothingSigma": 1.0,
+          "factor": { "type": "ROBUST_FIT", "noiseFactor": 4.0, "minPercentile": 50.0, "outlierK": 3.0,
+                      "fitOffset": true, "minR2": 0.5, "fallback": 1.0, "minValue": 0.0, "maxValue": 100.0 },
+          "factorScale": 1.0,
+          "estimationScope": "IMAGE",
+          "edgeTolerance": 0.0,
+          "clipNegative": true,
+          "output": "RESIDUAL"
+        }"#,
+    )
+    .unwrap();
+    let (
+        PipelineCommand::SubtractReferenceChannel(short),
+        PipelineCommand::SubtractReferenceChannel(mut full),
+    ) = (short, full)
+    else {
+        panic!("Subtract Reference Channel steps")
+    };
+    full.id = "reference".into();
+    let defaults = SubtractReferenceChannelSettings {
+        id: "reference".into(),
+        reference_channel: ImageChannelIdx(4),
+        ..Default::default()
+    };
+    for settings in [short, full] {
+        assert_eq!(
+            serde_json::to_value(&settings).unwrap(),
+            serde_json::to_value(&defaults).unwrap()
+        );
+    }
+}
+
+/// Its measurements are offered to later steps (Exclude Image) although it
+/// isn't a measurement step; a plain filter offers none.
+#[test]
+fn its_measurements_are_offered_to_later_steps() {
+    use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+    let settings = SubtractReferenceChannelSettings {
+        id: "reference".into(),
+        ..Default::default()
+    };
+    let keys: Vec<String> =
+        crate::measurement_outputs(&PipelineCommand::SubtractReferenceChannel(settings))
+            .into_iter()
+            .map(|info| info.key)
+            .collect();
+    assert!(keys.contains(&"reference/factor".to_string()), "{keys:?}");
+    assert!(
+        keys.contains(&"reference/fallback_used".to_string()),
+        "{keys:?}"
+    );
+    let blur = PipelineCommand::default_for_key("blur").unwrap();
+    assert!(crate::measurement_outputs(&blur).is_empty());
+}
