@@ -1629,6 +1629,7 @@ impl From<SubtractReferenceChannelSettings> for SubtractReferenceChannel {
 impl From<ThresholdSettings> for Threshold {
     fn from(_s: ThresholdSettings) -> Self {
         Threshold {
+            id: _s.id,
             thresholds: _s.thresholds.into_iter().map(|v| v.into()).collect(),
         }
     }

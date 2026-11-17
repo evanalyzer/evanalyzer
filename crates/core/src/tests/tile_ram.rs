@@ -203,6 +203,7 @@ fn tile(
     let mut ctx = PipelineContext::new_from_image(output.to_path_buf(), meta, image()).unwrap();
     for command in [
         PipelineCommand::Threshold(ThresholdSettings {
+            id: String::new(),
             thresholds: vec![ThresholdEntrySettings {
                 min_threshold: 1500.0,
                 segmentation_class: SegmentationClass(1),

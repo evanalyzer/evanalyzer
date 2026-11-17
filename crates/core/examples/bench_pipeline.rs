@@ -219,6 +219,8 @@ fn main() {
             .chain(spot_size.iter().flat_map(|how| spot_steps(how)).map(step))
             .chain((spot_size.is_none() && arg_text("--wavelet").is_none()).then(|| [
                 step(PipelineCommand::Threshold(ThresholdSettings {
+                    // Measured as in a project (its steps get an ID).
+                    id: "threshold_01".into(),
                     thresholds: vec![ThresholdEntrySettings {
                         min_threshold: 1500.0,
                         segmentation_class: SegmentationClass(1),

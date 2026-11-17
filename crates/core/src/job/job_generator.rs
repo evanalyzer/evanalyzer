@@ -689,7 +689,11 @@ fn generate_job_from_project_settings_intenal(
                     .filter(|b| b.pipeline_id == pipeline_setting.id && b.step_id == step.id)
                     .map(|b| b.inner.as_slice()),
             )? {
-                if let Some(name) = command.measurement_id() {
+                // A Threshold without an ID measures nothing (one a script or
+                // another command runs) - no name to check.
+                let unmeasured =
+                    matches!(&command, PipelineCommand::Threshold(t) if t.id.is_empty());
+                if let Some(name) = command.measurement_id().filter(|_| !unmeasured) {
                     measurement_ids.push((name.to_string(), pipeline_setting.name.as_str()));
                 }
                 let loads = loads_image(&command);
@@ -2263,6 +2267,7 @@ mod tests {
         use serde_json::json;
         let command = |command: PipelineCommand| serde_json::to_value(command).unwrap();
         let threshold = command(PipelineCommand::Threshold(ThresholdSettings {
+            id: String::new(),
             thresholds: vec![ThresholdEntrySettings {
                 segmentation_class: SegmentationClass(1),
                 ..Default::default()
@@ -2364,6 +2369,7 @@ mod tests {
             }))
         };
         let threshold = command(PipelineCommand::Threshold(ThresholdSettings {
+            id: String::new(),
             thresholds: vec![ThresholdEntrySettings {
                 segmentation_class: SegmentationClass(1),
                 ..Default::default()

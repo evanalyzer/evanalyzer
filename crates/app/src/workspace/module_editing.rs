@@ -2370,6 +2370,7 @@ mod tests {
 
     fn threshold(class: u32) -> PipelineCommand {
         PipelineCommand::Threshold(ThresholdSettings {
+            id: String::new(),
             thresholds: vec![ThresholdEntrySettings {
                 segmentation_class: SegmentationClass(class),
                 ..Default::default()
@@ -3255,6 +3256,7 @@ mod tests {
             ThresholdSettings,
         };
         let threshold = PipelineCommand::Threshold(ThresholdSettings {
+            id: String::new(),
             thresholds: vec![ThresholdEntrySettings {
                 value_source: Source::Memory(MemoryId::ModuleContext(1)),
                 ..Default::default()
@@ -4306,6 +4308,7 @@ mod tests {
             step(
                 2,
                 PipelineCommand::Threshold(ThresholdSettings {
+                    id: String::new(),
                     thresholds: vec![ThresholdEntrySettings {
                         value_source: Source::Memory(MemoryId::PipelineContext(1)),
                         ..Default::default()

@@ -2985,14 +2985,27 @@ impl Default for StardistSettings {
     }
 }
 
+fn _serde_default_threshold_id() -> String {
+    String::default()
+}
 /// A filter that segments an image into discrete classes based on intensity.
 ///
 /// This supports "Multi-Otsu" style behavior by allowing several
 /// thresholds. Each pixel is evaluated against them to determine which
 /// segmentation class it belongs to.
+///
+/// Measures per image the lower threshold each entry used - computed by an
+/// automatic method or set by hand, in the entry's unit - so images whose
+/// threshold is off can be found (and left out with Exclude Image). On an
+/// image split into tiles: the median over the tiles.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ThresholdSettings {
+    /// Names the step's measurements (the thresholds used) in the results.
+    /// Empty (a threshold a script or another command runs): nothing is
+    /// measured.
+    #[serde(default = "_serde_default_threshold_id")]
+    pub id: String,
     /// A list of thresholding layers. Overlapping ranges are resolved
     /// by the order of the vector (last-in priority).
     pub thresholds: Vec<ThresholdEntrySettings>,

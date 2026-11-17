@@ -395,6 +395,7 @@ mod tests {
                     enabled: true,
                     content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
                         PipelineCommand::Threshold(ThresholdSettings {
+                            id: String::new(),
                             thresholds: vec![ThresholdEntrySettings {
                                 segmentation_class: SegmentationClass(1),
                                 ..Default::default()
@@ -677,6 +678,7 @@ mod tests {
                 step(
                     1,
                     PipelineCommand::Threshold(ThresholdSettings {
+                        id: String::new(),
                         thresholds: vec![ThresholdEntrySettings {
                             segmentation_class: SegmentationClass(1),
                             ..Default::default()

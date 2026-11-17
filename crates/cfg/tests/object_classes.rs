@@ -19,6 +19,7 @@ use evanalyzer_cfg::settings::pipeline_command_settings::*;
 #[test]
 fn segmentation_classes_count_as_the_object_class_they_become() {
     let threshold = PipelineCommand::Threshold(ThresholdSettings {
+        id: String::new(),
         thresholds: vec![
             ThresholdEntrySettings {
                 segmentation_class: SegmentationClass(2),

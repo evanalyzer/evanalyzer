@@ -182,9 +182,20 @@ pub struct ThresholdEntry {
 /// This supports "Multi-Otsu" style behavior by allowing several
 /// thresholds. Each pixel is evaluated against them to determine which
 /// segmentation class it belongs to.
+///
+/// Measures per image the lower threshold each entry used - computed by an
+/// automatic method or set by hand, in the entry's unit - so images whose
+/// threshold is off can be found (and left out with Exclude Image). On an
+/// image split into tiles: the median over the tiles.
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "segment", next = "instance_segmentation")]
 pub struct Threshold {
+    /// Names the step's measurements (the thresholds used) in the results.
+    /// Empty (a threshold a script or another command runs): nothing is
+    /// measured.
+    #[cmdsmeta(measurement_id = "threshold", display_name = "ID", optional)]
+    pub id: String,
+
     /// A list of thresholding layers. Overlapping ranges are resolved
     /// by the order of the vector (last-in priority).
     pub thresholds: Vec<ThresholdEntry>,
@@ -308,6 +319,24 @@ impl ImageAlgorithm for Threshold {
             };
             normalized.push((min, ceiling, s.segmentation_class.as_u32()));
         }
+        // The thresholds used, in each entry's own unit.
+        if !self.id.is_empty() {
+            for ((info, s), (min, _, _)) in self
+                .measurement_outputs()
+                .into_iter()
+                .zip(&self.thresholds)
+                .zip(&normalized)
+            {
+                let value = from_relative(s.unit, *min, nr_of_bits) as f64;
+                cache.add_image_measurement(
+                    info,
+                    value.is_finite().then_some((
+                        crate::pipeline::pipeline_measure::MeasurementRegion::Image,
+                        value,
+                    )),
+                );
+            }
+        }
 
         let output_slice = segmentation_map.as_slice_mut();
         for (out_pixel, &in_pixel) in output_slice.iter_mut().zip(actual_slice.iter()) {
@@ -348,6 +377,44 @@ impl ImageAlgorithm for Threshold {
 
     fn execution_scope(&self) -> ExecutionScope {
         ExecutionScope::Tile
+    }
+
+    fn measures(&self) -> bool {
+        !self.id.is_empty()
+    }
+
+    /// One value per entry: "Threshold 1", "Threshold 2", … (in its unit).
+    fn measurement_outputs(&self) -> Vec<evanalyzer_cfg::core_types::MeasurementInfo> {
+        if self.id.is_empty() {
+            return Vec::new();
+        }
+        let outputs = crate::pipeline::pipeline_measure::Outputs::of(&self.id);
+        self.thresholds
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let unit = match s.unit {
+                    PixelUnits::Bit => "bit",
+                    PixelUnits::Percent => "%",
+                    PixelUnits::Relative => "rel",
+                };
+                outputs.image(
+                    &format!("threshold_{}", i + 1),
+                    &format!("Threshold {} [{unit}]", i + 1),
+                    evanalyzer_cfg::core_types::MeasurementUnit::Intensity,
+                )
+            })
+            .collect()
+    }
+}
+
+/// `relative` (0.0 - 1.0) in `unit` - the inverse of
+/// [`PixelUnits::to_relative`].
+fn from_relative(unit: PixelUnits, relative: f32, nr_of_bits: u16) -> f32 {
+    match unit {
+        PixelUnits::Relative => relative,
+        PixelUnits::Percent => relative * 100.0,
+        PixelUnits::Bit => relative * ((1u32 << nr_of_bits) - 1) as f32,
     }
 }
 
@@ -1643,6 +1710,7 @@ mod tests {
 
     fn threshold_with(methods: &[ThresholdMethod]) -> Threshold {
         Threshold {
+            id: String::new(),
             thresholds: methods
                 .iter()
                 .map(|&method| ThresholdEntry {
@@ -1655,6 +1723,84 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    /// Runs `threshold` on a bimodal 16-bit image (half at 1000, half at
+    /// 30000 of 65535); the values it measured and the foreground pixels.
+    fn measured(threshold: &Threshold) -> (Vec<(String, f64)>, usize) {
+        use crate::pipeline::pipeline_measure::MeasurementValues;
+        let values: Vec<f32> = (0..64)
+            .map(|i| if i < 32 { 1000.0 } else { 30000.0 } / 65535.0)
+            .collect();
+        let image = Image::<f32, 1>::new(ImageSize { width: 8, height: 8 }, values).unwrap();
+        let mut ctx = PipelineContext::new_from_image_test(image).unwrap();
+        ctx.image_meta.nr_of_bits = 16;
+        let mut cache = GlobalPipelineCache::default();
+        threshold.execute(&mut ctx, &mut cache).unwrap();
+        let foreground = ctx
+            .segmentation_map
+            .as_ref()
+            .unwrap()
+            .as_slice()
+            .iter()
+            .filter(|c| **c != 0)
+            .count();
+        let measured = cache
+            .measurements
+            .measurements
+            .iter()
+            .map(|m| match &m.values {
+                MeasurementValues::Image(v) => (m.info.key.clone(), v[0].1),
+                MeasurementValues::Objects(_) => unreachable!(),
+            })
+            .collect();
+        (measured, foreground)
+    }
+
+    #[test]
+    fn the_threshold_used_is_measured_per_entry_in_its_unit() {
+        let mut threshold = threshold_with(&[ThresholdMethod::Manual, ThresholdMethod::Manual]);
+        threshold.id = "threshold_01".into();
+        threshold.thresholds[0].min_threshold = 5000.0;
+        threshold.thresholds[0].max_threshold = 65535.0;
+        threshold.thresholds[1].unit = PixelUnits::Percent;
+        threshold.thresholds[1].min_threshold = 25.0;
+        threshold.thresholds[1].max_threshold = 100.0;
+        let (measured, _) = measured(&threshold);
+        assert_eq!(measured.len(), 2);
+        assert_eq!(measured[0].0, "threshold_01/threshold_1");
+        assert!((measured[0].1 - 5000.0).abs() < 0.01, "{measured:?}");
+        assert_eq!(measured[1].0, "threshold_01/threshold_2");
+        assert!((measured[1].1 - 25.0).abs() < 1e-4, "{measured:?}");
+        let names: Vec<String> = threshold
+            .measurement_outputs()
+            .into_iter()
+            .map(|i| i.name)
+            .collect();
+        assert_eq!(names, ["Threshold 1 [bit]", "Threshold 2 [%]"]);
+    }
+
+    /// An automatic method's measured value is the cut-off it applied: the
+    /// background below it, the foreground above.
+    #[test]
+    fn an_automatic_threshold_is_measured_as_applied() {
+        let mut threshold = threshold_with(&[ThresholdMethod::Otsu {
+            classes: OtsuClasses::Two,
+        }]);
+        threshold.id = "otsu".into();
+        threshold.thresholds[0].max_threshold = 65535.0;
+        let (measured, foreground) = measured(&threshold);
+        let value = measured[0].1;
+        assert!((1000.0..30000.0).contains(&value), "{value}");
+        assert_eq!(foreground, 32);
+    }
+
+    #[test]
+    fn without_an_id_nothing_is_measured() {
+        let threshold = threshold_with(&[ThresholdMethod::Manual]);
+        assert!(measured(&threshold).0.is_empty());
+        assert!(!threshold.measures());
+        assert!(threshold.measurement_outputs().is_empty());
     }
 
     fn cite_keys(methods: &[ThresholdMethod]) -> Vec<&'static str> {
@@ -1741,6 +1887,7 @@ mod tests {
         ];
 
         let cmd = Threshold {
+            id: String::new(),
             thresholds: settings,
         };
         let mut ctx = PipelineContext::new_from_image_test(input_img)?;
@@ -1883,6 +2030,7 @@ mod tests {
         }];
 
         let cmd = Threshold {
+            id: String::new(),
             thresholds: settings,
         };
         let mut ctx = PipelineContext::new_from_image_test(input_img)?;
@@ -1990,6 +2138,7 @@ mod tests {
                 value_source: ThresholdValueSource::ActualImage,
             }];
             let cmd = Threshold {
+                id: String::new(),
                 thresholds: settings,
             };
             let mut ctx = PipelineContext::new_from_image_test(input_img)?;
@@ -2144,6 +2293,7 @@ mod tests {
                 value_source: ThresholdValueSource::ActualImage,
             }];
             let cmd = Threshold {
+                id: String::new(),
                 thresholds: settings,
             };
             let mut ctx = PipelineContext::new_from_image_test(input_img)?;
@@ -2397,6 +2547,7 @@ mod tests {
             value_source: ThresholdValueSource::ActualImage,
         }];
         let cmd = Threshold {
+            id: String::new(),
             thresholds: settings,
         };
         let mut ctx = PipelineContext::new_from_image_test(input_img)?;
@@ -2455,6 +2606,7 @@ mod tests {
             value_source: ThresholdValueSource::ActualImage,
         }];
         let cmd = Threshold {
+            id: String::new(),
             thresholds: settings,
         };
         let mut ctx = PipelineContext::new_from_image_test(input_img)?;
@@ -2603,6 +2755,7 @@ mod tests {
         ctx.image_meta.nr_of_bits = 16;
 
         let cmd = Threshold {
+            id: String::new(),
             thresholds: vec![ThresholdEntry {
                 method: ThresholdMethod::Triangle,
                 min_threshold: 0.0,
@@ -2688,6 +2841,7 @@ mod tests {
         let mut ctx =
             PipelineContext::new_from_image_test(Image::<f32, 1>::new(size, probes.to_vec())?)?;
         let cmd = Threshold {
+            id: String::new(),
             thresholds: vec![ThresholdEntry {
                 method,
                 min_threshold: 0.0,
@@ -2945,6 +3099,7 @@ mod tests {
         let mut ctx = PipelineContext::new_from_image_test(constant_gray_image(0.5)?)?;
         let mut cache = GlobalPipelineCache::default();
         let cmd = Threshold {
+            id: String::new(),
             thresholds: vec![mean_threshold_entry(ThresholdValueSource::ActualImage)],
         };
         cmd.execute(&mut ctx, &mut cache)?;
@@ -2979,6 +3134,7 @@ mod tests {
         );
 
         let cmd = Threshold {
+            id: String::new(),
             thresholds: vec![mean_threshold_entry(ThresholdValueSource::RawImage)],
         };
         cmd.execute(&mut ctx, &mut cache)?;
@@ -2997,6 +3153,7 @@ mod tests {
         let mut ctx = PipelineContext::new_from_image_test(constant_gray_image(0.5)?)?;
         let mut cache = GlobalPipelineCache::default();
         let cmd = Threshold {
+            id: String::new(),
             thresholds: vec![mean_threshold_entry(ThresholdValueSource::RawImage)],
         };
 
@@ -3026,6 +3183,7 @@ mod tests {
         );
 
         let cmd = Threshold {
+            id: String::new(),
             thresholds: vec![mean_threshold_entry(ThresholdValueSource::Memory(
                 memory_id,
             ))],
@@ -3046,6 +3204,7 @@ mod tests {
         let mut ctx = PipelineContext::new_from_image_test(constant_gray_image(0.5)?)?;
         let mut cache = GlobalPipelineCache::default();
         let cmd = Threshold {
+            id: String::new(),
             thresholds: vec![mean_threshold_entry(ThresholdValueSource::Memory(
                 MemoryId::PipelineContext(9),
             ))],
@@ -3077,6 +3236,7 @@ mod tests {
         );
 
         let cmd = Threshold {
+            id: String::new(),
             thresholds: vec![mean_threshold_entry(ThresholdValueSource::RawImage)],
         };
 
@@ -3109,6 +3269,7 @@ mod tests {
         );
 
         let cmd = Threshold {
+            id: String::new(),
             thresholds: vec![
                 mean_threshold_entry(ThresholdValueSource::RawImage),
                 ThresholdEntry {

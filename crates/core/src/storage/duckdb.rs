@@ -358,6 +358,11 @@ pub struct DuckDbExporter {
     /// (1-based, by key) - given the first time a key is exported, kept in
     /// `measurement_info.object_index`.
     object_indices: Mutex<HashMap<String, i32>>,
+    /// The measurements already described in `measurement_info` (once per
+    /// key; `INSERT OR IGNORE` keeps the first): their insert is skipped -
+    /// otherwise every image pays a prepared statement per measurement.
+    /// Filled after a commit, so a rolled back export describes them again.
+    described: Mutex<std::collections::HashSet<String>>,
 }
 
 impl DuckDbExporter {
@@ -466,6 +471,7 @@ impl DuckDbExporter {
             store_masks: true,
             intermediate: Intermediate::default(),
             object_indices: Mutex::new(HashMap::new()),
+            described: Mutex::default(),
         })
     }
 
@@ -529,6 +535,7 @@ impl DuckDbExporter {
             store_masks: true,
             intermediate: Intermediate::default(),
             object_indices: Mutex::new(object_indices),
+            described: Mutex::default(),
         })
     }
 
@@ -561,44 +568,31 @@ impl DuckDbExporter {
     /// The values go in through the Arrow appender, like `objects`: a value
     /// per object for every object of a big image is far too many rows to
     /// insert one by one.
+    ///
+    /// Returns the keys it described now (to remember once committed).
     fn write_measurements(
         &self,
         tx: &duckdb::Transaction<'_>,
         cache: &GlobalPipelineCache,
-    ) -> Result<(), InternalErrors> {
+    ) -> Result<Vec<String>, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         let measured = &cache.measurements;
         if measured.measurements.is_empty() {
-            return Ok(());
+            return Ok(Vec::new());
         }
-        let mut info = tx
-            .prepare(
-                "INSERT OR IGNORE INTO measurement_info \
-                 (key, measurement, step, unit, target, range_min, range_max, aggregatable, \
-                 object_index, related_objects, profile) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            )
-            .map_err(err)?;
-        let indices = self
-            .object_indices
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        for Measurement { info: i, .. } in &measured.measurements {
-            info.execute(params![
-                i.key,
-                i.name,
-                i.step,
-                format!("{:?}", i.unit),
-                format!("{:?}", i.target),
-                i.range.map(|r| r.0),
-                i.range.map(|r| r.1),
-                i.aggregatable,
-                indices.get(&i.key),
-                i.related_objects,
-                i.profile
-            ])
-            .map_err(err)?;
+        let new: Vec<&MeasurementInfo> = {
+            let described = self.described.lock().unwrap_or_else(|e| e.into_inner());
+            measured
+                .measurements
+                .iter()
+                .map(|m| &m.info)
+                .filter(|i| !described.contains(&i.key))
+                .collect()
+        };
+        if !new.is_empty() {
+            self.describe_measurements(tx, &new)?;
         }
-        drop(indices);
+        let described = new.iter().map(|i| i.key.clone()).collect();
 
         let mut rows = MeasurementRows::new(self, cache);
         let mut app = tx.appender("measurements").map_err(err)?;
@@ -632,7 +626,46 @@ impl DuckDbExporter {
                 }
             }
         }
-        rows.flush(&mut app)
+        rows.flush(&mut app)?;
+        Ok(described)
+    }
+
+    /// Inserts the descriptions `infos` into `measurement_info` (first
+    /// writer of a key wins).
+    fn describe_measurements(
+        &self,
+        tx: &duckdb::Transaction<'_>,
+        infos: &[&MeasurementInfo],
+    ) -> Result<(), InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let mut info = tx
+            .prepare(
+                "INSERT OR IGNORE INTO measurement_info \
+                 (key, measurement, step, unit, target, range_min, range_max, aggregatable, \
+                 object_index, related_objects, profile) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .map_err(err)?;
+        let indices = self
+            .object_indices
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        for i in infos {
+            info.execute(params![
+                i.key,
+                i.name,
+                i.step,
+                format!("{:?}", i.unit),
+                format!("{:?}", i.target),
+                i.range.map(|r| r.0),
+                i.range.map(|r| r.1),
+                i.aggregatable,
+                indices.get(&i.key),
+                i.related_objects,
+                i.profile
+            ])
+            .map_err(err)?;
+        }
+        Ok(())
     }
 
     /// `classes`' names as a JSON list of strings (as `json_string_array`
@@ -2009,9 +2042,15 @@ impl PipelineResultExporter for DuckDbExporter {
             }
         }
 
-        self.write_measurements(&tx, cache)?;
+        let described = self.write_measurements(&tx, cache)?;
 
         tx.commit().map_err(|e| InternalErrors::Io(e.to_string()))?;
+        if !described.is_empty() {
+            self.described
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .extend(described);
+        }
 
         log::debug!(
             "Database: exported {object_count} object(s) for {} in {:?}",

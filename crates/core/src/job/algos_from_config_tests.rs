@@ -850,6 +850,7 @@ fn structure_tensor_settings_convert_all_fields() {
 #[test]
 fn threshold_settings_convert_vector_of_entries() {
     let settings = ThresholdSettings {
+        id: String::new(),
         thresholds: vec![
             ThresholdEntrySettings {
                 method: SegmentationThresholdThresholdMethodSettings::Otsu {

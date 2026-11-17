@@ -6837,9 +6837,14 @@
       }
     },
     "ThresholdSettings": {
-      "description": "A filter that segments an image into discrete classes based on intensity.\n\nThis supports \"Multi-Otsu\" style behavior by allowing several\nthresholds. Each pixel is evaluated against them to determine which\nsegmentation class it belongs to.",
+      "description": "A filter that segments an image into discrete classes based on intensity.\n\nThis supports \"Multi-Otsu\" style behavior by allowing several\nthresholds. Each pixel is evaluated against them to determine which\nsegmentation class it belongs to.\n\nMeasures per image the lower threshold each entry used - computed by an\nautomatic method or set by hand, in the entry's unit - so images whose\nthreshold is off can be found (and left out with Exclude Image). On an\nimage split into tiles: the median over the tiles.",
       "type": "object",
       "properties": {
+        "id": {
+          "description": "Names the step's measurements (the thresholds used) in the results.\nEmpty (a threshold a script or another command runs): nothing is\nmeasured.",
+          "type": "string",
+          "default": ""
+        },
         "thresholds": {
           "description": "A list of thresholding layers. Overlapping ranges are resolved\nby the order of the vector (last-in priority).",
           "type": "array",

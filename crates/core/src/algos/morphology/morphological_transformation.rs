@@ -666,9 +666,12 @@ mod tests {
                 value_source: ThresholdValueSource::ActualImage,
             })
             .collect();
-        Threshold { thresholds }
-            .execute(&mut ctx, &mut cache)
-            .unwrap();
+        Threshold {
+            id: String::new(),
+            thresholds,
+        }
+        .execute(&mut ctx, &mut cache)
+        .unwrap();
         // After a threshold the pipeline runs it on the mask.
         ctx.role = Some(CommandCategory::InstanceSegmentation);
         morph.execute(&mut ctx, &mut cache).unwrap();

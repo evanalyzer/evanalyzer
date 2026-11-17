@@ -359,6 +359,7 @@ mod tests {
                 step(
                     1,
                     PipelineCommand::Threshold(ThresholdSettings {
+                        id: String::new(),
                         thresholds: vec![ThresholdEntrySettings {
                             segmentation_class: SegmentationClass(3),
                             ..Default::default()

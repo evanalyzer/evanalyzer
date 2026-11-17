@@ -208,6 +208,8 @@ fn main() {
                 sigma: 1.0,
             })),
             step(PipelineCommand::Threshold(ThresholdSettings {
+                // Measured as in a project (its steps get an ID).
+                id: "threshold_01".into(),
                 thresholds: vec![ThresholdEntrySettings {
                     method: SegmentationThresholdThresholdMethodSettings::Otsu {
                         classes: Default::default(),

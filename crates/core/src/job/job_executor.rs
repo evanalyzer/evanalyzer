@@ -3105,6 +3105,7 @@ mod full_run_integration_tests {
             evanalyzer_cfg::core_types::StepId(1),
             crate::pipeline::pipeline::StepPlace::GLOBAL,
             Box::new(Threshold {
+                id: String::new(),
                 thresholds: vec![ThresholdEntry {
                     method: ThresholdMethod::Manual,
                     min_threshold: 0.0,
@@ -4174,6 +4175,7 @@ mod full_run_integration_tests {
             },
         );
         pipeline.add_command(Box::new(Threshold {
+            id: String::new(),
             thresholds: vec![ThresholdEntry {
                 method: ThresholdMethod::Manual,
                 min_threshold: min,
@@ -5378,6 +5380,7 @@ mod tile_merge_end_to_end_tests {
             evanalyzer_cfg::core_types::StepId(1),
             crate::pipeline::pipeline::StepPlace::GLOBAL,
             Box::new(Threshold {
+                id: String::new(),
                 thresholds: vec![ThresholdEntry {
                     method: ThresholdMethod::Manual,
                     min_threshold: 0.0,
