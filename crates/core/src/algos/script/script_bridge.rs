@@ -57,39 +57,6 @@ impl ScriptImage {
     pub(crate) fn height(&mut self) -> i64 {
         self.0.size().height as i64
     }
-
-    /// Mean over all pixels (and color channels).
-    pub(crate) fn mean(&mut self) -> f64 {
-        let (sum, count) = self.fold(0.0, |acc, v| acc + v);
-        if count == 0 { 0.0 } else { sum / count as f64 }
-    }
-
-    pub(crate) fn min(&mut self) -> f64 {
-        self.fold(f64::INFINITY, f64::min).0
-    }
-
-    pub(crate) fn max(&mut self) -> f64 {
-        self.fold(f64::NEG_INFINITY, f64::max).0
-    }
-
-    fn fold(&self, init: f64, f: impl Fn(f64, f64) -> f64) -> (f64, usize) {
-        match self.0.as_ref() {
-            ImageContainer::F32Gray(img) => fold_slice(img.data.as_slice(), init, f),
-            ImageContainer::F32Rgb(img) => fold_slice(img.data.as_slice(), init, f),
-            ImageContainer::U32(img) => fold_slice(img.data.as_slice(), init, f),
-        }
-    }
-}
-
-fn fold_slice<T: Copy + Into<f64>>(
-    data: &[T],
-    init: f64,
-    f: impl Fn(f64, f64) -> f64,
-) -> (f64, usize) {
-    (
-        data.iter().fold(init, |acc, v| f(acc, (*v).into())),
-        data.len(),
-    )
 }
 
 /// What the script's `run(...)` calls work on: the step's context and the

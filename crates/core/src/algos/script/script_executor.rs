@@ -10,7 +10,7 @@
 use crate::algos::script::script_bridge::{
     ScriptHost, ScriptImage, check_referenced_commands, referenced_citations,
 };
-use crate::algos::script::script_params;
+use crate::algos::script::{functions, script_params};
 use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, ObjectClass};
 use evanalyzer_cfg::settings::modules::ParamValue;
@@ -278,8 +278,9 @@ fn with_host<T>(f: impl FnOnce(&mut ScriptHost) -> Result<T, String>) -> ScriptR
 ///
 /// - `run(command [, image] [, #{ params }]) -> Image`
 /// - `image()`, `set_image(image)`, `channel(index)`, `instance_count()`
-/// - on `Image`: `width`, `height`, `mean()`, `min()`, `max()`
-fn new_engine() -> Engine {
+/// - on `Image`: `width`, `height`, and the script functions
+///   ([`functions`]): `mean()`, `min()`, `max()`, `dot(other [, #{ options }])`
+pub(super) fn new_engine() -> Engine {
     let mut engine = Engine::new();
     engine.set_module_resolver(rhai::module_resolvers::DummyModuleResolver::new());
     script_params::register(
@@ -322,10 +323,8 @@ fn new_engine() -> Engine {
     engine
         .register_type_with_name::<ScriptImage>("Image")
         .register_get("width", ScriptImage::width)
-        .register_get("height", ScriptImage::height)
-        .register_fn("mean", ScriptImage::mean)
-        .register_fn("min", ScriptImage::min)
-        .register_fn("max", ScriptImage::max);
+        .register_get("height", ScriptImage::height);
+    functions::register(&mut engine);
 
     fn run(key: &str, params: Map) -> ScriptResult<ScriptImage> {
         with_host(|host| {
