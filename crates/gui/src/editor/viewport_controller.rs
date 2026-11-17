@@ -1610,17 +1610,8 @@ impl ViewportController {
             off_y,
         );
 
-        let selected_object_id = project.get_selected_object_id();
-        let Some(objects) = project.get_objects() else {
-            return;
-        };
-        let auto_objects = project.get_preview_objects();
-        let hide_unclassified = project.hide_unclassified_objects();
-        // The objects of the plane (or z-projection) and frame shown - a
-        // volume's object as its part on the plane shown.
-        let shown = project.get_shown_plane();
-
-        // The results' split view: the analysis' objects instead.
+        // The results' split view: the analysis' objects instead - also
+        // for an image without objects of its own (none in the project).
         let results_overlay = self.results_overlay.read().expect("Poisoned").clone();
         if let Some(overlay) = results_overlay {
             let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(buf_w, buf_h);
@@ -1637,6 +1628,16 @@ impl ViewportController {
             self.post_object_image(buffer, rect);
             return;
         }
+
+        let selected_object_id = project.get_selected_object_id();
+        let Some(objects) = project.get_objects() else {
+            return;
+        };
+        let auto_objects = project.get_preview_objects();
+        let hide_unclassified = project.hide_unclassified_objects();
+        // The objects of the plane (or z-projection) and frame shown - a
+        // volume's object as its part on the plane shown.
+        let shown = project.get_shown_plane();
 
         // Draw order: selected object > selected class > class list order
         // (first class in the list on top) > unclassified. Resolved once here.

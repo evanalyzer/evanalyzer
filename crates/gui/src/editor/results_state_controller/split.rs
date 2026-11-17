@@ -598,6 +598,11 @@ impl ResultsStateController {
                 .is_some_and(|rel| self.split_in_viewer(rel))
         {
             self.split_push_overlay();
+            // Drawn now: the overlay may have been set while the image was
+            // still opening - its draw then found no image size and drew
+            // nothing, and the same overlay set again draws nothing anew
+            // (`set_results_overlay` skips an unchanged one).
+            self.viewport().trigger_image_redraw_objects();
             self.split_push_selection(false);
         }
     }

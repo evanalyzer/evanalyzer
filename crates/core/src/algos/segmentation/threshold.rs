@@ -1732,7 +1732,14 @@ mod tests {
         let values: Vec<f32> = (0..64)
             .map(|i| if i < 32 { 1000.0 } else { 30000.0 } / 65535.0)
             .collect();
-        let image = Image::<f32, 1>::new(ImageSize { width: 8, height: 8 }, values).unwrap();
+        let image = Image::<f32, 1>::new(
+            ImageSize {
+                width: 8,
+                height: 8,
+            },
+            values,
+        )
+        .unwrap();
         let mut ctx = PipelineContext::new_from_image_test(image).unwrap();
         ctx.image_meta.nr_of_bits = 16;
         let mut cache = GlobalPipelineCache::default();

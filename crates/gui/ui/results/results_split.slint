@@ -423,7 +423,36 @@ export component SplitHint inherits Hud {
     }
 }
 
-// Plate: the well's images under the image; a click shows one.
+// Scrolls the filmstrip a page to one side (‹ / ›) - shown while there is
+// more that way.
+component StripArrow inherits Rectangle {
+    in property <bool> left;
+    callback clicked();
+    width: 24px;
+    height: 56px;
+    border-radius: 6px;
+    background: arrow-ta.has-hover ? #3F3F46 : #27272A;
+    accessible-role: button;
+    accessible-label: root.left ? "Earlier images" : "Later images";
+    accessible-action-default => {
+        root.clicked();
+    }
+    Image {
+        source: root.left ? InkIcons.caret-left : InkIcons.caret-right;
+        width: 12px;
+        height: 12px;
+        colorize: #D4D4D8;
+    }
+    arrow-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// Plate: the well's images under the image; a click shows one. More than
+// fit scroll sideways (drag, wheel, ‹ ›).
 export component SplitFilmstrip inherits Rectangle {
     background: #18181B;
     Rectangle {
@@ -446,50 +475,91 @@ export component SplitFilmstrip inherits Rectangle {
             vertical-alignment: center;
             overflow: elide;
         }
-        for thumb in ResultsState.split-thumbs: Rectangle {
-            property <bool> current: thumb.key == ResultsState.split-image-key;
-            width: 92px;
-            height: 56px;
+        // The arrows lie on the strip's ends (not beside it: their showing
+        // would change its width).
+        Rectangle {
+            horizontal-stretch: 1;
+        strip := Flickable {
+            width: parent.width;
+            height: parent.height;
+            content-width: row.preferred-width;
+            content-height: self.height;
+            // The wheel scrolls sideways too.
+            TouchArea {
+                scroll-event(e) => {
+                    if strip.content-width <= strip.width {
+                        return reject;
+                    }
+                    strip.content-x = max(strip.width - strip.content-width, min(0px, strip.content-x + e.delta-y + e.delta-x));
+                    return accept;
+                }
+            }
+            row := HorizontalLayout {
+                spacing: 10px;
+                alignment: start;
+                for thumb in ResultsState.split-thumbs: Rectangle {
+                    property <bool> current: thumb.key == ResultsState.split-image-key;
+                    width: 92px;
+                    height: 56px;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: 6px;
+                    background: #0B0C10;
+                    clip: true;
+                    accessible-role: button;
+                    accessible-label: thumb.key;
+                    accessible-item-selected: self.current;
+                    Image {
+                        source: thumb.image;
+                        width: 100%;
+                        height: 100%;
+                        image-fit: cover;
+                    }
+                    Rectangle {
+                        x: 0;
+                        y: parent.height - 16px;
+                        height: 16px;
+                        background: #000000.with-alpha(0.5);
+                        Text {
+                            x: 4px;
+                            width: parent.width - 8px;
+                            text: thumb.key;
+                            font-size: Ink.fs-caption;
+                            font-family: Ink.font-mono;
+                            color: #D4D4D8;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+                    Rectangle {
+                        border-radius: 6px;
+                        border-width: 2px;
+                        border-color: parent.current ? #2A6BDF : thumb-ta.has-hover ? #3F3F46 : transparent;
+                    }
+                    thumb-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            ResultsState.split-show-image(thumb.key);
+                        }
+                    }
+                }
+            }
+        }
+        if strip.content-x < 0: StripArrow {
+            x: 0;
             y: (parent.height - self.height) / 2;
-            border-radius: 6px;
-            background: #0B0C10;
-            clip: true;
-            accessible-role: button;
-            accessible-label: thumb.key;
-            accessible-item-selected: self.current;
-            Image {
-                source: thumb.image;
-                width: 100%;
-                height: 100%;
-                image-fit: cover;
+            left: true;
+            clicked => {
+                strip.content-x = min(0px, strip.content-x + strip.width - 102px);
             }
-            Rectangle {
-                x: 0;
-                y: parent.height - 16px;
-                height: 16px;
-                background: #000000.with-alpha(0.5);
-                Text {
-                    x: 4px;
-                    width: parent.width - 8px;
-                    text: thumb.key;
-                    font-size: Ink.fs-caption;
-                    font-family: Ink.font-mono;
-                    color: #D4D4D8;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
+        }
+        if strip.content-x > strip.width - strip.content-width: StripArrow {
+            x: parent.width - self.width;
+            y: (parent.height - self.height) / 2;
+            left: false;
+            clicked => {
+                strip.content-x = max(strip.width - strip.content-width, strip.content-x - strip.width + 102px);
             }
-            Rectangle {
-                border-radius: 6px;
-                border-width: 2px;
-                border-color: parent.current ? #2A6BDF : thumb-ta.has-hover ? #3F3F46 : transparent;
-            }
-            thumb-ta := TouchArea {
-                mouse-cursor: pointer;
-                clicked => {
-                    ResultsState.split-show-image(thumb.key);
-                }
-            }
+        }
         }
     }
 }

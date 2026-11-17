@@ -135,9 +135,8 @@ export component ResultsListView inherits Rectangle {
             clip: true;
 
 
-            Flickable {
-                content-height: side.preferred-height;
-
+            // Scrolls with a scrollbar once the settings are taller.
+            ScrollView {
                 side := VerticalLayout {
                     padding: Ink.pad-panel;
                     spacing: 16px;
