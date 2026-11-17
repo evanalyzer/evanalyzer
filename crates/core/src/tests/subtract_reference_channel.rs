@@ -18,8 +18,8 @@
 use crate::algos::TranslateImage;
 use crate::algos::libs::phase_correlation::test_support::{Lcg, fourier_blur, fourier_shift};
 use crate::algos::{
-    Alignment, Background, EstimationScope, Factor, ImageAlgorithm, Interpolation, Padding,
-    SubtractReferenceChannel,
+    Alignment, Background, EstimationScope, Factor, ImageAlgorithm, Interpolation, OutputImage,
+    Padding, SubtractReferenceChannel,
 };
 use crate::image::{ImageContainer, ManagedImage};
 use crate::pipeline::pipeline_cache::{CacheAddress, GlobalPipelineCache};
@@ -65,6 +65,9 @@ struct Recipe {
     structure: bool,
     /// The target shows the network.
     target_network: bool,
+    /// The target's network blurred by this much more (σ, px): out of
+    /// focus against the reference, so the subtraction leaves leftovers.
+    target_blur: f64,
     noise: bool,
 }
 
@@ -74,6 +77,7 @@ impl Default for Recipe {
             shift: SHIFT,
             structure: true,
             target_network: true,
+            target_blur: 0.0,
             noise: true,
         }
     }
@@ -91,6 +95,11 @@ fn scene(recipe: Recipe) -> Scene {
     let binary: Vec<f32> = smooth.iter().map(|v| (*v > level) as u8 as f32).collect();
     let network = fourier_blur(&binary, w, h, 1.2);
     let shifted = fourier_shift(&network, w, h, recipe.shift.0, recipe.shift.1);
+    let target_network = if recipe.target_blur > 0.0 {
+        fourier_blur(&network, w, h, recipe.target_blur)
+    } else {
+        network.clone()
+    };
 
     // 50 spots, half of them on the network.
     let mut spots = Vec::new();
@@ -130,7 +139,7 @@ fn scene(recipe: Recipe) -> Scene {
         for x in 0..w {
             let i = y * w + x;
             let structure = if recipe.target_network {
-                A * NETWORK * network[i]
+                A * NETWORK * target_network[i]
             } else {
                 0.0
             };
@@ -675,4 +684,130 @@ fn its_measurements_are_offered_to_later_steps() {
     );
     let blur = PipelineCommand::default_for_key("blur").unwrap();
     assert!(crate::measurement_outputs(&blur).is_empty());
+}
+
+/// A dark crack in the reference (below its background) subtracts nothing
+/// by default; with the option off it brightens the residual.
+#[test]
+fn a_dark_crack_in_the_reference_subtracts_nothing() {
+    // Already background-free values: the reference 10 with a crack of -20
+    // in column 2, the target 5 with its own shallower crack of -2.
+    let (w, h) = (8, 8);
+    let reference: Vec<f32> = (0..w * h)
+        .map(|i| if i % w == 2 { -20.0 } else { 10.0 })
+        .collect();
+    let target: Vec<f32> = (0..w * h)
+        .map(|i| if i % w == 2 { -2.0 } else { 5.0 })
+        .collect();
+    let mut cmd = command();
+    cmd.background = Background::None;
+    cmd.alignment = Alignment::None;
+    cmd.smoothing_sigma = 0.0;
+    cmd.factor = Factor::Fixed { factor: 0.5 };
+    cmd.clip_negative = false;
+    let residual = |cmd: &SubtractReferenceChannel| {
+        try_run(
+            cmd,
+            gray(w, h, target.clone()),
+            gray(w, h, reference.clone()),
+        )
+        .unwrap()
+        .image
+    };
+
+    let on = residual(&cmd);
+    // The structure (5 - 0.5 · 10) is gone, the target's crack stays as it is.
+    assert_eq!((on[0], on[2]), (0.0, -2.0));
+    cmd.only_brighter_reference = false;
+    let off = residual(&cmd);
+    // -2 - 0.5 · (-20): the crack turns bright.
+    assert_eq!((off[0], off[2]), (0.0, 8.0));
+}
+
+/// With the target out of focus the subtraction leaves leftovers on the
+/// network. In Significance units (the residual over its local noise) they
+/// stay below the cut-off almost everywhere - unlike the residual over its
+/// typical noise - while the EVs stay above, and beside the structure the
+/// values spread by about 1.
+#[test]
+fn significance_keeps_the_evs_and_drops_the_leftovers() {
+    let scene = scene(Recipe {
+        target_blur: 1.5,
+        ..Default::default()
+    });
+    let mut cmd = command();
+    cmd.clip_negative = false;
+    let residual = run(&cmd, &scene);
+    cmd.output = OutputImage::Significance;
+    let significance = run(&cmd, &scene);
+    assert!(significance.value("residual_noise") > 0.0);
+    // Beside the structure, away from the EVs.
+    let beside = |image: &[f32]| -> Vec<f32> {
+        (0..SIDE * SIDE)
+            .filter(|&i| {
+                let (x, y) = ((i % SIDE) as f32, (i / SIDE) as f32);
+                scene.network[i] < 0.02
+                    && scene
+                        .spots
+                        .iter()
+                        .all(|(sx, sy)| (sx - x).powi(2) + (sy - y).powi(2) > 64.0)
+            })
+            .map(|i| image[i])
+            .collect()
+    };
+    let robust_spread = |mut values: Vec<f32>| -> f32 {
+        values.sort_by(f32::total_cmp);
+        let median = values[values.len() / 2];
+        let mut deviations: Vec<f32> = values.iter().map(|v| (v - median).abs()).collect();
+        deviations.sort_by(f32::total_cmp);
+        deviations[deviations.len() / 2] * 1.4826
+    };
+    // The residual's noise there: what a single global cut-off would use.
+    let noise = robust_spread(beside(&residual.image));
+
+    // Near the network (its flanks too, where a width mismatch leaves its
+    // leftovers), away from the EVs.
+    let near: Vec<usize> = (0..SIDE * SIDE)
+        .filter(|&i| {
+            let (x, y) = ((i % SIDE) as f32, (i / SIDE) as f32);
+            scene.network[i] > 0.02
+                && (8.0..SIDE as f32 - 8.0).contains(&x)
+                && (8.0..SIDE as f32 - 8.0).contains(&y)
+                && scene
+                    .spots
+                    .iter()
+                    .all(|(sx, sy)| (sx - x).powi(2) + (sy - y).powi(2) > 64.0)
+        })
+        .collect();
+    let above = |image: &[f32], unit: f32, cut: f32| {
+        near.iter().filter(|&&i| image[i] / unit > cut).count() as f64 / near.len() as f64
+    };
+    for (cut, most) in [(3.0, 0.02), (5.0, 0.005)] {
+        let (residual, significance) = (
+            above(&residual.image, noise, cut),
+            above(&significance.image, 1.0, cut),
+        );
+        assert!(
+            significance < most && residual > 2.0 * significance.max(1e-4),
+            "pixels near the network above {cut}: residual {residual:.4}, significance \
+             {significance:.4}"
+        );
+    }
+
+    // Every EV above the cut-off of 5 - also those on the network, where
+    // the leftovers raise the local noise.
+    let mut peaks = spot_peaks(&significance.image, &scene);
+    peaks.sort_by(f32::total_cmp);
+    let (weakest, median) = (peaks[0], peaks[peaks.len() / 2]);
+    assert!(
+        weakest > 5.0 && median > 10.0,
+        "EVs: weakest {weakest:.1}, median {median:.1}"
+    );
+
+    // Beside the structure: noise of about 1.
+    let spread = robust_spread(beside(&significance.image));
+    assert!(
+        (0.7..1.4).contains(&spread),
+        "spread beside the structure {spread:.2}"
+    );
 }

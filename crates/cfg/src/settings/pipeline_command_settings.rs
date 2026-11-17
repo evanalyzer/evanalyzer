@@ -985,6 +985,18 @@ pub enum MathSubtractReferenceChannelOutputImageSettings {
         alias = "scaled_reference"
     )]
     ScaledReference,
+    /// The residual in units of its local noise: the deviation from its
+    /// local baseline (median over 21 × 21 px) over the spread of the
+    /// deviations there, from the negative side only (noise is symmetric,
+    /// EVs only add light - so they don't raise their own noise). The noise
+    /// is higher where the image is brighter (photon noise) and where the
+    /// subtraction leaves leftovers of the structure; both raise it, so 5
+    /// means five times the noise right there - the same on the structure,
+    /// on a bright sheet and on dark background. For spot detection (a
+    /// threshold, Wavelet Spots) where leftovers or bright regions would
+    /// count as spots.
+    #[serde(alias = "significance")]
+    Significance,
 }
 
 /// What fills the strip [`TranslateImage`] empties at the image edge.
@@ -2384,7 +2396,8 @@ pub struct StructureTensorSettings {
 /// reference shifted onto the target - before the fit: a wrong shift gives
 /// a wrong `a` and leaves a relief) → extra blur of the sharper channel →
 /// the same smoothing of both (unsmoothed, noise in the reference biases
-/// `a` low) → factor → subtraction.
+/// `a` low) → factor → subtraction (by default only where the reference is
+/// brighter than its background).
 ///
 /// **Assumption:** estimating the factor from the image assumes the target's
 /// own signal is not correlated with the reference. If it binds the
@@ -2395,6 +2408,12 @@ pub struct StructureTensorSettings {
 /// other) → alignment. A bright centre line with dark sides → raise the
 /// target's extra blur; a dark centre line with bright sides → raise the
 /// reference's. The whole structure too bright or too dark → Factor scale.
+///
+/// **Spot detection afterwards:** leftovers of the structure that one
+/// factor can't remove (e.g. channels focused differently) and the higher
+/// photon noise of bright regions look like spots to a global cut-off.
+/// Output Significance divides the residual by its local noise, so a
+/// cut-off (e.g. 5 in a threshold) means the same everywhere.
 ///
 /// Measures per image: the factor, offset, shift, alignment quality, R²,
 /// the parts of fit and saturated pixels and whether a fallback was used
@@ -2459,6 +2478,12 @@ pub struct SubtractReferenceChannelSettings {
     /// off).
     #[schemars(range(min = 0, max = 10))]
     pub edge_tolerance: f32,
+    /// Subtract only where the reference is brighter than its background
+    /// (after the background is removed): dark lines or holes in the
+    /// reference (cracks, gaps) subtract nothing instead of brightening the
+    /// result. Off: the reference's dips are subtracted too. Needs a
+    /// background removal - without one the reference is never below 0.
+    pub only_brighter_reference: bool,
     /// Set negative residual values to 0.
     pub clip_negative: bool,
     /// Output: the residual, or the scaled aligned reference (for
@@ -2484,6 +2509,7 @@ impl Default for SubtractReferenceChannelSettings {
             factor_scale: 1.0f32,
             estimation_scope: MathSubtractReferenceChannelEstimationScopeSettings::Image,
             edge_tolerance: 0.0f32,
+            only_brighter_reference: true,
             clip_negative: true,
             output: MathSubtractReferenceChannelOutputImageSettings::Residual,
         }

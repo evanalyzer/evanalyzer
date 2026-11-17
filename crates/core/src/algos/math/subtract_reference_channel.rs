@@ -57,7 +57,8 @@ use std::sync::Arc;
 /// reference shifted onto the target - before the fit: a wrong shift gives
 /// a wrong `a` and leaves a relief) → extra blur of the sharper channel →
 /// the same smoothing of both (unsmoothed, noise in the reference biases
-/// `a` low) → factor → subtraction.
+/// `a` low) → factor → subtraction (by default only where the reference is
+/// brighter than its background).
 ///
 /// **Assumption:** estimating the factor from the image assumes the target's
 /// own signal is not correlated with the reference. If it binds the
@@ -68,6 +69,12 @@ use std::sync::Arc;
 /// other) → alignment. A bright centre line with dark sides → raise the
 /// target's extra blur; a dark centre line with bright sides → raise the
 /// reference's. The whole structure too bright or too dark → Factor scale.
+///
+/// **Spot detection afterwards:** leftovers of the structure that one
+/// factor can't remove (e.g. channels focused differently) and the higher
+/// photon noise of bright regions look like spots to a global cut-off.
+/// Output Significance divides the residual by its local noise, so a
+/// cut-off (e.g. 5 in a threshold) means the same everywhere.
 ///
 /// Measures per image: the factor, offset, shift, alignment quality, R²,
 /// the parts of fit and saturated pixels and whether a fallback was used
@@ -156,6 +163,14 @@ pub struct SubtractReferenceChannel {
     /// off).
     #[cmdsmeta(default = 0.0, min = 0.0, max = 10.0, step = 0.5, visibility = Advanced)]
     pub edge_tolerance: f32,
+
+    /// Subtract only where the reference is brighter than its background
+    /// (after the background is removed): dark lines or holes in the
+    /// reference (cracks, gaps) subtract nothing instead of brightening the
+    /// result. Off: the reference's dips are subtracted too. Needs a
+    /// background removal - without one the reference is never below 0.
+    #[cmdsmeta(default = true)]
+    pub only_brighter_reference: bool,
 
     /// Set negative residual values to 0.
     #[cmdsmeta(default = true)]
@@ -341,6 +356,17 @@ pub enum OutputImage {
     /// The scaled, aligned reference `a · align(T) + b` (to inspect the
     /// estimate).
     ScaledReference,
+    /// The residual in units of its local noise: the deviation from its
+    /// local baseline (median over 21 × 21 px) over the spread of the
+    /// deviations there, from the negative side only (noise is symmetric,
+    /// EVs only add light - so they don't raise their own noise). The noise
+    /// is higher where the image is brighter (photon noise) and where the
+    /// subtraction leaves leftovers of the structure; both raise it, so 5
+    /// means five times the noise right there - the same on the structure,
+    /// on a bright sheet and on dark background. For spot detection (a
+    /// threshold, Wavelet Spots) where leftovers or bright regions would
+    /// count as spots.
+    Significance,
 }
 
 /// Fewer fit pixels use the fallback factor.
@@ -348,6 +374,12 @@ const MIN_FIT_PIXELS: usize = 1000;
 /// Huber's tuning constant (95 % efficiency for normal errors).
 const HUBER_K: f64 = 1.345;
 const MAX_ITERATIONS: usize = 20;
+/// Fewer pixels give no noise estimate (Significance).
+const MIN_NOISE_PIXELS: usize = 100;
+/// The window of the local noise (Significance): (2·10 + 1)² px, about
+/// 3.4 µm at 160 nm per pixel - enough pixels for a steady estimate, narrow
+/// enough to follow the brightness and the edges of the structure.
+const LOCAL_NOISE_RADIUS: usize = 10;
 const TOLERANCE: f64 = 1e-6;
 
 impl ImageAlgorithm for SubtractReferenceChannel {
@@ -544,6 +576,11 @@ impl ImageAlgorithm for SubtractReferenceChannel {
                 MeasurementUnit::Fraction,
             ),
             outputs.image("fallback_used", "Fallback used", MeasurementUnit::None),
+            outputs.image(
+                "residual_noise",
+                "Residual noise",
+                MeasurementUnit::Intensity,
+            ),
         ]
     }
 }
@@ -577,11 +614,14 @@ struct PlaneEstimate {
     fit_fraction: f64,
     saturated_fraction: f64,
     fallback: bool,
+    /// Only with the Significance output: the residual's typical local
+    /// noise (median).
+    residual_noise: f64,
 }
 
 /// The planes' (and so a tile's) values in the order of the measurement
 /// outputs: their medians.
-fn median_of(estimates: &[PlaneEstimate]) -> [f64; 9] {
+fn median_of(estimates: &[PlaneEstimate]) -> [f64; 10] {
     let median = |f: &dyn Fn(&PlaneEstimate) -> f64| -> f64 {
         let mut values: Vec<f64> = estimates.iter().map(f).filter(|v| v.is_finite()).collect();
         if values.is_empty() {
@@ -606,6 +646,7 @@ fn median_of(estimates: &[PlaneEstimate]) -> [f64; 9] {
         median(&|e| e.saturated_fraction),
         // Any plane falling back counts.
         estimates.iter().any(|e| e.fallback) as u8 as f64,
+        median(&|e| e.residual_noise),
     ]
 }
 
@@ -820,7 +861,11 @@ impl SubtractReferenceChannel {
             }
         };
         a *= self.factor_scale as f64;
-        drop(work);
+        let significance = self.output == OutputImage::Significance;
+        if !significance {
+            // Freed: only Significance still needs it.
+            work = Vec::new();
+        }
 
         // 7. Subtraction.
         if self.edge_tolerance > 0.0 {
@@ -832,13 +877,56 @@ impl SubtractReferenceChannel {
             t = filter.process_image::<1>(&image)?.into_vec();
         }
         let (a32, b32) = (a as f32, b as f32);
+        // Below its background the reference shows no light to remove.
+        let floor = if self.only_brighter_reference {
+            0.0
+        } else {
+            f32::NEG_INFINITY
+        };
         for ((o, sv), tv) in out.iter_mut().zip(&s).zip(&t) {
-            let scaled = a32 * tv + b32;
+            let scaled = a32 * tv.max(floor) + b32;
             *o = match self.output {
                 OutputImage::ScaledReference => scaled,
                 OutputImage::Residual if self.clip_negative => (sv - scaled).max(0.0),
-                OutputImage::Residual => sv - scaled,
+                OutputImage::Residual | OutputImage::Significance => sv - scaled,
             };
+        }
+        let mut residual_noise = f64::NAN;
+        if significance {
+            // `out` holds the residual: in units of its local noise.
+            work.clear();
+            work.extend((0..len).filter(|&i| usable(i)).map(|i| out[i]));
+            let global = robust_noise(&mut work).unwrap_or(0.0).max(1e-12) as f32;
+            // The local baseline (median: EVs don't move it), then the
+            // noise of the deviations from it.
+            let baseline = RankFilter {
+                radius: LOCAL_NOISE_RADIUS as f64,
+                filter_type: RankFilterType::Median,
+            }
+            .process_image::<1>(
+                &Image::from_size_slice(input.size, out).map_err(InternalErrors::from_kornia)?,
+            )?;
+            for (o, b) in out.iter_mut().zip(baseline.as_slice()) {
+                *o -= b;
+            }
+            drop(baseline);
+            let sigma = local_noise(out, w, h, LOCAL_NOISE_RADIUS, global);
+            work.clear();
+            work.extend((0..len).filter(|&i| usable(i)).map(|i| sigma[i]));
+            residual_noise = if work.is_empty() {
+                global as f64
+            } else {
+                median_in_place(&mut work) as f64
+            };
+            drop(work);
+            for (o, s) in out.iter_mut().zip(&sigma) {
+                let value = *o / s;
+                *o = if self.clip_negative {
+                    value.max(0.0)
+                } else {
+                    value
+                };
+            }
         }
 
         Ok(PlaneEstimate {
@@ -851,6 +939,7 @@ impl SubtractReferenceChannel {
             fit_fraction,
             saturated_fraction: saturated as f64 / len as f64,
             fallback,
+            residual_noise,
         })
     }
 
@@ -952,22 +1041,16 @@ fn gaussian(
     std::mem::swap(plane, work);
 }
 
-/// The Huber fit of `s ≈ a·t + b` over the structure's pixels (see
-/// [`Factor::RobustFit`]); `None` without any. `work`: a plane-sized
-/// buffer.
-#[allow(clippy::too_many_arguments)]
-fn robust_fit(
-    s: &[f32],
+/// The level above which the reference shows structure: its median plus
+/// `noise_factor` × its noise (MAD), and at least its `min_percentile`, of
+/// the usable pixels; `None` without any. `work`: a plane-sized buffer.
+fn structure_level(
     t: &[f32],
     usable: &dyn Fn(usize) -> bool,
     work: &mut Vec<f32>,
     noise_factor: f32,
     min_percentile: f32,
-    outlier_k: f32,
-    fit_offset: bool,
-) -> Option<Fit> {
-    // The reference's level: median, noise and percentile of its usable
-    // pixels.
+) -> Option<f32> {
     work.clear();
     work.extend(
         (0..t.len())
@@ -986,7 +1069,95 @@ fn robust_fit(
         *v = (*v - median).abs();
     }
     let noise = median_in_place(work) * MAD_TO_SIGMA;
-    let level = (median + noise_factor * noise).max(percentile);
+    Some((median + noise_factor * noise).max(percentile))
+}
+
+/// The local noise of the residual's deviations `values` (`w × h`) from
+/// their local baseline over a `(2·radius + 1)²` window, from the negative
+/// side only: `σ² = 2 · mean(min(d, 0)²)`. Noise is symmetric, EVs only
+/// add positive values - so they don't raise their own noise, while the
+/// photon noise of bright regions and the relief of leftovers (dark on one
+/// side) do. At least half of `global`.
+fn local_noise(values: &[f32], w: usize, h: usize, radius: usize, global: f32) -> Vec<f32> {
+    let negative: Vec<f32> = values.iter().map(|v| v.min(0.0).powi(2)).collect();
+    box_mean(&negative, w, h, radius)
+        .into_iter()
+        .map(|m| (2.0 * m).sqrt().max(0.5 * global))
+        .collect()
+}
+
+/// The mean of `values` (`w × h`) over a `(2·radius + 1)²` window (smaller
+/// at the border), with running sums in `f64`.
+fn box_mean(values: &[f32], w: usize, h: usize, radius: usize) -> Vec<f32> {
+    // Rows.
+    let mut rows = vec![0f32; values.len()];
+    let mut prefix = vec![0f64; w + 1];
+    for y in 0..h {
+        let row = &values[y * w..(y + 1) * w];
+        for (x, v) in row.iter().enumerate() {
+            prefix[x + 1] = prefix[x] + *v as f64;
+        }
+        for x in 0..w {
+            let (from, to) = (x.saturating_sub(radius), (x + radius + 1).min(w));
+            rows[y * w + x] = ((prefix[to] - prefix[from]) / (to - from) as f64) as f32;
+        }
+    }
+    // Columns: a running sum of whole rows.
+    let mut out = vec![0f32; values.len()];
+    let mut sum = vec![0f64; w];
+    let mut count = 0usize;
+    let (mut top, mut bottom) = (0usize, 0usize);
+    for y in 0..h {
+        let (from, to) = (y.saturating_sub(radius), (y + radius + 1).min(h));
+        while bottom < to {
+            for (s, v) in sum.iter_mut().zip(&rows[bottom * w..(bottom + 1) * w]) {
+                *s += *v as f64;
+            }
+            bottom += 1;
+            count += 1;
+        }
+        while top < from {
+            for (s, v) in sum.iter_mut().zip(&rows[top * w..(top + 1) * w]) {
+                *s -= *v as f64;
+            }
+            top += 1;
+            count -= 1;
+        }
+        for (o, s) in out[y * w..(y + 1) * w].iter_mut().zip(&sum) {
+            *o = (s / count as f64) as f32;
+        }
+    }
+    out
+}
+
+/// The robust noise (`1.4826 · MAD`) of `values`, which it reorders; `None`
+/// for fewer than [`MIN_NOISE_PIXELS`].
+fn robust_noise(values: &mut [f32]) -> Option<f64> {
+    if values.len() < MIN_NOISE_PIXELS {
+        return None;
+    }
+    let median = median_in_place(values);
+    for v in values.iter_mut() {
+        *v = (*v - median).abs();
+    }
+    Some((median_in_place(values) * MAD_TO_SIGMA) as f64)
+}
+
+/// The Huber fit of `s ≈ a·t + b` over the structure's pixels (see
+/// [`Factor::RobustFit`]); `None` without any. `work`: a plane-sized
+/// buffer.
+#[allow(clippy::too_many_arguments)]
+fn robust_fit(
+    s: &[f32],
+    t: &[f32],
+    usable: &dyn Fn(usize) -> bool,
+    work: &mut Vec<f32>,
+    noise_factor: f32,
+    min_percentile: f32,
+    outlier_k: f32,
+    fit_offset: bool,
+) -> Option<Fit> {
+    let level = structure_level(t, usable, work, noise_factor, min_percentile)?;
 
     let pairs: Vec<(f32, f32)> = (0..t.len())
         .filter(|&i| usable(i) && t[i] > level && t[i] > 0.0 && s[i].is_finite())

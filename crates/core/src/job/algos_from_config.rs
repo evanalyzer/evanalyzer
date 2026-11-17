@@ -519,6 +519,9 @@ impl From<MathSubtractReferenceChannelOutputImageSettings> for OutputImage {
             MathSubtractReferenceChannelOutputImageSettings::ScaledReference => {
                 OutputImage::ScaledReference
             }
+            MathSubtractReferenceChannelOutputImageSettings::Significance => {
+                OutputImage::Significance
+            }
         }
     }
 }
@@ -1616,6 +1619,7 @@ impl From<SubtractReferenceChannelSettings> for SubtractReferenceChannel {
             factor_scale: _s.factor_scale.clamp(0.0, 100.0),
             estimation_scope: EstimationScope::from(_s.estimation_scope),
             edge_tolerance: _s.edge_tolerance.clamp(0.0, 10.0),
+            only_brighter_reference: _s.only_brighter_reference,
             clip_negative: _s.clip_negative,
             output: OutputImage::from(_s.output),
         }

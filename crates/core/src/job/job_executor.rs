@@ -3370,6 +3370,7 @@ mod full_run_integration_tests {
                 factor_scale: 1.0,
                 estimation_scope: EstimationScope::Image,
                 edge_tolerance: 0.0,
+                only_brighter_reference: true,
                 clip_negative: true,
                 output: OutputImage::Residual,
             }));

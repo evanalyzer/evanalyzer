@@ -2260,6 +2260,11 @@
           "description": "The scaled, aligned reference `a · align(T) + b` (to inspect the\nestimate).",
           "type": "string",
           "const": "SCALED_REFERENCE"
+        },
+        {
+          "description": "The residual in units of its local noise: the deviation from its\nlocal baseline (median over 21 × 21 px) over the spread of the\ndeviations there, from the negative side only (noise is symmetric,\nEVs only add light - so they don't raise their own noise). The noise\nis higher where the image is brighter (photon noise) and where the\nsubtraction leaves leftovers of the structure; both raise it, so 5\nmeans five times the noise right there - the same on the structure,\non a bright sheet and on dark background. For spot detection (a\nthreshold, Wavelet Spots) where leftovers or bright regions would\ncount as spots.",
+          "type": "string",
+          "const": "SIGNIFICANCE"
         }
       ]
     },
@@ -5849,7 +5854,7 @@
       ]
     },
     "SubtractReferenceChannelSettings": {
-      "description": "Removes a signal from the image with a channel that shows only that\nsignal (the reference) - e.g. serum filaments or autofluorescence in an\nEV spot channel: `residual = S − (a · align(T) + b)`. The scale `a`, the\noffset `b` and the shift are set by hand or estimated from the image.\nTypically the first step of a pipeline, before the spot detection.\n\n**Order:** camera offset → background (both channels) → alignment (the\nreference shifted onto the target - before the fit: a wrong shift gives\na wrong `a` and leaves a relief) → extra blur of the sharper channel →\nthe same smoothing of both (unsmoothed, noise in the reference biases\n`a` low) → factor → subtraction.\n\n**Assumption:** estimating the factor from the image assumes the target's\nown signal is not correlated with the reference. If it binds the\nreference structure (e.g. a protein on the filaments), use a Fixed\nfactor measured on single-stain controls.\n\n**Reading the residual:** a relief (bright on one side, dark on the\nother) → alignment. A bright centre line with dark sides → raise the\ntarget's extra blur; a dark centre line with bright sides → raise the\nreference's. The whole structure too bright or too dark → Factor scale.\n\nMeasures per image: the factor, offset, shift, alignment quality, R²,\nthe parts of fit and saturated pixels and whether a fallback was used\n(on an image split into tiles: the median over the tiles). Exclude\nImage can leave images out by them - e.g. \"Fallback used\" above 0.5.\n\nRuns per tile, the whole image up to 4096 px: on a larger image each\ntile has its own estimates for now (Image scope logs a warning), and the\nshift pads the tile borders with their edge pixels (no overlap with the\nneighbouring tiles).\n\nThe EV-in-serum assay - spots in the current image, the serum channel 4,\neverything else at its default:\n\n```json\n{ \"type\": \"SUBTRACT_REFERENCE_CHANNEL\", \"id\": \"reference\", \"referenceChannel\": 4 }\n```",
+      "description": "Removes a signal from the image with a channel that shows only that\nsignal (the reference) - e.g. serum filaments or autofluorescence in an\nEV spot channel: `residual = S − (a · align(T) + b)`. The scale `a`, the\noffset `b` and the shift are set by hand or estimated from the image.\nTypically the first step of a pipeline, before the spot detection.\n\n**Order:** camera offset → background (both channels) → alignment (the\nreference shifted onto the target - before the fit: a wrong shift gives\na wrong `a` and leaves a relief) → extra blur of the sharper channel →\nthe same smoothing of both (unsmoothed, noise in the reference biases\n`a` low) → factor → subtraction (by default only where the reference is\nbrighter than its background).\n\n**Assumption:** estimating the factor from the image assumes the target's\nown signal is not correlated with the reference. If it binds the\nreference structure (e.g. a protein on the filaments), use a Fixed\nfactor measured on single-stain controls.\n\n**Reading the residual:** a relief (bright on one side, dark on the\nother) → alignment. A bright centre line with dark sides → raise the\ntarget's extra blur; a dark centre line with bright sides → raise the\nreference's. The whole structure too bright or too dark → Factor scale.\n\n**Spot detection afterwards:** leftovers of the structure that one\nfactor can't remove (e.g. channels focused differently) and the higher\nphoton noise of bright regions look like spots to a global cut-off.\nOutput Significance divides the residual by its local noise, so a\ncut-off (e.g. 5 in a threshold) means the same everywhere.\n\nMeasures per image: the factor, offset, shift, alignment quality, R²,\nthe parts of fit and saturated pixels and whether a fallback was used\n(on an image split into tiles: the median over the tiles). Exclude\nImage can leave images out by them - e.g. \"Fallback used\" above 0.5.\n\nRuns per tile, the whole image up to 4096 px: on a larger image each\ntile has its own estimates for now (Image scope logs a warning), and the\nshift pads the tile borders with their edge pixels (no overlap with the\nneighbouring tiles).\n\nThe EV-in-serum assay - spots in the current image, the serum channel 4,\neverything else at its default:\n\n```json\n{ \"type\": \"SUBTRACT_REFERENCE_CHANNEL\", \"id\": \"reference\", \"referenceChannel\": 4 }\n```",
       "type": "object",
       "properties": {
         "alignment": {
@@ -5928,6 +5933,11 @@
           "description": "Interpolation for the shift.",
           "$ref": "#/$defs/MathSubtractReferenceChannelShiftInterpolationSettings",
           "default": "CUBIC"
+        },
+        "onlyBrighterReference": {
+          "description": "Subtract only where the reference is brighter than its background\n(after the background is removed): dark lines or holes in the\nreference (cracks, gaps) subtract nothing instead of brightening the\nresult. Off: the reference's dips are subtracted too. Needs a\nbackground removal - without one the reference is never below 0.",
+          "type": "boolean",
+          "default": true
         },
         "output": {
           "description": "Output: the residual, or the scaled aligned reference (for\ninspection).",
