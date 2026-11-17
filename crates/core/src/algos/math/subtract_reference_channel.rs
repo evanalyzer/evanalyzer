@@ -899,14 +899,8 @@ impl SubtractReferenceChannel {
             let global = robust_noise(&mut work).unwrap_or(0.0).max(1e-12) as f32;
             // The local baseline (median: EVs don't move it), then the
             // noise of the deviations from it.
-            let baseline = RankFilter {
-                radius: LOCAL_NOISE_RADIUS as f64,
-                filter_type: RankFilterType::Median,
-            }
-            .process_image::<1>(
-                &Image::from_size_slice(input.size, out).map_err(InternalErrors::from_kornia)?,
-            )?;
-            for (o, b) in out.iter_mut().zip(baseline.as_slice()) {
+            let baseline = local_median(out, input.size, LOCAL_NOISE_RADIUS)?;
+            for (o, b) in out.iter_mut().zip(&baseline) {
                 *o -= b;
             }
             drop(baseline);
@@ -1070,6 +1064,49 @@ fn structure_level(
     }
     let noise = median_in_place(work) * MAD_TO_SIGMA;
     Some((median + noise_factor * noise).max(percentile))
+}
+
+/// The median of `values` over Rank Filter's disk of `radius` px, the
+/// values quantized to its 65536 gray levels between their minimum and
+/// maximum: its sliding histogram then applies (the residual is no raw
+/// image - for arbitrary values it would rank every window, about 20 times
+/// slower for 21 × 21 px). Exact to (max − min) / 65535, a small part of
+/// the noise.
+fn local_median(
+    values: &[f32],
+    size: ImageSize,
+    radius: usize,
+) -> Result<Vec<f32>, InternalErrors> {
+    let (low, high) = values
+        .iter()
+        .filter(|v| v.is_finite())
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), v| {
+            (lo.min(*v), hi.max(*v))
+        });
+    // A flat plane (or no finite value): nothing to rank.
+    if high.partial_cmp(&low) != Some(std::cmp::Ordering::Greater) {
+        return Ok(values.to_vec());
+    }
+    let range = (high - low) as f64;
+    // Level k is the value k / 65535 - the same bits for every pixel of a
+    // level, as the histogram path requires.
+    let levels: Vec<f32> = values
+        .iter()
+        .map(|v| {
+            let k = ((((*v - low) as f64 / range) * 65535.0).round()).clamp(0.0, 65535.0);
+            (k / 65535.0) as f32
+        })
+        .collect();
+    let median = RankFilter {
+        radius: radius as f64,
+        filter_type: RankFilterType::Median,
+    }
+    .process_image::<1>(&Image::new(size, levels).map_err(InternalErrors::from_kornia)?)?;
+    Ok(median
+        .as_slice()
+        .iter()
+        .map(|q| (low as f64 + *q as f64 * range) as f32)
+        .collect())
 }
 
 /// The local noise of the residual's deviations `values` (`w × h`) from
