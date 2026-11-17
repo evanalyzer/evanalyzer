@@ -8,3 +8,4 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 pub mod edm;
+pub mod translate_image;

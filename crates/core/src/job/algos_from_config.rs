@@ -266,6 +266,16 @@ impl From<FiltersIntensityTransformIntensityTransformModeSettings> for Intensity
     }
 }
 
+impl From<SpartialTransformTranslateImageInterpolationSettings> for Interpolation {
+    fn from(_s: SpartialTransformTranslateImageInterpolationSettings) -> Self {
+        match _s {
+            SpartialTransformTranslateImageInterpolationSettings::Nearest => Interpolation::Nearest,
+            SpartialTransformTranslateImageInterpolationSettings::Linear => Interpolation::Linear,
+            SpartialTransformTranslateImageInterpolationSettings::Cubic => Interpolation::Cubic,
+        }
+    }
+}
+
 impl From<MorphologyMorphologicalTransformationKernelShapesSettings> for KernelShapes {
     fn from(_s: MorphologyMorphologicalTransformationKernelShapesSettings) -> Self {
         match _s {
@@ -396,6 +406,16 @@ impl From<SegmentationThresholdOtsuMiddleClassSettings> for OtsuMiddleClass {
         match _s {
             SegmentationThresholdOtsuMiddleClassSettings::Foreground => OtsuMiddleClass::Foreground,
             SegmentationThresholdOtsuMiddleClassSettings::Background => OtsuMiddleClass::Background,
+        }
+    }
+}
+
+impl From<SpartialTransformTranslateImagePaddingSettings> for Padding {
+    fn from(_s: SpartialTransformTranslateImagePaddingSettings) -> Self {
+        match _s {
+            SpartialTransformTranslateImagePaddingSettings::Replicate => Padding::Replicate,
+            SpartialTransformTranslateImagePaddingSettings::Reflect => Padding::Reflect,
+            SpartialTransformTranslateImagePaddingSettings::Constant => Padding::Constant,
         }
     }
 }
@@ -1532,6 +1552,18 @@ impl From<TransformObjectsSettings> for TransformObjects {
     }
 }
 
+impl From<TranslateImageSettings> for TranslateImage {
+    fn from(_s: TranslateImageSettings) -> Self {
+        TranslateImage {
+            dy: _s.dy.clamp(-1000.0, 1000.0),
+            dx: _s.dx.clamp(-1000.0, 1000.0),
+            interpolation: Interpolation::from(_s.interpolation),
+            padding: Padding::from(_s.padding),
+            pad_value: _s.pad_value.clamp(-65535.0, 65535.0),
+        }
+    }
+}
+
 impl From<UNetSettings> for UNet {
     fn from(_s: UNetSettings) -> Self {
         UNet {
@@ -1844,6 +1876,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         ))),
         PipelineCommand::TransformObjects(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::TransformObjects::from(settings),
+        ))),
+        PipelineCommand::TranslateImage(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::TranslateImage::from(settings),
         ))),
         PipelineCommand::UNet(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::UNet::from(settings),

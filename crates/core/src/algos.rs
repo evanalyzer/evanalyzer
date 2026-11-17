@@ -138,6 +138,7 @@ pub use self::segmentation::threshold::ThresholdValueSource;
 pub use self::segmentation::watershed::SeedSource;
 pub use self::segmentation::watershed::Watershed;
 pub use self::spartial_transform::edm::DistanceTransform;
+pub use self::spartial_transform::translate_image::{Interpolation, Padding, TranslateImage};
 
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::pipeline::pipeline_context::PipelineContext;

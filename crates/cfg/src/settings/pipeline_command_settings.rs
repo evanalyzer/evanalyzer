@@ -479,6 +479,23 @@ pub enum FiltersIntensityTransformIntensityTransformModeSettings {
     Manual,
 }
 
+/// How [`TranslateImage`] computes the values between pixels.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SpartialTransformTranslateImageInterpolationSettings {
+    /// The nearest pixel (the only choice for label images).
+    #[default]
+    #[serde(alias = "nearest")]
+    Nearest,
+    /// Bilinear, from the 4 nearest pixels.
+    #[serde(alias = "linear")]
+    Linear,
+    /// Bicubic, from the 16 nearest pixels (Keys, a = −0.5): sharper than
+    /// Linear, may over- and undershoot at edges.
+    #[serde(alias = "cubic")]
+    Cubic,
+}
+
 /// The geometric structure of the kernel (structuring element).
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -752,6 +769,23 @@ pub enum SegmentationThresholdOtsuMiddleClassSettings {
     Foreground,
     #[serde(alias = "background")]
     Background,
+}
+
+/// What fills the strip [`TranslateImage`] empties at the image edge.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SpartialTransformTranslateImagePaddingSettings {
+    /// The edge pixel repeated.
+    #[default]
+    #[serde(alias = "replicate")]
+    Replicate,
+    /// Mirrored at the edge, without repeating the edge pixel
+    /// (…, 2, 1, 0, 1, 2, …).
+    #[serde(alias = "reflect")]
+    Reflect,
+    /// A fixed value (`pad_value`).
+    #[serde(alias = "constant")]
+    Constant,
 }
 
 /// How large the pieces are that a large tile runs through a U-Net or
@@ -2057,6 +2091,60 @@ pub struct StructureTensorSettings {
     ///
     /// Controls the spatial "reach" of the neighborhood analysis.
     pub sigma: f32,
+}
+
+/// Shifts the image by a fraction of a pixel; it keeps its size.
+///
+/// Positive `dy` moves the content down, positive `dx` to the right:
+/// `output(y, x) = input(y − dy, x − dx)` - as `scipy.ndimage.shift`, so
+/// shifts measured in Python can be used as they are. The strip the shift
+/// empties at the edge is filled as set under Padding. A volume is shifted
+/// plane by plane; a colour image the same in every colour.
+///
+/// Cubic is Keys' cubic convolution with a = −0.5 (Catmull-Rom). Whole-pixel
+/// shifts copy the pixels, whatever the interpolation. Label images can
+/// only be shifted with Nearest.
+///
+/// Runs per tile: on an image split into tiles (larger than 4096 px) the
+/// padding also fills the strip at the inner tile borders - as wide as the
+/// shift.
+///
+/// A fixed channel shift as a step of a module:
+///
+/// ```json
+/// { "id": 2, "enabled": true,
+/// "command": { "type": "TRANSLATE_IMAGE", "dy": 0.5, "dx": -1.25,
+/// "interpolation": "CUBIC", "padding": "REPLICATE", "padValue": 0.0 } }
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[serde(default)]
+#[serde(rename_all = "camelCase")]
+pub struct TranslateImageSettings {
+    /// Shift down (+) or up (−) in pixels; fractions allowed.
+    #[schemars(range(min = -1000, max = 1000))]
+    pub dy: f64,
+    /// Shift right (+) or left (−) in pixels; fractions allowed.
+    #[schemars(range(min = -1000, max = 1000))]
+    pub dx: f64,
+    /// How pixel values between grid positions are computed.
+    pub interpolation: SpartialTransformTranslateImageInterpolationSettings,
+    /// What fills the strip that the shift empties at the image edge.
+    pub padding: SpartialTransformTranslateImagePaddingSettings,
+    /// Fill value for padding = Constant.
+    #[schemars(range(min = -65535, max = 65535))]
+    pub pad_value: f32,
+}
+
+impl Default for TranslateImageSettings {
+    fn default() -> Self {
+        Self {
+            dy: 0.0f64,
+            dx: 0.0f64,
+            interpolation: SpartialTransformTranslateImageInterpolationSettings::Linear,
+            padding: SpartialTransformTranslateImagePaddingSettings::Replicate,
+            pad_value: 0.0f32,
+        }
+    }
 }
 
 /// Highlights lines (fibres, neurites, vessels) of the given widths, so a

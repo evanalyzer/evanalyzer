@@ -50,6 +50,13 @@ fn configured(command: PipelineCommand) -> PipelineCommand {
             sigma: 1.0,
             ..s
         }),
+        // The defaults shift by 0 (a copy): measure the interpolation.
+        C::TranslateImage(s) => C::TranslateImage(TranslateImageSettings {
+            dy: 0.5,
+            dx: -1.2,
+            interpolation: SpartialTransformTranslateImageInterpolationSettings::Cubic,
+            ..s
+        }),
         C::WeightedDeviation(_) => C::WeightedDeviation(WeightedDeviationSettings {
             kernel_size: 5,
             sigma: 1.0,

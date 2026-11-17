@@ -405,7 +405,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         Measure,
         Dataset,
     ];
-    let expected: [(&str, &[CommandCategory]); 72] = [
+    let expected: [(&str, &[CommandCategory]); 73] = [
         ("AI Object Classifier", &[Object, Measure, Dataset]),
         ("Bandpass", &[Segment, Preprocess]),
         ("Blur", &[Segment, Preprocess]),
@@ -446,6 +446,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         ("Laplacian of Gaussian", &[Segment, Preprocess]),
         ("LoadAnnotatedObjects", &[Object, Measure, Dataset]),
         ("MedianSubtract", &[Segment, Preprocess]),
+        ("Translate Image", &[Segment, Preprocess]),
         ("MorphologicalCommand", &[Segment, Preprocess]),
         // Measurements first, then dataset steps (which run after every image).
         ("Measure Image Area Occupied", &[Measure, Dataset]),
@@ -828,6 +829,8 @@ fn apply_param_change_dropdown_fields_ignore_unknown_values() {
         ("Rolling Ball", "ball_type", "Paraboloid"),
         ("SaveImage", "source", "Instance Map"),
         ("StructureTensor", "mode", "Coherence"),
+        ("Translate Image", "interpolation", "Cubic"),
+        ("Translate Image", "padding", "Reflect"),
         (
             "AI UNet Segmentation",
             "output_mode",
@@ -1107,6 +1110,13 @@ fn apply_param_change_numeric_fields_ignore_unparsable_values() {
     cmd.apply_param_change("radius", "12.5");
     cmd.apply_param_change("radius", "not_a_number");
     assert_eq!(param_value(&cmd, "radius"), "12.5");
+
+    let mut cmd = default_command(id_of("Translate Image")).unwrap(); // dy, dx: f64
+    cmd.apply_param_change("dy", "-0.75");
+    cmd.apply_param_change("dx", "1.25");
+    cmd.apply_param_change("dy", "not_a_number");
+    assert_eq!(param_value(&cmd, "dy"), "-0.75");
+    assert_eq!(param_value(&cmd, "dx"), "1.25");
 }
 
 #[test]
