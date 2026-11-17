@@ -13,7 +13,7 @@ import { MatrixCell, MatrixLevel, ObjectMarker, ResultsState } from "../api/resu
 
 import { Ink } from "../ink/palette.slint";
 
-import { FilterPill, LegendBar, SettingsGroup } from "results_common.slint";
+import { ColocCountRow, FilterPill, LegendBar, SettingsGroup } from "results_common.slint";
 import { InkMultiSelect } from "../ink/ink.slint";
 
 component MatrixCellView inherits Rectangle {
@@ -558,6 +558,9 @@ export component ResultsMatrixView inherits Rectangle {
                                 ResultsState.matrix-column-summary = value;
                                 ResultsState.matrix-value-clicked();
                             }
+                        }
+                        if ResultsState.list-coloc-partner-items.length > 0: ColocCountRow {
+                            text: "Coloc counts";
                         }
                         InkMultiSelect {
                             label: "Aggregate";

@@ -1856,7 +1856,8 @@ impl ResultExport {
                     let mut plate_row = 0u32;
 
                     for column in &aggregable_columns {
-                        let column_label = column_display_name(column, &available_columns);
+                        let column_label =
+                            column_display_name(column, &available_columns, &classes_all);
                         for aggregation in &self.aggregations {
                             let plate_grid = plate_grids_iter.next().ok_or_else(|| {
                                 InternalErrors::Io(
@@ -1919,7 +1920,8 @@ impl ResultExport {
                     let mut well_row = 0u32;
 
                     for column in &aggregable_columns {
-                        let column_label = column_display_name(column, &available_columns);
+                        let column_label =
+                            column_display_name(column, &available_columns, &classes_all);
                         for aggregation in &self.aggregations {
                             let mut well_heatmaps = well_heatmaps_iter.next().ok_or_else(|| {
                                 InternalErrors::Io(
@@ -2009,7 +2011,7 @@ impl ResultExport {
         for class in &target_classes {
             let class_label = class_display_label(*class, &classes_all);
             for column in &aggregable_columns {
-                let column_label = column_display_name(column, &available_columns);
+                let column_label = column_display_name(column, &available_columns, &classes_all);
                 for aggregation in &self.aggregations {
                     combo_labels.push(format!(
                         "{class_label} — {column_label} — {}",
@@ -2277,7 +2279,8 @@ impl ResultExport {
                         .iter()
                         .filter(|column| column.is_aggregable() && !column.is_image_measurement())
                     {
-                        let column_label = column_display_name(column, &available_columns);
+                        let column_label =
+                            column_display_name(column, &available_columns, &classes_all);
                         for aggregation in &self.aggregations {
                             let caption =
                                 format!("{column_label} — {}", aggregation_label(aggregation));
@@ -3061,13 +3064,18 @@ fn write_cell(
 /// `Column`'s human-readable label, matching `get_available_columns()`'s
 /// own `display_name` for that column — falls back to the raw db key
 /// (`Column::as_key`) for a column this database's `available_columns`
-/// doesn't (or no longer) list, e.g. stale export settings.
-fn column_display_name(column: &Column, available_columns: &[ColumnEntry]) -> String {
+/// doesn't list - a coloc combination (`Column::Coloc`) or stale export
+/// settings - its own label with the class names.
+fn column_display_name(
+    column: &Column,
+    available_columns: &[ColumnEntry],
+    classes: &[evanalyzer_cfg::settings::classification_settings::Class],
+) -> String {
     available_columns
         .iter()
         .find(|entry| entry.key == *column)
         .map(|entry| entry.display_name.clone())
-        .unwrap_or_else(|| column.display_label(&[]))
+        .unwrap_or_else(|| column.display_label(classes))
 }
 
 fn aggregation_label(aggregation: &Aggregation) -> &'static str {

@@ -748,6 +748,8 @@ impl ResultsStateController {
 
     /// Every control of List, Plate and Charts as the filters are.
     pub(super) fn push_view_controls_in_slint(&self) {
+        // A view's coloc columns count as they did.
+        self.sync_coloc_with_columns();
         let classes = self.classes.lock().expect("Poisoned").clone();
         let available = self.available_columns.lock().expect("Poisoned").clone();
         let list = {
@@ -847,7 +849,7 @@ impl ResultsStateController {
             list_summary(child_aggregations.len(), AGGREGATIONS.len(), "Aggregations");
         let has_partners = available
             .iter()
-            .any(|entry| matches!(entry.key, Column::ColocCount(_)));
+            .any(|entry| super::coloc::is_coloc_column(&entry.key));
         let columns_summary = list_summary(
             column_items_list
                 .iter()
@@ -1055,6 +1057,8 @@ impl ResultsStateController {
             });
         })
         .ok();
+        // After the flat list above: the sections and the coloc box.
+        self.push_list_columns();
     }
 
     /// The note over the results: what the view names but this analysis

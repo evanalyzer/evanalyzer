@@ -147,7 +147,9 @@ pub mod results {
     pub use crate::api::color_scale_gradient;
     pub use crate::api::view_settings;
     pub use crate::api::{ChannelDisplay, DrawBrightness, DrawStyle, DrawnImages, ImageDisplay};
-    pub use crate::api::{ChildColumn, ChildValue, ParentColumn, ParentValue, RelatedTo};
+    pub use crate::api::{
+        ChildColumn, ChildValue, ColocColumn, ColocMatch, ParentColumn, ParentValue, RelatedTo,
+    };
     pub use crate::api::{
         ImageObjectsFilter, ImageTracks, ImageTracksFilter, LineageEvent, ResultObject,
         TrackFromStart, TrackLineage, TrackMotion, TrackPath, TrackPaths, TrackPathsFilter,

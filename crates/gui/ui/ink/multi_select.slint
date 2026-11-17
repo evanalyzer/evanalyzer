@@ -512,21 +512,35 @@ export component InkMultiSelect inherits Rectangle {
 /// how many are chosen, All / None, a search (`searchable`), the list with a
 /// checkbox each (it scrolls past `list-height`). Same items and callbacks
 /// as `InkMultiSelect` - the popup's list, open.
+/// `collapsible`: a caret before the title folds the list away (`open`,
+/// `toggled`) - the title and All / None stay.
 export component InkCheckList inherits VerticalLayout {
     in property <string> title;
     in-out property <[MultiSelectItem]> items;
     in property <bool> searchable: false;
     in-out property <string> filter-text;
     in property <length> list-height: 132px;
+    in property <bool> collapsible: false;
+    in-out property <bool> open: true;
     callback item-selected(string, string, bool);
     callback select-all();
     callback select-none();
     callback filter-changed(string);
+    callback toggled(bool);
 
     spacing: 4px;
 
     HorizontalLayout {
         spacing: 8px;
+        if root.collapsible: Rectangle {
+            width: 12px;
+            Image {
+                source: root.open ? InkIcons.caret-down : InkIcons.caret-right;
+                width: 10px;
+                height: 10px;
+                colorize: Ink.text-mute;
+            }
+        }
         Text {
             horizontal-stretch: 1;
             // A long title shortens itself rather than widening the
@@ -537,8 +551,16 @@ export component InkCheckList inherits VerticalLayout {
             font-size: Ink.fs-caption;
             font-weight: 600;
             letter-spacing: 0.6px;
-            color: Ink.text-mute;
+            color: fold-ta.has-hover ? Ink.text : Ink.text-mute;
             vertical-alignment: center;
+            fold-ta := TouchArea {
+                enabled: root.collapsible;
+                mouse-cursor: root.collapsible ? pointer : default;
+                clicked => {
+                    root.open = !root.open;
+                    root.toggled(root.open);
+                }
+            }
         }
         Text {
             text: "All";
@@ -564,7 +586,7 @@ export component InkCheckList inherits VerticalLayout {
         }
     }
 
-    if root.searchable: InkSearchField {
+    if root.searchable && root.open: InkSearchField {
         text: root.filter-text;
         placeholder: "Search";
         edited(t) => {
@@ -573,7 +595,7 @@ export component InkCheckList inherits VerticalLayout {
         }
     }
 
-    Rectangle {
+    if root.open: Rectangle {
         height: min(root.list-height, root.items.length * 24px + 4px);
         border-radius: Ink.radius-sm;
         border-width: 1px;

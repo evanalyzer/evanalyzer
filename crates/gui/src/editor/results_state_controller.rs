@@ -11,6 +11,7 @@ use crate::editor::images_list_controller::ImagesListController;
 use crate::editor::viewport_controller::ViewportController;
 use crate::helper::delayed_indicator::DelayedIndicator;
 
+mod coloc;
 mod paths;
 pub(crate) mod split;
 mod tracks;
@@ -538,7 +539,17 @@ pub struct ResultsStateController {
     list_page_cursors: Mutex<Vec<Option<String>>>,
     classes: Mutex<Vec<Class>>,
     images: Mutex<Vec<ImageEntry>>,
+    /// The columns the pickers offer: the results' (`raw_columns`) with
+    /// the coloc combinations of `coloc_settings` (`coloc::offered_columns`).
     available_columns: Mutex<Vec<ColumnEntry>>,
+    /// The results' own columns (`get_available_columns`).
+    raw_columns: Mutex<Vec<ColumnEntry>>,
+    coloc_settings: Mutex<coloc::ColocSettings>,
+    /// The sidebar's column sections folded (false) or opened by hand, by
+    /// group - else open while one of its columns is chosen.
+    column_sections_open: Mutex<HashMap<String, bool>>,
+    /// The sidebar's column search.
+    column_filter: Mutex<String>,
     /// The results' profile measurements (Charts › Profile, its export).
     profile_columns: Mutex<Vec<MeasurementColumn>>,
     /// Charts › Profile's selected object's circles on the split view.
@@ -661,6 +672,10 @@ impl ResultsStateController {
             classes: Mutex::new(Vec::new()),
             images: Mutex::new(Vec::new()),
             available_columns: Mutex::new(Vec::new()),
+            raw_columns: Mutex::new(Vec::new()),
+            coloc_settings: Mutex::new(coloc::ColocSettings::default()),
+            column_sections_open: Mutex::new(HashMap::new()),
+            column_filter: Mutex::new(String::new()),
             profile_columns: Mutex::new(Vec::new()),
             profile_rings: Mutex::new(None),
             profile_pos: Mutex::new((0, 0)),
@@ -700,6 +715,7 @@ impl ResultsStateController {
         if let Some(ui) = ui_handle.upgrade() {
             self.attach_split_callbacks(&ui);
             self.attach_views_callbacks(&ui);
+            self.attach_coloc_callbacks(&ui);
             self.attach_tracks_callbacks(&ui);
             self.attach_tracks_all_callbacks(&ui);
             self.attach_paths_callbacks(&ui);
@@ -951,9 +967,8 @@ impl ResultsStateController {
                     } else {
                         list_filter.columns.retain(|c| c != &column);
                     }
-                    let selected_count = list_filter.columns.len();
                     drop(list_filter);
-                    manager.push_columns_summary(selected_count);
+                    manager.push_list_columns();
                     manager.refresh_list();
                 });
 
@@ -2831,6 +2846,7 @@ impl ResultsStateController {
         self.classes.lock().expect("Poisoned").clear();
         self.images.lock().expect("Poisoned").clear();
         self.available_columns.lock().expect("Poisoned").clear();
+        self.raw_columns.lock().expect("Poisoned").clear();
         self.matrix_cells.lock().expect("Poisoned").clear();
         self.well_cells.lock().expect("Poisoned").clear();
         self.image_heatmap_cells.lock().expect("Poisoned").clear();
@@ -2968,7 +2984,8 @@ impl ResultsStateController {
                 };
 
                 match results.get_available_columns() {
-                    Ok(columns) => {
+                    Ok(raw) => {
+                        let columns = self.set_raw_columns(raw);
                         self.set_columns_in_slint(&columns);
                         let has_measurements = columns
                             .iter()
@@ -5085,6 +5102,7 @@ impl ResultsStateController {
             }
         })
         .ok();
+        self.push_list_columns();
     }
 
     pub fn set_color_schemas_in_slint(&self) {
@@ -5242,22 +5260,6 @@ impl ResultsStateController {
         .ok();
     }
 
-    fn push_columns_summary(&self, selected: usize) {
-        let total = self.available_columns.lock().expect("Poisened").len();
-        let text = list_summary(selected, total, "Columns");
-        let ui_weak = self.ui.clone();
-        crate::helper::ui_thread::invoke_from_event_loop(move || {
-            if let Some(ui_ready) = ui_weak.upgrade() {
-                ui_ready
-                    .global::<ResultsState>()
-                    .set_list_columns_summary(text);
-            } else {
-                warn!("Failed to upgrade UI handle, cannot update the columns summary!");
-            }
-        })
-        .ok();
-    }
-
     fn select_all_images(self: &Arc<Self>) {
         let images = self.images.lock().expect("Poisened");
         let items = image_items(&images, true);
@@ -5374,44 +5376,22 @@ impl ResultsStateController {
     }
 
     fn select_all_columns(self: &Arc<Self>) {
-        let columns = self.available_columns.lock().expect("Poisened");
-        let classes = self.classes.lock().expect("Poisened");
-        let items = column_items(&columns, &classes, |_| true);
-        drop(classes);
-        let total = columns.len();
-        let keys = columns.iter().map(|entry| entry.key.clone()).collect();
-        drop(columns);
+        let keys = self
+            .available_columns
+            .lock()
+            .expect("Poisened")
+            .iter()
+            .map(|entry| entry.key.clone())
+            .collect();
         self.list_filter.lock().expect("Poisened").columns = keys;
-        self.push_columns_items(items, list_summary(total, total, "Columns"));
+        self.push_list_columns();
         self.refresh_list();
     }
 
     fn select_none_columns(self: &Arc<Self>) {
-        let columns = self.available_columns.lock().expect("Poisened");
-        let classes = self.classes.lock().expect("Poisened");
-        let items = column_items(&columns, &classes, |_| false);
-        drop(classes);
-        let total = columns.len();
-        drop(columns);
         self.list_filter.lock().expect("Poisened").columns = Vec::new();
-        self.push_columns_items(items, list_summary(0, total, "Columns"));
+        self.push_list_columns();
         self.refresh_list();
-    }
-
-    // Only the List view's own columns dropdown — `matrix-column-items` is a
-    // separate, single-column aggregation picker for the Matrix view.
-    fn push_columns_items(&self, items: Vec<MultiSelectItem>, summary: slint::SharedString) {
-        let ui_weak = self.ui.clone();
-        crate::helper::ui_thread::invoke_from_event_loop(move || {
-            if let Some(ui_ready) = ui_weak.upgrade() {
-                let state = ui_ready.global::<ResultsState>();
-                state.set_list_columns(ModelRc::from(Rc::new(VecModel::from(items))));
-                state.set_list_columns_summary(summary);
-            } else {
-                warn!("Failed to upgrade UI handle, cannot update the columns list!");
-            }
-        })
-        .ok();
     }
 
     // Seeds `ExportDialogState` from whatever's currently selected in the
@@ -5541,7 +5521,10 @@ impl ResultsStateController {
         }
         let column_items_vec = column_items(&dialog_columns, &classes, |key| columns.contains(key));
         let column_groups_vec = column_groups(&dialog_columns);
-        let column_summary = list_summary(columns.len(), dialog_columns.len(), "Columns");
+        // Taken from the table on open (a change in the dialog says how
+        // many of how many instead).
+        let column_summary: slint::SharedString =
+            format!("As in the table · {}", columns.len()).into();
 
         let aggregation_items_vec = aggregation_items(&aggregations);
         let aggregation_summary =
@@ -7980,6 +7963,121 @@ pub(crate) mod tests {
         assert!(controller.list_filter.lock().unwrap().with_coloc_details);
         state.invoke_list_group_by_selected("objects".into());
         assert!(!controller.list_filter.lock().unwrap().with_coloc_details);
+    }
+
+    /// The sidebar's coloc box: the partner classes, objects or partners,
+    /// the combinations in their sections - the chosen columns follow
+    /// Objects / Partners; a section's All and the search.
+    #[test]
+    fn the_coloc_box_offers_the_combinations_and_counts_objects_or_partners() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("results.evadb");
+        seed_test_db(&path);
+        let ui = test_ui_window();
+        let controller = make_controller_with_ui(ui.as_weak());
+        controller.attach_callbacks();
+        controller.open_database(path);
+        drain_ui_queue();
+        let state = ui.global::<ResultsState>();
+        let values = |items: slint::ModelRc<MultiSelectItem>| -> Vec<String> {
+            items.iter().map(|item| item.value.to_string()).collect()
+        };
+        let coloc_sections = || -> Vec<(String, Vec<String>)> {
+            state
+                .get_list_coloc_sections()
+                .iter()
+                .map(|section| (section.group.to_string(), values(section.items)))
+                .collect()
+        };
+        let headers = || -> Vec<String> {
+            state
+                .get_list_column_headers()
+                .iter()
+                .map(|h| h.to_string())
+                .collect()
+        };
+        let class_b = ObjectClass::Global(2);
+
+        // The seeded ClassA object touches ClassB: objects counted first.
+        assert_eq!(values(state.get_list_coloc_partner_items()), ["ClassB"]);
+        assert_eq!(state.get_list_coloc_count(), 0);
+        assert_eq!(
+            coloc_sections(),
+            [
+                ("Coloc".to_string(), vec!["Coloc with ClassB".to_string()]),
+                (
+                    "Coloc · exactly".to_string(),
+                    vec![
+                        "Coloc with exactly ClassB".to_string(),
+                        "Coloc with no class".to_string()
+                    ]
+                ),
+            ]
+        );
+        assert!(
+            state
+                .get_list_column_sections()
+                .iter()
+                .all(|section| !section.group.starts_with("Coloc")),
+            "the coloc columns only in their box"
+        );
+
+        state.invoke_list_columns_select_none();
+        state.invoke_list_columns_item_selected("coloc:atleast:objects:2".into(), true);
+        drain_ui_queue();
+        assert_eq!(headers(), ["Coloc with ClassB"]);
+        assert_eq!(state.get_list_coloc_title().as_str(), "COLOC · 1 of 3");
+
+        // Partners: the chosen column counts them now.
+        state.invoke_list_coloc_count_picked(1);
+        drain_ui_queue();
+        assert_eq!(
+            controller.list_filter.lock().unwrap().columns,
+            [Column::ColocCount(class_b)]
+        );
+        assert_eq!(headers(), ["Coloc with ClassB"]);
+        assert_eq!(state.get_list_coloc_count(), 1);
+
+        // A section's All: every "exactly" column - no "no class" while
+        // counting partners.
+        state.invoke_list_columns_section_select("Coloc · exactly".into(), true);
+        drain_ui_queue();
+        assert_eq!(
+            headers(),
+            ["Coloc with ClassB", "Coloc with exactly ClassB"]
+        );
+
+        // Without ClassB as a partner class, no coloc column is left.
+        state.invoke_list_coloc_partner_toggled("2".into());
+        drain_ui_queue();
+        assert!(controller.list_filter.lock().unwrap().columns.is_empty());
+        assert!(coloc_sections().is_empty());
+        state.invoke_list_coloc_partner_toggled("2".into());
+        drain_ui_queue();
+
+        // The search narrows every section, the coloc ones too.
+        state.invoke_list_columns_filter_changed("area".into());
+        drain_ui_queue();
+        let shown: Vec<String> = state
+            .get_list_column_sections()
+            .iter()
+            .flat_map(|section| values(section.items))
+            .collect();
+        assert!(!shown.is_empty());
+        assert!(
+            shown
+                .iter()
+                .all(|value| value.to_lowercase().contains("area"))
+        );
+        assert!(coloc_sections().is_empty());
+        assert!(
+            state
+                .get_list_column_sections()
+                .iter()
+                .all(|section| section.open),
+            "open while searching"
+        );
+        drop(dir);
     }
 
     /// The split drawer's Classes panel: the analysis' classes, shown; an

@@ -4,7 +4,7 @@
 // results_common.slint — what the results views share: the Z/T plane
 // stepper (Z/T is a filter for every view), the legend bar, and the filter
 // pills.
-import { InkButton, InkButtonKind } from "../ink/ink.slint";
+import { InkButton, InkButtonKind, InkSegmented } from "../ink/ink.slint";
 import { BreadcrumbItem, ResultsRailMode, ResultsState } from "../api/results.slint";
 
 
@@ -413,5 +413,30 @@ export component SettingsGroup inherits VerticalLayout {
     InkCaption {
         text: root.title;
         color: Ink.text-dim;
+    }
+}
+
+/// How the coloc columns count - objects (1 / 0 per object) or their
+/// partner objects - the one setting of List, Plate and Charts.
+export component ColocCountRow inherits HorizontalLayout {
+    in property <string> text: "Count";
+    spacing: 8px;
+    Text {
+        text: root.text;
+        font-size: Ink.fs-secondary;
+        color: Ink.text-dim;
+        vertical-alignment: center;
+        horizontal-stretch: 1;
+    }
+    InkSegmented {
+        label: root.text;
+        model: ["Objects", "Partners"];
+        selected: ResultsState.list-coloc-count;
+        tips: ["1 for an object that colocalizes, else 0", "The number of partner objects"];
+        tip-details: ["Sum: how many objects · Mean: their share", ""];
+        picked(i) => {
+            ResultsState.list-coloc-count = i;
+            ResultsState.list-coloc-count-picked(i);
+        }
     }
 }

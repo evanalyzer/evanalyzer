@@ -62,6 +62,59 @@ pub struct MeasurementColumn {
     pub per_object: bool,
 }
 
+/// How a [`ColocColumn`] matches an object's partner classes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum ColocMatch {
+    /// A partner of each of `with` (others may be there too).
+    AtLeast,
+    /// A partner of each of `with` and of none of the other `among`.
+    Exactly,
+}
+
+/// Colocalization with a combination of partner classes: "Coloc with at
+/// least Class B, C", "Coloc with exactly Class B, C", "Coloc with no
+/// class" - read from `coloc_partner_ids`. A single class with
+/// [`ColocMatch::AtLeast`] is "Coloc with Class B"; its partner count is
+/// [`Column::ColocCount`] (see [`Column::coloc`]).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ColocColumn {
+    pub how: ColocMatch,
+    /// The partner classes, sorted. Empty with `Exactly`: a partner of none
+    /// of `among` ("Coloc with no class").
+    pub with: Vec<ObjectClass>,
+    /// `Exactly`: the classes looked at (sorted) - a partner of a class
+    /// outside them doesn't matter. Empty with `AtLeast`.
+    pub among: Vec<ObjectClass>,
+    /// The number of partner objects of `with` (0 without a match), else 1
+    /// for an object that matches and 0 for one that doesn't - so its Sum
+    /// is the number of objects and its Mean their share.
+    pub partners: bool,
+}
+
+impl Ord for ColocColumn {
+    /// Each class, at least, exactly; fewer classes first.
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let rank = |c: &Self| {
+            (
+                c.how,
+                c.how == ColocMatch::Exactly && c.with.is_empty(),
+                c.partners,
+                c.with.len(),
+            )
+        };
+        rank(self)
+            .cmp(&rank(other))
+            .then_with(|| self.with.cmp(&other.with))
+            .then_with(|| self.among.cmp(&other.among))
+    }
+}
+
+impl PartialOrd for ColocColumn {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Column {
     // The order the List shows them in (`Ord`): the image first.
@@ -94,7 +147,10 @@ pub enum Column {
     EquivalentDiameter,
     /// The area over the bounding box's.
     Extent,
+    /// The number of partner objects of a class ("Coloc with Class B").
     ColocCount(ObjectClass),
+    /// Colocalization with a combination of classes.
+    Coloc(ColocColumn),
     IntensityAvg(u32),
     IntensitySum(u32),
     IntensityMin(u32),
@@ -131,6 +187,30 @@ fn class_from_key_part(part: &str) -> Option<ObjectClass> {
         "unset" => Some(ObjectClass::Unset),
         n => n.parse().ok().map(ObjectClass::Global),
     }
+}
+
+/// The classes of a [`Column::Coloc`] key part: `2,3`.
+fn classes_key_part(classes: &[ObjectClass]) -> String {
+    classes
+        .iter()
+        .map(class_key_part)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn classes_from_key_part(part: &str) -> Option<Vec<ObjectClass>> {
+    if part.is_empty() {
+        return Some(Vec::new());
+    }
+    part.split(',').map(class_from_key_part).collect()
+}
+
+/// "Class B, C" - the class names joined.
+fn classes_label(with: &[ObjectClass], classes: &[Class]) -> String {
+    with.iter()
+        .map(|class| class_label(class, classes))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// An aggregation in a key.
@@ -191,6 +271,35 @@ const MEASUREMENT_KEY_PREFIX: &str = "measurement:";
 const MEASUREMENT_OBJECT_KEY_PREFIX: &str = "measurement_object:";
 
 impl Column {
+    /// The coloc column of a combination - [`Column::ColocCount`] for the
+    /// partners of a single class (the one column for it), else
+    /// [`Column::Coloc`]. Sorts `with` and `among`; `among` only counts for
+    /// `Exactly`.
+    pub fn coloc(
+        how: ColocMatch,
+        mut with: Vec<ObjectClass>,
+        mut among: Vec<ObjectClass>,
+        partners: bool,
+    ) -> Self {
+        with.sort();
+        with.dedup();
+        if how == ColocMatch::AtLeast {
+            among.clear();
+            if partners && with.len() == 1 {
+                return Column::ColocCount(with[0]);
+            }
+        } else {
+            among.sort();
+            among.dedup();
+        }
+        Column::Coloc(ColocColumn {
+            how,
+            with,
+            among,
+            partners,
+        })
+    }
+
     /// Stable string key (matches the underlying database column name, with
     /// a `_ch{n}` suffix for the per-channel intensity variants) used to
     /// store this variant in UI widgets that only accept strings, e.g. the
@@ -235,6 +344,20 @@ impl Column {
             }
             Column::ColocCount(ObjectClass::Unset | ObjectClass::Local(_)) => {
                 "n_colocalized_unset".to_string()
+            }
+            // coloc:<atleast|exactly>:<objects|partners>:<with>[:<among>]
+            Column::Coloc(c) => {
+                let how = match c.how {
+                    ColocMatch::AtLeast => "atleast",
+                    ColocMatch::Exactly => "exactly",
+                };
+                let count = if c.partners { "partners" } else { "objects" };
+                let mut key = format!("coloc:{how}:{count}:{}", classes_key_part(&c.with));
+                if c.how == ColocMatch::Exactly {
+                    key.push(':');
+                    key.push_str(&classes_key_part(&c.among));
+                }
+                key
             }
             Column::IntensityAvg(channel) => format!("intensity_mean_gray_ch{channel}"),
             Column::IntensitySum(channel) => format!("intensity_sum_gray_ch{channel}"),
@@ -322,14 +445,26 @@ impl Column {
             Column::MinorAxis => "Minor Axis [px]".to_string(),
             Column::EquivalentDiameter => "Equivalent Diameter [px]".to_string(),
             Column::Extent => "Extent".to_string(),
-            Column::ColocCount(class_id) => classes
-                .iter()
-                .find(|class| class.global() == *class_id)
-                .map(|class| format!("Coloc with {}", class.name))
-                .unwrap_or_else(|| match class_id {
-                    ObjectClass::Global(n) => format!("Coloc with class {n}"),
-                    ObjectClass::Unset | ObjectClass::Local(_) => "Coloc with unset".to_string(),
-                }),
+            // Objects and partners read the same: the view's Count says
+            // which (short headers, asked for).
+            Column::ColocCount(class_id) => {
+                format!("Coloc with {}", class_label(class_id, classes))
+            }
+            Column::Coloc(c) => {
+                let prefix = "Coloc with";
+                match (c.how, c.with.len()) {
+                    (ColocMatch::Exactly, 0) => format!("{prefix} no class"),
+                    (ColocMatch::AtLeast, 1) => {
+                        format!("{prefix} {}", classes_label(&c.with, classes))
+                    }
+                    (ColocMatch::AtLeast, _) => {
+                        format!("{prefix} at least {}", classes_label(&c.with, classes))
+                    }
+                    (ColocMatch::Exactly, _) => {
+                        format!("{prefix} exactly {}", classes_label(&c.with, classes))
+                    }
+                }
+            }
             Column::IntensityAvg(channel) => format!("Avg Intensity (Ch {channel})"),
             Column::IntensitySum(channel) => format!("Sum Intensity (Ch {channel})"),
             Column::IntensityMin(channel) => format!("Min Intensity (Ch {channel})"),
@@ -428,6 +563,25 @@ impl Column {
                 parent_class: class_from_key_part(class)?,
                 value,
             }));
+        }
+        if let Some(rest) = key.strip_prefix("coloc:") {
+            let mut parts = rest.splitn(4, ':');
+            let how = match parts.next()? {
+                "atleast" => ColocMatch::AtLeast,
+                "exactly" => ColocMatch::Exactly,
+                _ => return None,
+            };
+            let partners = match parts.next()? {
+                "partners" => true,
+                "objects" => false,
+                _ => return None,
+            };
+            let with = classes_from_key_part(parts.next()?)?;
+            let among = match how {
+                ColocMatch::Exactly => classes_from_key_part(parts.next()?)?,
+                ColocMatch::AtLeast => Vec::new(),
+            };
+            return Some(Column::coloc(how, with, among, partners));
         }
         if let Some(name) = key.strip_prefix("n_colocalized_class_") {
             let class_id = classes.iter().find(|class| class.name == name)?.global();

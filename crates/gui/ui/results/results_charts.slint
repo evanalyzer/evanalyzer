@@ -8,7 +8,7 @@
 // into `ResultsState.chart-*`) in the stretch area below.
 import { ResultsChartKind2, ResultsState } from "../api/results.slint";
 import { InkSegmented, InkHint, InkNumberField, InkSwitch, InkButton, InkButtonKind } from "../ink/ink.slint";
-import { SettingsGroup } from "results_common.slint";
+import { ColocCountRow, SettingsGroup } from "results_common.slint";
 import { ComboBox } from "../ink/std_compat.slint";
 
 import { ScrollView } from "std-widgets.slint";
@@ -654,6 +654,7 @@ export component ResultsChartsView inherits Rectangle {
                         summary-text: ResultsState.chart-column-summary;
                         items <=> ResultsState.chart-column-items;
                         multi-select: false;
+                        groups: ResultsState.list-columns-groups;
                         pill-width: root.field-w;
                         item-selected(key, value, selected) => {
                             ResultsState.chart-column-summary = value;
@@ -665,11 +666,15 @@ export component ResultsChartsView inherits Rectangle {
                         summary-text: ResultsState.chart-y-column-summary;
                         items <=> ResultsState.chart-y-column-items;
                         multi-select: false;
+                        groups: ResultsState.list-columns-groups;
                         pill-width: root.field-w;
                         item-selected(key, value, selected) => {
                             ResultsState.chart-y-column-summary = value;
                             ResultsState.chart-y-column-selected(key);
                         }
+                    }
+                    if ResultsState.chart-kind != ResultsChartKind2.profile && ResultsState.list-coloc-partner-items.length > 0: ColocCountRow {
+                        text: "Coloc counts";
                     }
                     if ResultsState.chart-kind == ResultsChartKind2.boxplot: VerticalLayout {
                         spacing: 4px;

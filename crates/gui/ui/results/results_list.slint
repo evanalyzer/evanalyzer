@@ -4,13 +4,108 @@
 // results_list.slint — the results as a table (a row per object or per
 // image), with what to show and how in the settings column on the right.
 import { InkButton, InkButtonKind, InkCheckbox, InkIconButton, InkIcons, InkHint } from "../ink/ink.slint";
-import { SettingsGroup } from "results_common.slint";
-import { ResultRow, ResultsState } from "../api/results.slint";
+import { ColocCountRow, SettingsGroup } from "results_common.slint";
+import { ColumnSection, ResultRow, ResultsState } from "../api/results.slint";
 
 import { ScrollView } from "std-widgets.slint";
 import { Ink } from "../ink/palette.slint";
 
-import { InkCheckList, InkMultiSelect, InkSwitch, InkTipSide, InkTipZone } from "../ink/ink.slint";
+import { InkCheckList, InkMultiSelect, InkSearchField, InkSwitch, InkTipSide, InkTipZone } from "../ink/ink.slint";
+
+/// A section of the column picker: its columns' checklist, foldable.
+component ColumnSectionList inherits InkCheckList {
+    in property <ColumnSection> section;
+    title: root.section.title;
+    items: root.section.items;
+    open: root.section.open;
+    collapsible: true;
+    list-height: 156px;
+    toggled(open) => {
+        ResultsState.list-columns-section-toggled(root.section.group, open);
+    }
+    item-selected(key, value, selected) => {
+        ResultsState.list-columns-item-selected(key, selected);
+    }
+    select-all => {
+        ResultsState.list-columns-section-select(root.section.group, true);
+    }
+    select-none => {
+        ResultsState.list-columns-section-select(root.section.group, false);
+    }
+}
+
+/// The coloc columns: the partner classes, objects or partners, then with
+/// each class / at least / exactly, only the combinations that occur.
+component ColocColumns inherits Rectangle {
+    in property <length> field-w;
+    border-radius: Ink.radius-md;
+    border-width: 1px;
+    border-color: Ink.border-soft;
+    background: Ink.raised;
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 8px;
+
+        HorizontalLayout {
+            spacing: 8px;
+            Rectangle {
+                width: 12px;
+                Image {
+                    source: ResultsState.list-coloc-open ? InkIcons.caret-down : InkIcons.caret-right;
+                    width: 10px;
+                    height: 10px;
+                    colorize: Ink.text-mute;
+                }
+            }
+            Text {
+                horizontal-stretch: 1;
+                min-width: 0px;
+                overflow: elide;
+                text: ResultsState.list-coloc-title;
+                font-size: Ink.fs-caption;
+                font-weight: 600;
+                letter-spacing: 0.6px;
+                color: coloc-ta.has-hover ? Ink.text : Ink.text-mute;
+                vertical-alignment: center;
+                coloc-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        ResultsState.list-coloc-open = !ResultsState.list-coloc-open;
+                        ResultsState.list-coloc-toggled(ResultsState.list-coloc-open);
+                    }
+                }
+            }
+        }
+
+        if ResultsState.list-coloc-open: VerticalLayout {
+            spacing: 8px;
+            InkMultiSelect {
+                label: "With";
+                summary-text: ResultsState.list-coloc-partner-summary;
+                items <=> ResultsState.list-coloc-partner-items;
+                multi-select: true;
+                pill-width: root.field-w - 16px;
+                item-selected(key, value, selected) => {
+                    ResultsState.list-coloc-partner-toggled(key);
+                }
+            }
+            ColocCountRow { }
+            for section in ResultsState.list-coloc-sections: ColumnSectionList {
+                section: section;
+                list-height: 120px;
+            }
+            InkSwitch {
+                text: "Only combinations that occur";
+                checked: ResultsState.list-coloc-only-occurring;
+                toggled(on) => {
+                    ResultsState.list-coloc-only-occurring = on;
+                    ResultsState.list-coloc-only-occurring-changed(on);
+                }
+            }
+        }
+    }
+}
 
 export component ResultsListView inherits Rectangle {
     property <length> side-w: 280px;
@@ -66,6 +161,7 @@ export component ResultsListView inherits Rectangle {
                             title: "IMAGES · " + ResultsState.list-image-summary;
                             items <=> ResultsState.list-image-items;
                             searchable: true;
+                            collapsible: true;
                             item-selected(key, value, selected) => {
                                 ResultsState.list-image-selected(key, selected);
                             }
@@ -83,6 +179,7 @@ export component ResultsListView inherits Rectangle {
                             title: "CLASSES · " + ResultsState.list-class-summary;
                             items <=> ResultsState.list-class-items;
                             list-height: 108px;
+                            collapsible: true;
                             item-selected(key, value, selected) => {
                                 ResultsState.list-class-selected(key, selected);
                             }
@@ -93,18 +190,67 @@ export component ResultsListView inherits Rectangle {
                                 ResultsState.list-class-select-none();
                             }
                         }
-                        InkCheckList {
-                            title: "COLUMNS · " + ResultsState.list-columns-summary;
-                            items <=> ResultsState.list-columns;
-                            list-height: 156px;
+                    }
+
+                    // The columns in sections, the coloc ones with their
+                    // settings (design canvas "Coloc Combinations", A).
+                    SettingsGroup {
+                        title: "COLUMNS · " + ResultsState.list-columns-summary;
+                        InkSearchField {
+                            text: ResultsState.list-columns-filter;
+                            placeholder: "Find a column";
+                            edited(text) => {
+                                ResultsState.list-columns-filter = text;
+                                ResultsState.list-columns-filter-changed(text);
+                            }
+                        }
+                        for section in ResultsState.list-column-sections: ColumnSectionList {
+                            section: section;
+                        }
+                        if ResultsState.list-coloc-partner-items.length > 0: ColocColumns {
+                            field-w: root.field-w;
+                        }
+                        // Relate Objects' links (design canvas "Object relations
+                        // in the results", board 1 and U1): the children's count
+                        // and aggregates, the parent's values.
+                        if ResultsState.list-children-items.length > 0: InkCheckList {
+                            title: "CHILDREN · " + ResultsState.list-children-summary;
+                            items <=> ResultsState.list-children-items;
+                            list-height: 72px;
+                            collapsible: true;
                             item-selected(key, value, selected) => {
-                                ResultsState.list-columns-item-selected(key, selected);
+                                ResultsState.list-children-selected(key, selected);
                             }
                             select-all => {
-                                ResultsState.list-columns-select-all();
+                                ResultsState.list-children-select-all(true);
                             }
                             select-none => {
-                                ResultsState.list-columns-select-none();
+                                ResultsState.list-children-select-all(false);
+                            }
+                        }
+                        if ResultsState.list-children-items.length > 0: InkMultiSelect {
+                            label: "Of the columns";
+                            summary-text: ResultsState.list-child-aggregate;
+                            items <=> ResultsState.list-child-aggregation-items;
+                            multi-select: true;
+                            pill-width: root.field-w;
+                            item-selected(key, value, selected) => {
+                                ResultsState.list-child-aggregation-selected(key, selected);
+                            }
+                        }
+                        if ResultsState.list-parent-items.length > 0: InkCheckList {
+                            title: "LINKED OBJECTS · " + ResultsState.list-parent-summary;
+                            items <=> ResultsState.list-parent-items;
+                            list-height: 72px;
+                            collapsible: true;
+                            item-selected(key, value, selected) => {
+                                ResultsState.list-parent-selected(key, selected);
+                            }
+                            select-all => {
+                                ResultsState.list-parent-select-all(true);
+                            }
+                            select-none => {
+                                ResultsState.list-parent-select-all(false);
                             }
                         }
                     }
@@ -132,47 +278,6 @@ export component ResultsListView inherits Rectangle {
                             item-selected(key, value, selected) => { ResultsState.list-aggregation-item-selected(key, selected); }
                             select-all => { ResultsState.list-aggregation-select-all(); }
                             select-none => { ResultsState.list-aggregation-select-none(); }
-                        }
-                        // Relate Objects' links (design canvas "Object relations
-                        // in the results", board 1 and U1): the children's count
-                        // and aggregates, the parent's values.
-                        if ResultsState.list-children-items.length > 0: InkCheckList {
-                            title: "CHILDREN · " + ResultsState.list-children-summary;
-                            items <=> ResultsState.list-children-items;
-                            list-height: 72px;
-                            item-selected(key, value, selected) => {
-                                ResultsState.list-children-selected(key, selected);
-                            }
-                            select-all => {
-                                ResultsState.list-children-select-all(true);
-                            }
-                            select-none => {
-                                ResultsState.list-children-select-all(false);
-                            }
-                        }
-                        if ResultsState.list-children-items.length > 0: InkMultiSelect {
-                            label: "Of the columns";
-                            summary-text: ResultsState.list-child-aggregate;
-                            items <=> ResultsState.list-child-aggregation-items;
-                            multi-select: true;
-                            pill-width: root.field-w;
-                            item-selected(key, value, selected) => {
-                                ResultsState.list-child-aggregation-selected(key, selected);
-                            }
-                        }
-                        if ResultsState.list-parent-items.length > 0: InkCheckList {
-                            title: "LINKED OBJECTS · " + ResultsState.list-parent-summary;
-                            items <=> ResultsState.list-parent-items;
-                            list-height: 72px;
-                            item-selected(key, value, selected) => {
-                                ResultsState.list-parent-selected(key, selected);
-                            }
-                            select-all => {
-                                ResultsState.list-parent-select-all(true);
-                            }
-                            select-none => {
-                                ResultsState.list-parent-select-all(false);
-                            }
                         }
                         InkSwitch {
                             text: "Transpose";

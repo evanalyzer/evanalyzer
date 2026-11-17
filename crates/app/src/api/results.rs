@@ -16,7 +16,10 @@ pub mod view_settings;
 
 pub(crate) use colors::value_to_color;
 pub use colors::{COLOR_SCALE_GRADIENT_STOPS, color_scale_gradient};
-pub use column::{ChildColumn, ChildValue, Column, MeasurementColumn, ParentColumn, ParentValue};
+pub use column::{
+    ChildColumn, ChildValue, ColocColumn, ColocMatch, Column, MeasurementColumn, ParentColumn,
+    ParentValue,
+};
 use evanalyzer_cfg::core_types::ObjectClass;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

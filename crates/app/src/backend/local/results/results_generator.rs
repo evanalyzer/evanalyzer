@@ -51,7 +51,7 @@ pub(super) struct GroupingSql {
 pub struct ResultsGenerator {
     database: evanalyzer_core::ResultsConnection,
     classes_cache: RefCell<Option<Vec<Class>>>,
-    coloc_classes_cache: RefCell<Option<Vec<ObjectClass>>>,
+    coloc_classes_cache: RefCell<Option<Vec<Vec<ObjectClass>>>>,
     /// The pattern `Grouping::Auto` picked for this database's images.
     auto_grouping_cache: RefCell<Option<String>>,
     /// The `objects` table's columns - fixed when the results are written.
@@ -279,21 +279,28 @@ impl ResultsGenerator {
             .map(|c| c.display_label(&classes))
             .collect();
 
-        // `ListFilter::with_coloc_details`: every selected `ColocCount(class)`
-        // column crossed with every selected plain-measurement column (see
+        // `ListFilter::with_coloc_details`: every class of a selected coloc
+        // column (`ColocCount`, a combination's `Coloc` - each class once)
+        // crossed with every selected plain-measurement column (see
         // `is_resolvable_metric`) adds one more header — that combination's
         // value resolved on the class's colocalizing partner object instead
         // of the source object. Needs at least one of each to mean anything;
         // with only coloc-class columns selected (no measurement to resolve)
         // or vice versa, list rows are built the same as when the flag is
         // off.
-        let coloc_class_columns: Vec<ObjectClass> = ordered_columns
-            .iter()
-            .filter_map(|c| match c {
-                Column::ColocCount(class) => Some(*class),
-                _ => None,
-            })
-            .collect();
+        let mut coloc_class_columns: Vec<ObjectClass> = Vec::new();
+        for column in &ordered_columns {
+            let classes: &[ObjectClass] = match column {
+                Column::ColocCount(class) => std::slice::from_ref(class),
+                Column::Coloc(c) => &c.with,
+                _ => &[],
+            };
+            for class in classes {
+                if !coloc_class_columns.contains(class) {
+                    coloc_class_columns.push(*class);
+                }
+            }
+        }
         let metric_columns: Vec<Column> = ordered_columns
             .iter()
             .filter(|c| is_resolvable_metric(c))
@@ -2721,20 +2728,30 @@ impl ResultsGenerator {
     /// one object's `coloc_partner_ids` — i.e. the candidates for a
     /// `Column::ColocCount(class)` column, mirroring how
     /// `get_available_columns` enumerates one Avg/Sum/Min/Max intensity
-    /// column per `get_nr_of_c_stacks()` channel. The map is keyed by class
-    /// id directly (see evanalyzer_core's duckdb.rs), so this just needs the
-    /// distinct keys across every non-empty map — no join against `classes`
-    /// required to recover the id itself, only to resolve display names
-    /// later in `get_available_columns`.
-    ///
-    /// Cached after the first call for this opened database (see
-    /// `coloc_classes_cache`), same reasoning as `get_object_classes`: this
-    /// scans every non-empty `coloc_partner_ids` in the table, and the set of
-    /// classes ever recorded as a coloc partner can't change without
-    /// re-exporting (i.e. opening a different database).
+    /// column per `get_nr_of_c_stacks()` channel. The union of
+    /// [`Self::get_coloc_class_sets`].
     pub fn get_object_classes_with_at_least_coloc(
         &self,
     ) -> Result<Vec<ObjectClass>, InternalErrors> {
+        let mut classes: Vec<ObjectClass> =
+            self.get_coloc_class_sets()?.into_iter().flatten().collect();
+        classes.sort();
+        classes.dedup();
+        Ok(classes)
+    }
+
+    /// The combinations of partner classes objects colocalize with - each
+    /// distinct set of `coloc_partner_ids`' keys (sorted), e.g. `[2, 3]` for
+    /// objects with partners of class 2 and 3 and of no other. The map is
+    /// keyed by class id directly (see evanalyzer_core's duckdb.rs) and
+    /// only holds classes with partners.
+    ///
+    /// Cached after the first call for this opened database (see
+    /// `coloc_classes_cache`), same reasoning as `get_object_classes`: this
+    /// scans every non-empty `coloc_partner_ids` in the table, and what was
+    /// recorded can't change without re-exporting (i.e. opening a
+    /// different database).
+    pub fn get_coloc_class_sets(&self) -> Result<Vec<Vec<ObjectClass>>, InternalErrors> {
         if let Some(cached) = self.coloc_classes_cache.borrow().as_ref() {
             return Ok(cached.clone());
         }
@@ -2743,27 +2760,34 @@ impl ResultsGenerator {
         let mut stmt = self
             .database
             .prepare(
-                "SELECT DISTINCT UNNEST(map_keys(coloc_partner_ids)) AS class_key \
+                "SELECT DISTINCT CAST(list_sort(map_keys(coloc_partner_ids)) AS VARCHAR) \
                  FROM objects \
                  WHERE cardinality(coloc_partner_ids) > 0",
             )
             .map_err(err)?;
-        let keys: Vec<i32> = stmt
-            .query_map([], |row| row.get::<_, i32>(0))
+        let lists: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
 
-        let mut classes: Vec<ObjectClass> = keys
-            .into_iter()
-            .filter_map(|key| u32::try_from(key).ok())
-            .map(ObjectClass::Global)
+        // "[2, 3]" - a class key per entry (-1, no class, isn't a column).
+        let mut sets: Vec<Vec<ObjectClass>> = lists
+            .iter()
+            .map(|list| {
+                list.trim_matches(|c| c == '[' || c == ']')
+                    .split(',')
+                    .filter_map(|key| key.trim().parse::<u32>().ok())
+                    .map(ObjectClass::Global)
+                    .collect::<Vec<_>>()
+            })
+            .filter(|set| !set.is_empty())
             .collect();
-        classes.sort();
-        classes.dedup();
+        sets.sort();
+        sets.dedup();
 
-        *self.coloc_classes_cache.borrow_mut() = Some(classes.clone());
-        Ok(classes)
+        *self.coloc_classes_cache.borrow_mut() = Some(sets.clone());
+        Ok(sets)
     }
 
     pub fn get_available_columns(&self) -> Result<Vec<ColumnEntry>, InternalErrors> {
@@ -2805,8 +2829,18 @@ impl ResultsGenerator {
         // per class that actually shows up as a colocalization partner
         // somewhere in this database, rather than a single shared "total
         // across every class" column.
-        for class_id in self.get_object_classes_with_at_least_coloc()? {
-            ret.push(entry(Column::ColocCount(class_id), "Coloc"));
+        let coloc_classes = self.get_object_classes_with_at_least_coloc()?;
+        for class_id in &coloc_classes {
+            ret.push(entry(Column::ColocCount(*class_id), "Coloc"));
+        }
+        // The combinations that occur: "Coloc with exactly" each set of
+        // partner classes found, among all of them - the GUI makes its
+        // combination columns from them (`coloc_columns`).
+        for set in self.get_coloc_class_sets()? {
+            ret.push(entry(
+                Column::coloc(ColocMatch::Exactly, set, coloc_classes.clone(), false),
+                "Coloc",
+            ));
         }
 
         // Intensity is measured per image channel, so there's one Avg/Sum/
@@ -3255,7 +3289,9 @@ impl ObjectColumnNeeds {
             solidity: columns.contains(&Column::Solidity),
             eccentricity: columns.contains(&Column::Eccentricity),
             track_id: columns.contains(&Column::TrackId),
-            coloc: columns.iter().any(|c| matches!(c, Column::ColocCount(_))),
+            coloc: columns
+                .iter()
+                .any(|c| matches!(c, Column::ColocCount(_) | Column::Coloc(_))),
             intensities: columns.iter().any(|c| {
                 matches!(
                     c,
@@ -3838,6 +3874,12 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
             ),
             ..no_bg
         },
+        Column::Coloc(c) => Cell {
+            value: CellValue::Integer(coloc_value(c, |class| {
+                coloc_partners(object, class).map_or(0, |ids| ids.len())
+            }) as i32),
+            ..no_bg
+        },
         Column::IntensitySum(channel) => Cell {
             value: CellValue::Float(intensity_stat(object, IntensityStat::Sum, *channel)),
             ..no_bg
@@ -3924,6 +3966,58 @@ fn coloc_partners(object: &ObjectRow, class: ObjectClass) -> Option<&Vec<String>
         .map(|(_, ids)| ids)
 }
 
+/// A [`Column::Coloc`] value from an object's number of partners per
+/// class (`partners_of`) - what [`coloc_value_expr`] computes in SQL.
+fn coloc_value(c: &ColocColumn, partners_of: impl Fn(ObjectClass) -> usize) -> usize {
+    let matches = c.with.iter().all(|class| partners_of(*class) > 0)
+        && (c.how == ColocMatch::AtLeast
+            || c.among
+                .iter()
+                .filter(|class| !c.with.contains(class))
+                .all(|class| partners_of(*class) == 0));
+    match (matches, c.partners) {
+        (false, _) => 0,
+        (true, false) => 1,
+        (true, true) => c.with.iter().map(|class| partners_of(*class)).sum(),
+    }
+}
+
+/// SQL for a [`Column::Coloc`] value of the row's object (see
+/// [`coloc_value`]): 1 / 0 for whether it matches, or its partners of the
+/// classes when it does.
+fn coloc_value_expr(c: &ColocColumn) -> String {
+    let count = |class: &ObjectClass| {
+        format!(
+            "COALESCE(len(coloc_partner_ids[{}]), 0)",
+            coloc_class_key(*class)
+        )
+    };
+    let mut conditions: Vec<String> = c
+        .with
+        .iter()
+        .map(|class| format!("{} > 0", count(class)))
+        .collect();
+    if c.how == ColocMatch::Exactly {
+        conditions.extend(
+            c.among
+                .iter()
+                .filter(|class| !c.with.contains(class))
+                .map(|class| format!("{} = 0", count(class))),
+        );
+    }
+    let condition = if conditions.is_empty() {
+        "true".to_string()
+    } else {
+        conditions.join(" AND ")
+    };
+    let value = if c.partners && !c.with.is_empty() {
+        c.with.iter().map(count).collect::<Vec<_>>().join(" + ")
+    } else {
+        "1".to_string()
+    };
+    format!("(CASE WHEN {condition} THEN {value} ELSE 0 END)")
+}
+
 /// Position of a statistic in `ObjectRow::intensities`.
 #[derive(Clone, Copy)]
 enum IntensityStat {
@@ -3980,6 +4074,7 @@ pub(super) fn column_aggregate_expr(column: &Column) -> Result<String, InternalE
             "COALESCE(len(coloc_partner_ids[{}]), 0)",
             coloc_class_key(*class)
         ),
+        Column::Coloc(c) => coloc_value_expr(c),
         // Gray values, like the list view; NULL (left out of every
         // aggregate) for a channel the object wasn't measured in.
         Column::IntensitySum(channel) => format!("intensity_sum_gray[{}]", channel + 1),
@@ -6599,6 +6694,133 @@ mod tests {
             .filter(|c| matches!(c.key, Column::ColocCount(_)))
             .collect();
         assert_eq!(coloc_columns.len(), 1);
+    }
+
+    // -- coloc combinations -------------------------------------------------
+
+    /// Class 1 objects (area 10..40) with partners of class 2 and 3: both,
+    /// only 2, only 3 (2 of them), none.
+    fn coloc_combinations() -> ResultsGenerator {
+        let id = |n: u32| format!("00000000-0000-0000-0000-00000000000{n}");
+        open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10).with_coloc(&format!(
+                r#"{{"2":["{}"],"3":["{}","{}"]}}"#,
+                id(5),
+                id(6),
+                id(7)
+            )),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 20)
+                .with_coloc(&format!(r#"{{"2":["{}"]}}"#, id(5))),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 30).with_coloc(&format!(
+                r#"{{"3":["{}","{}"]}}"#,
+                id(6),
+                id(7)
+            )),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 40),
+            ObjectSpec::new("img1.tif", "ClassB", 2, 50),
+            ObjectSpec::new("img1.tif", "ClassC", 3, 60),
+            ObjectSpec::new("img1.tif", "ClassC", 3, 70),
+        ])
+    }
+
+    /// The combinations of the fixture: (column, value per object by area,
+    /// their sum).
+    fn coloc_combination_cases() -> Vec<(Column, [i32; 4], f64)> {
+        let b = ObjectClass::Global(2);
+        let c = ObjectClass::Global(3);
+        let at_least = |partners| Column::coloc(ColocMatch::AtLeast, vec![b, c], vec![], partners);
+        let exactly = |with: Vec<ObjectClass>, partners| {
+            Column::coloc(ColocMatch::Exactly, with, vec![b, c], partners)
+        };
+        vec![
+            (
+                Column::coloc(ColocMatch::AtLeast, vec![b], vec![], false),
+                [1, 1, 0, 0],
+                2.0,
+            ),
+            (Column::ColocCount(c), [2, 0, 2, 0], 4.0),
+            (at_least(false), [1, 0, 0, 0], 1.0),
+            (at_least(true), [3, 0, 0, 0], 3.0),
+            (exactly(vec![b], false), [0, 1, 0, 0], 1.0),
+            (exactly(vec![c], true), [0, 0, 2, 0], 2.0),
+            (exactly(vec![b, c], false), [1, 0, 0, 0], 1.0),
+            (exactly(vec![], false), [0, 0, 0, 1], 1.0),
+        ]
+    }
+
+    #[test]
+    fn coloc_combinations_per_object() {
+        let generator = coloc_combinations();
+        for (column, expected, _) in coloc_combination_cases() {
+            let result = generator
+                .get_object_list(&ListFilter {
+                    plane: plane(),
+                    images: None,
+                    object_classes: Some(vec![ObjectClass::Global(1)]),
+                    columns: vec![Column::AreaSizePx, column.clone()],
+                    with_coloc_details: false,
+                    related_to: None,
+                    page: no_page(),
+                    transpond_table: false,
+                })
+                .unwrap();
+            let mut values: Vec<(i32, i32)> = result
+                .rows
+                .iter()
+                .map(|row| match (&row[0].value, &row[1].value) {
+                    (CellValue::Integer(area), CellValue::Integer(v)) => (*area, *v),
+                    _ => panic!("expected integers"),
+                })
+                .collect();
+            values.sort();
+            let got: Vec<i32> = values.iter().map(|(_, v)| *v).collect();
+            assert_eq!(got, expected, "{column:?}");
+        }
+    }
+
+    /// The SQL of a group (per image) counts as the list does per object.
+    #[test]
+    fn coloc_combinations_summed_per_image() {
+        let generator = coloc_combinations();
+        for (column, _, sum) in coloc_combination_cases() {
+            let result = generator
+                .get_grouped_by_image(&GroupedByImageFilter {
+                    plane: plane(),
+                    images: None,
+                    object_classes: Some(vec![ObjectClass::Global(1)]),
+                    columns: vec![column.clone()],
+                    aggregation: vec![Aggregation::Sum],
+                    page: no_page(),
+                    transpond_table: false,
+                })
+                .unwrap();
+            assert_eq!(number(&result.rows[0][2]), Some(sum), "{column:?}");
+        }
+    }
+
+    #[test]
+    fn the_combinations_that_occur_are_offered() {
+        let generator = coloc_combinations();
+        let b = ObjectClass::Global(2);
+        let c = ObjectClass::Global(3);
+        let sets: Vec<Vec<ObjectClass>> = generator
+            .get_available_columns()
+            .unwrap()
+            .into_iter()
+            .filter_map(|entry| match entry.key {
+                Column::Coloc(ColocColumn {
+                    how: ColocMatch::Exactly,
+                    with,
+                    among,
+                    ..
+                }) => {
+                    assert_eq!(among, vec![b, c]);
+                    Some(with)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sets, vec![vec![b], vec![b, c], vec![c]]);
     }
 
     // -- with_coloc_details fan-out ----------------------------------------

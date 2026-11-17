@@ -7,6 +7,16 @@
 import { MultiSelectItem } from "../ink/ink.slint";
 import { ClassItemData } from "classification.slint";
 
+/// A section of a column picker (Shape, Intensity, ...): its checklist,
+/// titled with how many are chosen, folded or open.
+export struct ColumnSection {
+    // The columns' group (`ColumnEntry::group`) - what the callbacks name.
+    group: string,
+    title: string,
+    open: bool,
+    items: [MultiSelectItem],
+}
+
 // Tracks: only with tracked objects - one image's tracks, beside it.
 export enum ResultsRailMode { list, matrix, charts, tracks, paths, trees }
 
@@ -523,6 +533,19 @@ export global ResultsState {
     in-out property <[MultiSelectItem]> list-columns: [];
     in-out property <[string]> list-columns-groups: [];
     in-out property <string> list-columns-summary: "";
+    // The same columns in sections (the sidebar's picker), the coloc ones
+    // apart (`list-coloc-sections`: with each class, at least, exactly).
+    in-out property <[ColumnSection]> list-column-sections: [];
+    in-out property <string> list-columns-filter: "";
+    in-out property <[ColumnSection]> list-coloc-sections: [];
+    in-out property <string> list-coloc-title: "";
+    in-out property <bool> list-coloc-open: true;
+    // The partner classes the combinations are made of.
+    in-out property <[MultiSelectItem]> list-coloc-partner-items: [];
+    in-out property <string> list-coloc-partner-summary: "";
+    // 0: objects (1 / 0 per object), 1: partner objects.
+    in-out property <int> list-coloc-count: 0;
+    in-out property <bool> list-coloc-only-occurring: true;
 
     // Objects (one row per object, the default) vs Images (one row per
     // image, each selected column aggregated across that image's objects —
@@ -662,6 +685,14 @@ export global ResultsState {
     callback list-columns-item-selected(string, bool);
     callback list-columns-select-all();
     callback list-columns-select-none();
+    // A section's All / None (its group), folded / opened, the search.
+    callback list-columns-section-select(string, bool);
+    callback list-columns-section-toggled(string, bool);
+    callback list-columns-filter-changed(string);
+    callback list-coloc-toggled(bool);
+    callback list-coloc-partner-toggled(string);
+    callback list-coloc-count-picked(int);
+    callback list-coloc-only-occurring-changed(bool);
 
     // -------- Matrix / plate / well / object --------
     in-out property <[MultiSelectItem]> matrix-column-items: [];

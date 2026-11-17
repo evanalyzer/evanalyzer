@@ -1,5 +1,5 @@
 {
-  "protocol_version": 42,
+  "protocol_version": 43,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -281,6 +281,42 @@
         }
       }
     },
+    "ColocColumn": {
+      "STRUCT": [
+        {
+          "how": {
+            "TYPENAME": "ColocMatch"
+          }
+        },
+        {
+          "with": {
+            "SEQ": {
+              "TYPENAME": "ObjectClass"
+            }
+          }
+        },
+        {
+          "among": {
+            "SEQ": {
+              "TYPENAME": "ObjectClass"
+            }
+          }
+        },
+        {
+          "partners": "BOOL"
+        }
+      ]
+    },
+    "ColocMatch": {
+      "ENUM": {
+        "0": {
+          "AtLeast": "UNIT"
+        },
+        "1": {
+          "Exactly": "UNIT"
+        }
+      }
+    },
     "ColorScale": {
       "ENUM": {
         "0": {
@@ -406,72 +442,79 @@
           }
         },
         "22": {
+          "Coloc": {
+            "NEWTYPE": {
+              "TYPENAME": "ColocColumn"
+            }
+          }
+        },
+        "23": {
           "IntensityAvg": {
             "NEWTYPE": "U32"
           }
         },
-        "23": {
+        "24": {
           "IntensitySum": {
             "NEWTYPE": "U32"
           }
         },
-        "24": {
+        "25": {
           "IntensityMin": {
             "NEWTYPE": "U32"
           }
         },
-        "25": {
+        "26": {
           "IntensityMax": {
             "NEWTYPE": "U32"
           }
         },
-        "26": {
+        "27": {
           "IntensityStd": {
             "NEWTYPE": "U32"
           }
         },
-        "27": {
+        "28": {
           "IntensityMedian": {
             "NEWTYPE": "U32"
           }
         },
-        "28": {
+        "29": {
           "IntensityLowerQuartile": {
             "NEWTYPE": "U32"
           }
         },
-        "29": {
+        "30": {
           "IntensityUpperQuartile": {
             "NEWTYPE": "U32"
           }
         },
-        "30": {
+        "31": {
           "IntensityMad": {
             "NEWTYPE": "U32"
           }
         },
-        "31": {
+        "32": {
           "Measurement": {
             "NEWTYPE": {
               "TYPENAME": "MeasurementColumn"
             }
           }
         },
-        "32": {
+        "33": {
           "MeasurementObject": {
             "NEWTYPE": {
               "TYPENAME": "MeasurementColumn"
             }
           }
         },
-        "33": {
+        "34": {
           "Children": {
             "NEWTYPE": {
               "TYPENAME": "ChildColumn"
             }
           }
         },
-        "34": {
+        "35": {
           "Parent": {
             "NEWTYPE": {
               "TYPENAME": "ParentColumn"
