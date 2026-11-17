@@ -138,6 +138,12 @@ pub enum ProgressEvent {
     },
 }
 
+/// Images up to this many pixels on both sides are always previewed whole
+/// (see `JobExecutor::preview_tile_size`). Must stay at most
+/// [`MAX_TILE_SIZE`], so such an image is one tile.
+const WHOLE_IMAGE_PREVIEW_MAX_SIDE: usize = 2048;
+const _: () = assert!(WHOLE_IMAGE_PREVIEW_MAX_SIDE <= MAX_TILE_SIZE);
+
 /// Controls tile selection when running a preview on a single image.
 ///
 /// Only meaningful for `analyze_image`'s interactive calling context (see its
@@ -649,10 +655,6 @@ impl<'a> JobExecutor {
     ) -> Result<(), InternalErrors> {
         let start_image = Instant::now();
         const RES_IDX: i32 = 0;
-        let tile_size = match &progress {
-            Some(_) => self.preview_tile_size(),
-            None => MAX_TILE_SIZE,
-        };
 
         // One reader for the whole image: it is thread-safe, every tile
         // below reads through it in parallel.
@@ -736,6 +738,10 @@ impl<'a> JobExecutor {
             )
         };
 
+        let tile_size = match &progress {
+            Some(_) => self.preview_tile_size(full_size.width, full_size.height),
+            None => MAX_TILE_SIZE,
+        };
         let tiles: Vec<ImageTile> = self
             .prepare_tile_iterator(full_size.width, full_size.height, tile_size)
             .collect();
@@ -1674,7 +1680,7 @@ impl<'a> JobExecutor {
     /// Pure tile-count math, factored out of [`count_preview_visible_tiles`] so it
     /// can be unit-tested without needing a real image file on disk.
     fn count_visible_tiles_for_image(&self, full_width: usize, full_height: usize) -> usize {
-        let tile_size = self.preview_tile_size();
+        let tile_size = self.preview_tile_size(full_width, full_height);
         let tiles = self.prepare_tile_iterator(full_width, full_height, tile_size);
         match &self.preview_tile_settings {
             Some(settings) if !settings.process_all_tiles => {
@@ -1801,13 +1807,6 @@ impl<'a> JobExecutor {
             .max(1)
     }
 
-    /// Picks the tile size for a single-image preview run.
-    ///
-    /// At higher zoom the viewport covers a smaller area of the full image, so
-    /// using the same fixed 4096px tile means re-reading and re-analyzing a lot
-    /// of pixels the user can't see just to get the small visible patch. Shrinking
-    /// the tile as zoom increases keeps the analyzed area closer to what's on
-    /// screen, so feedback for that area arrives faster.
     /// The tiles a breakpoint captures (their offsets), at most `count`
     /// (at least 1): among the tiles visible in the viewport (all tiles if
     /// none is), the ones whose centres are closest to the viewport centre;
@@ -1866,7 +1865,22 @@ impl<'a> JobExecutor {
             .collect()
     }
 
-    fn preview_tile_size(&self) -> usize {
+    /// Picks the tile size for a single-image preview run of an image
+    /// `full_width` × `full_height` px.
+    ///
+    /// At higher zoom the viewport covers a smaller area of the full image, so
+    /// using the same fixed 4096px tile means re-reading and re-analyzing a lot
+    /// of pixels the user can't see just to get the small visible patch. Shrinking
+    /// the tile as zoom increases keeps the analyzed area closer to what's on
+    /// screen, so feedback for that area arrives faster.
+    ///
+    /// A small image (both sides up to [`WHOLE_IMAGE_PREVIEW_MAX_SIDE`]) is
+    /// previewed whole at every zoom: one tile, as a batch run analyzes it -
+    /// no seams, and panning shows no stale area.
+    fn preview_tile_size(&self, full_width: usize, full_height: usize) -> usize {
+        if full_width.max(full_height) <= WHOLE_IMAGE_PREVIEW_MAX_SIDE {
+            return MAX_TILE_SIZE;
+        }
         // All tiles: as big as they get - fewer seams to merge, and the
         // limit on a whole-image preview doesn't depend on the zoom.
         let Some(zoom) = self
@@ -2419,6 +2433,9 @@ mod preview_tile_size_tests {
     use crate::storage::memory::MemoryExporter;
     use std::sync::{Arc, Mutex};
 
+    /// An image side too large to be previewed whole.
+    const LARGE: usize = 10_000;
+
     fn make_job(zoom: Option<f32>) -> JobExecutor {
         let mut job = JobExecutor::new(
             std::path::PathBuf::new(),
@@ -2446,42 +2463,78 @@ mod preview_tile_size_tests {
 
     #[test]
     fn no_preview_settings_uses_base_tile_size() {
-        assert_eq!(make_job(None).preview_tile_size(), 4096);
+        assert_eq!(make_job(None).preview_tile_size(LARGE, LARGE), 4096);
     }
 
     #[test]
     fn zoom_just_below_2_uses_base_tile_size() {
-        assert_eq!(make_job(Some(1.99)).preview_tile_size(), 4096);
+        assert_eq!(make_job(Some(1.99)).preview_tile_size(LARGE, LARGE), 4096);
     }
 
     #[test]
     fn zoom_exactly_2_shrinks_tile_to_2048() {
-        assert_eq!(make_job(Some(2.0)).preview_tile_size(), 2048);
+        assert_eq!(make_job(Some(2.0)).preview_tile_size(LARGE, LARGE), 2048);
     }
 
     #[test]
     fn zoom_just_below_4_stays_at_2048() {
-        assert_eq!(make_job(Some(3.99)).preview_tile_size(), 2048);
+        assert_eq!(make_job(Some(3.99)).preview_tile_size(LARGE, LARGE), 2048);
     }
 
     #[test]
     fn zoom_exactly_4_shrinks_tile_to_1024() {
-        assert_eq!(make_job(Some(4.0)).preview_tile_size(), 1024);
+        assert_eq!(make_job(Some(4.0)).preview_tile_size(LARGE, LARGE), 1024);
     }
 
     #[test]
     fn zoom_just_below_8_stays_at_1024() {
-        assert_eq!(make_job(Some(7.99)).preview_tile_size(), 1024);
+        assert_eq!(make_job(Some(7.99)).preview_tile_size(LARGE, LARGE), 1024);
     }
 
     #[test]
     fn zoom_exactly_8_shrinks_tile_to_512() {
-        assert_eq!(make_job(Some(8.0)).preview_tile_size(), 512);
+        assert_eq!(make_job(Some(8.0)).preview_tile_size(LARGE, LARGE), 512);
     }
 
     #[test]
     fn zoom_far_beyond_8_still_clamps_to_512() {
-        assert_eq!(make_job(Some(100.0)).preview_tile_size(), 512);
+        assert_eq!(make_job(Some(100.0)).preview_tile_size(LARGE, LARGE), 512);
+    }
+
+    #[test]
+    fn a_small_image_is_previewed_whole_at_every_zoom() {
+        for zoom in [0.5, 1.0, 2.0, 4.0, 8.0, 100.0] {
+            let mut job = make_job(Some(zoom));
+            // An 800 × 600 viewport looking at the image's bottom-right corner.
+            if let Some(vp) = job.preview_tile_settings.as_mut() {
+                vp.viewport_width = 800.0;
+                vp.viewport_height = 600.0;
+                vp.offset_x = 800.0 - 2048.0 * zoom;
+                vp.offset_y = 600.0 - 2048.0 * zoom;
+            }
+            assert_eq!(
+                job.preview_tile_size(2048, 2048),
+                MAX_TILE_SIZE,
+                "zoom {zoom}"
+            );
+            assert_eq!(
+                job.preview_tile_size(2048, 300),
+                MAX_TILE_SIZE,
+                "zoom {zoom}"
+            );
+            assert_eq!(
+                job.count_visible_tiles_for_image(2048, 2048),
+                1,
+                "zoom {zoom}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_image_with_one_side_above_2048_keeps_the_zoomed_tiles() {
+        let job = make_job(Some(8.0));
+        assert_eq!(job.preview_tile_size(2049, 100), 512);
+        assert_eq!(job.preview_tile_size(100, 2049), 512);
     }
 }
 
