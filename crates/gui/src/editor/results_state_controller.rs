@@ -2086,6 +2086,9 @@ impl ResultsStateController {
                 if !already_populated {
                     manager.populate_export_defaults(&ui_ready);
                 }
+                // What the table shows, every time: the dialog opens with
+                // the table's settings, not those of its first opening.
+                manager.sync_export_with_table(&ui_ready);
                 ui_ready.global::<ExportDialogState>().set_active(true);
             });
 
@@ -3891,6 +3894,9 @@ impl ResultsStateController {
         if !populated {
             self.populate_export_defaults(&ui_ready);
         }
+        // The lists (images, classes, columns) as the table has them; the
+        // chart's preset below.
+        self.sync_export_with_table(&ui_ready);
         let filter = self.chart_filter.lock().expect("Poisened").clone();
         let profiles = self.profile_columns.lock().expect("Poisened").clone();
         let state = ui_ready.global::<ExportDialogState>();
@@ -3924,6 +3930,9 @@ impl ResultsStateController {
         if !populated {
             self.populate_export_defaults(&ui_ready);
         }
+        // The lists (images, classes, columns) as the table has them; the
+        // chart's preset below.
+        self.sync_export_with_table(&ui_ready);
         let filter = self.chart_filter.lock().expect("Poisened").clone();
         let classes = self.classes.lock().expect("Poisened").clone();
         let state = ui_ready.global::<ExportDialogState>();
@@ -5411,7 +5420,10 @@ impl ResultsStateController {
     // `on_export_dialog_open`). Runs directly on the UI thread (it's called
     // from a Slint callback), so it pushes into `ExportDialogState` right
     // away rather than through `invoke_from_event_loop`.
-    fn populate_export_defaults(&self, ui_ready: &AppWindow) {
+    /// The settings that mirror the table - images, classes, columns,
+    /// aggregations, transpose, objects or per image, coloc rows and the
+    /// profile measurements - set every time the dialog opens.
+    fn sync_export_with_table(&self, ui_ready: &AppWindow) {
         {
             // The profile measurements (the first preselected).
             let profiles = self.profile_columns.lock().expect("Poisened");
@@ -5419,12 +5431,8 @@ impl ResultsStateController {
             state.set_profile_names(profile_names(&profiles));
             state.set_profile_index(0);
         }
-        let rail_mode = ui_ready.global::<ResultsState>().get_rail_mode();
-        let z_stack_max = ui_ready.global::<ResultsState>().get_z_stack_max().max(0) as u32;
-        let t_stack_max = ui_ready.global::<ResultsState>().get_t_stack_max().max(0) as u32;
 
         let list_filter = self.list_filter.lock().expect("Poisened");
-        let matrix_filter_guard = self.matrix_filter.lock().expect("Poisened");
         let classes = self.classes.lock().expect("Poisened");
         let images = self.images.lock().expect("Poisened");
         let available_columns = self.available_columns.lock().expect("Poisened");
@@ -5460,18 +5468,14 @@ impl ResultsStateController {
             &list_filter.parents,
         );
         let overlapping_pairs = list_filter.with_coloc_details;
-        // Export always uses `ColorScale::Auto` (see `read_export_settings`)
-        // - the dialog exposes no manual min/max override, so the current
-        // Matrix view's own scale (which may be pinned) isn't mirrored here.
-        let (aggregations, color_schema, square_size) = match matrix_filter_guard.as_ref() {
-            Some(filter) => (
-                vec![filter.aggregation.clone()],
-                filter.color_schema.clone(),
-                filter.square_size,
-            ),
-            None => (vec![Aggregation::default()], ColorSchema::default(), None),
+        // The table's aggregations (the Matrix view has its own one).
+        let aggregations = if list_filter.aggregations.is_empty() {
+            vec![Aggregation::default()]
+        } else {
+            list_filter.aggregations.clone()
         };
-        let square_size = square_size.unwrap_or(DEFAULT_SQUARE_SIZE);
+        let transpond = list_filter.transpond;
+        let per_object = list_filter.group_by == ListGroupBy::Objects;
 
         // Seeds the export dialog's own image selection from whatever the
         // main List view's image filter currently has selected - except
@@ -5546,8 +5550,45 @@ impl ResultsStateController {
         drop(available_columns);
         drop(images);
         drop(classes);
-        drop(matrix_filter_guard);
         drop(list_filter);
+
+        let state = ui_ready.global::<ExportDialogState>();
+        *self.export_image_selection.lock().expect("Poisened") = image_selection;
+        state.set_image_filter_text("".into());
+        self.push_export_image_items(ui_ready);
+        state.set_class_items(ModelRc::from(Rc::new(VecModel::from(class_items_vec))));
+        state.set_class_summary(class_summary);
+        state.set_column_items(ModelRc::from(Rc::new(VecModel::from(column_items_vec))));
+        state.set_column_groups(ModelRc::from(Rc::new(VecModel::from(column_groups_vec))));
+        state.set_column_summary(column_summary);
+        state.set_aggregation_items(ModelRc::from(Rc::new(VecModel::from(
+            aggregation_items_vec,
+        ))));
+        state.set_aggregation_summary(aggregation_summary);
+        state.set_transpond_output_table(transpond);
+        // The table's rows: one per object, or per image.
+        state.set_with_list_view(per_object);
+        state.set_with_grouped_by_image_list(!per_object);
+        state.set_with_list_coloc_details(overlapping_pairs);
+    }
+
+    /// The export-only settings (folder, format, planes, time course,
+    /// plate and heatmap options), set the first time the dialog opens and
+    /// kept from one export to the next. What mirrors the table:
+    /// [`Self::sync_export_with_table`].
+    fn populate_export_defaults(&self, ui_ready: &AppWindow) {
+        let rail_mode = ui_ready.global::<ResultsState>().get_rail_mode();
+        let z_stack_max = ui_ready.global::<ResultsState>().get_z_stack_max().max(0) as u32;
+        let t_stack_max = ui_ready.global::<ResultsState>().get_t_stack_max().max(0) as u32;
+        // Export always uses `ColorScale::Auto` (see `read_export_settings`)
+        // - the dialog exposes no manual min/max override, so the current
+        // Matrix view's own scale (which may be pinned) isn't mirrored here.
+        let (color_schema, square_size) =
+            match self.matrix_filter.lock().expect("Poisened").as_ref() {
+                Some(filter) => (filter.color_schema.clone(), filter.square_size),
+                None => (ColorSchema::default(), None),
+            };
+        let square_size = square_size.unwrap_or(DEFAULT_SQUARE_SIZE);
 
         let state = ui_ready.global::<ExportDialogState>();
         state.set_output_dir("".into());
@@ -5562,19 +5603,6 @@ impl ResultsStateController {
         state.set_t_start("0".into());
         state.set_t_end((t_stack_max + 1).to_string().into());
 
-        *self.export_image_selection.lock().expect("Poisened") = image_selection;
-        state.set_image_filter_text("".into());
-        self.push_export_image_items(ui_ready);
-        state.set_class_items(ModelRc::from(Rc::new(VecModel::from(class_items_vec))));
-        state.set_class_summary(class_summary);
-        state.set_column_items(ModelRc::from(Rc::new(VecModel::from(column_items_vec))));
-        state.set_column_groups(ModelRc::from(Rc::new(VecModel::from(column_groups_vec))));
-        state.set_column_summary(column_summary);
-
-        state.set_aggregation_items(ModelRc::from(Rc::new(VecModel::from(
-            aggregation_items_vec,
-        ))));
-        state.set_aggregation_summary(aggregation_summary);
         state.set_color_schema_items(ModelRc::from(Rc::new(VecModel::from(color_schema_items()))));
         state.set_color_schema_summary(
             color_schemas()
@@ -5589,10 +5617,7 @@ impl ResultsStateController {
         )))));
         state.set_square_size_summary(format!("{square_size} px").into());
 
-        state.set_with_list_view(false);
-        state.set_with_list_coloc_details(overlapping_pairs);
         state.set_with_list_one_file_per_image(true);
-        state.set_with_grouped_by_image_list(true);
         state.set_with_plate_heatmap_view(rail_mode == ResultsRailMode::Matrix);
         state.set_with_well_heatmap_view(rail_mode == ResultsRailMode::Matrix);
         state.set_with_plate_list(false);
@@ -6814,15 +6839,16 @@ pub(crate) mod tests {
 
         let state = ui.global::<ExportDialogState>();
         assert!(state.get_active(), "dialog should activate on open");
-        // See `populate_export_defaults`: the Object list starts unchecked
-        // (one-file-per-image and the Image/Grouped-by-image list start
-        // checked instead), and the plate/well heatmap flags follow
-        // whether the rail was on Matrix - no matrix view has been
-        // rendered yet (`matrix_filter` starts `None`) and the rail starts
-        // on List, so both start unchecked too.
-        assert!(!state.get_with_list_view());
+        // The table's rows (see `sync_export_with_table`): it starts with a
+        // row per object, so the Objects export is checked and Per image
+        // isn't. One-file-per-image starts checked, and the plate/well
+        // heatmap flags follow whether the rail was on Matrix - no matrix
+        // view has been rendered yet (`matrix_filter` starts `None`) and
+        // the rail starts on List, so both start unchecked too.
+        assert!(state.get_with_list_view());
         assert!(state.get_with_list_one_file_per_image());
-        assert!(state.get_with_grouped_by_image_list());
+        assert!(!state.get_with_grouped_by_image_list());
+        assert!(!state.get_transpond_output_table());
         assert!(!state.get_with_plate_heatmap_view());
         assert!(!state.get_with_well_heatmap_view());
         assert!(!state.get_with_plate_list());
@@ -6874,10 +6900,10 @@ pub(crate) mod tests {
         assert_eq!(export_format_from_key("bogus"), None);
     }
 
-    // Re-opening the dialog after the user has already changed something
-    // (here: unchecking "List view") must not clobber it - only the *first*
-    // open after a database loads re-seeds the defaults (see
-    // `export_populated`).
+    // Re-opening the dialog keeps what only the export has (here: the
+    // output folder and the plate list) - only the *first* open after a
+    // database loads seeds those (see `export_populated`) - while what
+    // mirrors the table follows the table again (`sync_export_with_table`).
     #[test]
     fn attach_callbacks_export_dialog_reopen_keeps_user_changes() {
         let ui = test_ui_window();
@@ -6885,17 +6911,60 @@ pub(crate) mod tests {
         controller.attach_callbacks();
 
         ui.global::<ResultsState>().invoke_export_dialog_open();
-        ui.global::<ExportDialogState>().set_with_list_view(false);
-        ui.global::<ExportDialogState>().set_active(false);
+        let state = ui.global::<ExportDialogState>();
+        state.set_output_dir("/tmp/out".into());
+        state.set_with_plate_list(true);
+        state.set_with_list_view(false);
+        state.set_active(false);
 
         ui.global::<ResultsState>().invoke_export_dialog_open();
 
-        let state = ui.global::<ExportDialogState>();
         assert!(state.get_active());
-        assert!(
-            !state.get_with_list_view(),
-            "re-opening must not reset a setting the user already changed"
+        assert_eq!(
+            state.get_output_dir(),
+            "/tmp/out",
+            "an export-only setting stays"
         );
+        assert!(state.get_with_plate_list(), "an export-only setting stays");
+        assert!(
+            state.get_with_list_view(),
+            "the table's rows (one per object) come back with each opening"
+        );
+    }
+
+    /// Each opening takes the table's aggregations, transpose and rows as
+    /// they are now - also after they changed since the first opening.
+    #[test]
+    fn export_dialog_follows_the_tables_aggregation_transpose_and_rows() {
+        let ui = test_ui_window();
+        let controller = make_controller_with_ui(ui.as_weak());
+        controller.attach_callbacks();
+        ui.global::<ResultsState>().invoke_export_dialog_open();
+
+        {
+            let mut filter = controller.list_filter.lock().unwrap();
+            filter.aggregations = vec![Aggregation::Median, Aggregation::Max];
+            filter.transpond = true;
+            filter.group_by = ListGroupBy::Images;
+        }
+        ui.global::<ResultsState>().invoke_export_dialog_open();
+
+        let state = ui.global::<ExportDialogState>();
+        let selected: Vec<String> = state
+            .get_aggregation_items()
+            .iter()
+            .filter(|item| item.selected)
+            .map(|item| item.key.to_string())
+            .collect();
+        let expected: Vec<String> = aggregation_items(&[Aggregation::Median, Aggregation::Max])
+            .into_iter()
+            .filter(|item| item.selected)
+            .map(|item| item.key.to_string())
+            .collect();
+        assert_eq!(selected, expected);
+        assert!(state.get_transpond_output_table());
+        assert!(state.get_with_grouped_by_image_list());
+        assert!(!state.get_with_list_view());
     }
 
     // `on_start_clicked` with no output folder chosen must surface a
@@ -7454,19 +7523,19 @@ pub(crate) mod tests {
         // the alphabetically-first one) -> the export dialog starts with
         // exactly those checked, not just the first.
         list_state.invoke_list_image_selected("A2_01.tif".into(), true);
-        controller.populate_export_defaults(&ui);
+        controller.sync_export_with_table(&ui);
         assert_eq!(selected_keys(&export_state), vec!["A2_01.tif".to_string()]);
 
         // Every image selected -> too many to usefully pre-check, defaults
         // back to just the first.
         list_state.invoke_list_image_select_all();
-        controller.populate_export_defaults(&ui);
+        controller.sync_export_with_table(&ui);
         assert_eq!(selected_keys(&export_state), vec!["A1_01.tif".to_string()]);
 
         // Nothing selected (= all images) -> same "just the
         // first" default, rather than a picker with nothing checked at all.
         list_state.invoke_list_image_select_none();
-        controller.populate_export_defaults(&ui);
+        controller.sync_export_with_table(&ui);
         assert_eq!(selected_keys(&export_state), vec!["A1_01.tif".to_string()]);
     }
 
@@ -7474,7 +7543,7 @@ pub(crate) mod tests {
     fn export_dialog_image_filter_changed_narrows_items_without_touching_selection() {
         let (ui, controller) = controller_with_open_database();
         let export_state = ui.global::<ExportDialogState>();
-        controller.populate_export_defaults(&ui);
+        controller.sync_export_with_table(&ui);
 
         // Starts with just "A1_01.tif" selected (the default - see the
         // test above), and, unlike the main List view's search box, this
@@ -7530,7 +7599,7 @@ pub(crate) mod tests {
         // search-narrowed rows, so images checked under one search were
         // dropped from the export (and the "N of M" count) by the next.
         let (ui, controller) = controller_with_open_database();
-        controller.populate_export_defaults(&ui);
+        controller.sync_export_with_table(&ui);
         let state = ui.global::<ExportDialogState>();
         state.set_output_dir("out".into());
         state.set_with_list_view(true);
@@ -7564,7 +7633,7 @@ pub(crate) mod tests {
     #[test]
     fn export_dialog_select_all_and_none_keep_the_current_search() {
         let (ui, controller) = controller_with_open_database();
-        controller.populate_export_defaults(&ui);
+        controller.sync_export_with_table(&ui);
         let state = ui.global::<ExportDialogState>();
         state.set_output_dir("out".into());
 
@@ -7590,7 +7659,7 @@ pub(crate) mod tests {
     #[test]
     fn export_dialog_with_no_image_selected_exports_all_images() {
         let (ui, controller) = controller_with_open_database();
-        controller.populate_export_defaults(&ui);
+        controller.sync_export_with_table(&ui);
         let state = ui.global::<ExportDialogState>();
         state.set_output_dir("out".into());
         state.set_with_list_view(true);
