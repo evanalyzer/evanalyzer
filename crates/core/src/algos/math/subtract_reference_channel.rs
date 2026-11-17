@@ -899,7 +899,7 @@ impl SubtractReferenceChannel {
             let global = robust_noise(&mut work).unwrap_or(0.0).max(1e-12) as f32;
             // The local baseline (median: EVs don't move it), then the
             // noise of the deviations from it.
-            let baseline = local_median(out, input.size, LOCAL_NOISE_RADIUS)?;
+            let baseline = local_median(out, input.size, LOCAL_NOISE_RADIUS as f64)?;
             for (o, b) in out.iter_mut().zip(&baseline) {
                 *o -= b;
             }
@@ -947,14 +947,8 @@ impl SubtractReferenceChannel {
         match self.background {
             Background::None => Ok(()),
             Background::Median { radius } => {
-                let filter = RankFilter {
-                    radius: radius as f64,
-                    filter_type: RankFilterType::Median,
-                };
-                let image =
-                    Image::from_size_slice(size, plane).map_err(InternalErrors::from_kornia)?;
-                let background = filter.process_image::<1>(&image)?;
-                for (v, b) in plane.iter_mut().zip(background.as_slice()) {
+                let background = median_background(plane, size, radius)?;
+                for (v, b) in plane.iter_mut().zip(&background) {
                     *v -= b;
                 }
                 Ok(())
@@ -1066,17 +1060,89 @@ fn structure_level(
     Some((median + noise_factor * noise).max(percentile))
 }
 
+/// From this radius on, the median background is estimated on a reduced
+/// image (see [`median_background`]).
+const REDUCE_FROM_RADIUS: f32 = 8.0;
+/// The largest reduction (per side).
+const MAX_REDUCTION: usize = 4;
+
+/// The background of `plane` as the median over a disk of `radius` px. A
+/// slowly varying background doesn't need every pixel: from
+/// [`REDUCE_FROM_RADIUS`] on, the plane is reduced to the medians of `f × f`
+/// blocks (`f = radius / 8`, at most 4), the median taken there with
+/// radius `radius / f` and scaled back up bilinearly - about `f³` times
+/// less work (a median's cost grows with its radius). Smaller radii: the
+/// median of every pixel, as before.
+fn median_background(
+    plane: &[f32],
+    size: ImageSize,
+    radius: f32,
+) -> Result<Vec<f32>, InternalErrors> {
+    let factor = ((radius / REDUCE_FROM_RADIUS).floor() as usize).clamp(1, MAX_REDUCTION);
+    if factor == 1 {
+        let image = Image::from_size_slice(size, plane).map_err(InternalErrors::from_kornia)?;
+        let background = RankFilter {
+            radius: radius as f64,
+            filter_type: RankFilterType::Median,
+        }
+        .process_image::<1>(&image)?;
+        return Ok(background.into_vec());
+    }
+    let (w, h) = (size.width, size.height);
+    let (sw, sh) = (w.div_ceil(factor), h.div_ceil(factor));
+    // Block medians (robust to the structure and spots a block holds; the
+    // last row and column of blocks may be smaller).
+    let mut small = vec![0f32; sw * sh];
+    let mut block = Vec::with_capacity(factor * factor);
+    for by in 0..sh {
+        for bx in 0..sw {
+            block.clear();
+            for y in by * factor..((by + 1) * factor).min(h) {
+                block.extend_from_slice(
+                    &plane[y * w + bx * factor..y * w + ((bx + 1) * factor).min(w)],
+                );
+            }
+            small[by * sw + bx] = median_in_place(&mut block);
+        }
+    }
+    let small = local_median(
+        &small,
+        ImageSize {
+            width: sw,
+            height: sh,
+        },
+        radius as f64 / factor as f64,
+    )?;
+    // Bilinear back to every pixel, between the blocks' centres.
+    let axis = |i: usize, n: usize| -> (usize, usize, f32) {
+        let u = ((i as f32 + 0.5) / factor as f32 - 0.5).clamp(0.0, (n - 1) as f32);
+        let i0 = u.floor() as usize;
+        (i0, (i0 + 1).min(n - 1), u - i0 as f32)
+    };
+    let columns: Vec<(usize, usize, f32)> = (0..w).map(|x| axis(x, sw)).collect();
+    let mut background = vec![0f32; w * h];
+    for y in 0..h {
+        let (y0, y1, ty) = axis(y, sh);
+        let (top, bottom) = (
+            &small[y0 * sw..(y0 + 1) * sw],
+            &small[y1 * sw..(y1 + 1) * sw],
+        );
+        for (x, &(x0, x1, tx)) in columns.iter().enumerate() {
+            let upper = top[x0] + (top[x1] - top[x0]) * tx;
+            let lower = bottom[x0] + (bottom[x1] - bottom[x0]) * tx;
+            background[y * w + x] = upper + (lower - upper) * ty;
+        }
+    }
+    Ok(background)
+}
+
 /// The median of `values` over Rank Filter's disk of `radius` px, the
 /// values quantized to its 65536 gray levels between their minimum and
 /// maximum: its sliding histogram then applies (the residual is no raw
 /// image - for arbitrary values it would rank every window, about 20 times
 /// slower for 21 × 21 px). Exact to (max − min) / 65535, a small part of
 /// the noise.
-fn local_median(
-    values: &[f32],
-    size: ImageSize,
-    radius: usize,
-) -> Result<Vec<f32>, InternalErrors> {
+fn local_median(values: &[f32], size: ImageSize, radius: f64) -> Result<Vec<f32>, InternalErrors> {
     let (low, high) = values
         .iter()
         .filter(|v| v.is_finite())
@@ -1098,7 +1164,7 @@ fn local_median(
         })
         .collect();
     let median = RankFilter {
-        radius: radius as f64,
+        radius,
         filter_type: RankFilterType::Median,
     }
     .process_image::<1>(&Image::new(size, levels).map_err(InternalErrors::from_kornia)?)?;
@@ -1335,3 +1401,65 @@ static HUBER_1964: CitationMetadata = CitationMetadata {
     url: None,
     pages: Some("73-101"),
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The reduced median background follows the full-resolution one: on
+    /// a ramp with spots and a filament it stays within 2 % of the ramp's
+    /// height of the median of every pixel.
+    #[test]
+    fn the_reduced_background_matches_the_full_median() {
+        let (w, h) = (200usize, 160usize);
+        let size = ImageSize {
+            width: w,
+            height: h,
+        };
+        let mut plane: Vec<f32> = (0..w * h)
+            .map(|i| 100.0 + 0.5 * (i % w) as f32 + 0.3 * (i / w) as f32)
+            .collect();
+        // Spots every 17 px and a filament along y = 80.
+        for y in (8..h).step_by(17) {
+            for x in (8..w).step_by(17) {
+                plane[y * w + x] += 400.0;
+            }
+        }
+        for x in 0..w {
+            plane[80 * w + x] += 200.0;
+        }
+        let full = RankFilter {
+            radius: 30.0,
+            filter_type: RankFilterType::Median,
+        }
+        .process_image::<1>(&Image::from_size_slice(size, &plane).unwrap())
+        .unwrap()
+        .into_vec();
+        let reduced = median_background(&plane, size, 30.0).unwrap();
+        // The ramp rises 0.5 · 200 + 0.3 · 160 = 148 across the plane; away
+        // from the border (where the disks differ most).
+        let worst = (30..h - 30)
+            .flat_map(|y| (30..w - 30).map(move |x| y * w + x))
+            .map(|i| (reduced[i] - full[i]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(worst < 0.02 * 148.0, "largest difference {worst:.2}");
+    }
+
+    /// Below 8 px nothing is reduced: the median of every pixel.
+    #[test]
+    fn a_small_radius_keeps_every_pixel() {
+        let size = ImageSize {
+            width: 40,
+            height: 30,
+        };
+        let plane: Vec<f32> = (0..40 * 30).map(|i| ((i * 37) % 101) as f32).collect();
+        let full = RankFilter {
+            radius: 5.0,
+            filter_type: RankFilterType::Median,
+        }
+        .process_image::<1>(&Image::from_size_slice(size, &plane).unwrap())
+        .unwrap()
+        .into_vec();
+        assert_eq!(median_background(&plane, size, 5.0).unwrap(), full);
+    }
+}
