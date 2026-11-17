@@ -138,27 +138,36 @@ fn remap_default_expr(expr: &str, enums: &[EnumInfo], commands: &[CommandInfo]) 
             to_pascal_case(&enum_info.source_file),
             enum_info.enum_name
         );
-        result = result.replace(
-            &format!("{} ::", enum_info.enum_name),
-            &format!("{} ::", settings_name),
-        );
-        result = result.replace(
-            &format!("{}::", enum_info.enum_name),
-            &format!("{}::", settings_name),
-        );
+        result = replace_type_path(&result, &enum_info.enum_name, &settings_name);
     }
     for cmd in commands {
         let settings_name = format!("{}Settings", cmd.struct_name);
-        result = result.replace(
-            &format!("{} ::", cmd.struct_name),
-            &format!("{} ::", settings_name),
-        );
-        result = result.replace(
-            &format!("{}::", cmd.struct_name),
-            &format!("{}::", settings_name),
-        );
+        result = replace_type_path(&result, &cmd.struct_name, &settings_name);
     }
     result
+}
+
+/// `expr` with the type `name` replaced by `replacement` where it starts a
+/// path (`name::` or `name ::`) - only as a whole identifier, so an enum
+/// `Interpolation` doesn't rewrite `ShiftInterpolation::Cubic`.
+fn replace_type_path(expr: &str, name: &str, replacement: &str) -> String {
+    let is_ident = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = String::with_capacity(expr.len());
+    let mut rest = expr;
+    while let Some(at) = rest.find(name) {
+        let before = rest[..at].chars().next_back();
+        let after = &rest[at + name.len()..];
+        let starts_path = after.starts_with("::") || after.starts_with(" ::");
+        out.push_str(&rest[..at]);
+        if starts_path && !before.is_some_and(is_ident) {
+            out.push_str(replacement);
+        } else {
+            out.push_str(name);
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
 }
 
 fn format_default_for_type(ty: &str, val: f64) -> String {
