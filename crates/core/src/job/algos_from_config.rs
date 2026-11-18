@@ -1604,24 +1604,24 @@ impl From<StructureTensorSettings> for StructureTensor {
 impl From<SubtractReferenceChannelSettings> for SubtractReferenceChannel {
     fn from(_s: SubtractReferenceChannelSettings) -> Self {
         SubtractReferenceChannel {
-            id: _s.id,
             target: TargetSource::from(_s.target),
             reference_channel: _s.reference_channel,
-            camera_offset: CameraOffset::from(_s.camera_offset),
-            saturation: Saturation::from(_s.saturation),
-            background: Background::from(_s.background),
+            output: OutputImage::from(_s.output),
             alignment: Alignment::from(_s.alignment),
             interpolation: ShiftInterpolation::from(_s.interpolation),
+            background: Background::from(_s.background),
+            smoothing_sigma: _s.smoothing_sigma.clamp(0.0, 20.0),
             target_extra_sigma: _s.target_extra_sigma.clamp(0.0, 20.0),
             reference_extra_sigma: _s.reference_extra_sigma.clamp(0.0, 20.0),
-            smoothing_sigma: _s.smoothing_sigma.clamp(0.0, 20.0),
+            camera_offset: CameraOffset::from(_s.camera_offset),
+            saturation: Saturation::from(_s.saturation),
             factor: Factor::from(_s.factor),
             factor_scale: _s.factor_scale.clamp(0.0, 100.0),
+            id: _s.id,
             estimation_scope: EstimationScope::from(_s.estimation_scope),
             edge_tolerance: _s.edge_tolerance.clamp(0.0, 10.0),
             only_brighter_reference: _s.only_brighter_reference,
             clip_negative: _s.clip_negative,
-            output: OutputImage::from(_s.output),
         }
     }
 }

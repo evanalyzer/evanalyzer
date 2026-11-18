@@ -2435,25 +2435,23 @@ pub struct StructureTensorSettings {
 #[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct SubtractReferenceChannelSettings {
-    /// Names the step's measurements (factor, shift, …) in the results.
-    pub id: String,
     /// Image to correct: the current pipeline image, or a channel.
     pub target: MathSubtractReferenceChannelTargetSourceSettings,
     /// Channel containing only the signal to remove.
     pub reference_channel: ImageChannelIdx,
-    /// Camera offset subtracted from target and reference before anything
-    /// else.
-    pub camera_offset: MathSubtractReferenceChannelCameraOffsetSettings,
-    /// Pixels at or above this level (in either channel) are left out of
-    /// all estimates - and their neighbours as far as the blurs and the
-    /// shift reach.
-    pub saturation: MathSubtractReferenceChannelSaturationSettings,
-    /// Slowly varying background, removed from both channels.
-    pub background: MathSubtractReferenceChannelBackgroundSettings,
+    /// Output: the residual, or the scaled aligned reference (for
+    /// inspection).
+    pub output: MathSubtractReferenceChannelOutputImageSettings,
     /// How the reference is shifted onto the target.
     pub alignment: MathSubtractReferenceChannelAlignmentSettings,
     /// Interpolation for the shift.
     pub interpolation: MathSubtractReferenceChannelShiftInterpolationSettings,
+    /// Slowly varying background, removed from both channels.
+    pub background: MathSubtractReferenceChannelBackgroundSettings,
+    /// Gaussian smoothing (σ, px) applied identically to both channels (0 =
+    /// off).
+    #[schemars(range(min = 0, max = 20))]
+    pub smoothing_sigma: f32,
     /// Extra blur (σ, px) for the target if it is sharper than the
     /// reference (0 = off).
     #[schemars(range(min = 0, max = 20))]
@@ -2462,15 +2460,20 @@ pub struct SubtractReferenceChannelSettings {
     /// target (0 = off).
     #[schemars(range(min = 0, max = 20))]
     pub reference_extra_sigma: f32,
-    /// Gaussian smoothing (σ, px) applied identically to both channels (0 =
-    /// off).
-    #[schemars(range(min = 0, max = 20))]
-    pub smoothing_sigma: f32,
+    /// Camera offset subtracted from target and reference before anything
+    /// else.
+    pub camera_offset: MathSubtractReferenceChannelCameraOffsetSettings,
+    /// Pixels at or above this level (in either channel) are left out of
+    /// all estimates - and their neighbours as far as the blurs and the
+    /// shift reach.
+    pub saturation: MathSubtractReferenceChannelSaturationSettings,
     /// How the scale factor `a` is set.
     pub factor: MathSubtractReferenceChannelFactorSettings,
     /// Multiplies `a` after it is set (fine tuning, 1 = unchanged).
     #[schemars(range(min = 0, max = 100))]
     pub factor_scale: f32,
+    /// Names the step's measurements (factor, shift, …) in the results.
+    pub id: String,
     /// Area the estimates (shift, factor) are computed over.
     pub estimation_scope: MathSubtractReferenceChannelEstimationScopeSettings,
     /// Local maximum of the reference over this radius (px) before
@@ -2486,32 +2489,29 @@ pub struct SubtractReferenceChannelSettings {
     pub only_brighter_reference: bool,
     /// Set negative residual values to 0.
     pub clip_negative: bool,
-    /// Output: the residual, or the scaled aligned reference (for
-    /// inspection).
-    pub output: MathSubtractReferenceChannelOutputImageSettings,
 }
 
 impl Default for SubtractReferenceChannelSettings {
     fn default() -> Self {
         Self {
-            id: String::default(),
             target: MathSubtractReferenceChannelTargetSourceSettings::default(),
             reference_channel: ImageChannelIdx(1),
-            camera_offset: MathSubtractReferenceChannelCameraOffsetSettings::default(),
-            saturation: MathSubtractReferenceChannelSaturationSettings::default(),
-            background: MathSubtractReferenceChannelBackgroundSettings::default(),
+            output: MathSubtractReferenceChannelOutputImageSettings::Residual,
             alignment: MathSubtractReferenceChannelAlignmentSettings::default(),
             interpolation: MathSubtractReferenceChannelShiftInterpolationSettings::Cubic,
+            background: MathSubtractReferenceChannelBackgroundSettings::default(),
+            smoothing_sigma: 1.0f32,
             target_extra_sigma: 0.0f32,
             reference_extra_sigma: 0.0f32,
-            smoothing_sigma: 1.0f32,
+            camera_offset: MathSubtractReferenceChannelCameraOffsetSettings::default(),
+            saturation: MathSubtractReferenceChannelSaturationSettings::default(),
             factor: MathSubtractReferenceChannelFactorSettings::default(),
             factor_scale: 1.0f32,
+            id: String::default(),
             estimation_scope: MathSubtractReferenceChannelEstimationScopeSettings::Image,
             edge_tolerance: 0.0f32,
             only_brighter_reference: true,
             clip_negative: true,
-            output: MathSubtractReferenceChannelOutputImageSettings::Residual,
         }
     }
 }

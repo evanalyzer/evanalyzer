@@ -98,10 +98,6 @@ use std::sync::Arc;
     display_name = "Subtract Reference Channel"
 )]
 pub struct SubtractReferenceChannel {
-    /// Names the step's measurements (factor, shift, …) in the results.
-    #[cmdsmeta(measurement_id = "reference", display_name = "ID")]
-    pub id: String,
-
     /// Image to correct: the current pipeline image, or a channel.
     pub target: TargetSource,
 
@@ -109,59 +105,87 @@ pub struct SubtractReferenceChannel {
     #[cmdsmeta(default = ImageChannelIdx(1), summary = true)]
     pub reference_channel: ImageChannelIdx,
 
+    /// Output: the residual, or the scaled aligned reference (for
+    /// inspection).
+    #[cmdsmeta(default = OutputImage::Residual)]
+    pub output: OutputImage,
+
+    /// How the reference is shifted onto the target.
+    #[cmdsmeta(section = "Alignment", summary = true)]
+    pub alignment: Alignment,
+
+    /// Interpolation for the shift.
+    #[cmdsmeta(section = "Alignment", default = ShiftInterpolation::Cubic, visibility = Advanced)]
+    pub interpolation: ShiftInterpolation,
+
+    /// Slowly varying background, removed from both channels.
+    #[cmdsmeta(section = "Background & smoothing")]
+    pub background: Background,
+
+    /// Gaussian smoothing (σ, px) applied identically to both channels (0 =
+    /// off).
+    #[cmdsmeta(
+        section = "Background & smoothing",
+        default = 1.0,
+        min = 0.0,
+        max = 20.0,
+        step = 0.1
+    )]
+    pub smoothing_sigma: f32,
+
+    /// Extra blur (σ, px) for the target if it is sharper than the
+    /// reference (0 = off).
+    #[cmdsmeta(
+        section = "Background & smoothing",
+        default = 0.0,
+        min = 0.0,
+        max = 20.0,
+        step = 0.1
+    )]
+    pub target_extra_sigma: f32,
+
+    /// Extra blur (σ, px) for the reference if it is sharper than the
+    /// target (0 = off).
+    #[cmdsmeta(
+        section = "Background & smoothing",
+        default = 0.0,
+        min = 0.0,
+        max = 20.0,
+        step = 0.1
+    )]
+    pub reference_extra_sigma: f32,
+
     /// Camera offset subtracted from target and reference before anything
     /// else.
-    #[cmdsmeta(visibility = Advanced)]
+    #[cmdsmeta(section = "Background & smoothing", visibility = Advanced)]
     pub camera_offset: CameraOffset,
 
     /// Pixels at or above this level (in either channel) are left out of
     /// all estimates - and their neighbours as far as the blurs and the
     /// shift reach.
-    #[cmdsmeta(visibility = Advanced)]
+    #[cmdsmeta(section = "Background & smoothing", visibility = Advanced)]
     pub saturation: Saturation,
 
-    /// Slowly varying background, removed from both channels.
-    pub background: Background,
-
-    /// How the reference is shifted onto the target.
-    #[cmdsmeta(summary = true)]
-    pub alignment: Alignment,
-
-    /// Interpolation for the shift.
-    #[cmdsmeta(default = ShiftInterpolation::Cubic, visibility = Advanced)]
-    pub interpolation: ShiftInterpolation,
-
-    /// Extra blur (σ, px) for the target if it is sharper than the
-    /// reference (0 = off).
-    #[cmdsmeta(default = 0.0, min = 0.0, max = 20.0, step = 0.1, visibility = Advanced)]
-    pub target_extra_sigma: f32,
-
-    /// Extra blur (σ, px) for the reference if it is sharper than the
-    /// target (0 = off).
-    #[cmdsmeta(default = 0.0, min = 0.0, max = 20.0, step = 0.1, visibility = Advanced)]
-    pub reference_extra_sigma: f32,
-
-    /// Gaussian smoothing (σ, px) applied identically to both channels (0 =
-    /// off).
-    #[cmdsmeta(default = 1.0, min = 0.0, max = 20.0, step = 0.1)]
-    pub smoothing_sigma: f32,
-
     /// How the scale factor `a` is set.
-    #[cmdsmeta(summary = true)]
+    #[cmdsmeta(section = "Factor", summary = true)]
     pub factor: Factor,
 
     /// Multiplies `a` after it is set (fine tuning, 1 = unchanged).
-    #[cmdsmeta(default = 1.0, min = 0.0, max = 100.0, step = 0.01)]
+    #[cmdsmeta(section = "Factor", default = 1.0, min = 0.0, max = 100.0, step = 0.01)]
     pub factor_scale: f32,
 
+    /// Names the step's measurements (factor, shift, …) in the results.
+    #[cmdsmeta(section = "Factor", measurement_id = "reference", display_name = "ID")]
+    pub id: String,
+
     /// Area the estimates (shift, factor) are computed over.
-    #[cmdsmeta(default = EstimationScope::Image, visibility = Advanced)]
+    #[cmdsmeta(section = "Factor", default = EstimationScope::Image, visibility = Advanced)]
     pub estimation_scope: EstimationScope,
 
     /// Local maximum of the reference over this radius (px) before
     /// subtracting; tolerates a small leftover shift or edge mismatch (0 =
     /// off).
-    #[cmdsmeta(default = 0.0, min = 0.0, max = 10.0, step = 0.5, visibility = Advanced)]
+    #[cmdsmeta(section = "Factor", default = 0.0, min = 0.0, max = 10.0, step = 0.5, visibility = Advanced)]
     pub edge_tolerance: f32,
 
     /// Subtract only where the reference is brighter than its background
@@ -169,17 +193,12 @@ pub struct SubtractReferenceChannel {
     /// reference (cracks, gaps) subtract nothing instead of brightening the
     /// result. Off: the reference's dips are subtracted too. Needs a
     /// background removal - without one the reference is never below 0.
-    #[cmdsmeta(default = true)]
+    #[cmdsmeta(section = "Subtraction", default = true)]
     pub only_brighter_reference: bool,
 
     /// Set negative residual values to 0.
-    #[cmdsmeta(default = true)]
+    #[cmdsmeta(section = "Subtraction", default = true)]
     pub clip_negative: bool,
-
-    /// Output: the residual, or the scaled aligned reference (for
-    /// inspection).
-    #[cmdsmeta(default = OutputImage::Residual)]
-    pub output: OutputImage,
 }
 
 /// The image [`SubtractReferenceChannel`] corrects.
@@ -1405,6 +1424,64 @@ static HUBER_1964: CitationMetadata = CitationMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The step card: what to set first without a section, the rest in
+    /// sections - in this order.
+    #[test]
+    fn the_settings_are_in_sections() {
+        let command: evanalyzer_cfg::settings::pipeline_command::PipelineCommand =
+            serde_json::from_str(
+                r#"{ "type": "SUBTRACT_REFERENCE_CHANNEL", "id": "reference", "referenceChannel": 4 }"#,
+            )
+            .unwrap();
+        // A choice's own settings ("factor.min_r2") go with it.
+        let mut sections: Vec<(String, Vec<String>)> = Vec::new();
+        for def in command.to_parameters() {
+            if def.name.contains('.') {
+                continue;
+            }
+            match sections.last_mut() {
+                Some((section, names)) if *section == def.section => names.push(def.name),
+                _ => sections.push((def.section, vec![def.name])),
+            }
+        }
+        let names = |list: &[&str]| list.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            sections,
+            vec![
+                (
+                    String::new(),
+                    names(&["target", "reference_channel", "output"])
+                ),
+                ("Alignment".into(), names(&["alignment", "interpolation"])),
+                (
+                    "Background & smoothing".into(),
+                    names(&[
+                        "background",
+                        "smoothing_sigma",
+                        "target_extra_sigma",
+                        "reference_extra_sigma",
+                        "camera_offset",
+                        "saturation"
+                    ])
+                ),
+                (
+                    "Factor".into(),
+                    names(&[
+                        "factor",
+                        "factor_scale",
+                        "id",
+                        "estimation_scope",
+                        "edge_tolerance"
+                    ])
+                ),
+                (
+                    "Subtraction".into(),
+                    names(&["only_brighter_reference", "clip_negative"])
+                ),
+            ]
+        );
+    }
 
     /// The reduced median background follows the full-resolution one: on
     /// a ramp with spots and a filament it stays within 2 % of the ramp's
