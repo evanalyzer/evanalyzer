@@ -45,18 +45,78 @@ impl StartPageController {
     /// At startup without a project to open: the last project (if so set
     /// and it is still there), else the start page.
     pub fn show_start(&self) {
+        let backend = self.app_state.backend();
+        self.show_start_with(
+            move |path| matches!(backend.files().stat(path), Ok(Some(_))),
+            LAST_PROJECT_WAIT,
+        );
+    }
+
+    /// [`Self::show_start`] with `exists` telling whether the last project
+    /// is still there. It is asked on a thread of its own and waited for at
+    /// most `wait` - the window shows only after this, and a network share
+    /// that is gone can take many seconds to answer. Answered later: the
+    /// start page meanwhile, and the project opened when the answer comes
+    /// if the start page is still untouched (as if its entry was clicked).
+    pub(crate) fn show_start_with(
+        &self,
+        exists: impl FnOnce(&std::path::Path) -> bool + Send + 'static,
+        wait: std::time::Duration,
+    ) {
         let settings = self.app_state.load_app_settings();
         let last = settings
             .recent_projects
             .first()
             .map(|p| p.path.clone())
-            .filter(|_| settings.open_last_project)
-            .filter(|path| matches!(self.app_state.backend().files().stat(path), Ok(Some(_))));
+            .filter(|_| settings.open_last_project);
         // The EVA menu's RECENT either way.
         push_recent(&self.ui, &self.app_state);
-        match last {
-            Some(path) => Arc::clone(&self.project_controller).open_new_project(&path),
-            None => set_active(&self.ui, true, None),
+        let Some(path) = last else {
+            set_active(&self.ui, true, None);
+            return;
+        };
+        let (answer, answered) = std::sync::mpsc::channel();
+        let late = Arc::new(std::sync::Mutex::new(None::<LateOpen>));
+        let late_in = Arc::clone(&late);
+        let asked = path.clone();
+        crate::helper::ui_thread::spawn(move || {
+            let there = exists(&asked);
+            // Waited for: the answer goes back. Too late: opened from here.
+            // Under the lock, so the wait can't end between the two.
+            let mut waiting = late_in.lock().expect("Poisoned");
+            match waiting.take() {
+                None => {
+                    let _ = answer.send(there);
+                }
+                Some(late) if there => late.open(asked),
+                Some(_) => {}
+            }
+        });
+        match answered.recv_timeout(wait) {
+            Ok(true) => Arc::clone(&self.project_controller).open_new_project(&path),
+            Ok(false) => set_active(&self.ui, true, None),
+            Err(_) => {
+                let mut waiting = late.lock().expect("Poisoned");
+                match answered.try_recv() {
+                    // Answered just now.
+                    Ok(true) => {
+                        drop(waiting);
+                        Arc::clone(&self.project_controller).open_new_project(&path);
+                    }
+                    Ok(false) => set_active(&self.ui, true, None),
+                    Err(_) => {
+                        log::info!(
+                            "The last project {path:?} doesn't answer yet - the start page meanwhile"
+                        );
+                        *waiting = Some(LateOpen {
+                            ui: self.ui.clone(),
+                            app_state: Arc::clone(&self.app_state),
+                            project_controller: Arc::clone(&self.project_controller),
+                        });
+                        set_active(&self.ui, true, None);
+                    }
+                }
+            }
         }
     }
 
@@ -152,6 +212,51 @@ impl StartPageController {
                 .app_state
                 .update_app_settings(|settings| settings.open_last_project = on);
         });
+    }
+}
+
+/// How long startup waits for the last project to answer whether it is
+/// still there - a local disk answers at once, a share that is gone may
+/// take many seconds.
+const LAST_PROJECT_WAIT: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// The last project, opened once its late answer comes - if nothing
+/// happened on the start page meanwhile.
+struct LateOpen {
+    ui: slint::Weak<AppWindow>,
+    app_state: Arc<UiState>,
+    project_controller: Arc<ProjectController>,
+}
+
+impl LateOpen {
+    /// Opens `path` on the UI thread - only while the start page shows, no
+    /// dialog is open and the project is the untouched blank one: anything
+    /// the user did meanwhile wins.
+    fn open(self, path: PathBuf) {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            let Some(ui) = self.ui.upgrade() else {
+                return;
+            };
+            let untouched = ui.global::<StartState>().get_active()
+                && ui.global::<crate::GlobalAppState>().get_active_dialog()
+                    == crate::DialogType::None
+                && !ui.global::<crate::FileBrowserState>().get_visible()
+                && !self.app_state.is_dirty()
+                && self
+                    .app_state
+                    .get_project()
+                    .tmp_settings
+                    .current_project
+                    .is_none();
+            if untouched {
+                self.project_controller.open_new_project(&path);
+            } else {
+                log::info!(
+                    "The last project {path:?} answered, but the start page was used - not opened"
+                );
+            }
+        })
+        .ok();
     }
 }
 

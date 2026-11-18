@@ -18,10 +18,14 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use evanalyzer_app::images::{ImageChannel, ImageContainer, ManagedImage, Point2d};
-use evanalyzer_cfg::core_types::ImageDimensionality;
-use evanalyzer_cfg::core_types::InternalErrors;
-use kornia_image::{Image, ImageSize};
+#[cfg(test)]
+use evanalyzer_app::images::ManagedImage;
+use evanalyzer_app::images::{ImageChannel, ImageContainer, Point2d};
+#[cfg(test)]
+use evanalyzer_cfg::core_types::{ImageDimensionality, InternalErrors};
+#[cfg(test)]
+use kornia_image::Image;
+use kornia_image::ImageSize;
 use rayon::prelude::*;
 use std::sync::Arc;
 
@@ -136,6 +140,7 @@ impl ViewChannel {
 
     /// The image as read (`f32`), expanded from compact samples if needed -
     /// for the few users that need an [`ImageContainer`].
+    #[cfg(test)]
     pub fn to_container(&self) -> Result<Arc<ImageContainer>, InternalErrors> {
         let values: Vec<f32> = match &self.samples {
             Samples::Image(img) => return Ok(img.clone()),

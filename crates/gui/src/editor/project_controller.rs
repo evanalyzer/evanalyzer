@@ -2153,6 +2153,119 @@ pub(crate) mod tests {
         assert_eq!(w.pipeline_names(), ["Last"]);
     }
 
+    /// The last project, asked whether it is still there at startup, with
+    /// an answer the test releases - `there` once released.
+    fn slow_answer(
+        there: bool,
+    ) -> (
+        impl FnOnce(&std::path::Path) -> bool + Send + 'static,
+        std::sync::mpsc::Sender<()>,
+    ) {
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        (
+            move |_: &std::path::Path| {
+                released.recv().ok();
+                there
+            },
+            release,
+        )
+    }
+
+    fn remember_as_last(w: &Window, path: &PathBuf) {
+        w.ui_state.update_app_settings(|s| {
+            s.open_last_project = true;
+            s.remember_project(evanalyzer_app::global::RecentProject {
+                path: path.clone(),
+                name: "x".into(),
+                images: 0,
+                pipelines: 0,
+                opened_at: 0,
+            });
+        });
+    }
+
+    /// A last project that doesn't answer in time (a share that is gone):
+    /// startup goes on with the start page, and the late answer still opens
+    /// it - the start page untouched.
+    #[test]
+    fn a_last_project_answering_late_opens_once_it_answers() {
+        let w = with_window(ProjectWithRuntime::default());
+        let path = w.saved_project("last.evaproj", &project_with_pipeline("Last"));
+        remember_as_last(&w, &path);
+        let (exists, release) = slow_answer(true);
+
+        let started = std::time::Instant::now();
+        w.start
+            .show_start_with(exists, std::time::Duration::from_millis(30));
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "startup did not wait for the answer"
+        );
+        assert!(w.pipeline_names().is_empty(), "not opened yet");
+
+        release.send(()).unwrap();
+        drain_ui_queue();
+        let start = w.ui.global::<crate::StartState>();
+        assert!(!start.get_active(), "opened");
+        assert_eq!(w.pipeline_names(), ["Last"]);
+    }
+
+    /// The start page used before the late answer (a project changed, a
+    /// dialog open): the answer opens nothing - what the user did wins. An
+    /// answer "gone" opens nothing either.
+    #[test]
+    fn a_late_answer_opens_nothing_once_the_start_page_was_used() {
+        let wait = std::time::Duration::from_millis(30);
+        // Changed meanwhile.
+        let w = with_window(ProjectWithRuntime::default());
+        let path = w.saved_project("last.evaproj", &project_with_pipeline("Last"));
+        remember_as_last(&w, &path);
+        let (exists, release) = slow_answer(true);
+        w.start.show_start_with(exists, wait);
+        w.ui_state.mark_dirty();
+        release.send(()).unwrap();
+        drain_ui_queue();
+        assert!(w.pipeline_names().is_empty(), "not opened over a change");
+
+        // A dialog open meanwhile.
+        let w = with_window(ProjectWithRuntime::default());
+        let path = w.saved_project("last.evaproj", &project_with_pipeline("Last"));
+        remember_as_last(&w, &path);
+        let (exists, release) = slow_answer(true);
+        w.start.show_start_with(exists, wait);
+        w.ui.global::<GlobalAppState>()
+            .set_active_dialog(DialogType::About);
+        release.send(()).unwrap();
+        drain_ui_queue();
+        assert!(w.pipeline_names().is_empty(), "not opened under a dialog");
+
+        // Gone, late.
+        let w = with_window(ProjectWithRuntime::default());
+        let path = w.saved_project("last.evaproj", &project_with_pipeline("Last"));
+        remember_as_last(&w, &path);
+        let (exists, release) = slow_answer(false);
+        w.start.show_start_with(exists, wait);
+        release.send(()).unwrap();
+        drain_ui_queue();
+        assert!(w.pipeline_names().is_empty());
+        assert!(w.ui.global::<crate::StartState>().get_active());
+    }
+
+    /// Answered in time: opened (or the start page) before the window
+    /// shows, as before.
+    #[test]
+    fn an_answer_in_time_opens_the_last_project_at_once() {
+        let w = with_window(ProjectWithRuntime::default());
+        let path = w.saved_project("last.evaproj", &project_with_pipeline("Last"));
+        remember_as_last(&w, &path);
+        w.start
+            .show_start_with(|_| true, std::time::Duration::from_secs(10));
+        // Opened synchronously - before any UI update ran.
+        assert_eq!(w.pipeline_names(), ["Last"]);
+        drain_ui_queue();
+        assert!(!w.ui.global::<crate::StartState>().get_active());
+    }
+
     #[test]
     fn new_file_on_a_clean_project_starts_a_blank_one() {
         let w = with_window(project_with_pipeline("Old"));

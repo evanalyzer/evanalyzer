@@ -65,7 +65,19 @@ pub(super) struct SplitState {
     /// The class selected in the drawer's Classes panel: drawn on top of
     /// the others (only the selected object above it), as in the editor.
     pub(super) selected_class: Option<i32>,
+    /// The overlay masks of `objects` decoded so far (by index), and which
+    /// objects they belong to (held weakly: a new list never matches) - a
+    /// selection click or an arrow step redraws the overlay without
+    /// decoding every mask again, and the unchanged masks compare by
+    /// pointer (see [`ResultsStateController::split_masks`]).
+    pub(super) masks: Option<(std::sync::Weak<Vec<ResultObject>>, OverlayMasks)>,
 }
+
+/// An object's mask as the overlay draws it (its box, filled, without one).
+type OverlayMask = Arc<bitvec::vec::BitVec<u64, bitvec::order::Lsb0>>;
+
+/// The overlay masks of an object list, by index (`None`: not decoded yet).
+type OverlayMasks = Arc<Vec<Option<OverlayMask>>>;
 
 impl ResultsStateController {
     pub(super) fn attach_split_callbacks(self: &Arc<Self>, ui: &AppWindow) {
@@ -185,7 +197,7 @@ impl ResultsStateController {
                     manager.profile_step(1);
                 }
             } else {
-                manager.viewport().set_results_overlay(None);
+                manager.split_clear_overlay();
                 *manager
                     .viewport()
                     .viewport_cache
@@ -480,7 +492,7 @@ impl ResultsStateController {
             split.selected = None;
             split.generation
         };
-        self.viewport().set_results_overlay(None);
+        self.split_clear_overlay();
         self.split_push_selection(false);
 
         // Not in the viewer yet: opened, at the object when following.
@@ -687,13 +699,13 @@ impl ResultsStateController {
             .is_some_and(|rel| !self.split_in_viewer(rel))
         {
             log::debug!("Split view: {image:?} not open yet - its objects wait for it");
-            self.viewport().set_results_overlay(None);
+            self.split_clear_overlay();
             return;
         }
         let t = self.plane_filter.lock().expect("Poisoned").selected_t_stack;
         let trails = self.tracks_trails(image.as_deref(), t);
         if objects.is_empty() && trails.is_none() {
-            self.viewport().set_results_overlay(None);
+            self.split_clear_overlay();
             return;
         }
         let (class_colors, class_order): (HashMap<i32, u32>, Vec<i32>) = {
@@ -740,6 +752,7 @@ impl ResultsStateController {
         let sources: Vec<usize> = (0..objects.len())
             .filter(|i| !hidden.contains(&objects[*i].class_id))
             .collect();
+        let masks = self.split_masks(&objects, &sources);
         let drawn = sources
             .iter()
             .map(|i| {
@@ -770,7 +783,7 @@ impl ResultsStateController {
                     dimmed,
                     layer: z.key(&classes, selected == Some(*i)),
                     pick: z.key(&classes, false),
-                    ..OverlayObject::new(object.bbox_px, rgb, object.decoded_mask().map(Arc::new))
+                    ..OverlayObject::new(object.bbox_px, rgb, masks[*i].clone())
                 }
             })
             .collect();
@@ -800,6 +813,53 @@ impl ResultsStateController {
             rings,
         };
         self.viewport().set_results_overlay(Some(overlay));
+    }
+
+    /// Nothing of the split view on the image - its decoded masks freed
+    /// with the overlay.
+    fn split_clear_overlay(&self) {
+        self.split.lock().expect("Poisoned").masks = None;
+        self.viewport().set_results_overlay(None);
+    }
+
+    /// The overlay masks of `objects` (by index) - those of `needed`
+    /// decoded if not yet: once per object list, not at every overlay.
+    pub(super) fn split_masks(
+        &self,
+        objects: &Arc<Vec<ResultObject>>,
+        needed: &[usize],
+    ) -> OverlayMasks {
+        let kept = {
+            let split = self.split.lock().expect("Poisoned");
+            split
+                .masks
+                .as_ref()
+                .filter(|(of, _)| std::ptr::eq(of.as_ptr(), Arc::as_ptr(objects)))
+                .map(|(_, masks)| Arc::clone(masks))
+        };
+        let mut masks = kept.unwrap_or_else(|| Arc::new(vec![None; objects.len()]));
+        if needed.iter().any(|i| masks[*i].is_none()) {
+            let filled = Arc::make_mut(&mut masks);
+            for &i in needed {
+                if filled[i].is_none() {
+                    let object = &objects[i];
+                    filled[i] = Some(
+                        OverlayObject::new(
+                            object.bbox_px,
+                            [0; 3],
+                            object.decoded_mask().map(Arc::new),
+                        )
+                        .mask,
+                    );
+                }
+            }
+            // Kept while these are still the objects shown.
+            let mut split = self.split.lock().expect("Poisoned");
+            if Arc::ptr_eq(&split.objects, objects) {
+                split.masks = Some((Arc::downgrade(objects), Arc::clone(&masks)));
+            }
+        }
+        masks
     }
 
     /// The viewer shows plane `(z, t)`: with the split on screen and its

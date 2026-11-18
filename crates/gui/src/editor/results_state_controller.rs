@@ -6748,6 +6748,107 @@ pub(crate) mod tests {
     use crate::editor::viewport_controller::ViewportController;
     use evanalyzer_app::project::ImageListExt;
 
+    mod bench_split_overlay {
+        //! # bench_split_overlay
+        //!
+        //! Benchmark (not run by default): the split view's overlay redrawn for a
+        //! selection step (a click, an arrow key) on the image with the first row's
+        //! objects - the UI thread's time per step, the process CPU, and RAM.
+        //!
+        //! EVADB=<copy of a results database> cargo test --target
+        //! x86_64-unknown-linux-gnu --release -p evanalyzer_gui --lib
+        //! bench_split_overlay_steps -- --ignored --nocapture
+
+        use super::*;
+
+        fn cpu_ms() -> f64 {
+            // SAFETY: getrusage only writes the struct it is given.
+            let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+            unsafe {
+                libc::getrusage(libc::RUSAGE_SELF, &mut usage);
+            }
+            let ms = |t: libc::timeval| t.tv_sec as f64 * 1000.0 + t.tv_usec as f64 / 1000.0;
+            ms(usage.ru_utime) + ms(usage.ru_stime)
+        }
+
+        fn rss_mb() -> (f64, f64) {
+            let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+            let kb = |key: &str| {
+                status
+                    .lines()
+                    .find(|l| l.starts_with(key))
+                    .and_then(|l| l.split_whitespace().nth(1))
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .unwrap_or(0.0)
+                    / 1024.0
+            };
+            (kb("VmRSS:"), kb("VmHWM:"))
+        }
+
+        #[test]
+        #[ignore]
+        fn bench_split_overlay_steps() {
+            use std::time::Instant;
+            let Ok(path) = std::env::var("EVADB") else {
+                eprintln!("EVADB not set - skipped");
+                return;
+            };
+            let ui = test_ui_window();
+            let ui_state = ui_state_with_window(&ui, Default::default());
+            let controller = make_controller_with_state(ui.as_weak(), ui_state);
+            controller.attach_callbacks();
+            controller.open_database(PathBuf::from(&path));
+            drain_ui_queue();
+            let (rel_path, _) = controller.list_row_locations.lock().unwrap()[0].clone();
+            let objects = controller
+                .result_generator
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .image_objects(&evanalyzer_app::results::ImageObjectsFilter {
+                    image_rel_path: rel_path,
+                    plane: evanalyzer_app::results::PlaneFilter {
+                        z_stack: 0,
+                        t_stack: 0,
+                    },
+                    value_column: None,
+                })
+                .unwrap();
+            let n = objects.len();
+            {
+                let mut split = controller.split.lock().unwrap();
+                // No image to wait for: the overlay is pushed at once.
+                split.image = None;
+                split.objects = Arc::new(objects);
+                split.selected = None;
+            }
+            let (rss_start, _) = rss_mb();
+            let step = |i: usize| {
+                controller.split.lock().unwrap().selected = Some(i % n);
+                let start = Instant::now();
+                controller.split_push_overlay();
+                start.elapsed().as_secs_f64() * 1000.0
+            };
+            let first = step(0);
+            let cpu = cpu_ms();
+            let wall = Instant::now();
+            let mut times: Vec<f64> = (1..=20).map(|i| step(i * 7)).collect();
+            let cpu = cpu_ms() - cpu;
+            let wall = wall.elapsed().as_secs_f64() * 1000.0;
+            times.sort_by(f64::total_cmp);
+            let (rss, peak) = rss_mb();
+            println!(
+                "split overlay, {n} objects: first {first:.1} ms; 20 steps: median {:.2} ms, max {:.2} ms, \
+                 wall {wall:.1} ms, cpu {cpu:.1} ms, RSS {:+.0} MB, peak {:.0} MB",
+                times[10],
+                times[19],
+                rss - rss_start,
+                peak
+            );
+        }
+    }
+
     fn make_controller_with_ui(ui: slint::Weak<AppWindow>) -> Arc<ResultsStateController> {
         make_controller_with_state(ui, test_ui_state())
     }
@@ -8167,6 +8268,61 @@ pub(crate) mod tests {
         };
         assert_eq!(overlay.sources, [0, 2], "the first class hidden");
         assert_eq!(overlay.source(1), 2);
+    }
+
+    /// A selection (a click, an arrow step) redraws the split overlay with
+    /// the masks already decoded - shared, not decoded again - which are
+    /// what decoding gives. Another object list decodes its own; leaving
+    /// the split view frees them.
+    #[test]
+    fn split_overlay_masks_are_decoded_once_per_object_list() {
+        use crate::editor::results_overlay::OverlayObject;
+        let (ui, controller) = split_controller();
+        let state = ui.global::<ResultsState>();
+        state.invoke_list_row_selected(0);
+        drain_ui_queue();
+        controller.split_push_overlay();
+        let first = controller.viewport().results_overlay().expect("an overlay");
+        assert!(!first.objects.is_empty());
+        let objects = controller.split.lock().unwrap().objects.clone();
+        for (k, drawn) in first.objects.iter().enumerate() {
+            let object = &objects[first.source(k)];
+            let decoded =
+                OverlayObject::new(object.bbox_px, [0; 3], object.decoded_mask().map(Arc::new));
+            assert_eq!(*drawn.mask, *decoded.mask, "object {k}");
+        }
+
+        // Another selection (none): the same masks, not decoded again.
+        assert_eq!(controller.split.lock().unwrap().selected, Some(0));
+        controller.split.lock().unwrap().selected = None;
+        controller.split_push_overlay();
+        let second = controller.viewport().results_overlay().unwrap();
+        assert_ne!(*first, *second, "the selection is drawn");
+        assert_eq!(first.objects.len(), second.objects.len());
+        for (a, b) in first.objects.iter().zip(&second.objects) {
+            assert!(Arc::ptr_eq(&a.mask, &b.mask));
+        }
+
+        // Another object list (the same objects read again): its own masks
+        // (the overlay itself stays - it is equal).
+        let again = Arc::new((*objects).clone());
+        controller.split.lock().unwrap().objects = again.clone();
+        controller.split_push_overlay();
+        let kept = |list: &Arc<Vec<evanalyzer_app::results::ResultObject>>| {
+            let split = controller.split.lock().unwrap();
+            let (of, masks) = split.masks.as_ref().expect("masks kept");
+            assert!(std::ptr::eq(of.as_ptr(), Arc::as_ptr(list)), "of this list");
+            masks[first.source(0)].clone().unwrap()
+        };
+        let own = kept(&again);
+        assert!(!Arc::ptr_eq(&first.objects[0].mask, &own));
+        assert_eq!(*first.objects[0].mask, *own);
+
+        // The split view left: the overlay and its masks go.
+        state.invoke_split_shown(false);
+        drain_ui_queue();
+        assert!(controller.viewport().results_overlay().is_none());
+        assert!(controller.split.lock().unwrap().masks.is_none());
     }
 
     #[test]

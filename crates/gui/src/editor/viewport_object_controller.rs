@@ -687,7 +687,7 @@ impl ViewPortObjectController {
         let mask = if tool == ToolState::Wand {
             self.wand_stroke_mask(&image_points, radius)
         } else {
-            let (_, read_context) = self.viewport_cache.get_image_references();
+            let read_context = self.viewport_cache.read_context();
             stroke_mask(
                 &image_points,
                 radius,
@@ -765,7 +765,7 @@ impl ViewPortObjectController {
     /// Adds the stroke to the selected object, if it is a hand-drawn one
     /// (measured again, keeping its id and classes). Whether it was.
     fn paint_into_selected(&self, stroke: &BitVec<u64, Lsb0>, stroke_bbox: [u32; 4]) -> bool {
-        let (_, read_context) = self.viewport_cache.get_image_references();
+        let read_context = self.viewport_cache.read_context();
         if read_context.full_image_w == 0 {
             return false; // no image shown
         }
@@ -825,7 +825,7 @@ impl ViewPortObjectController {
     /// the plane or z-projection and frame shown): an object left empty is
     /// deleted, the others measured again (keeping their id and classes).
     fn erase(&self, stroke: &BitVec<u64, Lsb0>, stroke_bbox: [u32; 4]) -> bool {
-        let (_, read_context) = self.viewport_cache.get_image_references();
+        let read_context = self.viewport_cache.read_context();
         if read_context.full_image_w == 0 {
             return false; // no image shown
         }
@@ -897,7 +897,7 @@ impl ViewPortObjectController {
     fn add_to_object_list(&self, mask_data: BitVec<u64, Lsb0>, bbox: [u32; 4]) {
         // Each drawn object is an undo step of its own.
         self.app_state.begin_undo_step();
-        let (_, read_context) = self.viewport_cache.get_image_references();
+        let read_context = self.viewport_cache.read_context();
         if read_context.full_image_w == 0 {
             return; // no image shown
         }

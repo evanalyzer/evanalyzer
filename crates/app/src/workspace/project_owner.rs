@@ -324,6 +324,13 @@ impl AppHandle {
         old
     }
 
+    /// Forgets the cached opened image (nothing shown any more, e.g. another
+    /// project): its reader and buffers are freed once no read still uses
+    /// it. The next [`Self::get_image_source`] opens the image again.
+    pub fn forget_image_source(&self) {
+        *self.image_source.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
     /// Returns the metadata of the image at `new_path`, from the same cached
     /// [`ImageSource`] as [`Self::get_image_source`].
     pub fn get_image_meta(&self, new_path: &PathBuf) -> Result<ImageMeta, InternalErrors> {

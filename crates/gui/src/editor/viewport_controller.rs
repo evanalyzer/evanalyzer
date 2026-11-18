@@ -286,7 +286,7 @@ fn update_retained_tiles(
 /// Hands freed heap memory back to the operating system. glibc keeps freed
 /// chunks of its heap for reuse instead, so the process wouldn't shrink
 /// after a cache is emptied. Elsewhere large blocks go back on their own.
-fn return_freed_memory_to_os() {
+pub(crate) fn return_freed_memory_to_os() {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     // SAFETY: malloc_trim only releases free memory of the allocator.
     unsafe {
@@ -395,6 +395,11 @@ pub struct ViewportController {
     /// The caches are held small while a local analysis runs (see
     /// [`Self::release_preview_memory_for_analysis`]).
     pub(crate) caches_small_for_analysis: AtomicBool,
+    /// The overview (low-res) shows an older look than asked for: a display
+    /// change rendered only the sharp view first - see
+    /// [`Self::trigger_image_redraw`]. The high-res worker renders it once
+    /// no newer sharp render waits ([`Self::take_stale_overview`]).
+    pub(crate) overview_stale: AtomicBool,
     /// Full-resolution size of the current image, for the navigator, which
     /// pan/zoom update without a render.
     pub(crate) full_image_size: Mutex<(i64, i64)>,
@@ -524,6 +529,7 @@ impl ViewportController {
             content_generation: AtomicU64::new(0),
             memory_settings: RwLock::new(app_state.viewport_memory_settings()),
             caches_small_for_analysis: AtomicBool::new(false),
+            overview_stale: AtomicBool::new(false),
             full_image_size: Mutex::new((0, 0)),
             viewport_cache,
             results_overlay: RwLock::new(None),
@@ -860,6 +866,9 @@ impl ViewportController {
     pub fn trigger_new_image_redraw(&self) {
         // Another image: the last one's prediction doesn't belong to it.
         self.prediction.clear();
+        // Read anew (also the same file again); the workers then keep what
+        // either of them reads for this opening.
+        self.viewport_cache.clear_tiles();
         self.bump_content_generation();
         self.reset_high_res_barrier();
         self.start_opening();
@@ -890,7 +899,8 @@ impl ViewportController {
 
     /// Redraws after a display change (histogram, breakpoint view, ...).
     /// The overview is redrawn too: pan/zoom no longer re-render it, so it
-    /// would otherwise keep showing the old look.
+    /// would otherwise keep showing the old look - but after the sharp view
+    /// (see [`Self::dispatch_sharp_first`]).
     pub fn trigger_image_redraw(&self) {
         self.bump_content_generation();
         let mut task: DrawingTask = DrawingTask::default();
@@ -899,7 +909,39 @@ impl ViewportController {
         task.is_new_image = false;
         task.fit_to_screen = false;
         task.is_new_series = false;
-        self.dispatch_worker_task(task, TaskDispatch::HighResAndLowRes);
+        self.dispatch_sharp_first(task);
+    }
+
+    /// The sharp view now, the overview once no newer sharp render waits:
+    /// under the sharp view (it covers the image, or the viewport when
+    /// zoomed in) the overview isn't seen, so during a drag (a contrast
+    /// slider, a time-lapse played) it isn't rendered every frame for
+    /// nothing - only once the gesture rests, before the next pan can show
+    /// it. New content (another image or series) still gets both at once:
+    /// its overview is what shows while the sharp view loads.
+    fn dispatch_sharp_first(&self, task: DrawingTask) {
+        self.overview_stale.store(true, Ordering::SeqCst);
+        self.dispatch_worker_task(task, TaskDispatch::HighRes);
+    }
+
+    /// Called by the high-res worker after a render: the overview that
+    /// [`Self::dispatch_sharp_first`] left out is dispatched now - unless a
+    /// newer sharp render waits (that one's end will).
+    pub(crate) fn take_stale_overview(&self) {
+        if !self.overview_stale.load(Ordering::SeqCst) {
+            return;
+        }
+        let sharp_waits = self
+            .drawing_tasks
+            .high_res_task
+            .task_request
+            .0
+            .lock()
+            .unwrap()
+            .is_some();
+        if !sharp_waits && self.overview_stale.swap(false, Ordering::SeqCst) {
+            self.dispatch_worker_task(DrawingTask::default(), TaskDispatch::LowRes);
+        }
     }
 
     pub fn trigger_image_redraw_with_auto_adjust(&self) {
@@ -935,11 +977,13 @@ impl ViewportController {
         self.dispatch_worker_task(task, TaskDispatch::LowRes);
     }
 
-    /// Redraws after a change of what is shown (channels, z/t stack, ...).
+    /// Redraws after a change of what is shown (channels, z/t stack, ...) -
+    /// the sharp view first, the overview after it (see
+    /// [`Self::dispatch_sharp_first`]).
     pub fn trigger_redraw_low_res_and_high_res(&self) {
         self.bump_content_generation();
         let task = DrawingTask::default();
-        self.dispatch_worker_task(task, TaskDispatch::HighResAndLowRes);
+        self.dispatch_sharp_first(task);
     }
 
     /// Re-renders once a pan/zoom/resize settled: the sharp tile and the
@@ -987,6 +1031,8 @@ impl ViewportController {
     /// 3. Signal the `Condvar` to wake up a blocked worker thread.
     fn dispatch_worker_task(&self, task: DrawingTask, scope: TaskDispatch) {
         if scope == TaskDispatch::LowRes || scope == TaskDispatch::HighResAndLowRes {
+            // An overview render on its way: it reads the look then.
+            self.overview_stale.store(false, Ordering::SeqCst);
             self.drawing_tasks
                 .low_res_task
                 .task_count
@@ -1286,7 +1332,9 @@ impl ViewportController {
 
     /// Another project: nothing shown until an image is opened - the
     /// renders, the tile history, the objects, the breakpoint image and its
-    /// compare are gone.
+    /// compare are gone. So is the RAM kept for the last image: the tile
+    /// and overview caches, the opened image (its reader) and the workers'
+    /// frame buffers - otherwise held while nothing is shown.
     pub fn clear_shown_image(&self) {
         self.bump_content_generation();
         self.opening_done(self.content_generation());
@@ -1296,9 +1344,11 @@ impl ViewportController {
         *self.breakpoint_histogram.write().unwrap() = None;
         self.compare.store(false, Ordering::Relaxed);
         *self.histograms.lock().expect("Poisoned") = [(Vec::new(), 1.0), (Vec::new(), 1.0)];
-        if let Ok(mut active) = self.viewport_cache.active_high_res_data.write() {
-            *active = None;
-        }
+        self.viewport_cache.clear();
+        self.app_state.forget_image_source();
+        // The workers find no image and drop their frame buffers (a render
+        // of the last image still running is cancelled after its read).
+        self.dispatch_worker_task(DrawingTask::default(), TaskDispatch::HighResAndLowRes);
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
@@ -1316,14 +1366,27 @@ impl ViewportController {
                     .set_has_breakpoint_image(false);
                 ui.global::<crate::ViewportObjectState>().set_compare(false);
             }
+            // The caches and the renders just dropped: back to the system.
+            return_freed_memory_to_os();
         })
         .ok();
     }
 
     /// The histogram curve and value scale (2^bits) of `side` (0 the
     /// original, 1 the breakpoint image) - shown if the panel shows that side.
+    /// The same curve and scale as already published: nothing to do - the
+    /// panel shows (or will show, if that side is chosen) exactly that, and
+    /// re-posting would only make Slint parse the same paths again (every
+    /// frame of a contrast drag).
     pub fn publish_histogram(&self, side: u8, curves: Vec<HistogramData>, value_scale: f32) {
-        self.histograms.lock().expect("Poisoned")[side as usize] = (curves, value_scale);
+        {
+            let mut histograms = self.histograms.lock().expect("Poisoned");
+            let kept = &mut histograms[side as usize];
+            if kept.0 == curves && kept.1 == value_scale {
+                return;
+            }
+            *kept = (curves, value_scale);
+        }
         if self.histogram_side.load(Ordering::Relaxed) == side {
             self.show_histogram_curve();
         }

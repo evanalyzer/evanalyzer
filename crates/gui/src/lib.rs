@@ -655,6 +655,12 @@ impl UiState {
         self.app.get_image_source(new_path)
     }
 
+    /// Forgets the cached opened image - see
+    /// [`AppHandle::forget_image_source`](evanalyzer_app::global::AppHandle::forget_image_source).
+    pub fn forget_image_source(&self) {
+        self.app.forget_image_source()
+    }
+
     /// Where analysis/preview/training runs - local or a server. Can change
     /// while the program runs ("Connect to server"), so fetch it per use.
     pub fn backend(&self) -> Arc<dyn Backend> {
@@ -864,6 +870,7 @@ fn run(
     let ui_handle = ui.as_weak();
     startup_phase("window created");
     load_about_dialog_information(&ui);
+    attach_licenses(&ui);
     startup_phase("about information");
 
     // Build AppHandle from owner - shares the same Arc<RwLock<ProjectSettings>>
@@ -911,13 +918,34 @@ fn platform_text(os: &str, arch: &str) -> String {
 }
 
 /// About dialog content: version comes from the crate version (which the
-/// release CI patches to the git tag before building), licenses are fixed.
-/// The system tab is filled per opening by [`attach_system_info`].
+/// release CI patches to the git tag before building). The licenses are
+/// filled when the dialog first opens ([`attach_licenses`]), the system tab
+/// whenever it is shown ([`attach_system_info`]).
 fn load_about_dialog_information(ui: &AppWindow) {
     let info = ui.global::<AppInfoState>();
     info.set_version(env!("CARGO_PKG_VERSION").into());
     info.set_prerelease(env!("CARGO_PKG_VERSION").contains('-'));
     info.set_platform(platform_text(std::env::consts::OS, std::env::consts::ARCH).into());
+}
+
+/// The licenses for the About dialog: parsed (~1.2 MB of text into a few
+/// thousand paragraphs) the first time the dialog opens - not at every
+/// start - and kept from then on.
+fn attach_licenses(ui: &AppWindow) {
+    let ui_weak = ui.as_weak();
+    ui.global::<AppInfoState>().on_load_licenses(move || {
+        if let Some(ui) = ui_weak.upgrade() {
+            load_licenses(&ui);
+        }
+    });
+}
+
+/// Fills the About dialog's licenses, once.
+fn load_licenses(ui: &AppWindow) {
+    let info = ui.global::<AppInfoState>();
+    if slint::Model::row_count(&info.get_license_paragraphs()) > 0 {
+        return;
+    }
     let paragraphs: Vec<slint::SharedString> = license_text::LICENSE_TEXT
         .split("\n\n")
         .map(|p| p.into())
@@ -1774,14 +1802,51 @@ mod ui_state_tests {
         let ui = crate::editor::test_support::test_ui_window();
 
         load_about_dialog_information(&ui);
+        attach_licenses(&ui);
 
         let info = ui.global::<AppInfoState>();
         assert_eq!(info.get_version(), env!("CARGO_PKG_VERSION"));
-        assert!(slint::Model::row_count(&info.get_license_paragraphs()) > 0);
+        // Not parsed at startup.
+        assert_eq!(slint::Model::row_count(&info.get_license_paragraphs()), 0);
+        assert_eq!(slint::Model::row_count(&info.get_third_party_licenses()), 0);
+
+        // The dialog opening asks for them.
+        info.invoke_load_licenses();
+        let paragraphs = slint::Model::row_count(&info.get_license_paragraphs());
+        let groups = slint::Model::row_count(&info.get_third_party_licenses());
+        assert!(paragraphs > 0);
+        assert_eq!(groups > 0, info.get_third_party_package_count() > 0);
+
+        // Opened again: the same, not filled twice.
+        info.invoke_load_licenses();
         assert_eq!(
-            slint::Model::row_count(&info.get_third_party_licenses()) > 0,
-            info.get_third_party_package_count() > 0
+            slint::Model::row_count(&info.get_license_paragraphs()),
+            paragraphs
         );
+        assert_eq!(
+            slint::Model::row_count(&info.get_third_party_licenses()),
+            groups
+        );
+    }
+
+    #[test]
+    fn opening_the_about_dialog_loads_the_licenses() {
+        use i_slint_backend_testing::ElementHandle;
+
+        let ui = crate::editor::test_support::test_ui_window();
+        ui.window().set_size(slint::LogicalSize::new(1280.0, 720.0));
+        attach_licenses(&ui);
+        let info = ui.global::<AppInfoState>();
+        assert_eq!(slint::Model::row_count(&info.get_license_paragraphs()), 0);
+
+        ui.global::<GlobalAppState>()
+            .set_active_dialog(DialogType::About);
+        // Looking up an element builds the dialog (its `init` runs).
+        ElementHandle::find_by_accessible_label(&ui, "Licenses")
+            .next()
+            .expect("the Licenses tab");
+        assert!(slint::Model::row_count(&info.get_license_paragraphs()) > 0);
+        assert!(info.get_third_party_package_count() > 0);
     }
 
     #[test]
@@ -1803,6 +1868,40 @@ mod ui_state_tests {
         assert!(info.get_cpu_cores() > 0);
         assert!(info.get_ram_total().ends_with(" GB"));
         assert_eq!(info.get_system_error(), "");
+    }
+
+    /// The system (and its GPU check, which loads the graphics driver) is
+    /// read when the System tab is shown - not when the dialog opens.
+    #[test]
+    fn the_system_is_read_when_its_tab_is_shown_not_when_the_about_dialog_opens() {
+        use crate::helper::ui_thread::drain_ui_queue;
+        use i_slint_backend_testing::ElementHandle;
+
+        let ui = crate::editor::test_support::test_ui_window();
+        ui.window().set_size(slint::LogicalSize::new(1280.0, 720.0));
+        let ui_state =
+            crate::editor::test_support::ui_state_with_window(&ui, ProjectWithRuntime::default());
+        attach_system_info(&ui, Arc::clone(&ui_state));
+        attach_licenses(&ui);
+        let info = ui.global::<AppInfoState>();
+        let untouched = info.get_system_source();
+
+        ui.global::<GlobalAppState>()
+            .set_active_dialog(DialogType::About);
+        let tab = ElementHandle::find_by_accessible_label(&ui, "System")
+            .next()
+            .expect("the System tab");
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(20));
+        drain_ui_queue();
+        assert_eq!(info.get_system_source(), untouched, "not read on opening");
+        assert!(!info.get_system_loading());
+
+        tab.invoke_accessible_default_action();
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(20));
+        assert_eq!(info.get_system_source(), "this computer");
+        drain_ui_queue();
+        assert!(!info.get_system_loading());
+        assert!(info.get_cpu_cores() > 0);
     }
 
     /// Slint's Royalty-free license asks for its logo in the About screen:

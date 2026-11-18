@@ -422,10 +422,19 @@ export component AboutDialog inherits Rectangle {
         root.query == "" || words.to-lowercase().replace-all(root.query.to-lowercase(), "") != words.to-lowercase()
     }
 
-    // Fresh every time it opens: in remote mode the numbers come from the
-    // worker, whose connection may have changed since startup.
+    // The licenses: parsed the first time the dialog opens, not at startup.
     init => {
-        AppInfoState.refresh_system_info();
+        AppInfoState.load_licenses();
+    }
+
+    // The system: fresh every time its tab is shown - in remote mode the
+    // numbers come from the worker, whose connection may have changed since
+    // startup. Not when the dialog opens: the GPU check loads the graphics
+    // driver, which then stays in RAM for the rest of the session.
+    changed tab => {
+        if (root.tab == 2) {
+            AppInfoState.refresh_system_info();
+        }
     }
 
     card := Rectangle {

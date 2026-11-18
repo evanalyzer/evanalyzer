@@ -177,7 +177,13 @@ impl ViewportWorker {
         };
 
         if !has_image {
-            //debug!("No current image");
+            // Nothing shown (another project): the frame buffers kept for
+            // the next frame are freed - Slint keeps its own reference to a
+            // frame still on screen.
+            if !b.is_empty() {
+                *b = RenderBuffers::new();
+                crate::editor::viewport_controller::return_freed_memory_to_os();
+            }
             return;
         }
 
@@ -234,25 +240,11 @@ impl ViewportWorker {
                 }
             }
 
-            // Resize buffer from pool if needed. A high-res buffer the tile
-            // history may still hold is never written again (that would
-            // copy it first) - a fresh one is taken instead.
-            b.pool_idx = (b.pool_idx + 1) % b.buffer_pool.len();
             let tile_history_on = !is_low_res
                 && self
                     .viewport_controller
                     .memory_settings()
                     .tile_history_enabled;
-            if tile_history_on
-                || b.buffer_pool[b.pool_idx].width() != prepared.image_w as u32
-                || b.buffer_pool[b.pool_idx].height() != prepared.image_h as u32
-            {
-                b.buffer_pool[b.pool_idx] =
-                    SharedPixelBuffer::new(prepared.image_w as u32, prepared.image_h as u32);
-            }
-
-            let master_slice = b.buffer_pool[b.pool_idx].make_mut_slice();
-            master_slice.fill(Rgb8Pixel { r: 0, g: 0, b: 0 });
 
             // ------------------------------------------------------------
             // STEP 5-7: Render pixels + build histograms - pure CPU, no locks.
@@ -348,15 +340,73 @@ impl ViewportWorker {
                     }
                 }
 
-                // STEP 7: render
-                prepare_image_channels_for_slint(
-                    &channel_contexts,
-                    master_slice,
-                    NUM_BINS,
-                    !is_low_res,
-                    &visible_channels,
-                    is_rgb,
-                )
+                // STEP 7: render. The overview with the same pixels and
+                // the same look as its last render (the software renderer
+                // re-renders it while panning - only the view moved): that
+                // render, as it is.
+                let overview_key = is_low_res.then(|| {
+                    LookKey::of(
+                        &render_src,
+                        &channel_contexts,
+                        &visible_channels,
+                        prepared.image_w,
+                        prepared.image_h,
+                    )
+                });
+                if overview_key.is_some() && b.overview == overview_key {
+                    Vec::new()
+                } else {
+                    // Resize buffer from pool if needed. A high-res buffer
+                    // the tile history may still hold is never written again
+                    // (that would copy it first) - a fresh one is taken
+                    // instead.
+                    b.pool_idx = (b.pool_idx + 1) % b.buffer_pool.len();
+                    if tile_history_on
+                        || b.buffer_pool[b.pool_idx].width() != prepared.image_w as u32
+                        || b.buffer_pool[b.pool_idx].height() != prepared.image_h as u32
+                    {
+                        b.buffer_pool[b.pool_idx] = SharedPixelBuffer::new(
+                            prepared.image_w as u32,
+                            prepared.image_h as u32,
+                        );
+                    }
+                    // What the pool's buffer now holds (no overview for a
+                    // sharp render).
+                    b.overview = overview_key;
+
+                    let master_slice = b.buffer_pool[b.pool_idx].make_mut_slice();
+                    master_slice.fill(Rgb8Pixel { r: 0, g: 0, b: 0 });
+
+                    // The histograms counted again only if what they count
+                    // changed (a contrast drag moves only the window: same
+                    // pixels, same axis).
+                    let histogram_key = (!is_low_res).then(|| {
+                        HistogramKey::of(&render_src, &channel_contexts, &visible_channels)
+                    });
+                    let kept = histogram_key
+                        .as_ref()
+                        .and_then(|key| b.histograms.as_ref().filter(|kept| kept.key == *key))
+                        .map(|kept| kept.counts.clone());
+                    let counted = prepare_image_channels_for_slint(
+                        &channel_contexts,
+                        master_slice,
+                        NUM_BINS,
+                        !is_low_res && kept.is_none(),
+                        &visible_channels,
+                        is_rgb,
+                    );
+                    match (kept, histogram_key) {
+                        (Some(kept), _) => kept,
+                        (None, Some(key)) => {
+                            b.histograms = Some(KeptHistograms {
+                                key,
+                                counts: counted.clone(),
+                            });
+                            counted
+                        }
+                        (None, None) => counted,
+                    }
+                }
             };
             let step4_7_duration = step4_7_start.elapsed();
 
@@ -553,6 +603,12 @@ impl ViewportWorker {
         } else if !comparing {
             // Compare off (or no breakpoint): its render's RAM is freed.
             b.compare = None;
+        }
+
+        // A display change left the overview for after the sharp view: now,
+        // unless a newer sharp render already waits.
+        if !is_low_res {
+            self.viewport_controller.take_stale_overview();
         }
 
         busy.store(false, Ordering::SeqCst);
@@ -888,6 +944,102 @@ fn composite_to_screen(
         });
 }
 
+/// What a sharp render's histograms count: the view's pixels (which data,
+/// held weakly - so its address is never reused for other data while
+/// compared), and per channel rendered whether it is visible (only visible
+/// channels are counted) and its axis (`min_limit`, `max_limit` and the
+/// bin factor, as bits).
+#[derive(Clone)]
+struct HistogramKey {
+    source: std::sync::Weak<Vec<ViewChannel>>,
+    channels: Vec<(i32, bool, u32, u32, u32)>,
+}
+
+impl HistogramKey {
+    fn of(
+        source: &crate::editor::viewport_cache::RenderSource,
+        channels: &[ChannelCtx],
+        visible_channels: &[i32],
+    ) -> Self {
+        Self {
+            source: Arc::downgrade(source),
+            channels: channels
+                .iter()
+                .map(|c| {
+                    (
+                        c.channel_idx,
+                        visible_channels.contains(&c.channel_idx),
+                        c.histogram.min_limit.to_bits(),
+                        c.histogram.max_limit.to_bits(),
+                        c.h_mult.to_bits(),
+                    )
+                })
+                .collect(),
+        }
+    }
+}
+
+impl PartialEq for HistogramKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.source.ptr_eq(&other.source) && self.channels == other.channels
+    }
+}
+
+/// What a render's pixels are made of: the view's samples (held weakly,
+/// as in [`HistogramKey`]), the frame's size, and per channel whether it is
+/// visible and how it is drawn (its colour factors and offset, as bits) -
+/// everything [`render_pixels`] blends.
+#[derive(Clone)]
+struct LookKey {
+    source: std::sync::Weak<Vec<ViewChannel>>,
+    size: (usize, usize),
+    channels: Vec<(i32, bool, [u32; 4])>,
+}
+
+impl LookKey {
+    fn of(
+        source: &crate::editor::viewport_cache::RenderSource,
+        channels: &[ChannelCtx],
+        visible_channels: &[i32],
+        width: usize,
+        height: usize,
+    ) -> Self {
+        Self {
+            source: Arc::downgrade(source),
+            size: (width, height),
+            channels: channels
+                .iter()
+                .map(|c| {
+                    (
+                        c.channel_idx,
+                        visible_channels.contains(&c.channel_idx),
+                        [
+                            c.r_factor.to_bits(),
+                            c.g_factor.to_bits(),
+                            c.b_factor.to_bits(),
+                            c.offset.to_bits(),
+                        ],
+                    )
+                })
+                .collect(),
+        }
+    }
+}
+
+impl PartialEq for LookKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.source.ptr_eq(&other.source)
+            && self.size == other.size
+            && self.channels == other.channels
+    }
+}
+
+/// The last sharp render's histograms and what they counted.
+struct KeptHistograms {
+    key: HistogramKey,
+    counts: Vec<Vec<f32>>,
+}
+
 /// Per-worker-thread state reused from frame to frame.
 struct RenderBuffers {
     ui_busy: Arc<AtomicBool>,
@@ -897,6 +1049,11 @@ struct RenderBuffers {
     screen_pool_idx: usize,
     /// The compare's render of the breakpoint images (none until a compare).
     compare: Option<CompareRender>,
+    /// The last sharp render's histograms (see [`HistogramKey`]).
+    histograms: Option<KeptHistograms>,
+    /// What the pool's current buffer shows, if it is an overview render -
+    /// the same again is not rendered again (see [`LookKey`]).
+    overview: Option<LookKey>,
 }
 
 impl RenderBuffers {
@@ -934,7 +1091,20 @@ impl RenderBuffers {
             screen_buffer_pool,
             screen_pool_idx,
             compare: None,
+            histograms: None,
+            overview: None,
         }
+    }
+
+    /// Nothing kept: the buffers as new (1 x 1), no compare render, no
+    /// histograms.
+    fn is_empty(&self) -> bool {
+        let tiny = |b: &SharedPixelBuffer<Rgb8Pixel>| b.width() <= 1 && b.height() <= 1;
+        self.buffer_pool.iter().all(tiny)
+            && self.screen_buffer_pool.iter().all(tiny)
+            && self.compare.is_none()
+            && self.histograms.is_none()
+            && self.overview.is_none()
     }
 }
 
@@ -1733,6 +1903,355 @@ mod tests {
     use crate::{AppWindow, ViewportState as ViewportSlintState};
     use evanalyzer_cfg::settings::images_settings::{ZStackHandling, ZStackSettings};
     use slint::ComponentHandle;
+
+    mod bench_interactions {
+        //! # bench_interactions
+        //!
+        //! Benchmark (not run by default): what a user does in the viewer with one
+        //! image, through the real dispatch - open, a contrast drag, switching the
+        //! selected channel, z steps, overview re-renders (the software renderer's
+        //! pan), the stroke end's read context and closing the project. The worker
+        //! threads are simulated on this thread (one buffer set per worker, as
+        //! there), so CPU time is the sum of all workers' work.
+        //!
+        //! A drag frame: the worker takes its task, the next slider move arrives
+        //! while it renders (so the next task is already waiting when it ends) -
+        //! what a drag faster than the render does.
+        //!
+        //! EVANALYZER_BENCH_IMAGE=<image> [BENCH_VIEWPORT=1920x1080]
+        //! cargo test --target x86_64-unknown-linux-gnu --release -p evanalyzer_gui
+        //! --lib bench_viewer_interactions -- --ignored --nocapture
+
+        use super::*;
+
+        /// Process CPU time (user + system, all threads) in ms.
+        fn cpu_ms() -> f64 {
+            // SAFETY: getrusage only writes the struct it is given.
+            let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+            unsafe {
+                libc::getrusage(libc::RUSAGE_SELF, &mut usage);
+            }
+            let ms = |t: libc::timeval| t.tv_sec as f64 * 1000.0 + t.tv_usec as f64 / 1000.0;
+            ms(usage.ru_utime) + ms(usage.ru_stime)
+        }
+
+        fn trim() {
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            // SAFETY: only releases free allocator memory.
+            unsafe {
+                libc::malloc_trim(0);
+            }
+        }
+
+        const SCOPES: [TaskDispatch; 3] = [
+            TaskDispatch::HighRes,
+            TaskDispatch::LowRes,
+            TaskDispatch::Objects,
+        ];
+
+        /// The viewer with its workers simulated on this thread.
+        struct Sim {
+            r: Render,
+            /// One buffer set per worker, as each worker thread keeps its own.
+            buffers: [RenderBuffers; 3],
+            /// Time spent per worker (high-res, low-res, objects) in ms.
+            scope_ms: [f64; 3],
+            renders: [usize; 3],
+        }
+
+        impl Sim {
+            fn take(&self, scope: TaskDispatch) -> Option<DrawingTask> {
+                self.r
+                    .worker
+                    .task_container(scope)
+                    .task_request
+                    .0
+                    .lock()
+                    .unwrap()
+                    .take()
+            }
+
+            fn run(&mut self, scope: TaskDispatch, task: DrawingTask) {
+                let i = SCOPES.iter().position(|s| *s == scope).unwrap();
+                let start = Instant::now();
+                self.r.worker.render_task(scope, task, &mut self.buffers[i]);
+                self.scope_ms[i] += start.elapsed().as_secs_f64() * 1000.0;
+                self.renders[i] += 1;
+                drain_ui_queue();
+            }
+
+            /// Runs every waiting task (and what they dispatch) until none waits.
+            fn settle(&mut self) {
+                loop {
+                    let mut any = false;
+                    for scope in SCOPES {
+                        if let Some(task) = self.take(scope) {
+                            self.run(scope, task);
+                            any = true;
+                        }
+                    }
+                    if !any {
+                        break;
+                    }
+                }
+            }
+
+            /// One frame of a fast gesture: the waiting tasks are taken, `next`
+            /// (the next event) arrives, then the taken tasks render.
+            fn frame(&mut self, next: impl FnOnce(&Render)) {
+                let taken: Vec<_> = SCOPES
+                    .iter()
+                    .filter_map(|s| self.take(*s).map(|t| (*s, t)))
+                    .collect();
+                next(&self.r);
+                for (scope, task) in taken {
+                    self.run(scope, task);
+                }
+            }
+
+            fn controller(&self) -> &ViewportController {
+                &self.r.worker.viewport_controller
+            }
+        }
+
+        struct Measure {
+            wall: Instant,
+            cpu: f64,
+            scope_ms: [f64; 3],
+            renders: [usize; 3],
+        }
+
+        fn start(sim: &Sim) -> Measure {
+            trim();
+            reset_peak_rss();
+            Measure {
+                wall: Instant::now(),
+                cpu: cpu_ms(),
+                scope_ms: sim.scope_ms,
+                renders: sim.renders,
+            }
+        }
+
+        /// FNV-1a of an image's RGB8 pixels (0 without one) - the old and the new
+        /// build must draw the same.
+        fn pixels_hash(image: &slint::Image) -> u64 {
+            image.to_rgb8().map_or(0, |b| {
+                b.as_slice()
+                    .iter()
+                    .flat_map(|p| [p.r, p.g, p.b])
+                    .fold(0xcbf29ce484222325u64, |h, v| {
+                        (h ^ v as u64).wrapping_mul(0x100000001b3)
+                    })
+            })
+        }
+
+        fn report(sim: &Sim, name: &str, m: Measure, rss_start: f64) {
+            let wall = m.wall.elapsed().as_secs_f64() * 1000.0;
+            let cpu = cpu_ms() - m.cpu;
+            let (_, peak) = rss_mb();
+            trim();
+            let (rss, _) = rss_mb();
+            let (tiles, overviews) = sim.r.worker.viewport_cache.held_bytes();
+            let d = |i: usize| sim.scope_ms[i] - m.scope_ms[i];
+            let n = |i: usize| sim.renders[i] - m.renders[i];
+            println!(
+                "{:<26} {:>8.1} {:>8.1} {:>8.1}/{:<3} {:>8.1}/{:<3} {:>7.1} {:>9} {:>7.0} {:>7.0}  sharp {:016x} overview {:016x}",
+                name,
+                wall,
+                cpu,
+                d(0),
+                n(0),
+                d(1),
+                n(1),
+                d(2),
+                format!(
+                    "{:.0}+{:.0}",
+                    tiles as f64 / BYTES_PER_MB as f64,
+                    overviews as f64 / BYTES_PER_MB as f64
+                ),
+                rss - rss_start,
+                peak - rss_start,
+                pixels_hash(&sim.r.ui.get_display_image()),
+                pixels_hash(&sim.r.ui.get_ghost_image())
+            );
+        }
+
+        #[test]
+        #[ignore]
+        fn bench_viewer_interactions() {
+            let Ok(image) = std::env::var("EVANALYZER_BENCH_IMAGE") else {
+                eprintln!("EVANALYZER_BENCH_IMAGE not set - skipped");
+                return;
+            };
+            let (vp_w, vp_h) = std::env::var("BENCH_VIEWPORT")
+                .ok()
+                .and_then(|v| {
+                    let (w, h) = v.split_once('x')?;
+                    Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?))
+                })
+                .unwrap_or((1920.0, 1080.0));
+            let (rss_start, _) = rss_mb();
+            let r = render_fixture(crate::editor::test_support::project_with_image_file(
+                image.clone().into(),
+            ));
+            {
+                let mut vp = r.worker.viewport_controller.viewport_state.write().unwrap();
+                vp.viewport_width = vp_w;
+                vp.viewport_height = vp_h;
+            }
+            let (channels, z_planes) = {
+                let source = r
+                    .app_state
+                    .get_image_source(&image.clone().into())
+                    .expect("the image opens");
+                let meta = source.meta();
+                let series = meta.series.get(&0).expect("series 0");
+                println!(
+                    "\n{image}\nc={} z={} t={}, levels: {}",
+                    series.nr_c_stacks,
+                    series.nr_z_stacks,
+                    series.nr_t_stacks,
+                    series
+                        .resolutions
+                        .iter()
+                        .map(|(l, p)| format!("{l}:{}x{} {}bit", p.width, p.height, p.nr_bits))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                (series.nr_c_stacks as i32, series.nr_z_stacks as i32)
+            };
+            let mut sim = Sim {
+                r,
+                buffers: [
+                    RenderBuffers::new(),
+                    RenderBuffers::new(),
+                    RenderBuffers::new(),
+                ],
+                scope_ms: [0.0; 3],
+                renders: [0; 3],
+            };
+            println!(
+                "viewport {vp_w}x{vp_h}, {} threads",
+                rayon::current_num_threads()
+            );
+            println!(
+                "{:<26} {:>8} {:>8} {:>12} {:>12} {:>7} {:>9} {:>7} {:>7}",
+                "step",
+                "wall ms",
+                "cpu ms",
+                "high ms/n",
+                "low ms/n",
+                "obj ms",
+                "cache MB",
+                "RSS MB",
+                "peak MB"
+            );
+
+            // Open (fit to screen), five times: each a new image to the viewer.
+            let m = start(&sim);
+            for _ in 0..5 {
+                sim.controller().trigger_new_image_redraw();
+                sim.settle();
+            }
+            report(&sim, "open x5", m, rss_start);
+
+            // A contrast drag: 40 slider moves on the selected channel.
+            let selected = sim
+                .r
+                .app_state
+                .get_project()
+                .get_selected_image_channel_idx();
+            let window = sim
+                .r
+                .app_state
+                .get_project()
+                .get_image_channel_histograms()
+                .get(&selected)
+                .cloned()
+                .flatten()
+                .map(|h| (h.min, h.max, h.min_limit, h.max_limit))
+                .unwrap_or((0.0, 1.0, 0.0, 1.0));
+            let set_window = |r: &Render, i: usize| {
+                let (min, max, lo, hi) = window;
+                let shift = (max - min) * 0.01 * i as f32;
+                r.app_state
+                    .get_project_write()
+                    .set_image_histogram_settings_for_channel(selected, min + shift, max, lo, hi);
+                r.worker.viewport_controller.trigger_image_redraw();
+            };
+            let m = start(&sim);
+            set_window(&sim.r, 0);
+            for i in 1..=40 {
+                sim.frame(|r| set_window(r, i));
+            }
+            sim.settle();
+            report(&sim, "contrast drag x40", m, rss_start);
+
+            // Switching the selected channel, ten times.
+            if channels > 1 {
+                let m = start(&sim);
+                for i in 0..10 {
+                    sim.r
+                        .app_state
+                        .get_project_write()
+                        .set_global_selected_channel(&(i % channels));
+                    sim.controller().trigger_redraw_low_res_and_high_res();
+                    sim.settle();
+                }
+                report(&sim, "select channel x10", m, rss_start);
+            }
+
+            // Z steps, one plane at a time.
+            if z_planes > 1 {
+                let m = start(&sim);
+                for i in 0..10.min(z_planes) {
+                    sim.r
+                        .app_state
+                        .get_project_write()
+                        .set_global_z_stack(&ZStackSettings {
+                            z_projection: ZStackHandling::SingleStack,
+                            z_range: Some(i..=i),
+                        });
+                    sim.controller().trigger_redraw_low_res_and_high_res();
+                    sim.settle();
+                }
+                report(&sim, "z step x10", m, rss_start);
+            }
+
+            // Overview re-renders with the view moving (the software renderer's
+            // pan), thirty times.
+            let m = start(&sim);
+            for i in 0..30 {
+                {
+                    let mut vp = sim.controller().viewport_state.write().unwrap();
+                    vp.offset_x += 3.0 * (i % 2) as f32 - 1.0;
+                }
+                sim.controller().trigger_redraw_low_res();
+                sim.settle();
+            }
+            report(&sim, "overview re-render x30", m, rss_start);
+
+            // The read context a finished stroke takes, twenty times.
+            let m = start(&sim);
+            for _ in 0..20 {
+                let (_, ctx) = sim.r.worker.viewport_cache.get_image_references();
+                std::hint::black_box(ctx);
+            }
+            report(&sim, "image references x20", m, rss_start);
+
+            // Another project: nothing shown (as opening one does: no current
+            // image, then the viewer emptied).
+            let m = start(&sim);
+            sim.r
+                .app_state
+                .get_project_write()
+                .rest_current_image_path();
+            sim.controller().clear_shown_image();
+            drain_ui_queue();
+            sim.settle();
+            report(&sim, "close (other project)", m, rss_start);
+        }
+    }
 
     struct Render {
         ui: AppWindow,
@@ -3199,6 +3718,442 @@ mod tests {
         assert!(r.ui.get_display_image().size().width > 0);
         let histograms = r.app_state.get_project().get_image_channel_histograms();
         assert!(histograms.values().all(|h| h.is_none()), "{histograms:?}");
+    }
+
+    /// Another project: the RAM kept for the last image goes - the tile and
+    /// overview caches, the opened image and (once the workers see no image)
+    /// their frame buffers. An image opened afterwards shows as before.
+    #[test]
+    fn another_project_frees_the_caches_the_opened_image_and_the_frame_buffers() {
+        let mut r = render_fixture(project_with_fixture_image());
+        r.draw(TaskDispatch::LowRes, new_image_task());
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        let cache = r.worker.viewport_cache.clone();
+        let (tiles, overviews) = cache.held_bytes();
+        assert!(tiles > 0 && overviews > 0, "{tiles} {overviews}");
+        assert!(!r.buffers.is_empty());
+        let path = r
+            .app_state
+            .get_project()
+            .get_current_image_path_cloned()
+            .expect("an image shown");
+        let source = r.app_state.get_image_source(&path).unwrap();
+        let held = Arc::strong_count(&source);
+
+        // As opening another project does.
+        r.app_state.get_project_write().rest_current_image_path();
+        r.worker.viewport_controller.clear_shown_image();
+        drain_ui_queue();
+
+        assert_eq!(cache.held_bytes(), (0, 0));
+        assert_eq!(cache.read_context().full_image_w, 0);
+        assert_eq!(
+            Arc::strong_count(&source),
+            held - 1,
+            "the opened image forgotten"
+        );
+        assert_eq!(r.ui.get_display_image().size().width, 0);
+        // Each worker gets a task, finds no image and frees its buffers.
+        for scope in [TaskDispatch::HighRes, TaskDispatch::LowRes] {
+            let task = r
+                .worker
+                .task_container(scope)
+                .task_request
+                .0
+                .lock()
+                .unwrap()
+                .take()
+                .expect("a task for the worker");
+            r.worker.render_task(scope, task, &mut r.buffers);
+        }
+        assert!(r.buffers.is_empty());
+
+        // An image opened afterwards: read again and shown.
+        r.app_state
+            .get_project_write()
+            .set_current_image_path(&path);
+        r.draw(TaskDispatch::LowRes, new_image_task());
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        assert!(r.ui.get_display_image().size().width > 0);
+        assert!(r.ui.get_ghost_image().size().width > 0);
+        assert!(cache.held_bytes().0 > 0);
+    }
+
+    /// The histograms kept from the last sharp render (a contrast drag only
+    /// moves the window) are exactly what counting again gives - and they
+    /// are counted again when the axis, the visible channels or the view
+    /// change.
+    #[test]
+    fn kept_histograms_are_what_counting_again_gives() {
+        let mut r = render_fixture(project_with_fixture_image());
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        let curves =
+            |r: &Render| r.worker.viewport_controller.histograms.lock().unwrap()[0].clone();
+        // A worker without kept histograms counts everything anew.
+        let recounted = |r: &Render| {
+            let mut fresh = RenderBuffers::new();
+            r.worker
+                .render_task(TaskDispatch::HighRes, DrawingTask::default(), &mut fresh);
+            drain_ui_queue();
+            curves(r)
+        };
+        let kept_counts = |r: &Render| r.buffers.histograms.as_ref().unwrap().counts.as_ptr();
+        let selected = r.app_state.get_project().get_selected_image_channel_idx();
+        let window = || {
+            r.app_state
+                .get_project()
+                .get_image_channel_histograms()
+                .get(&selected)
+                .cloned()
+                .flatten()
+                .expect("auto-adjusted")
+        };
+        let set_window = |r: &Render, min: f32, max: f32, lo: f32, hi: f32| {
+            r.app_state
+                .get_project_write()
+                .set_image_histogram_settings_for_channel(selected, min, max, lo, hi);
+        };
+        let h = window();
+        assert!(!curves(&r).0.is_empty());
+        let first = kept_counts(&r);
+
+        // The window moved, the axis kept: the kept counts, the same curve.
+        set_window(
+            &r,
+            h.min + (h.max - h.min) * 0.2,
+            h.max,
+            h.min_limit,
+            h.max_limit,
+        );
+        r.draw(TaskDispatch::HighRes, DrawingTask::default());
+        assert_eq!(kept_counts(&r), first, "not counted again");
+        let shown = curves(&r);
+        assert_eq!(shown, recounted(&r));
+
+        // Another axis: counted again.
+        let hi = (h.max_limit + 1.0) / 2.0;
+        set_window(&r, h.min, h.max, h.min_limit, hi.max(h.max_limit * 0.9));
+        r.draw(TaskDispatch::HighRes, DrawingTask::default());
+        let shown = curves(&r);
+        assert_eq!(shown, recounted(&r));
+
+        // A channel hidden: counted again (only visible ones count).
+        let channels = r
+            .app_state
+            .get_project()
+            .get_image_channel_visibilities_vec();
+        if channels.len() > 1 {
+            let hidden: std::collections::BTreeMap<i32, bool> =
+                channels.iter().map(|c| (*c, *c == selected)).collect();
+            r.app_state
+                .get_project_write()
+                .set_global_preferences(&hidden);
+            r.draw(TaskDispatch::HighRes, DrawingTask::default());
+            let shown = curves(&r);
+            assert_eq!(shown, recounted(&r));
+        }
+
+        // Another plane: other pixels, counted again.
+        let before = curves(&r);
+        r.app_state
+            .get_project_write()
+            .set_global_z_stack(&ZStackSettings {
+                z_projection: ZStackHandling::SingleStack,
+                z_range: Some(1..=1),
+            });
+        r.draw(TaskDispatch::HighRes, DrawingTask::default());
+        let shown = curves(&r);
+        assert_ne!(shown, before, "the other plane's histogram");
+        assert_eq!(shown, recounted(&r));
+    }
+
+    /// The same histogram again is not posted to the panel again (Slint
+    /// would parse the same paths every frame of a drag); a new one is.
+    #[test]
+    fn an_unchanged_histogram_is_not_posted_again() {
+        let r = render_fixture(project_with_fixture_image());
+        let controller = &r.worker.viewport_controller;
+        let curve = |path: &str| {
+            vec![HistogramData {
+                color: slint::Color::from_rgb_u8(1, 2, 3),
+                path: path.into(),
+            }]
+        };
+        let posted = || {
+            r.ui.global::<crate::HistogramState>()
+                .get_histogram_svg_path()
+                .row_data(0)
+                .map(|d| d.path.to_string())
+        };
+        controller.publish_histogram(0, curve("M 0 1"), 256.0);
+        drain_ui_queue();
+        assert_eq!(posted().as_deref(), Some("M 0 1"));
+
+        // A marker in the panel: a post would replace it.
+        r.ui.global::<crate::HistogramState>()
+            .set_histogram_svg_path(
+                std::rc::Rc::new(slint::VecModel::from(curve("marker"))).into(),
+            );
+        controller.publish_histogram(0, curve("M 0 1"), 256.0);
+        drain_ui_queue();
+        assert_eq!(posted().as_deref(), Some("marker"), "nothing posted");
+
+        controller.publish_histogram(0, curve("M 0 2"), 256.0);
+        drain_ui_queue();
+        assert_eq!(posted().as_deref(), Some("M 0 2"));
+        // Another scale alone is posted, too.
+        controller.publish_histogram(0, curve("M 0 2"), 4096.0);
+        drain_ui_queue();
+        assert_eq!(
+            r.ui.global::<crate::HistogramState>().get_value_scale(),
+            4096.0
+        );
+    }
+
+    fn take_task(r: &Render, scope: TaskDispatch) -> Option<DrawingTask> {
+        r.worker
+            .task_container(scope)
+            .task_request
+            .0
+            .lock()
+            .unwrap()
+            .take()
+    }
+
+    fn ghost_pixels(r: &Render) -> Vec<u8> {
+        let buffer = r.ui.get_ghost_image().to_rgb8().expect("an overview");
+        buffer
+            .as_slice()
+            .iter()
+            .flat_map(|p| [p.r, p.g, p.b])
+            .collect()
+    }
+
+    /// A display change renders the sharp view first and the overview right
+    /// after it - with the new look, as rendering it at once gives.
+    #[test]
+    fn after_a_display_change_the_overview_follows_the_sharp_view() {
+        let mut r = render_fixture(project_with_fixture_image());
+        r.draw(TaskDispatch::LowRes, new_image_task());
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        let before = ghost_pixels(&r);
+        let selected = r.app_state.get_project().get_selected_image_channel_idx();
+        let h = r
+            .app_state
+            .get_project()
+            .get_image_channel_histograms()
+            .get(&selected)
+            .cloned()
+            .flatten()
+            .unwrap();
+        r.app_state
+            .get_project_write()
+            .set_image_histogram_settings_for_channel(
+                selected,
+                h.min,
+                h.min + (h.max - h.min) * 0.25,
+                h.min_limit,
+                h.max_limit,
+            );
+
+        r.worker.viewport_controller.trigger_image_redraw();
+        assert!(take_task(&r, TaskDispatch::LowRes).is_none(), "not yet");
+        let sharp = take_task(&r, TaskDispatch::HighRes).expect("the sharp view");
+        r.draw(TaskDispatch::HighRes, sharp);
+        let overview = take_task(&r, TaskDispatch::LowRes).expect("now the overview");
+        r.draw(TaskDispatch::LowRes, overview);
+        let after = ghost_pixels(&r);
+        assert_ne!(after, before, "the new look");
+
+        // What rendering the overview at once gives.
+        r.draw(TaskDispatch::LowRes, DrawingTask::default());
+        assert_eq!(ghost_pixels(&r), after);
+        // Nothing more waits.
+        assert!(take_task(&r, TaskDispatch::LowRes).is_none());
+        assert!(take_task(&r, TaskDispatch::HighRes).is_none());
+    }
+
+    /// During a drag (the next change already waits when a sharp render
+    /// ends) no overview is rendered; once it rests, one is. Changing the
+    /// plane or the channels works the same way.
+    #[test]
+    fn during_a_drag_the_overview_waits_until_it_rests() {
+        let mut r = render_fixture(project_with_fixture_image());
+        r.draw(TaskDispatch::LowRes, new_image_task());
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        let controller = r.worker.viewport_controller.clone();
+
+        controller.trigger_image_redraw();
+        for _ in 0..3 {
+            let sharp = take_task(&r, TaskDispatch::HighRes).expect("a sharp render");
+            // The next slider move arrives while it renders.
+            controller.trigger_image_redraw();
+            r.draw(TaskDispatch::HighRes, sharp);
+            assert!(
+                take_task(&r, TaskDispatch::LowRes).is_none(),
+                "still dragging"
+            );
+        }
+        let last = take_task(&r, TaskDispatch::HighRes).expect("the last move");
+        r.draw(TaskDispatch::HighRes, last);
+        assert!(
+            take_task(&r, TaskDispatch::LowRes).is_some(),
+            "rested: the overview"
+        );
+
+        // Another plane: the same.
+        controller.trigger_redraw_low_res_and_high_res();
+        assert!(take_task(&r, TaskDispatch::LowRes).is_none());
+        let sharp = take_task(&r, TaskDispatch::HighRes).unwrap();
+        r.draw(TaskDispatch::HighRes, sharp);
+        assert!(take_task(&r, TaskDispatch::LowRes).is_some());
+    }
+
+    /// New content still gets its overview at once (it shows while the
+    /// sharp view loads); an overview dispatched for another reason meets
+    /// the waiting one - no second render.
+    #[test]
+    fn new_content_dispatches_the_overview_at_once() {
+        let mut r = render_fixture(project_with_fixture_image());
+        let controller = r.worker.viewport_controller.clone();
+        controller.trigger_new_image_redraw();
+        assert!(take_task(&r, TaskDispatch::LowRes).is_some());
+        assert!(take_task(&r, TaskDispatch::HighRes).is_some());
+        controller.trigger_new_series_redraw();
+        assert!(take_task(&r, TaskDispatch::LowRes).is_some());
+        assert!(take_task(&r, TaskDispatch::HighRes).is_some());
+        // Auto-scaling: both, as before.
+        controller.trigger_image_redraw_with_auto_adjust();
+        assert!(take_task(&r, TaskDispatch::LowRes).is_some());
+        assert!(take_task(&r, TaskDispatch::HighRes).is_some());
+
+        // A display change, then an overview on its own (the software
+        // renderer's pan): that one renders the new look - none after the
+        // sharp view.
+        controller.trigger_image_redraw();
+        controller.trigger_redraw_low_res();
+        assert!(take_task(&r, TaskDispatch::LowRes).is_some());
+        let sharp = take_task(&r, TaskDispatch::HighRes).unwrap();
+        r.draw(TaskDispatch::HighRes, sharp);
+        assert!(take_task(&r, TaskDispatch::LowRes).is_none());
+    }
+
+    /// The overview rendered with fresh buffers (nothing kept) - for
+    /// comparing.
+    fn fresh_overview(r: &Render) -> Vec<u8> {
+        let mut fresh = RenderBuffers::new();
+        r.worker
+            .render_task(TaskDispatch::LowRes, DrawingTask::default(), &mut fresh);
+        drain_ui_queue();
+        ghost_pixels(r)
+    }
+
+    /// The overview re-rendered with only the view moved (the software
+    /// renderer's pan) is its last render, not blended again; any change of
+    /// the look renders it anew - each time what a fresh render gives.
+    #[test]
+    fn an_overview_with_the_same_look_is_not_rendered_again() {
+        let mut r = render_fixture(project_with_fixture_image());
+        r.draw(TaskDispatch::LowRes, new_image_task());
+        let frame = |r: &Render| {
+            r.buffers.buffer_pool[r.buffers.pool_idx]
+                .as_slice()
+                .as_ptr()
+        };
+        let first = frame(&r);
+        let pixels = ghost_pixels(&r);
+
+        // Panned: the same frame.
+        set_view(&r, 1.0, -7.0, 3.0);
+        r.draw(TaskDispatch::LowRes, DrawingTask::default());
+        assert_eq!(frame(&r), first, "not rendered again");
+        assert_eq!(ghost_pixels(&r), pixels);
+        assert_eq!(fresh_overview(&r), pixels);
+
+        // Another window: rendered anew.
+        let selected = r.app_state.get_project().get_selected_image_channel_idx();
+        let h = r
+            .app_state
+            .get_project()
+            .get_image_channel_histograms()
+            .get(&selected)
+            .cloned()
+            .flatten()
+            .unwrap();
+        r.app_state
+            .get_project_write()
+            .set_image_histogram_settings_for_channel(
+                selected,
+                h.min,
+                h.min + (h.max - h.min) * 0.3,
+                h.min_limit,
+                h.max_limit,
+            );
+        r.draw(TaskDispatch::LowRes, DrawingTask::default());
+        assert_ne!(frame(&r), first, "rendered anew");
+        let windowed = ghost_pixels(&r);
+        assert_ne!(windowed, pixels);
+        assert_eq!(fresh_overview(&r), windowed);
+
+        // Grayscale (other colours): rendered anew.
+        let before = frame(&r);
+        r.app_state.get_project_write().set_grayscale(true);
+        r.draw(TaskDispatch::LowRes, DrawingTask::default());
+        assert_ne!(frame(&r), before);
+        let gray = ghost_pixels(&r);
+        assert_eq!(fresh_overview(&r), gray);
+
+        // A channel hidden: rendered anew.
+        r.app_state.get_project_write().set_grayscale(false);
+        let channels = r
+            .app_state
+            .get_project()
+            .get_image_channel_visibilities_vec();
+        if channels.len() > 1 {
+            r.draw(TaskDispatch::LowRes, DrawingTask::default());
+            let before = frame(&r);
+            let shown_one: std::collections::BTreeMap<i32, bool> =
+                channels.iter().map(|c| (*c, *c == channels[0])).collect();
+            r.app_state
+                .get_project_write()
+                .set_global_preferences(&shown_one);
+            r.draw(TaskDispatch::LowRes, DrawingTask::default());
+            assert_ne!(frame(&r), before);
+            let one = ghost_pixels(&r);
+            assert_eq!(fresh_overview(&r), one);
+        }
+    }
+
+    /// A sharp render into the same buffers (one worker doing both, as in
+    /// these tests) leaves no overview to take: the next overview is
+    /// rendered.
+    #[test]
+    fn a_sharp_render_in_between_leaves_no_overview_to_take() {
+        let mut r = render_fixture(project_with_fixture_image());
+        r.draw(TaskDispatch::LowRes, new_image_task());
+        let pixels = ghost_pixels(&r);
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        assert!(r.buffers.overview.is_none());
+        r.draw(TaskDispatch::LowRes, DrawingTask::default());
+        assert_eq!(ghost_pixels(&r), pixels);
+        assert_eq!(fresh_overview(&r), pixels);
+    }
+
+    /// A stroke's end takes the sharp view's position from `read_context` -
+    /// the same as `get_image_references` gives, without the pixels.
+    #[test]
+    fn the_read_context_is_the_sharp_views_context() {
+        let mut r = render_fixture(project_with_fixture_image());
+        let cache = r.worker.viewport_cache.clone();
+        assert_eq!(cache.read_context().full_image_w, 0, "nothing shown yet");
+
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        let (_, expected) = cache.get_image_references();
+        assert!(expected.full_image_w > 0);
+        assert_eq!(
+            format!("{:?}", cache.read_context()),
+            format!("{expected:?}")
+        );
     }
 
     #[test]

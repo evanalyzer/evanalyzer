@@ -64,6 +64,11 @@ pub struct ReadContext {
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub struct TileKey {
+    /// The image file the tile is of: a tile of another image never
+    /// matches, even before the caches are emptied for it (the overview
+    /// and the sharp view are read by two workers, each emptying its cache
+    /// when it gets to the new image).
+    pub image: Arc<PathBuf>,
     pub series: i32,
     pub level: i32,
     pub x: usize, // offset_x
@@ -113,6 +118,7 @@ pub(crate) type RenderSource = Arc<Vec<ViewChannel>>;
 /// candidate set instead of the whole cache.
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 struct TileGroupKey {
+    image: Arc<PathBuf>,
     series: i32,
     level: i32,
     subsample: usize,
@@ -124,6 +130,7 @@ struct TileGroupKey {
 impl From<&TileKey> for TileGroupKey {
     fn from(key: &TileKey) -> Self {
         Self {
+            image: Arc::clone(&key.image),
             series: key.series,
             level: key.level,
             subsample: key.subsample,
@@ -179,6 +186,41 @@ impl TileGroupIndex {
 struct IndexedTileCache {
     cache: InnerCache,
     index: TileGroupIndex,
+    /// The view last assembled from this cache's grid cells (see
+    /// [`read_grid_view`]).
+    last_view: Option<AssembledView>,
+    /// Grid cells being read right now (see [`read_grid_cells`]): another
+    /// reader needing one waits for it on `ready` instead of reading it a
+    /// second time.
+    in_flight: std::collections::HashSet<TileKey>,
+    ready: Arc<std::sync::Condvar>,
+}
+
+/// A sharp view assembled from grid cells, and which cells it was made of.
+/// The same cells again (a contrast drag, a channel toggle: only the look
+/// changes) give the same view - it is returned instead of copying every
+/// cell again. The cells are held weakly: their pixels are freed when the
+/// cache evicts them, only their small allocation stays, so an address is
+/// never reused for another cell while it is compared.
+struct AssembledView {
+    cells: Vec<std::sync::Weak<CachedTile>>,
+    region: GridRegion,
+    data: RenderSource,
+}
+
+impl AssembledView {
+    /// The view if `cells` (rows of cells, as read) and `region` are what
+    /// it was assembled from.
+    fn reuse(&self, cells: &[Vec<Arc<CachedTile>>], region: &GridRegion) -> Option<RenderSource> {
+        let same = self.region == *region
+            && self.cells.len() == cells.iter().map(Vec::len).sum::<usize>()
+            && self
+                .cells
+                .iter()
+                .zip(cells.iter().flatten())
+                .all(|(kept, cell)| std::ptr::eq(kept.as_ptr(), Arc::as_ptr(cell)));
+        same.then(|| Arc::clone(&self.data))
+    }
 }
 
 impl IndexedTileCache {
@@ -188,12 +230,30 @@ impl IndexedTileCache {
                 clru::CLruCacheConfig::new(capacity).with_scale(TileWeightScale),
             ),
             index: TileGroupIndex::default(),
+            last_view: None,
+            in_flight: Default::default(),
+            ready: Arc::new(std::sync::Condvar::new()),
         }
     }
 
     fn clear(&mut self) {
         self.cache.clear();
         self.index.clear();
+        self.last_view = None;
+        // A read still under way finds its cells' keys gone (harmless); a
+        // reader waiting for one reads it itself.
+        self.in_flight.clear();
+        self.ready.notify_all();
+    }
+
+    /// Only `image`'s tiles kept (another image opens): the others freed.
+    /// Its own were read for this opening - by the other worker, too (the
+    /// caches are emptied when the opening is dispatched, see
+    /// [`ViewportCache::clear_tiles`]).
+    fn retain_image(&mut self, image: &std::path::Path) {
+        self.cache.retain(|key, _| key.image.as_path() == image);
+        self.index.rebuild_from(&self.cache);
+        self.last_view = None;
     }
 
     /// Changes the weight budget, evicting least recently used tiles until
@@ -301,6 +361,22 @@ impl ViewportCache {
         )
     }
 
+    /// Nothing shown any more (another project): every cached tile and
+    /// overview, and the sharp view's data, are freed.
+    pub fn clear(&self) {
+        self.clear_tiles();
+        if let Ok(mut active) = self.active_high_res_data.write() {
+            *active = None;
+        }
+    }
+
+    /// Every cached tile and overview freed - an image opens: it is read
+    /// anew (also when it is the same file again).
+    pub fn clear_tiles(&self) {
+        self.cache_high_res.lock().unwrap().clear();
+        self.cache_low_res.lock().unwrap().clear();
+    }
+
     /// Bytes held by the (tile, overview) cache.
     pub fn held_bytes(&self) -> (usize, usize) {
         (
@@ -309,6 +385,9 @@ impl ViewportCache {
         )
     }
 
+    /// The sharp view's channels expanded to `f32`, and where it lies (the
+    /// benchmarks print them; elsewhere [`Self::read_context`] does).
+    #[cfg(test)]
     pub fn get_image_references(&self) -> (Vec<(i32, Arc<ImageContainer>)>, ReadContext) {
         let guard = self.active_high_res_data.read().expect("Poisoned");
         let Some((render_source, read_context)) = &*guard else {
@@ -321,6 +400,17 @@ impl ViewportCache {
                 .collect(),
             read_context.clone(),
         )
+    }
+
+    /// Where the sharp view on screen lies - [`Self::get_image_references`]'s
+    /// context alone, without expanding the pixels (a stroke's end only
+    /// needs the view's position).
+    pub fn read_context(&self) -> ReadContext {
+        let guard = self.active_high_res_data.read().expect("Poisoned");
+        guard
+            .as_ref()
+            .map(|(_, context)| context.clone())
+            .unwrap_or_default()
     }
 
     /// Read an image tile either from disk or from the cache
@@ -368,13 +458,14 @@ impl ViewportCache {
         let wanted_w: f32;
         let wanted_h: f32;
 
+        // Another image: the last one's tiles go. This one's stay - the
+        // other worker may have read them for this opening already (both
+        // caches were emptied when it was dispatched).
         if is_new_image {
             if is_low_res {
-                let mut cache = self.cache_low_res.lock().unwrap();
-                cache.clear();
+                self.cache_low_res.lock().unwrap().retain_image(&path);
             } else {
-                let mut cache = self.cache_high_res.lock().unwrap();
-                cache.clear();
+                self.cache_high_res.lock().unwrap().retain_image(&path);
             }
         }
         if fit_to_screen {
@@ -431,10 +522,12 @@ impl ViewportCache {
             is_low_res,
         );
 
+        let image = Arc::new(path.clone());
         if !is_low_res {
             return self.read_sharp_view(
                 &*source,
                 GridParams {
+                    image,
                     series,
                     res_idx,
                     z_projection,
@@ -506,6 +599,7 @@ impl ViewportCache {
         };
 
         let cache_key = TileKey {
+            image: Arc::clone(&image),
             series,
             level: res_idx,
             x: read_off_x,
@@ -567,7 +661,41 @@ impl ViewportCache {
         // The overview: subsampled down to about its size first (the only
         // level may be the full image), then scaled exactly.
         let step = (request_w / key_w).min(request_h / key_h).max(1);
-        let loaded = read_subsampled(&*source, &request, step)?;
+        // Of an image without a coarser level, the sharp view (fitted)
+        // reads the same level: its cells give the same samples, read once
+        // for both workers (else the file was decoded twice).
+        let shared = SharedOverview {
+            image: Arc::clone(&image),
+            series,
+            z_projection: request.z_projection,
+            z_range: z_range.clone(),
+            t: t_stack,
+            step,
+            bits: highest_res.nr_bits,
+        };
+        let from_cells = (res_idx == 0)
+            .then(|| {
+                sharp_subsample_shared_with_overview(
+                    &s_info.resolutions,
+                    wanted_w,
+                    wanted_h,
+                    v_w,
+                    v_h,
+                    step,
+                )
+            })
+            .flatten()
+            .and_then(|subsample| {
+                // Not one value per pixel (interleaved, labels) or a read
+                // error: read as before.
+                self.overview_from_sharp_cells(&*source, &shared, subsample)
+                    .inspect_err(|e| log::debug!("Overview from the sharp cells: {e:?}"))
+                    .ok()
+            });
+        let loaded = match from_cells {
+            Some(loaded) => loaded,
+            None => read_subsampled(&*source, &request, step)?,
+        };
         let loaded = scale_image(loaded, key_w, key_h)?;
 
         // Keep the samples compact (exactly - see `ViewChannel`); the
@@ -591,6 +719,46 @@ impl ViewportCache {
         }
 
         Ok((Arc::clone(&shared_data), ctx))
+    }
+
+    /// The overview's samples (`shared.step` x `shared.step` subsampled,
+    /// as [`read_subsampled`] gives them) taken from the sharp view's grid
+    /// cells of level 0 at `subsample` (a divisor of the step) - cached ones
+    /// reused, the rest read (and cached for the sharp view).
+    fn overview_from_sharp_cells(
+        &self,
+        source: &dyn ImageSource,
+        shared: &SharedOverview,
+        subsample: usize,
+    ) -> Result<Vec<ImageChannel>, InternalErrors> {
+        let level = source
+            .meta()
+            .series
+            .get(&shared.series)
+            .and_then(|s| s.resolutions.get(&0))
+            .ok_or_else(|| InternalErrors::Internal("Level 0 missing".into()))?;
+        let (full_w, full_h) = (level.width as usize, level.height as usize);
+        let view = GridView {
+            image: Arc::clone(&shared.image),
+            series: shared.series,
+            level: 0,
+            z_projection: shared.z_projection,
+            z_range: shared.z_range.clone(),
+            t: shared.t,
+            subsample,
+            level_w: full_w,
+            level_h: full_h,
+            visible: [0.0, 0.0, full_w as f32, full_h as f32],
+        };
+        let (cells, region) = read_grid_cells(&self.cache_high_res, source, &view, shared.bits)?;
+        overview_samples(
+            &cells,
+            &region,
+            shared.step / subsample,
+            shared.step,
+            full_w,
+            full_h,
+        )
     }
 
     /// Create a new image reader or use an existing if the image is the same
@@ -629,6 +797,7 @@ impl ViewportCache {
         // only every `subsample`-th pixel.
         let subsample = ((1.0 / scale_x.max(scale_y)).floor() as usize).max(1);
         let view = GridView {
+            image: p.image,
             series: p.series,
             level: p.res_idx,
             z_projection: p.z_projection,
@@ -693,6 +862,120 @@ impl ViewportCache {
 
         cache.find_spatial_superset(req)
     }
+}
+
+/// What the overview of one plane needs to be taken from the sharp view's
+/// cells (see [`ViewportCache::overview_from_sharp_cells`]).
+struct SharedOverview {
+    image: Arc<PathBuf>,
+    series: i32,
+    z_projection: ZProjection,
+    z_range: Option<RangeInclusive<i32>>,
+    t: i32,
+    /// The overview's subsampling of level 0.
+    step: usize,
+    bits: u16,
+}
+
+/// The subsample the sharp view reads level 0 with for a view of
+/// `wanted_w` x `wanted_h` screen pixels (computed exactly as
+/// [`ViewportCache::read_sharp_view`] does) - if the overview, which reads
+/// level 0 subsampled by `step`, can take its samples from those cells:
+/// the sharp view reads level 0 too, at the subsample the fitted view of a
+/// `v_w` x `v_h` viewport uses (zoomed in further, its cells of the whole
+/// image would be far more than the overview needs), and that divides
+/// `step`. `None`: the overview is read on its own, as before.
+fn sharp_subsample_shared_with_overview(
+    resolutions: &BTreeMap<i32, PyramidInfo>,
+    wanted_w: f32,
+    wanted_h: f32,
+    v_w: f32,
+    v_h: f32,
+    step: usize,
+) -> Option<usize> {
+    let full = resolutions.get(&0)?;
+    let subsample_for = |wanted_w: f32, wanted_h: f32| {
+        let (level, level_w, level_h) = look_for_best_matching_resolution_index(
+            wanted_w as usize,
+            wanted_h as usize,
+            resolutions,
+            false,
+        );
+        let (scale_x, scale_y) = (wanted_w / level_w, wanted_h / level_h);
+        let valid = scale_x.is_finite() && scale_x > 0.0 && scale_y.is_finite() && scale_y > 0.0;
+        (level == 0 && valid).then(|| ((1.0 / scale_x.max(scale_y)).floor() as usize).max(1))
+    };
+    let now = subsample_for(wanted_w, wanted_h)?;
+    // The fitted view's, as `read_image_tile_combined` fits.
+    let mut zoom = (v_w / full.width as f32).min(v_h / full.height as f32);
+    zoom *= 0.95;
+    let fitted = subsample_for(full.width as f32 * zoom, full.height as f32 * zoom)?;
+    (now == fitted && step.is_multiple_of(now)).then_some(now)
+}
+
+/// The overview's samples from `cells` (the grid of all of level 0 at a
+/// subsample, `region` where they lie): every `ratio`-th of them - level-0
+/// pixel `(x * step, y * step)` at `(x, y)`, as [`read_subsampled`] keeps
+/// them, for a `full_w` x `full_h` level.
+fn overview_samples(
+    cells: &[Vec<Arc<CachedTile>>],
+    region: &GridRegion,
+    ratio: usize,
+    step: usize,
+    full_w: usize,
+    full_h: usize,
+) -> Result<Vec<ImageChannel>, InternalErrors> {
+    if region.x != 0 || region.y != 0 || ratio == 0 {
+        return Err(InternalErrors::Internal(
+            "Overview grid not of the whole image".into(),
+        ));
+    }
+    let (out_w, out_h) = (full_w.div_ceil(step), full_h.div_ceil(step));
+    let size = kornia_image::ImageSize {
+        width: out_w,
+        height: out_h,
+    };
+    (0..cells[0][0].data.len())
+        .map(|c| {
+            let first = &cells[0][0].data[c];
+            let mut out = vec![0.0f32; out_w * out_h];
+            out.par_chunks_mut(out_w)
+                .enumerate()
+                .try_for_each(|(oy, row)| {
+                    let gy = oy * ratio;
+                    let (cy, ly) = (gy / GRID_CELL, gy % GRID_CELL);
+                    for (ox, value) in row.iter_mut().enumerate() {
+                        let gx = ox * ratio;
+                        let ch = &cells.get(cy)?.get(gx / GRID_CELL)?.data[c];
+                        let samples = ch.slice()?;
+                        let lx = gx % GRID_CELL;
+                        (lx < ch.width && ly < ch.height).then_some(())?;
+                        let i = ly * ch.width + lx;
+                        (i < samples.len()).then_some(())?;
+                        *value = samples.get(i);
+                    }
+                    Some(())
+                })
+                .ok_or_else(|| {
+                    InternalErrors::ImageReadError(
+                        "overview cell without one value per pixel".into(),
+                    )
+                })?;
+            Ok(ImageChannel {
+                image: Arc::new(ImageContainer::F32Gray(ManagedImage {
+                    data: Image::<f32, 1>::new(size, out).map_err(InternalErrors::from_kornia)?,
+                    tile_offset: Point2d { x: 0, y: 0 },
+                    plane: None,
+                    dimensionality: ImageDimensionality::Planar,
+                })),
+                color: first.color,
+                is_visible: true,
+                c_stack: first.c_stack,
+                name: first.name.clone(),
+                is_rgb: first.is_rgb,
+            })
+        })
+        .collect()
 }
 
 /// Looks for the best matching pyramid index
@@ -856,6 +1139,7 @@ fn f32_samples(image: &ImageContainer) -> Option<&[f32]> {
 
 /// What [`ViewportCache::read_sharp_view`] needs from the read request.
 struct GridParams {
+    image: Arc<PathBuf>,
     series: i32,
     res_idx: i32,
     z_projection: ZProjection,
@@ -886,6 +1170,8 @@ const PARALLEL_RUNS: usize = 4;
 /// What a sharp view of one plane at one pyramid level needs, in that
 /// level's pixels.
 struct GridView {
+    /// The image file (see [`TileKey::image`]).
+    image: Arc<PathBuf>,
     series: i32,
     level: i32,
     z_projection: ZProjection,
@@ -901,7 +1187,7 @@ struct GridView {
 
 /// Where an assembled view lies: its top-left cell corner and size, in
 /// level pixels / output pixels.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 struct GridRegion {
     x: usize,
     y: usize,
@@ -939,6 +1225,7 @@ impl GridView {
         let cell = self.cell();
         let (x, y) = (cx * cell, cy * cell);
         TileKey {
+            image: Arc::clone(&self.image),
             series: self.series,
             level: self.level,
             x,
@@ -953,30 +1240,129 @@ impl GridView {
     }
 }
 
-/// The sharp view `view` asks for, assembled from grid cells: cached cells
-/// are reused, missing ones read - a row's run of neighbouring missing cells
-/// in one read - compacted and cached one by one. So a pan reads only the
-/// cells it uncovers, and every pixel is cached once however the views
-/// overlap.
+/// The sharp view `view` asks for, assembled from grid cells (see
+/// [`read_grid_cells`]).
 fn read_grid_view(
     cache: &Mutex<IndexedTileCache>,
     source: &dyn ImageSource,
     view: &GridView,
     bits: u16,
 ) -> Result<(RenderSource, GridRegion), InternalErrors> {
+    let (cells, region) = read_grid_cells(cache, source, view, bits)?;
+    // The same cells as the last view (only the look changed): that view.
+    if let Some(data) = cache
+        .lock()
+        .unwrap()
+        .last_view
+        .as_ref()
+        .and_then(|view| view.reuse(&cells, &region))
+    {
+        return Ok((data, region));
+    }
+    let assembled: RenderSource = match single_compact_cell(&cells) {
+        // One cell, already compact: the view is that cell, uncopied.
+        Some(data) => data,
+        None => {
+            let channels = cells[0][0].data.len();
+            Arc::new(
+                (0..channels)
+                    .into_par_iter()
+                    .map(|c| assemble_channel(&cells, c, GRID_CELL, region.out_w, region.out_h))
+                    .collect::<Result<Vec<_>, InternalErrors>>()?,
+            )
+        }
+    };
+    cache.lock().unwrap().last_view = Some(AssembledView {
+        cells: cells.iter().flatten().map(Arc::downgrade).collect(),
+        region,
+        data: Arc::clone(&assembled),
+    });
+    Ok((assembled, region))
+}
+
+/// Rows of grid cells.
+type CellGrid = Vec<Vec<Arc<CachedTile>>>;
+
+/// Rows of grid cells, those not read yet `None`.
+type PartialCellGrid = [Vec<Option<Arc<CachedTile>>>];
+
+/// Cells this reader claimed for reading (in the cache's `in_flight`):
+/// released when read - or when the read fails or panics (on drop), so a
+/// reader waiting for one never waits forever.
+struct Claims<'a> {
+    cache: &'a Mutex<IndexedTileCache>,
+    keys: Vec<TileKey>,
+}
+
+impl Claims<'_> {
+    /// `keys` read (or given up): no longer claimed, the waiters woken.
+    fn release(&mut self, keys: &[TileKey]) {
+        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        for key in keys {
+            cache.in_flight.remove(key);
+        }
+        self.keys.retain(|k| !keys.contains(k));
+        cache.ready.notify_all();
+    }
+}
+
+impl Drop for Claims<'_> {
+    fn drop(&mut self) {
+        if !self.keys.is_empty() {
+            let keys = std::mem::take(&mut self.keys);
+            self.release(&keys);
+        }
+    }
+}
+
+/// The grid cells `view` shows (rows of cells) and where they lie: cached
+/// cells are reused, missing ones read - a row's run of neighbouring missing
+/// cells in one read - compacted and cached one by one. So a pan reads only
+/// the cells it uncovers, and every pixel is cached once however the views
+/// overlap. A cell another reader is reading right now (the other worker:
+/// the overview and the sharp view of an image without a pyramid share
+/// cells) is waited for, not read a second time.
+fn read_grid_cells(
+    cache: &Mutex<IndexedTileCache>,
+    source: &dyn ImageSource,
+    view: &GridView,
+    bits: u16,
+) -> Result<(CellGrid, GridRegion), InternalErrors> {
     let (cols, rows) = view.cell_range();
+    let mut claims = Claims {
+        cache,
+        keys: Vec::new(),
+    };
+    // Cached; else claimed here (read below); else read by another reader
+    // right now (`theirs`, waited for after).
+    let mut theirs: Vec<(usize, usize)> = Vec::new();
     let mut cells: Vec<Vec<Option<Arc<CachedTile>>>> = {
         let mut cache = cache.lock().unwrap();
         rows.clone()
-            .map(|cy| {
+            .enumerate()
+            .map(|(ry, cy)| {
                 cols.clone()
-                    .map(|cx| cache.get_exact(&view.key(cx, cy)))
+                    .enumerate()
+                    .map(|(rx, cx)| {
+                        let key = view.key(cx, cy);
+                        let cached = cache.get_exact(&key);
+                        if cached.is_none() {
+                            if cache.in_flight.contains(&key) {
+                                theirs.push((ry, rx));
+                            } else {
+                                cache.in_flight.insert(key.clone());
+                                claims.keys.push(key);
+                            }
+                        }
+                        cached
+                    })
                     .collect()
             })
             .collect()
     };
+    let is_theirs = |ry: usize, rx: usize| theirs.contains(&(ry, rx));
 
-    // Read the missing ones, a run of neighbours per read - up to
+    // Read the claimed ones, a run of neighbours per read - up to
     // `PARALLEL_RUNS` runs at once, so the reader keeps more cores busy
     // while the f32 copies in flight stay bounded.
     let step = view.subsample.max(1);
@@ -984,17 +1370,95 @@ fn read_grid_view(
     for (ry, row) in cells.iter().enumerate() {
         let mut rx = 0;
         while rx < row.len() {
-            if row[rx].is_some() {
+            if row[rx].is_some() || is_theirs(ry, rx) {
                 rx += 1;
                 continue;
             }
             let start = rx;
-            while rx < row.len() && row[rx].is_none() {
+            while rx < row.len() && row[rx].is_none() && !is_theirs(ry, rx) {
                 rx += 1;
             }
             runs.push((ry, start..rx));
         }
     }
+    read_runs(
+        cache,
+        source,
+        view,
+        bits,
+        &rows,
+        &cols,
+        &runs,
+        &mut cells,
+        &mut claims,
+    )?;
+
+    // The cells another reader was reading: once it is done, from the cache
+    // - or read here if it didn't keep them (its read failed, no room).
+    for (ry, rx) in theirs {
+        let key = view.key(cols.start + rx, rows.start + ry);
+        let mut guard = cache.lock().unwrap();
+        loop {
+            if let Some(tile) = guard.get_exact(&key) {
+                cells[ry][rx] = Some(tile);
+                break;
+            }
+            if !guard.in_flight.contains(&key) {
+                guard.in_flight.insert(key.clone());
+                claims.keys.push(key.clone());
+                drop(guard);
+                read_runs(
+                    cache,
+                    source,
+                    view,
+                    bits,
+                    &rows,
+                    &cols,
+                    &[(ry, rx..rx + 1)],
+                    &mut cells,
+                    &mut claims,
+                )?;
+                break;
+            }
+            let ready = Arc::clone(&guard.ready);
+            guard = ready.wait(guard).unwrap();
+        }
+    }
+
+    let cells: CellGrid = cells
+        .into_iter()
+        .map(|row| {
+            row.into_iter()
+                .map(|c| c.expect("every cell read"))
+                .collect()
+        })
+        .collect();
+    let first = view.key(cols.start, rows.start);
+    let last = view.key(cols.end - 1, rows.end - 1);
+    let region = GridRegion {
+        x: first.x,
+        y: first.y,
+        out_w: (last.x + last.width - first.x).div_ceil(step),
+        out_h: (last.y + last.height - first.y).div_ceil(step),
+    };
+    Ok((cells, region))
+}
+
+/// Reads `runs` (`(row, cells)` of `view`'s cell range `rows` x `cols`),
+/// caches each cell, puts it into `cells` and releases its claim.
+#[allow(clippy::too_many_arguments)]
+fn read_runs(
+    cache: &Mutex<IndexedTileCache>,
+    source: &dyn ImageSource,
+    view: &GridView,
+    bits: u16,
+    rows: &std::ops::Range<usize>,
+    cols: &std::ops::Range<usize>,
+    runs: &[(usize, std::ops::Range<usize>)],
+    cells: &mut PartialCellGrid,
+    claims: &mut Claims<'_>,
+) -> Result<(), InternalErrors> {
+    let step = view.subsample.max(1);
     for batch in runs.chunks(PARALLEL_RUNS) {
         let read: Vec<Vec<(usize, usize, TileKey, Arc<CachedTile>)>> = batch
             .par_iter()
@@ -1038,38 +1502,37 @@ fn read_grid_view(
                     .collect()
             })
             .collect::<Result<_, InternalErrors>>()?;
-        let mut cache = cache.lock().unwrap();
-        for (ry, i, key, tile) in read.into_iter().flatten() {
-            if cache.insert(key, tile.clone()).is_err() {
-                error!("Not enough space for a viewport tile!");
+        let mut read_keys = Vec::new();
+        {
+            let mut cache = cache.lock().unwrap();
+            for (ry, i, key, tile) in read.into_iter().flatten() {
+                if cache.insert(key.clone(), tile.clone()).is_err() {
+                    error!("Not enough space for a viewport tile!");
+                }
+                cells[ry][i] = Some(tile);
+                read_keys.push(key);
             }
-            cells[ry][i] = Some(tile);
         }
+        claims.release(&read_keys);
     }
+    Ok(())
+}
 
-    // Assemble them into one view.
-    let cells: Vec<Vec<Arc<CachedTile>>> = cells
-        .into_iter()
-        .map(|row| {
-            row.into_iter()
-                .map(|c| c.expect("every cell read"))
-                .collect()
-        })
-        .collect();
-    let first = view.key(cols.start, rows.start);
-    let last = view.key(cols.end - 1, rows.end - 1);
-    let region = GridRegion {
-        x: first.x,
-        y: first.y,
-        out_w: (last.x + last.width - first.x).div_ceil(step),
-        out_h: (last.y + last.height - first.y).div_ceil(step),
+/// The one cell of a one-cell view, if all its channels are compact
+/// (`u8`/`u16`) - what [`assemble_channel`] would copy it into, value for
+/// value. Other data goes through `assemble_channel` (which turns float
+/// cells into one `f32` image and refuses interleaved ones).
+fn single_compact_cell(cells: &[Vec<Arc<CachedTile>>]) -> Option<RenderSource> {
+    let [row] = cells else {
+        return None;
     };
-    let channels = cells[0][0].data.len();
-    let assembled = (0..channels)
-        .into_par_iter()
-        .map(|c| assemble_channel(&cells, c, GRID_CELL, region.out_w, region.out_h))
-        .collect::<Result<Vec<_>, InternalErrors>>()?;
-    Ok((Arc::new(assembled), region))
+    let [cell] = row.as_slice() else {
+        return None;
+    };
+    cell.data
+        .iter()
+        .all(|ch| matches!(ch.samples, Samples::U8 { .. } | Samples::U16 { .. }))
+        .then(|| Arc::clone(&cell.data))
 }
 
 /// Columns `first..first + width` of `channel` (gray or interleaved RGB).
@@ -1121,6 +1584,21 @@ fn crop_columns(
     })
 }
 
+/// Sample types whose all-zero bytes are a valid value (`0`) - so a buffer
+/// of them can be allocated zeroed (lazily, by the system) instead of
+/// written once before it is filled.
+trait ZeroIsValid: Copy + Send + Sync {}
+impl ZeroIsValid for u8 {}
+impl ZeroIsValid for u16 {}
+
+/// A shared buffer of `n` zeros.
+fn zeroed_shared<T: ZeroIsValid>(n: usize) -> Arc<[T]> {
+    let zeroed = Arc::<[T]>::new_zeroed_slice(n);
+    // SAFETY: all-zero bytes are a valid `T` (see `ZeroIsValid`: `u8` and
+    // `u16` only).
+    unsafe { zeroed.assume_init() }
+}
+
 /// Channel `c` of the `cells` grid (rows of cells, each `cell` output
 /// pixels wide/high except at the image edge) as one `out_w` x `out_h`
 /// channel - in the cells' compact type if they all share one.
@@ -1133,18 +1611,22 @@ fn assemble_channel(
 ) -> Result<ViewChannel, InternalErrors> {
     let first = &cells[0][0].data[c];
     let all = || cells.iter().flatten().map(|t| &t.data[c]);
-    // Copies each cell's rows into `out` (one value per pixel).
-    fn copy<T: Copy + Default + Send + Sync>(
+    // Copies each cell's rows into `out` (one value per pixel) - made in
+    // place in the shared buffer the view keeps (not a `Vec` copied into
+    // one afterwards).
+    fn copy<T: ZeroIsValid>(
         cells: &[Vec<Arc<CachedTile>>],
         c: usize,
         cell: usize,
         out_w: usize,
         out_h: usize,
         get: impl Fn(&ViewChannel) -> Option<&[T]> + Sync,
-    ) -> Option<Vec<T>> {
-        let mut out = vec![T::default(); out_w * out_h];
+    ) -> Option<Arc<[T]>> {
+        let mut out = zeroed_shared::<T>(out_w * out_h);
+        let slice = Arc::get_mut(&mut out).expect("a new buffer is not shared");
         // One band of cell rows per task.
-        out.par_chunks_mut(cell * out_w)
+        slice
+            .par_chunks_mut(cell * out_w)
             .zip(cells.par_iter())
             .try_for_each(|(band, row)| {
                 for (gx, tile) in row.iter().enumerate() {
@@ -1166,20 +1648,14 @@ fn assemble_channel(
                 Samples::U8 { data, .. } => Some(&data[..]),
                 _ => None,
             })
-            .map(|d| Samples::U8 {
-                data: d.into(),
-                inv: *inv,
-            })
+            .map(|data| Samples::U8 { data, inv: *inv })
         }
         Samples::U16 { inv, .. } if all().all(|ch| matches!(ch.samples, Samples::U16 { .. })) => {
             copy(cells, c, cell, out_w, out_h, |ch| match &ch.samples {
                 Samples::U16 { data, .. } => Some(&data[..]),
                 _ => None,
             })
-            .map(|d| Samples::U16 {
-                data: d.into(),
-                inv: *inv,
-            })
+            .map(|data| Samples::U16 { data, inv: *inv })
         }
         _ => None,
     };
@@ -1332,8 +1808,14 @@ mod tests {
     use evanalyzer_cfg::core_types::ImagePlane;
     use kornia_image::ImageSize;
 
+    /// The image the tests' tiles are of.
+    fn test_image() -> Arc<PathBuf> {
+        Arc::new(PathBuf::from("/test/image.tif"))
+    }
+
     fn key(series: i32, level: i32, t: i32, x: usize, y: usize, w: usize, h: usize) -> TileKey {
         TileKey {
+            image: test_image(),
             series,
             level,
             x,
@@ -1628,6 +2110,7 @@ mod tests {
     /// `x0..x1` x `y0..y1`.
     fn grid_view(subsample: usize, visible: [f32; 4]) -> GridView {
         GridView {
+            image: test_image(),
             series: 0,
             level: 0,
             z_projection: ZProjection::None,
@@ -1674,6 +2157,125 @@ mod tests {
             matches!(data[0].samples, Samples::U8 { .. }),
             "8-bit stays compact"
         );
+    }
+
+    /// Every value of `data`'s first channel against the pattern.
+    fn assert_shows_pattern(data: &RenderSource, region: &GridRegion) {
+        let (w, values) = view_values(data);
+        assert_eq!(w, region.out_w);
+        assert_eq!(values.len(), region.out_w * region.out_h);
+        for (i, v) in values.iter().enumerate() {
+            let (ox, oy) = (i % w, i / w);
+            assert_eq!(
+                v.to_bits(),
+                pattern_value(region.x + ox, region.y + oy).to_bits(),
+                "({ox}, {oy})"
+            );
+        }
+    }
+
+    /// The same view again (a contrast drag, a channel toggle) is the view
+    /// already assembled - not a copy of every cell again - and shows the
+    /// same pixels. Another view, or the same cells read again after they
+    /// left the cache, are assembled anew.
+    #[test]
+    fn the_same_cells_again_give_the_view_already_assembled() {
+        let cache = Mutex::new(IndexedTileCache::new(NonZeroUsize::new(1 << 30).unwrap()));
+        let source = PatternSource::default();
+        let view = grid_view(1, [1100.0, 700.0, 2900.0, 1800.0]);
+
+        let (first, region) = read_grid_view(&cache, &source, &view, 8).unwrap();
+        let (again, region_again) = read_grid_view(&cache, &source, &view, 8).unwrap();
+        assert!(Arc::ptr_eq(&first, &again), "the same view, uncopied");
+        assert_eq!(region, region_again);
+        assert_shows_pattern(&again, &region);
+
+        // Panned by one cell: other cells, a new view with their pixels.
+        let panned = grid_view(1, [1100.0 + 512.0, 700.0, 2900.0 + 512.0, 1800.0]);
+        let (moved, moved_region) = read_grid_view(&cache, &source, &panned, 8).unwrap();
+        assert!(!Arc::ptr_eq(&first, &moved));
+        assert_ne!(moved_region, region);
+        assert_shows_pattern(&moved, &moved_region);
+
+        // Back: the cells are still cached, but the last view is the panned
+        // one - assembled again, the same pixels.
+        let (back, back_region) = read_grid_view(&cache, &source, &view, 8).unwrap();
+        assert!(!Arc::ptr_eq(&moved, &back));
+        assert_eq!(back_region, region);
+        assert_shows_pattern(&back, &back_region);
+
+        // The cache emptied (another image): the cells are read again -
+        // a new view even though it lies at the same place.
+        cache.lock().unwrap().clear();
+        assert!(cache.lock().unwrap().last_view.is_none());
+        let (fresh, fresh_region) = read_grid_view(&cache, &source, &view, 8).unwrap();
+        assert!(!Arc::ptr_eq(&back, &fresh));
+        assert_shows_pattern(&fresh, &fresh_region);
+    }
+
+    /// A cell evicted (its pixels freed) and read again is another cell:
+    /// the view kept from the evicted one is not taken for it.
+    #[test]
+    fn a_cell_read_again_after_eviction_is_not_taken_for_the_old_one() {
+        // Room for one 512 x 512 8-bit cell, not two.
+        let cache = Mutex::new(IndexedTileCache::new(
+            NonZeroUsize::new(512 * 512 + 1024).unwrap(),
+        ));
+        let source = PatternSource::default();
+        let view = grid_view(1, [10.0, 10.0, 500.0, 500.0]);
+        let other = grid_view(1, [600.0, 10.0, 1000.0, 500.0]);
+
+        let (first, _) = read_grid_view(&cache, &source, &view, 8).unwrap();
+        let cell = cache.lock().unwrap().get_exact(&view.key(0, 0)).unwrap();
+        drop(cell);
+        // Another cell evicts the first one.
+        read_grid_view(&cache, &source, &other, 8).unwrap();
+        assert!(cache.lock().unwrap().get_exact(&view.key(0, 0)).is_none());
+        let reads = *source.pixels_read.lock().unwrap();
+
+        let (again, region) = read_grid_view(&cache, &source, &view, 8).unwrap();
+        assert!(*source.pixels_read.lock().unwrap() > reads, "read again");
+        assert!(!Arc::ptr_eq(&first, &again));
+        assert_shows_pattern(&again, &region);
+    }
+
+    /// A view of one compact cell is that cell itself (nothing copied) -
+    /// with exactly what assembling it would give.
+    #[test]
+    fn a_one_cell_view_is_the_cell_itself() {
+        let cache = Mutex::new(IndexedTileCache::new(NonZeroUsize::new(1 << 30).unwrap()));
+        let source = PatternSource::default();
+        let view = grid_view(1, [600.0, 600.0, 900.0, 900.0]);
+
+        let (data, region) = read_grid_view(&cache, &source, &view, 8).unwrap();
+
+        let cell = cache.lock().unwrap().get_exact(&view.key(1, 1)).unwrap();
+        assert!(Arc::ptr_eq(&data, &cell.data), "the cached cell, uncopied");
+        let assembled = assemble_channel(
+            &[vec![cell.clone()]],
+            0,
+            GRID_CELL,
+            region.out_w,
+            region.out_h,
+        )
+        .unwrap();
+        let ch = &data[0];
+        assert_eq!(
+            (ch.width, ch.height, ch.tile_offset, ch.c_stack, ch.is_rgb),
+            (
+                assembled.width,
+                assembled.height,
+                assembled.tile_offset,
+                assembled.c_stack,
+                assembled.is_rgb
+            )
+        );
+        assert_eq!(
+            view_values(&data),
+            view_values(&Arc::new(vec![assembled])),
+            "the same values"
+        );
+        assert_shows_pattern(&data, &region);
     }
 
     #[test]
@@ -1800,6 +2402,344 @@ mod tests {
             height,
             ..Default::default()
         }
+    }
+
+    /// The overview takes the sharp view's cells only where both read level
+    /// 0 - the sharp view at the fitted view's subsample, which divides the
+    /// overview's step.
+    #[test]
+    fn the_overview_shares_the_sharp_cells_only_at_the_fitted_subsample() {
+        let single = |w: u64, h: u64| BTreeMap::from([(0, pyramid(w, h))]);
+        let fit = |w: f32, h: f32| {
+            let mut zoom = (1920.0 / w).min(1080.0 / h);
+            zoom *= 0.95;
+            (w * zoom, h * zoom)
+        };
+        // 2048 x 2048 in 1080p: fitted at every pixel (zoom 0.5), step 2.
+        let (fw, fh) = fit(2048.0, 2048.0);
+        let shared = sharp_subsample_shared_with_overview;
+        assert_eq!(
+            shared(&single(2048, 2048), fw, fh, 1920.0, 1080.0, 2),
+            Some(1)
+        );
+        // Zoomed in to 100%: still every pixel - the same cells.
+        assert_eq!(
+            shared(&single(2048, 2048), 2048.0, 2048.0, 1920.0, 1080.0, 2),
+            Some(1)
+        );
+        // 3000 x 3000: every 2nd pixel fitted, step 2.
+        let (fw, fh) = fit(3000.0, 3000.0);
+        assert_eq!(
+            shared(&single(3000, 3000), fw, fh, 1920.0, 1080.0, 2),
+            Some(2)
+        );
+        // ... zoomed in to 100%, every pixel: not the fitted cells.
+        assert_eq!(
+            shared(&single(3000, 3000), 3000.0, 3000.0, 1920.0, 1080.0, 2),
+            None
+        );
+        // 4096 x 4096: every 3rd pixel fitted, step 4 - no divisor.
+        let (fw, fh) = fit(4096.0, 4096.0);
+        assert_eq!(shared(&single(4096, 4096), fw, fh, 1920.0, 1080.0, 4), None);
+        // A pyramid whose coarser level the sharp view reads: nothing shared.
+        let pyramid_levels = BTreeMap::from([
+            (0, pyramid(8000, 8000)),
+            (1, pyramid(2000, 2000)),
+            (2, pyramid(500, 500)),
+        ]);
+        let (fw, fh) = fit(8000.0, 8000.0);
+        assert_eq!(shared(&pyramid_levels, fw, fh, 1920.0, 1080.0, 7), None);
+        // A degenerate view.
+        assert_eq!(
+            shared(&single(2048, 2048), 0.0, 0.0, 1920.0, 1080.0, 2),
+            None
+        );
+    }
+
+    /// A view of all of a `w` x `h` level 0 at `subsample`.
+    fn whole_view(w: usize, h: usize, subsample: usize) -> GridView {
+        GridView {
+            subsample,
+            level_w: w,
+            level_h: h,
+            visible: [0.0, 0.0, w as f32, h as f32],
+            ..grid_view(subsample, [0.0; 4])
+        }
+    }
+
+    /// Taken from the sharp view's cells, the overview's samples are
+    /// bit for bit what reading it on its own gave - for every subsample
+    /// that divides the step.
+    #[test]
+    fn the_overview_from_the_sharp_cells_is_what_reading_it_gives() {
+        let (w, h) = (1500usize, 1100usize);
+        for (step, subsample) in [(1, 1), (2, 1), (2, 2), (3, 1), (3, 3), (4, 2), (6, 3)] {
+            let cache = Mutex::new(IndexedTileCache::new(NonZeroUsize::new(1 << 30).unwrap()));
+            let source = PatternSource::default();
+            let (cells, region) =
+                read_grid_cells(&cache, &source, &whole_view(w, h, subsample), 8).unwrap();
+            let from_cells =
+                overview_samples(&cells, &region, step / subsample, step, w, h).unwrap();
+            let read = read_subsampled(&source, &pattern_request(0, 0, w, h), step).unwrap();
+
+            assert_eq!(from_cells.len(), read.len());
+            for (a, b) in from_cells.iter().zip(&read) {
+                assert_eq!(
+                    a.image.size(),
+                    b.image.size(),
+                    "step {step}, subsample {subsample}"
+                );
+                let values = |c: &ImageChannel| match &*c.image {
+                    ImageContainer::F32Gray(img) => img
+                        .as_slice()
+                        .iter()
+                        .map(|v| v.to_bits())
+                        .collect::<Vec<_>>(),
+                    _ => panic!("gray"),
+                };
+                assert_eq!(values(a), values(b), "step {step}, subsample {subsample}");
+                assert_eq!(a.image.tile_offset(), b.image.tile_offset());
+                assert_eq!(
+                    (a.c_stack, &a.name, a.color, a.is_rgb),
+                    (b.c_stack, &b.name, b.color, b.is_rgb)
+                );
+            }
+        }
+    }
+
+    /// A source that answers slowly (so two readers overlap), counting the
+    /// pixels read; optionally failing or panicking on its first read.
+    #[derive(Default)]
+    struct SlowSource {
+        inner: PatternSource,
+        reads: std::sync::atomic::AtomicUsize,
+        fail_first: bool,
+        panic_first: bool,
+    }
+
+    impl ImageSource for SlowSource {
+        fn meta(&self) -> &evanalyzer_app::images::ImageMeta {
+            self.inner.meta()
+        }
+
+        fn read_tile(&self, req: &TileRequest) -> Result<Vec<ImageChannel>, InternalErrors> {
+            let n = self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            if n == 0 && self.panic_first {
+                panic!("the reader fails");
+            }
+            if n == 0 && self.fail_first {
+                return Err(InternalErrors::ImageReadError("unreadable".into()));
+            }
+            self.inner.read_tile(req)
+        }
+    }
+
+    /// Runs `f` on its own thread, failing the test if it takes over 20 s
+    /// (a reader waiting forever).
+    fn within_time<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+        let (done, result) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = done.send(f());
+        });
+        result
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .expect("a reader waited forever")
+    }
+
+    /// Two readers wanting the same cells at once (the overview and the
+    /// sharp view of an image without a pyramid) read each cell once: one
+    /// reads, the other waits for it - and both get the same cells.
+    #[test]
+    fn two_readers_of_the_same_cells_read_each_once() {
+        let cache = Arc::new(Mutex::new(IndexedTileCache::new(
+            NonZeroUsize::new(1 << 30).unwrap(),
+        )));
+        let source = Arc::new(SlowSource::default());
+        let view = Arc::new(whole_view(1500, 1100, 1));
+        let read =
+            |cache: Arc<Mutex<IndexedTileCache>>, source: Arc<SlowSource>, view: Arc<GridView>| {
+                std::thread::spawn(move || read_grid_cells(&cache, &*source, &view, 8).unwrap())
+            };
+        let a = read(cache.clone(), source.clone(), view.clone());
+        let b = read(cache.clone(), source.clone(), view.clone());
+        let ((a, _), (b, _)) = within_time(move || (a.join().unwrap(), b.join().unwrap()));
+
+        assert_eq!(
+            *source.inner.pixels_read.lock().unwrap(),
+            1500 * 1100,
+            "once"
+        );
+        for (x, y) in a.iter().flatten().zip(b.iter().flatten()) {
+            assert!(Arc::ptr_eq(x, y), "the same cells");
+        }
+        assert!(cache.lock().unwrap().in_flight.is_empty());
+    }
+
+    /// The reader others wait for fails or panics: its cells are released,
+    /// and a waiting reader reads them itself - nobody waits forever.
+    #[test]
+    fn a_failing_or_panicking_reader_leaves_no_one_waiting() {
+        for panics in [false, true] {
+            let cache = Arc::new(Mutex::new(IndexedTileCache::new(
+                NonZeroUsize::new(1 << 30).unwrap(),
+            )));
+            let source = Arc::new(SlowSource {
+                fail_first: !panics,
+                panic_first: panics,
+                ..Default::default()
+            });
+            // One cell: the first reader claims it, the second waits.
+            let view = Arc::new(grid_view(1, [10.0, 10.0, 400.0, 400.0]));
+            let first = {
+                let (cache, source, view) = (cache.clone(), source.clone(), view.clone());
+                std::thread::spawn(move || read_grid_cells(&cache, &*source, &view, 8).map(|_| ()))
+            };
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            let second = {
+                let (cache, source, view) = (cache.clone(), source.clone(), view.clone());
+                std::thread::spawn(move || read_grid_cells(&cache, &*source, &view, 8).map(|_| ()))
+            };
+            let (first, second) =
+                within_time(move || (first.join(), second.join().expect("no panic")));
+            match first {
+                Ok(result) => assert!(result.is_err() && !panics),
+                Err(_) => assert!(panics, "the first reader panicked"),
+            }
+            assert!(second.is_ok(), "read by the second reader");
+            assert!(cache.lock().unwrap().in_flight.is_empty());
+            assert!(cache.lock().unwrap().get_exact(&view.key(0, 0)).is_some());
+        }
+    }
+
+    /// A real image without a pyramid (the fixture), fitted: its overview is
+    /// taken from the sharp view's cells (they are in the tile cache after
+    /// it) and is, value for value, the overview read on its own as before
+    /// - for every plane.
+    #[test]
+    fn an_image_without_a_pyramid_gets_the_overview_it_got_when_read_alone() {
+        use evanalyzer_app::project::ProjectExt;
+        let app_state = crate::editor::test_support::test_ui_state_with_project(
+            crate::editor::test_support::project_with_fixture_image(),
+        );
+        let cache = ViewportCache::new(app_state.clone());
+        let state = ViewportState {
+            viewport_width: 400.0,
+            viewport_height: 300.0,
+            zoom: 1.0,
+            offset_x: 0.0,
+            offset_y: 0.0,
+            mouse_pos_x: 0.0,
+            mouse_pos_y: 0.0,
+        };
+        let path = app_state
+            .get_project()
+            .get_current_image_path_cloned()
+            .unwrap();
+        let source = app_state.get_image_source(&path).unwrap();
+        let level = source.meta().series[&0].resolutions[&0].clone();
+        assert_eq!(
+            source.meta().series[&0].resolutions.len(),
+            1,
+            "the fixture has no pyramid"
+        );
+        let planes = source.meta().series[&0].nr_z_stacks.max(1) as i32;
+        let (w, h) = (level.width as usize, level.height as usize);
+
+        for z in 0..planes {
+            let z_range = Some(z..=z);
+            let (data, _) = cache
+                .read_image_tile_combined(
+                    0,
+                    ZProjection::None,
+                    z_range.clone(),
+                    0,
+                    true,
+                    z == 0,
+                    true,
+                    &state,
+                )
+                .unwrap();
+            assert!(
+                cache.held_bytes().0 > 0,
+                "read as sharp-view cells (plane {z})"
+            );
+
+            // As before: read alone, scaled, compacted.
+            let ratio = w as f32 / h as f32;
+            let (key_w, key_h) = (1024usize, (1024.0 / ratio).max(1.0) as usize);
+            let step = (w / key_w).min(h / key_h).max(1);
+            let request = TileRequest {
+                series: 0,
+                resolution_idx: 0,
+                z_projection: ZProjection::None,
+                z_range,
+                t_stack: 0,
+                tile: ImageTile {
+                    offset_x: 0,
+                    offset_y: 0,
+                    width: w,
+                    height: h,
+                },
+            };
+            let alone = scale_image(
+                read_subsampled(&*source, &request, step).unwrap(),
+                key_w,
+                key_h,
+            )
+            .unwrap()
+            .iter()
+            .map(|c| ViewChannel::from_image_channel(c, level.nr_bits))
+            .collect::<Vec<_>>();
+
+            assert_eq!(data.len(), alone.len());
+            for (a, b) in data.iter().zip(&alone) {
+                assert_eq!((a.width, a.height), (b.width, b.height));
+                assert_eq!(
+                    (a.tile_offset, a.c_stack, &a.name, a.color, a.is_rgb),
+                    (b.tile_offset, b.c_stack, &b.name, b.color, b.is_rgb)
+                );
+                let (sa, sb) = (a.slice().unwrap(), b.slice().unwrap());
+                assert_eq!(sa.len(), sb.len());
+                assert!(
+                    (0..sa.len()).all(|i| sa.get(i).to_bits() == sb.get(i).to_bits()),
+                    "plane {z}, channel {}",
+                    a.c_stack
+                );
+                assert_eq!(
+                    std::mem::discriminant(&a.samples),
+                    std::mem::discriminant(&b.samples)
+                );
+            }
+        }
+    }
+
+    /// The cells of one image never stand in for another's, even before the
+    /// cache is emptied for it.
+    #[test]
+    fn cells_of_another_image_are_never_taken() {
+        let cache = Mutex::new(IndexedTileCache::new(NonZeroUsize::new(1 << 30).unwrap()));
+        let source = PatternSource::default();
+        let view = grid_view(1, [10.0, 10.0, 400.0, 400.0]);
+        read_grid_cells(&cache, &source, &view, 8).unwrap();
+        let reads = *source.pixels_read.lock().unwrap();
+        let other = GridView {
+            image: Arc::new(PathBuf::from("/test/other.tif")),
+            ..grid_view(1, [10.0, 10.0, 400.0, 400.0])
+        };
+        read_grid_cells(&cache, &source, &other, 8).unwrap();
+        assert!(
+            *source.pixels_read.lock().unwrap() > reads,
+            "read for the other image"
+        );
+
+        // Another image opens: the last one's tiles go, its own stay.
+        cache
+            .lock()
+            .unwrap()
+            .retain_image(std::path::Path::new("/test/other.tif"));
+        assert!(cache.lock().unwrap().get_exact(&view.key(0, 0)).is_none());
+        assert!(cache.lock().unwrap().get_exact(&other.key(0, 0)).is_some());
     }
 
     #[test]

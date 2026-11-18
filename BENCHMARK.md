@@ -2470,6 +2470,77 @@ code, so the same-tree build is the fair comparison):
   images, same objects: 1.5 min) - the results writer has a cost per image;
   not looked into.
 
+## Viewer and startup: work done once, RAM given back (2026-11-18)
+
+Twelve changes, old (`b5ccf044`) and new build alternated, 10 s pauses,
+2 rounds each. The viewer numbers come from
+`bench_viewer_interactions` (in `crates/gui/src/editor/viewport_worker.rs`):
+the real dispatch with the workers simulated on one thread, so CPU time is
+the sum of all workers. A drag frame takes its task, then the next move
+arrives (as when dragging faster than the render). Every step prints a hash
+of the sharp view and the overview: **identical in the old and the new build
+in every step on every image**.
+
+```bash
+EVANALYZER_BENCH_IMAGE=<image> [RAYON_NUM_THREADS=2] \
+  cargo test --target x86_64-unknown-linux-gnu --release -p evanalyzer_gui \
+  --lib bench_viewer_interactions -- --ignored --nocapture
+```
+
+Wall time in ms, old → new (22 threads / 2 threads):
+
+| Image | Open ×5 | Contrast drag ×40 | Select channel ×10 | z step ×10 | Overview re-render ×30 |
+|---|---|---|---|---|---|
+| 2048², 16-bit, 1 ch | 164 → 126 / 239 → 216 | 261 → 110 / 720 → 370 | - | - | 18 → 0.1 / 64 → 0.1 |
+| 2048², RGB 8-bit | 314 → 235 / 510 → 444 | 351 → 154 / 1106 → 494 | 90 → 37 / 270 → 120 | - | 26 → 0.1 / 89 → 0.1 |
+| ND2 2424², 3 ch, 23 z, no pyramid | 516 → 306 / 791 → 628 | 183 → 52 / 577 → 194 | 50 → 12 / 139 → 46 | 1093 → 596 / 1524 → 1110 | 29 → 0.1 / 98 → 0.1 |
+| `tests/haut` 9343 × 27143, 7 levels | 1509 → 1505 (22 thr.) | 243 → 41 | 56 → 10 | 1521 → 1466 | 85 → 0.1 |
+
+RAM (RSS after trim, MB above the start): after the drag 2048² RGB 296 → 138,
+ND2 283 → 217; after another project is opened (viewer emptied) 2048² u16
+93 → 74 (2 threads 70 → 44), RGB 255 → 87, ND2 363 → 215, `tests/haut`
+606 → 302 (caches now 0 + 0 MB, before up to their limit).
+
+What did it:
+
+- **Overview of an image without a pyramid** (V1): taken from the sharp
+  view's level-0 cells when the fitted view's subsample divides the
+  overview's step (bit for bit the old samples) - the file is decoded once
+  for both workers; concurrent readers of one cell wait for each other.
+  Tiles are keyed by the image file now.
+- **Display changes** (V2): the sharp view first, the overview once no newer
+  sharp render waits. **Same cells again** (V4): the assembled view reused,
+  one cell not copied, the copy built straight into the shared buffer.
+  **Histograms** (V6) counted again only when their pixels or axis change;
+  an unchanged curve isn't posted to Slint again. **Overview with the same
+  look** (V5, the software renderer's pan) is not blended again.
+- **Stroke ends** (V3) take only the view's position: before, every visible
+  channel was expanded to f32 (2048² RGB: 3 ms per stroke, 2 threads 6 ms).
+- **Another project** (S2): tile and overview caches, the opened image and
+  the workers' frame buffers freed.
+- **Split view** (V7, `bench_split_overlay_steps`, 1.7 GB results file,
+  4,500 objects): a selection step 1.35 → 0.3 ms (masks decoded once per
+  object list).
+
+The real app under Xvfb (Mesa software GL; window seen with `xdotool`, CPU
+from `/proc/<pid>/stat`, separate `HOME`):
+the start page's CPU after its first 20 s 172 % → 0.0 % (S1: the drift
+stops); licenses parsed when About opens, not at startup (S3: startup phase
+2 → 0 ms, idle RSS 213 → 210 MB). The GPU check runs when About's System
+tab is shown (S4 - not measurable here, no NVIDIA driver). The last
+project's "still there?" check waits at most 1.5 s at startup (S5 -
+unit-tested with a slow answer; a share that is gone blocked the start
+before until the system gave up).
+
+Whole slide `bench_viewport_whole_slide`, `tests/haut`: tour 1264 → 1178 ms,
+peak 560 → 505 MB - no step slower.
+
+"Image references ×20" (the old stroke-end call, kept only for the
+benchmarks) reads slower in the new build (2048² RGB 60 → 110 ms): the new
+process keeps less freed memory, so the call's 50 MB of f32 meet fresh
+pages. The object layer after an open is ~1 ms slower for the same reason
+(page faults of its new buffer).
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -2538,6 +2609,7 @@ graphics driver).
 | Whole slide `tests/haut`, cells from Grow Regions (reach 50 px), 21 threads | 7.42 GB (Voronoi 7.14-7.22 GB) | 2026-11-13 | Grow Regions |
 | Spot pipeline with Grow Regions: 200 images 2048², 21 threads | 3.69-3.74 GB (Draw Circle 3.92-4.25 GB) | 2026-11-13 | Grow Regions |
 | Whole slide `tests/haut`, Grow Regions through the pipeline's image or a memory slot, 21 threads / 4 threads and `--max-ram 6000` | 7.64-7.71 GB / 3.45-3.70 GB (+1 GB spill; channel 7.38-7.41 / 3.74-3.92 GB) | 2026-11-16 | Grow Regions - growing through the pipeline's image or a memory slot |
+| Viewer, 2048² RGB after a contrast drag / after another project opened (test process, 22 threads) | 138 / 87 MB above start (was 296 / 255 MB) | 2026-11-18 | Viewer and startup: work done once, RAM given back |
 | StarDist post-processing, 2048² tile, 590,000 candidates | 280 MB (was 1,494 MB) | 2026-11-04 | AI steps per thread and StarDist's candidates |
 | One U-Net / StarDist inference on a 4096² slide tile, CPU (above the model) | 2048² pieces: StarDist 2.4 GB, U-Net 32 / 64 filters 3.1 / 5.8 GB, joyful-pig 7.4 GB (was 6.3 / 10.6 / ~21 / 25.2 GB); 1024² pieces (8-16 GB computers): 1.3 / 1.2 GB; up to 2048² whole: 1.6 / 2.7 / 5.4 / 6.4 GB | 2026-11-04 | AI models: RAM per inference |
 

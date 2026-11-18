@@ -253,11 +253,13 @@ export component StartPage inherits Rectangle {
 
     // The circles drift - only while nothing covers the page: on Windows
     // (drawn by the CPU) each step redraws most of the window, and a dialog
-    // over it (the file browser) would wait for those redraws.
+    // over it (the file browser) would wait for those redraws. And only for
+    // the first 20 s: a page left open doesn't keep the CPU busy (the page
+    // is created anew each time it shows, so the drift starts again then).
     Timer {
         interval: 100ms;
         running: !ViewportMemoryState.reduce_motion && !FileBrowserState.visible
-            && GlobalAppState.active_dialog == DialogType.none;
+            && GlobalAppState.active_dialog == DialogType.none && root.phase < 20;
         triggered => {
             root.phase += 0.1;
         }
