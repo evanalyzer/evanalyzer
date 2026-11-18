@@ -266,6 +266,16 @@ impl ResultsGenerator {
     }
 
     pub fn get_object_list(&self, filter: &ListFilter) -> Result<DatabaseResult, InternalErrors> {
+        self.get_object_list_of(filter, ImageSelection::of(&filter.images))
+    }
+
+    /// [`get_object_list`](Self::get_object_list) of `images` instead of
+    /// `filter.images` (which is then ignored).
+    pub(super) fn get_object_list_of(
+        &self,
+        filter: &ListFilter,
+        images: ImageSelection<'_>,
+    ) -> Result<DatabaseResult, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         // Fetched up front (cached — see `classes_cache`) since
         // `column_names` below already needs it to resolve a `ColocCount`
@@ -337,13 +347,9 @@ impl ResultsGenerator {
         // (an active filter matching nothing) means zero rows, same
         // convention as the class filter below; a path that names no image
         // simply matches no object.
-        let image_rel_paths = match &filter.images {
-            Some(rel_paths) if rel_paths.is_empty() => {
-                return Ok(empty_result(column_names.clone()));
-            }
-            Some(rel_paths) => Some(rel_paths),
-            None => None,
-        };
+        if images.matches_nothing() {
+            return Ok(empty_result(column_names.clone()));
+        }
 
         // `ListFilter.object_classes` already carries `ObjectClass` ids, but
         // `classes` (fetched above) still doubles as validation: an id that
@@ -369,11 +375,8 @@ impl ResultsGenerator {
             self.object_on_plane_sql("", filter.plane.z_stack)?,
             format!("t_stack = {}", filter.plane.t_stack),
         ];
-        if let Some(rel_paths) = image_rel_paths {
-            conditions.push(format!(
-                "image_rel_path IN ({})",
-                sql_string_in_list(rel_paths)
-            ));
+        if let Some(condition) = images.objects_condition() {
+            conditions.push(condition);
         }
         if filter.transpond_table {
             let blocks = class_blocks(class_ids.as_deref(), &classes);
@@ -741,6 +744,16 @@ impl ResultsGenerator {
         &self,
         filter: &GroupedByImageFilter,
     ) -> Result<DatabaseResult, InternalErrors> {
+        self.get_grouped_by_image_of(filter, ImageSelection::of(&filter.images))
+    }
+
+    /// [`get_grouped_by_image`](Self::get_grouped_by_image) of `images`
+    /// instead of `filter.images` (which is then ignored).
+    pub(super) fn get_grouped_by_image_of(
+        &self,
+        filter: &GroupedByImageFilter,
+        images: ImageSelection<'_>,
+    ) -> Result<DatabaseResult, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         let classes = self.get_object_classes()?;
         let mut ordered_columns = filter.columns.clone();
@@ -782,13 +795,14 @@ impl ResultsGenerator {
         ];
         let mut post = Vec::new();
         let mut image_conditions = vec!["true".to_string()];
-        if let Some(rel_paths) = &filter.images {
-            if rel_paths.is_empty() {
-                return Ok(empty_result());
-            }
-            let in_list = format!("image_rel_path IN ({})", sql_string_in_list(rel_paths));
-            pre.push(in_list.clone());
-            image_conditions.push(in_list);
+        if images.matches_nothing() {
+            return Ok(empty_result());
+        }
+        if let Some(condition) = images.objects_condition() {
+            pre.push(condition);
+        }
+        if let Some(condition) = images.images_condition() {
+            image_conditions.push(condition);
         }
         let selected_ids: Option<Vec<u32>> = filter.object_classes.as_ref().map(|wanted| {
             wanted
@@ -2671,6 +2685,22 @@ impl ResultsGenerator {
         map
     }
 
+    /// Every enabled image's `image_rel_path`, in the order the list and
+    /// grouped-by-image queries sort by.
+    pub(super) fn enabled_image_rel_paths(&self) -> Result<Vec<String>, InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let mut stmt = self
+            .database
+            .prepare("SELECT image_rel_path FROM images WHERE NOT disabled ORDER BY image_rel_path")
+            .map_err(err)?;
+        let paths = stmt
+            .query_map([], |row| row.get(0))
+            .map_err(err)?
+            .collect::<Result<Vec<String>, _>>()
+            .map_err(err);
+        paths
+    }
+
     /// Enables or disables `image_rel_path` (the `images` table's primary
     /// key) for statistics: a disabled image's own value is still shown
     /// everywhere it appears, but is excluded from any aggregate combining
@@ -3714,6 +3744,82 @@ fn value_range<'a>(values: impl Iterator<Item = &'a Option<f64>>) -> (f32, f32) 
         (min as f32, max as f32)
     } else {
         (0.0, 0.0)
+    }
+}
+
+/// The images a list or grouped-by-image query reads.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum ImageSelection<'a> {
+    /// Every image.
+    All,
+    /// Every image that isn't disabled - an export of all images: a
+    /// condition on the `images` table, not a list of every path parsed
+    /// with each page (100,000 images: ~4 MB of SQL per page).
+    Enabled,
+    /// These images (`image_rel_path`s); none matches nothing.
+    Listed(&'a [String]),
+    /// The enabled images from `first` to `last` (`image_rel_path`s, in
+    /// the database's order, both included) - a block of an export's
+    /// images: the objects outside it are filtered out before they are
+    /// aggregated, and rows of the same file stay together (zone maps).
+    EnabledRange { first: &'a str, last: &'a str },
+}
+
+impl<'a> ImageSelection<'a> {
+    /// A filter's `images`: `None` is every image.
+    pub(super) fn of(images: &'a Option<Vec<String>>) -> Self {
+        match images {
+            Some(rel_paths) => Self::Listed(rel_paths),
+            None => Self::All,
+        }
+    }
+
+    pub(super) fn matches_nothing(&self) -> bool {
+        matches!(self, Self::Listed(rel_paths) if rel_paths.is_empty())
+    }
+
+    /// The condition on the objects' `image_rel_path`, if any.
+    fn objects_condition(&self) -> Option<String> {
+        match self {
+            Self::All => None,
+            Self::Enabled => Some(
+                "image_rel_path IN (SELECT image_rel_path FROM images WHERE NOT disabled)"
+                    .to_string(),
+            ),
+            Self::Listed(rel_paths) => Some(format!(
+                "image_rel_path IN ({})",
+                sql_string_in_list(rel_paths)
+            )),
+            Self::EnabledRange { .. } => Some(format!(
+                "{} AND {}",
+                self.range_condition(),
+                Self::Enabled.objects_condition()?
+            )),
+        }
+    }
+
+    /// `image_rel_path BETWEEN first AND last` of an `EnabledRange`.
+    fn range_condition(&self) -> String {
+        match self {
+            Self::EnabledRange { first, last } => format!(
+                "image_rel_path BETWEEN '{}' AND '{}'",
+                first.replace('\'', "''"),
+                last.replace('\'', "''")
+            ),
+            _ => "true".to_string(),
+        }
+    }
+
+    /// The condition on the `images` table itself, if any.
+    fn images_condition(&self) -> Option<String> {
+        match self {
+            Self::All => None,
+            Self::Enabled => Some("NOT disabled".to_string()),
+            Self::Listed(_) => self.objects_condition(),
+            Self::EnabledRange { .. } => {
+                Some(format!("NOT disabled AND {}", self.range_condition()))
+            }
+        }
     }
 }
 

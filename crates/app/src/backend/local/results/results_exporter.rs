@@ -8,7 +8,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::results_generator::{
-    ResultsGenerator, class_display_label, class_filter_sql, sql_string_in_list,
+    ImageSelection, ResultsGenerator, class_display_label, class_filter_sql, sql_string_in_list,
 };
 use super::results_time_course::{TimeCourseHead, TimeCourseQuery};
 use super::results_tracks::{TrackSummaryHead, TrackSummaryQuery};
@@ -937,7 +937,7 @@ impl ResultExport {
                 self.write_list_document(
                     database,
                     cancel,
-                    single_image,
+                    ImageSelection::Listed(single_image),
                     &object_classes,
                     &format!("list_{stem}"),
                 )?;
@@ -946,7 +946,13 @@ impl ResultExport {
         }
 
         on_progress("Exporting List view", 0, 1);
-        self.write_list_document(database, cancel, &images, &object_classes, "list")?;
+        self.write_list_document(
+            database,
+            cancel,
+            self.image_selection(&images),
+            &object_classes,
+            "list",
+        )?;
         on_progress("Exporting List view", 1, 1);
         Ok(())
     }
@@ -962,7 +968,7 @@ impl ResultExport {
         &self,
         database: &ResultsGenerator,
         cancel: &AtomicBool,
-        images: &[String],
+        images: ImageSelection<'_>,
         object_classes: &Option<Vec<ObjectClass>>,
         file_stem: &str,
     ) -> Result<(), InternalErrors> {
@@ -1060,10 +1066,8 @@ impl ResultExport {
         check_cancelled(cancel)?;
         on_progress("Exporting Grouped Image List", 0, 1);
 
-        // Group by image always returns a list of all images.
-        // Image filter is not applied here.
-        // let images = resolve_images(database, self)?;
-        let images = resolve_all_images(database)?;
+        // Group by image always lists every enabled image: the image
+        // filter is not applied here.
         let object_classes = if self.object_classes.is_empty() {
             None
         } else {
@@ -1075,63 +1079,113 @@ impl ResultExport {
             .filter(|column| column.is_aggregable())
             .cloned()
             .collect();
-
         // Each plane's rows, time point by time point, behind its "T"/"Z".
         let planes = ExportPlanes::of(database, self)?;
-        let mut result: Option<DatabaseResult> = None;
-        for &plane in &planes.planes {
-            check_cancelled(cancel)?;
-            let base_filter = GroupedByImageFilter {
-                plane,
-                images: Some(images.clone()),
-                object_classes: object_classes.clone(),
-                columns: columns.clone(),
-                aggregation: self.aggregations.clone(),
-                page: Pagination {
-                    limit: 0,
-                    after: None,
-                },
-                transpond_table: self.transpond_table,
-            };
-            let page = fetch_all_grouped_by_image_rows(database, &base_filter)?;
-            let merged = result.get_or_insert_with(|| DatabaseResult {
-                column_names: planes
-                    .header()
-                    .into_iter()
-                    .chain(page.column_names.iter().cloned())
-                    .collect(),
-                row_names: Vec::new(),
-                rows: Vec::new(),
-                min: page.min,
-                max: page.max,
-                source_object_count: 0,
-                row_locations: Vec::new(),
-            });
-            merged.min = merged.min.min(page.min);
-            merged.max = merged.max.max(page.max);
-            merged.source_object_count += page.source_object_count;
-            merged.row_names.extend(page.row_names);
-            merged.rows.extend(
-                page.rows
-                    .into_iter()
-                    .map(|row| planes.cells(plane).into_iter().chain(row).collect()),
-            );
-        }
-        let result = result.expect("at least one plane");
+        let filter_of = |plane: PlaneFilter| GroupedByImageFilter {
+            plane,
+            images: None,
+            object_classes: object_classes.clone(),
+            columns: columns.clone(),
+            aggregation: self.aggregations.clone(),
+            page: Pagination {
+                limit: 0,
+                after: None,
+            },
+            transpond_table: self.transpond_table,
+        };
 
+        // Written page by page as the rows come (100,000 images × 5
+        // classes: 500,000 rows - kept in RAM, they took GBs).
         match self.format {
             ExportFormat::XLSX => {
                 let mut workbook = Workbook::new();
-                let sheet = workbook.add_worksheet();
+                let sheet = workbook
+                    .add_worksheet_with_constant_memory()
+                    .map_err(xlsx_err)?;
                 sheet.set_name("Grouped by Image").map_err(xlsx_err)?;
-                write_database_result_sheet(sheet, &result)?;
-
+                let header_format = Format::new().set_bold().set_font_size(EXPORT_FONT_SIZE);
+                let mut next_row: u32 = 0;
+                for &plane in &planes.planes {
+                    let plane_cells = planes.cells(plane);
+                    stream_grouped_by_image_pages(
+                        database,
+                        cancel,
+                        &filter_of(plane),
+                        GROUPED_ROWS_PER_PAGE,
+                        |page| {
+                            if next_row == 0 {
+                                let header = planes
+                                    .header()
+                                    .into_iter()
+                                    .chain(page.column_names.iter().cloned());
+                                for (col_idx, name) in header.enumerate() {
+                                    sheet
+                                        .write_with_format(
+                                            0,
+                                            col_idx as u16,
+                                            name.as_str(),
+                                            &header_format,
+                                        )
+                                        .map_err(xlsx_err)?;
+                                }
+                                next_row = 1;
+                            }
+                            for row in &page.rows {
+                                if next_row as usize >= XLSX_MAX_ROWS {
+                                    return Err(InternalErrors::InvalidArgument(format!(
+                                        "Grouped by image has more than {} rows - more than \
+                                         an XLSX sheet holds: export it as CSV",
+                                        XLSX_MAX_ROWS - 1
+                                    )));
+                                }
+                                for (col_idx, cell) in plane_cells.iter().chain(row).enumerate() {
+                                    write_cell(sheet, next_row, col_idx as u16, cell, None)?;
+                                }
+                                next_row += 1;
+                            }
+                            Ok(())
+                        },
+                    )?;
+                }
                 workbook
                     .save(self.output_path("grouped_by_image.xlsx"))
                     .map_err(xlsx_err)?;
             }
             ExportFormat::CSV => {
-                write_csv(&result, &self.output_path("grouped_by_image.csv"))?;
+                let path = self.output_path("grouped_by_image.csv");
+                let mut out = create_csv_writer(&path)?;
+                let write_err = |e: std::io::Error| {
+                    InternalErrors::Internal(format!("could not write {}: {e}", path.display()))
+                };
+                let mut header_written = false;
+                for &plane in &planes.planes {
+                    let plane_cells = planes.cells(plane);
+                    stream_grouped_by_image_pages(
+                        database,
+                        cancel,
+                        &filter_of(plane),
+                        GROUPED_ROWS_PER_PAGE,
+                        |page| {
+                            if !header_written {
+                                let header: Vec<String> = planes
+                                    .header()
+                                    .into_iter()
+                                    .chain(page.column_names.iter().cloned())
+                                    .collect();
+                                write_csv_row(&mut out, &header).map_err(write_err)?;
+                                header_written = true;
+                            }
+                            for row in &page.rows {
+                                let cells: Vec<String> =
+                                    plane_cells.iter().chain(row).map(cell_text).collect();
+                                write_csv_row(&mut out, &cells).map_err(write_err)?;
+                            }
+                            Ok(())
+                        },
+                    )?;
+                }
+                use std::io::Write;
+                out.flush().map_err(write_err)?;
             }
             // See the identical arm in `write_list_document` above.
             ExportFormat::Parquet => {
@@ -2394,6 +2448,19 @@ fn xlsx_err(error: XlsxError) -> InternalErrors {
 /// supplies an explicit subset. `[]` means every image in the database,
 /// except ones the user has disabled — an explicit list is taken as
 /// overriding that (the caller asked for exactly these, disabled or not).
+impl ResultExport {
+    /// The images of `resolved` (from [`resolve_images`]) for a query: every
+    /// enabled image as a condition when none is picked (no list of every
+    /// path in each page's SQL), else the picked ones.
+    fn image_selection<'a>(&self, resolved: &'a [String]) -> ImageSelection<'a> {
+        if self.image_rel_paths.is_empty() && !resolved.is_empty() {
+            ImageSelection::Enabled
+        } else {
+            ImageSelection::Listed(resolved)
+        }
+    }
+}
+
 fn resolve_images(
     database: &ResultsGenerator,
     export: &ResultExport,
@@ -2413,15 +2480,6 @@ fn resolve_images(
             .filter(|rel_path| wanted.contains(rel_path.as_str()))
             .collect())
     }
-}
-
-fn resolve_all_images(database: &ResultsGenerator) -> Result<Vec<String>, InternalErrors> {
-    let all = database.get_images()?;
-    Ok(all
-        .into_iter()
-        .filter(|image| !image.disabled)
-        .map(|image| image.rel_path.to_string_lossy().into_owned())
-        .collect())
 }
 
 // `get_list` only ever hands back one bounded page (`ListFilter.page`) —
@@ -2455,7 +2513,7 @@ fn stream_list_pages(
     database: &ResultsGenerator,
     cancel: &AtomicBool,
     export: &ResultExport,
-    images: &[String],
+    images: ImageSelection<'_>,
     object_classes: &Option<Vec<ObjectClass>>,
     with_coloc_details: bool,
     planes: &ExportPlanes,
@@ -2466,7 +2524,7 @@ fn stream_list_pages(
     // scan at all: no query, no header, an empty document - rather than
     // running one (z, t) query per plane for a filter that's already known
     // to match nothing.
-    if images.is_empty() {
+    if images.matches_nothing() {
         return Ok(());
     }
 
@@ -2479,7 +2537,8 @@ fn stream_list_pages(
             check_cancelled(cancel)?;
             let filter = ListFilter {
                 plane,
-                images: Some(images.to_vec()),
+                // `images` below instead: no copy of every path per page.
+                images: None,
                 object_classes: object_classes.clone(),
                 columns: export.columns.clone(),
                 with_coloc_details,
@@ -2490,7 +2549,7 @@ fn stream_list_pages(
                 },
                 transpond_table: export.transpond_table,
             };
-            let page = database.get_object_list(&filter)?;
+            let page = database.get_object_list_of(&filter, images)?;
             let is_last_page = page.source_object_count < PAGE_SIZE as usize;
             cursor = page.row_names.last().cloned();
 
@@ -2506,61 +2565,43 @@ fn stream_list_pages(
     Ok(())
 }
 
-// Same keyset-pagination walk as `stream_list_pages`, just over
-// `get_grouped_by_image`'s (image-grouped, not per-object) pages instead —
-// its cursor is the last page's final `image_rel_path`, exactly like
-// `get_object_list`'s own row-id cursor.
-fn fetch_all_grouped_by_image_rows(
+/// About how many rows a block of a grouped-by-image export has.
+const GROUPED_ROWS_PER_PAGE: usize = 20_000;
+
+// Every enabled image's rows of `get_grouped_by_image` (the filter's
+// `images` and `page` are ignored), a block of images at a time: each
+// block's objects are aggregated once (a cursor over the rows aggregated
+// every object after it again, each page), and `on_page` gets each block's
+// rows as they come, so RAM stays at one block however many images there
+// are. Called once with no rows (its column names) when no image is
+// enabled.
+fn stream_grouped_by_image_pages(
     database: &ResultsGenerator,
+    cancel: &AtomicBool,
     base_filter: &GroupedByImageFilter,
-) -> Result<DatabaseResult, InternalErrors> {
-    const PAGE_SIZE: i32 = 20_000;
-
-    let mut merged = DatabaseResult {
-        column_names: Vec::new(),
-        row_names: Vec::new(),
-        rows: Vec::new(),
-        min: f32::INFINITY,
-        max: f32::NEG_INFINITY,
-        source_object_count: 0,
-        row_locations: Vec::new(),
+    rows_per_page: usize,
+    mut on_page: impl FnMut(&DatabaseResult) -> Result<(), InternalErrors>,
+) -> Result<(), InternalErrors> {
+    let filter = GroupedByImageFilter {
+        page: Pagination {
+            limit: i32::MAX,
+            after: None,
+        },
+        ..base_filter.clone()
     };
-    let mut cursor: Option<String> = None;
-    let mut first_page = true;
-
-    loop {
-        let filter = GroupedByImageFilter {
-            page: Pagination {
-                limit: PAGE_SIZE,
-                after: cursor.take(),
-            },
-            ..base_filter.clone()
-        };
-        let mut page = database.get_grouped_by_image(&filter)?;
-        let is_last_page = page.source_object_count < PAGE_SIZE as usize;
-        cursor = page.row_names.last().cloned();
-
-        if first_page {
-            merged.column_names = std::mem::take(&mut page.column_names);
-            first_page = false;
-        }
-        merged.min = merged.min.min(page.min);
-        merged.max = merged.max.max(page.max);
-        merged.row_names.extend(page.row_names);
-        merged.rows.extend(page.rows);
-        merged.source_object_count += page.source_object_count;
-
-        if is_last_page {
-            break;
-        }
+    let images = database.enabled_image_rel_paths()?;
+    if images.is_empty() {
+        return on_page(&database.get_grouped_by_image_of(&filter, ImageSelection::Listed(&[]))?);
     }
-
-    if !merged.min.is_finite() || !merged.max.is_finite() {
-        merged.min = 0.0;
-        merged.max = 0.0;
+    let classes = database.get_object_classes()?.len().max(1);
+    // About `rows_per_page` rows per block: a row per image and class.
+    for block in images.chunks((rows_per_page / classes).max(1)) {
+        check_cancelled(cancel)?;
+        let (first, last) = (&block[0], &block[block.len() - 1]);
+        let range = ImageSelection::EnabledRange { first, last };
+        on_page(&database.get_grouped_by_image_of(&filter, range)?)?;
     }
-
-    Ok(merged)
+    Ok(())
 }
 
 // Writes every object matching `export`'s filters, in
@@ -2571,7 +2612,7 @@ fn write_list_sheet(
     database: &ResultsGenerator,
     cancel: &AtomicBool,
     export: &ResultExport,
-    images: &[String],
+    images: ImageSelection<'_>,
     object_classes: &Option<Vec<ObjectClass>>,
     with_coloc_details: bool,
 ) -> Result<(), InternalErrors> {
@@ -2627,7 +2668,7 @@ fn write_list_csv(
     database: &ResultsGenerator,
     cancel: &AtomicBool,
     export: &ResultExport,
-    images: &[String],
+    images: ImageSelection<'_>,
     object_classes: &Option<Vec<ObjectClass>>,
     with_coloc_details: bool,
     path: &Path,
@@ -2674,52 +2715,6 @@ fn write_list_csv(
             Ok(())
         },
     )
-}
-
-/// Writes `result` as CSV to `path` in one shot — `result.column_names` as
-/// the header, then one line per row. Used by whichever export step already
-/// has its whole result in memory (e.g. `export_grouped_by_image`, which
-/// pages through `fetch_all_grouped_by_image_rows` and merges before
-/// writing); `write_list_csv` above streams instead, since a List export
-/// covers every z/t/image plane and its per-plane fetch is already the
-/// natural place to write each batch of rows.
-fn write_csv(result: &DatabaseResult, path: &Path) -> Result<(), InternalErrors> {
-    let mut out = create_csv_writer(path)?;
-    let write_err = |e: std::io::Error| {
-        InternalErrors::Internal(format!("could not write {}: {e}", path.display()))
-    };
-    write_csv_row(&mut out, &result.column_names).map_err(write_err)?;
-    for row in &result.rows {
-        let cells: Vec<String> = row.iter().map(cell_text).collect();
-        write_csv_row(&mut out, &cells).map_err(write_err)?;
-    }
-    Ok(())
-}
-
-/// XLSX sibling of `write_csv`: writes `result` into `worksheet` in one
-/// shot from an already-fetched, in-memory `DatabaseResult` - a bold
-/// header row at row 0, then one row per `result.rows` entry below it.
-/// Used by whichever export step already has its whole result in memory
-/// (`export_grouped_by_image`); `write_list_sheet` writes straight from
-/// `stream_list_pages`'s own pages instead, since a List export's combined
-/// row count is the thing that RAM-bounded streaming exists for.
-fn write_database_result_sheet(
-    worksheet: &mut Worksheet,
-    result: &DatabaseResult,
-) -> Result<(), InternalErrors> {
-    let header_format = Format::new().set_bold().set_font_size(EXPORT_FONT_SIZE);
-    for (col_idx, name) in result.column_names.iter().enumerate() {
-        worksheet
-            .write_with_format(0, col_idx as u16, name.as_str(), &header_format)
-            .map_err(xlsx_err)?;
-    }
-    for (row_idx, row) in result.rows.iter().enumerate() {
-        let row_n = (row_idx + 1) as u32;
-        for (col_idx, cell) in row.iter().enumerate() {
-            write_cell(worksheet, row_n, col_idx as u16, cell, None)?;
-        }
-    }
-    Ok(())
 }
 
 fn create_csv_writer(path: &Path) -> Result<std::io::BufWriter<std::fs::File>, InternalErrors> {
@@ -4006,7 +4001,13 @@ mod tests {
             format: ExportFormat::Parquet,
             ..Default::default()
         };
-        let result = export.write_list_document(&database, &no_cancel(), &[], &None, "list");
+        let result = export.write_list_document(
+            &database,
+            &no_cancel(),
+            ImageSelection::Listed(&[]),
+            &None,
+            "list",
+        );
         assert!(result.is_err());
     }
 
@@ -5343,11 +5344,10 @@ mod tests {
             columns: vec![Column::AreaSizePx],
             aggregations: vec![Aggregation::Avg],
             // No class 99 object was ever seeded - a selection matching
-            // zero objects, exercising `fetch_all_grouped_by_image_rows`'s
-            // "no values at all" min/max fallback (as opposed to an
-            // explicitly-empty `Some(vec![])` selection, which short-
-            // circuits earlier). The analysed image still gets its row:
-            // "none found" is a result, and there's no average to show.
+            // zero objects (as opposed to an explicitly-empty `Some(vec![])`
+            // selection, which short-circuits earlier). The analysed image
+            // still gets its row: "none found" is a result, and there's no
+            // average to show.
             object_classes: vec![ObjectClass::Global(99)],
             with_grouped_by_image_list: true,
             ..Default::default()
@@ -5364,6 +5364,124 @@ mod tests {
             lines[1].ends_with(','),
             "no average without objects: {content}"
         );
+    }
+
+    /// The image files `export` writes into `file` (CSV) name.
+    fn exported_images(export: &ResultExport, database: &ResultsGenerator, file: &str) -> String {
+        export
+            .start_export(database, &no_cancel(), &mut no_progress())
+            .expect("export");
+        std::fs::read_to_string(export.output_dir.join(file)).expect("read csv")
+    }
+
+    #[test]
+    fn an_export_of_all_images_leaves_out_a_disabled_image() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 100),
+            ObjectSpec::new("img2.tif", "ClassA", 1, 100),
+        ]);
+        database.enable_image("img2.tif", true).unwrap();
+        for (list, file) in [(true, "list.csv"), (false, "grouped_by_image.csv")] {
+            let export = ResultExport {
+                output_dir: out_dir.clone(),
+                format: ExportFormat::CSV,
+                columns: vec![Column::ImageName, Column::AreaSizePx],
+                aggregations: vec![Aggregation::Avg],
+                with_list_view: list,
+                with_grouped_by_image_list: !list,
+                ..Default::default()
+            };
+
+            let content = exported_images(&export, &database, file);
+
+            assert!(content.contains("img1.tif"), "{file}: {content}");
+            assert!(!content.contains("img2.tif"), "{file}: {content}");
+        }
+    }
+
+    #[test]
+    fn a_grouped_export_in_blocks_of_one_image_has_the_rows_of_one_block() {
+        let (database, _) = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 100),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 40),
+            ObjectSpec::new("img2.tif", "ClassA", 1, 50),
+            ObjectSpec::new("img2.tif", "ClassB", 2, 70),
+            ObjectSpec::new("img3.tif", "ClassB", 2, 20),
+        ]);
+        database.enable_image("img2.tif", true).unwrap();
+        let filter = GroupedByImageFilter {
+            plane: PlaneFilter {
+                z_stack: 0,
+                t_stack: 0,
+            },
+            images: None,
+            object_classes: None,
+            columns: vec![Column::Count, Column::AreaSizePx],
+            aggregation: vec![Aggregation::Avg],
+            page: Pagination {
+                limit: 0,
+                after: None,
+            },
+            transpond_table: false,
+        };
+        let rows = |rows_per_page, transpond_table| {
+            let filter = GroupedByImageFilter {
+                transpond_table,
+                ..filter.clone()
+            };
+            let mut texts = Vec::new();
+            let mut pages = 0;
+            stream_grouped_by_image_pages(
+                &database,
+                &no_cancel(),
+                &filter,
+                rows_per_page,
+                |page| {
+                    pages += 1;
+                    texts.extend(
+                        page.rows
+                            .iter()
+                            .map(|row| row.iter().map(cell_text).collect::<Vec<_>>()),
+                    );
+                    Ok(())
+                },
+            )
+            .unwrap();
+            (pages, texts)
+        };
+
+        for transposed in [false, true] {
+            let (one_page, all) = rows(usize::MAX, transposed);
+            let (pages, blocks) = rows(1, transposed);
+
+            assert_eq!(one_page, 1);
+            assert_eq!(pages, 2, "img1 and img3 - img2 is disabled");
+            assert_eq!(blocks, all, "transposed: {transposed}");
+            assert!(all.iter().any(|row| row[0] == "img3.tif"), "{all:?}");
+            assert!(!all.iter().any(|row| row[0] == "img2.tif"), "{all:?}");
+        }
+    }
+
+    #[test]
+    fn a_disabled_image_picked_for_the_list_export_is_exported() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 100),
+            ObjectSpec::new("img2.tif", "ClassA", 1, 100),
+        ]);
+        database.enable_image("img2.tif", true).unwrap();
+        let export = ResultExport {
+            output_dir: out_dir,
+            format: ExportFormat::CSV,
+            columns: vec![Column::ImageName, Column::AreaSizePx],
+            image_rel_paths: vec!["img2.tif".to_string()],
+            with_list_view: true,
+            ..Default::default()
+        };
+
+        let content = exported_images(&export, &database, "list.csv");
+
+        assert!(content.contains("img2.tif"), "{content}");
+        assert!(!content.contains("img1.tif"), "{content}");
     }
 
     #[test]
@@ -5572,7 +5690,7 @@ mod tests {
             &database,
             &no_cancel(),
             &export,
-            &[],
+            ImageSelection::Listed(&[]),
             &None,
             false,
             &ExportPlanes::of(&database, &export).unwrap(),
@@ -5584,31 +5702,6 @@ mod tests {
         .unwrap();
 
         assert_eq!(pages, 0);
-    }
-
-    #[test]
-    fn grouped_rows_without_values_report_a_zero_range_instead_of_infinities() {
-        let (database, _) = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
-        let filter = GroupedByImageFilter {
-            plane: PlaneFilter {
-                z_stack: 0,
-                t_stack: 0,
-            },
-            images: Some(vec!["not-in-the-database.tif".into()]),
-            object_classes: None,
-            columns: vec![Column::AreaSizePx],
-            aggregation: vec![Aggregation::Avg],
-            page: Pagination {
-                limit: 1,
-                after: None,
-            },
-            transpond_table: false,
-        };
-
-        let merged = fetch_all_grouped_by_image_rows(&database, &filter).unwrap();
-
-        assert!(merged.rows.is_empty());
-        assert_eq!((merged.min, merged.max), (0.0, 0.0));
     }
 
     #[test]

@@ -2420,6 +2420,56 @@ time on 2048²: short loops, the mirrored rows found once per strip) and
 the radix select with branches on the sign and on "below the bucket" (+20 %
 time: mispredicted on a wavelet plane's random signs).
 
+## Exports of 100,000 images: no path list per page, grouped export in blocks (2026-11-18)
+
+The audit's export items (2026-10-27), now measured on 100,000 images.
+Data: core `bench_export --object-size 12` with `--images 100000
+--objects-per-image 40` (4M objects, 1.9 GB file), `--images 4000
+--objects-per-image 1000` (4M objects, the 2026-10-28 file) and `--images
+100 --objects-per-image 2000`. `bench_results_export` (app example) as on
+2026-10-28: every image, columns Count, Area, Intensity avg (channel 0),
+Circularity, aggregations Avg + Median, one export per process, old and new
+alternated with 10 s between runs, 2 runs each (22 cores).
+
+What changed:
+- An export of all images put every enabled image's path into each
+  20,000-row page's SQL (`image_rel_path IN (...)`, ~4 MB at 100,000
+  images, parsed with every page) - now a condition on the `images` table
+  (`ImageSelection::Enabled`); a picked list of images stays a list.
+- Grouped by image collected every row in memory before writing (a
+  non-constant-memory XLSX sheet on top), and each page aggregated every
+  object from its cursor to the end (only a lower bound) - ~pages² / 2
+  aggregations. Now blocks of images (≈ 20,000 rows: images × classes)
+  by range (`image_rel_path BETWEEN first AND last`), each object
+  aggregated once, each block written as it comes (CSV, constant-memory
+  XLSX).
+
+| Export | Images | Old: wall / CPU / peak RSS | New |
+|---|---|---|---|
+| List of all objects, CSV | 100,000 | 131-132 s / 162-163 s / 1.33 GB | **15.0 s / 45-46 s / 1.20-1.22 GB** |
+| Grouped by image, CSV (2.2M rows) | 100,000 | 165-187 s / 633-696 s / 4.6 GB | **7.7-7.8 s / 20 s / 556-612 MB** |
+| Grouped by image, XLSX (over the sheet's row limit) | 100,000 | refused after 167-187 s, 5.2 GB | refused after 7.9-8.0 s, 558-575 MB ("export it as CSV") |
+| List of all objects, CSV | 4,000 | 16.5 s / 41-42 s / 1.15 GB | 12.0-12.4 s / 39-40 s / 1.14 GB |
+| Grouped by image, CSV | 4,000 | 0.8 s / 5.6-5.7 s / 638-671 MB | 0.4 s / 2.4-2.5 s / 430-440 MB |
+| Grouped by image, XLSX | 4,000 | 1.5-1.6 s / 6.3 s / 758-771 MB | 1.0 s / 3.0 s / 426-433 MB |
+
+100 images (10 runs each, alternated; the old code built in the same tree -
+a baseline built from a separate worktree had ~5 MB less RSS for the same
+code, so the same-tree build is the fair comparison):
+
+| Export, 100 images | Old: CPU / peak RSS (mean) | New |
+|---|---|---|
+| List of all objects, CSV | 630 ms / 183.5 MB | 632 ms / 181.5 MB |
+| Grouped by image, CSV | 144 ms / 92.8 MB | 146 ms / 91.5 MB |
+| Grouped by image, XLSX | 167 ms / 94.5 MB | 158 ms / 91.6 MB |
+
+- The files are the same: CSVs byte-identical (100,000-image grouped CSV:
+  2,200,001 lines), XLSX the same value and format in every cell (only the
+  strings are written inline instead of in the shared-strings table).
+- The 100,000-image file took 11 min to write with `bench_export` (4,000
+  images, same objects: 1.5 min) - the results writer has a cost per image;
+  not looked into.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -2438,6 +2488,8 @@ graphics driver).
 | Over time chart, 6.6M objects | 180-470 MB (query process) | 2026-10-21 | Time course |
 | Time course export, 6.6M objects | 250-410 MB (query process) | 2026-10-21 | Time course |
 | List export (a row per object), 6.6M objects, CSV | ~790 MB (query process) | 2026-10-21 | List export |
+| List export, all objects of 100,000 images (4M), CSV | 1.20-1.22 GB (query process) | 2026-11-18 | Exports of 100,000 images |
+| Grouped-by-image export, 100,000 images (2.2M rows), CSV / XLSX | 556-612 MB (query process; was 4.6 / 5.2 GB) | 2026-11-18 | Exports of 100,000 images |
 | Tracks: one image's tracks (1500 tracks) | ~60 MB (query process), ~1 MB kept | 2026-10-21 | Results › Tracks |
 | Track export, a row per track (144,000 tracks) | ~410 MB (query process) | 2026-10-21 | Results › Tracks |
 | Tracks, Full: every track's row (144,000 tracks) | ~300 MB (query process) | 2026-10-21 | Results › Tracks |
