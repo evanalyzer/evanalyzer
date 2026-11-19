@@ -142,7 +142,7 @@ export component ImageMetaPanel inherits Rectangle {
     property <int> picked: -1;
     // Which parts are open (for the session).
     property <bool> part-image: true;
-    property <bool> part-calib: true;
+    property <bool> part-calib: false;
     property <bool> part-channels: true;
     property <bool> part-objective: false;
     property <bool> part-position: false;
@@ -159,10 +159,6 @@ export component ImageMetaPanel inherits Rectangle {
     property <length> tile-gap: 4px;
     property <ChannelAcq> acq: root.picked >= 0 && root.picked < ImageMetaData.channel_acq.length ? ImageMetaData.channel_acq[root.picked] : { fluor: "" };
 
-    background: Ink.ground.mix(Ink.panel, 0.35);
-    // At the panel's bottom: its rounded corners (a clip doesn't round).
-    border-bottom-left-radius: Ink.radius-lg - 1px;
-    border-bottom-right-radius: Ink.radius-lg - 1px;
     // As high as its content; short of room, the parts scroll.
     preferred-height: LayoutState.image-info-folded ? 36px : 36px + body.preferred-height;
     min-height: LayoutState.image-info-folded ? 36px : 36px + min(body.preferred-height, 160px);
@@ -278,108 +274,6 @@ export component ImageMetaPanel inherits Rectangle {
                     if ImageMetaData.storage_size != "": InfoRow {
                         key: "Data size";
                         value: ImageMetaData.storage_size;
-                    }
-                }
-
-                // -- Calibration: what a user corrects --
-                InfoPart {
-                    title: "Calibration";
-                    summary: round(ImageMetaData.pixel_size_x * 10) / 10 + " × " + round(ImageMetaData.pixel_size_y * 10) / 10 + " × " + (ImageMetaData.pixel_size_z > 0 ? round(ImageMetaData.pixel_size_z * 10) / 10 : "–") + " nm";
-                    open <=> root.part-calib;
-                }
-                if root.part-calib: VerticalLayout {
-                    padding-left: 28px;
-                    padding-right: Ink.pad-panel;
-                    padding-bottom: 8px;
-                    spacing: 6px;
-                    HorizontalLayout {
-                        spacing: 6px;
-                        Key {
-                            width: 70px;
-                            text: "Pixel size";
-                        }
-                        px-x := InkTextField {
-                            mono: true;
-                            suffix: "nm";
-                            label: "Pixel size X in nm";
-                            placeholder: "X";
-                            value: ImageMetaData.pixel_size_x;
-                            accepted(t) => {
-                                ImageMetaData.pixel_size_changed(t.to-float(), px-y.text.to-float(), px-z.text.to-float());
-                            }
-                        }
-                        px-y := InkTextField {
-                            mono: true;
-                            suffix: "nm";
-                            label: "Pixel size Y in nm";
-                            placeholder: "Y";
-                            value: ImageMetaData.pixel_size_y;
-                            accepted(t) => {
-                                ImageMetaData.pixel_size_changed(px-x.text.to-float(), t.to-float(), px-z.text.to-float());
-                            }
-                        }
-                        px-z := InkTextField {
-                            mono: true;
-                            suffix: "nm";
-                            label: "Pixel size Z in nm";
-                            placeholder: "Z –";
-                            value: ImageMetaData.pixel_size_z > 0 ? ImageMetaData.pixel_size_z : "";
-                            accepted(t) => {
-                                ImageMetaData.pixel_size_changed(px-x.text.to-float(), px-y.text.to-float(), t.to-float());
-                            }
-                        }
-                    }
-                    HorizontalLayout {
-                        spacing: 6px;
-                        Rectangle {
-                            width: 70px;
-                        }
-                        Text {
-                            horizontal-stretch: 1;
-                            text: "X · Y · Z";
-                            font-size: Ink.fs-caption;
-                            color: Ink.text-faint;
-                            vertical-alignment: center;
-                        }
-                        InkButton {
-                            small: true;
-                            kind: InkButtonKind.quiet;
-                            text: "Reset pixel size";
-                            clicked => {
-                                ImageMetaData.reset_pixel_sizes();
-                            }
-                        }
-                    }
-                    HorizontalLayout {
-                        spacing: 6px;
-                        Key {
-                            width: 70px;
-                            text: "Interval";
-                        }
-                        InkTextField {
-                            horizontal-stretch: 0;
-                            width: 96px;
-                            mono: true;
-                            suffix: "s";
-                            label: "Frame interval in seconds";
-                            placeholder: "–";
-                            edited-mark: ImageMetaData.frame_interval_overridden;
-                            value: ImageMetaData.frame_interval_text;
-                            accepted(t) => {
-                                ImageMetaData.frame_interval_changed(t.to-float());
-                            }
-                        }
-                        Rectangle {
-                            horizontal-stretch: 1;
-                        }
-                        if ImageMetaData.frame_interval_overridden: InkButton {
-                            small: true;
-                            kind: InkButtonKind.quiet;
-                            text: "Reset";
-                            clicked => {
-                                ImageMetaData.reset_frame_interval();
-                            }
-                        }
                     }
                 }
 
@@ -558,6 +452,108 @@ export component ImageMetaPanel inherits Rectangle {
                                         ImageMetaData.emission_wave_length_changed(ChannelState.channels[root.picked].idx, nm);
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
+
+                // -- Calibration: what a user corrects --
+                InfoPart {
+                    title: "Calibration";
+                    summary: round(ImageMetaData.pixel_size_x * 10) / 10 + " × " + round(ImageMetaData.pixel_size_y * 10) / 10 + " × " + (ImageMetaData.pixel_size_z > 0 ? round(ImageMetaData.pixel_size_z * 10) / 10 : "–") + " nm";
+                    open <=> root.part-calib;
+                }
+                if root.part-calib: VerticalLayout {
+                    padding-left: 28px;
+                    padding-right: Ink.pad-panel;
+                    padding-bottom: 8px;
+                    spacing: 6px;
+                    HorizontalLayout {
+                        spacing: 6px;
+                        Key {
+                            width: 70px;
+                            text: "Pixel size";
+                        }
+                        px-x := InkTextField {
+                            mono: true;
+                            suffix: "nm";
+                            label: "Pixel size X in nm";
+                            placeholder: "X";
+                            value: ImageMetaData.pixel_size_x;
+                            accepted(t) => {
+                                ImageMetaData.pixel_size_changed(t.to-float(), px-y.text.to-float(), px-z.text.to-float());
+                            }
+                        }
+                        px-y := InkTextField {
+                            mono: true;
+                            suffix: "nm";
+                            label: "Pixel size Y in nm";
+                            placeholder: "Y";
+                            value: ImageMetaData.pixel_size_y;
+                            accepted(t) => {
+                                ImageMetaData.pixel_size_changed(px-x.text.to-float(), t.to-float(), px-z.text.to-float());
+                            }
+                        }
+                        px-z := InkTextField {
+                            mono: true;
+                            suffix: "nm";
+                            label: "Pixel size Z in nm";
+                            placeholder: "Z –";
+                            value: ImageMetaData.pixel_size_z > 0 ? ImageMetaData.pixel_size_z : "";
+                            accepted(t) => {
+                                ImageMetaData.pixel_size_changed(px-x.text.to-float(), px-y.text.to-float(), t.to-float());
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        Rectangle {
+                            width: 70px;
+                        }
+                        Text {
+                            horizontal-stretch: 1;
+                            text: "X · Y · Z";
+                            font-size: Ink.fs-caption;
+                            color: Ink.text-faint;
+                            vertical-alignment: center;
+                        }
+                        InkButton {
+                            small: true;
+                            kind: InkButtonKind.quiet;
+                            text: "Reset pixel size";
+                            clicked => {
+                                ImageMetaData.reset_pixel_sizes();
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        Key {
+                            width: 70px;
+                            text: "Interval";
+                        }
+                        InkTextField {
+                            horizontal-stretch: 0;
+                            width: 96px;
+                            mono: true;
+                            suffix: "s";
+                            label: "Frame interval in seconds";
+                            placeholder: "–";
+                            edited-mark: ImageMetaData.frame_interval_overridden;
+                            value: ImageMetaData.frame_interval_text;
+                            accepted(t) => {
+                                ImageMetaData.frame_interval_changed(t.to-float());
+                            }
+                        }
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                        if ImageMetaData.frame_interval_overridden: InkButton {
+                            small: true;
+                            kind: InkButtonKind.quiet;
+                            text: "Reset";
+                            clicked => {
+                                ImageMetaData.reset_frame_interval();
                             }
                         }
                     }

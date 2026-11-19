@@ -433,13 +433,12 @@ export component ObjectListPanel inherits Rectangle {
     property <length> head-buttons-w: 72px;
     property <length> filter-row-h: 34px;
 
-    // The selected object's place in the list shown (filtered); -1 unknown.
-    property <int> sel-index: -1;
     function step-by(d: int) {
-        let k = root.sel-index + d;
+        let k = ObjectListState.selected-index + d;
         if k >= 0 && k < ObjectListState.object_list.length {
-            root.sel-index = k;
+            ObjectListState.selected-index = k;
             ObjectListState.scroll_to_object_index = k;
+            ObjectListState.scroll-seq += 1;
             root.select(ObjectListState.object_list[k]);
         }
     }
@@ -489,12 +488,14 @@ export component ObjectListPanel inherits Rectangle {
             title: "Objects";
             subtitle: root.table ? ImageMetaData.image_name
                 : ObjectListState.filter-source == 1 ? "annotated" : ObjectListState.filter-source == 2 ? "pipeline" : "";
-            count: ObjectListState.object_list.length;
             closable: root.table;
             // The list folds to its head (a click on the title).
             foldable: !root.table;
             borderless: !root.table;
             folded: root.folded;
+            // How many objects, folded or not (as Image shows its channel).
+            summary: ObjectListState.object_list.length + (ObjectListState.object_list.length == 1 ? " object" : " objects");
+            summary-always: !root.table;
             fold-toggled => {
                 LayoutState.objects-folded = !LayoutState.objects-folded;
                 LayoutState.panels-changed();
@@ -510,7 +511,8 @@ export component ObjectListPanel inherits Rectangle {
 
         // The list: room for the filter (below), a row of its own; the
         // columns' heads.
-        if !root.table && !root.folded: HorizontalLayout {
+        // No objects: no heads, only the placeholder below.
+        if !root.table && !root.folded && ObjectListState.object_list.length > 0: HorizontalLayout {
             height: 20px;
             padding-left: 28px;
             padding-right: 12px;
@@ -594,9 +596,8 @@ export component ObjectListPanel inherits Rectangle {
             visible: !root.folded;
 
             // Follow a selection made on the image.
-            property <int> scroll-index: ObjectListState.scroll_to_object_index;
-            changed scroll-index => {
-                root.sel-index = ObjectListState.scroll_to_object_index;
+            property <int> scroll-seq: ObjectListState.scroll-seq;
+            changed scroll-seq => {
                 if ObjectListState.scroll_to_object_index >= 0 {
                     list.content-y = clamp(
                         -(ObjectListState.scroll_to_object_index * root.row-h) + list.visible-height / 2 - root.row-h / 2,
@@ -619,25 +620,25 @@ export component ObjectListPanel inherits Rectangle {
                     init => {
                         if self.selected {
                             root.sel-row = i;
-                            root.sel-index = i;
+                            ObjectListState.selected-index = i;
                         }
                     }
                     changed selected => {
                         if self.selected {
                             root.sel-row = i;
-                            root.sel-index = i;
+                            ObjectListState.selected-index = i;
                         }
                     }
                     clicked => {
                         if data.id == root.sel.id {
                             root.unselect();
                         } else {
-                            root.sel-index = i;
+                            ObjectListState.selected-index = i;
                             root.select(data);
                         }
                     }
                     details => {
-                        root.sel-index = i;
+                        ObjectListState.selected-index = i;
                         if data.id != root.sel.id {
                             root.select(data);
                         }
@@ -646,10 +647,32 @@ export component ObjectListPanel inherits Rectangle {
                 }
             }
 
-            if ObjectListState.object_list.length == 0 && !ObjectListState.is_scanning: InkHint {
-                x: 14px;
-                width: parent.width - 28px;
-                text: "No objects in this image yet. Run the preview, or draw some in annotate mode.";
+            // Empty: the placeholder as everywhere (e.g. the pipelines'
+            // "Pick a pipeline").
+            if ObjectListState.object_list.length == 0 && !ObjectListState.is_scanning: VerticalLayout {
+                x: 0px;
+                width: parent.width;
+                height: self.preferred-height;
+                padding: 20px;
+                padding-top: 32px;
+                spacing: 8px;
+                Image {
+                    source: InkIcons.objects;
+                    height: 14px;
+                    colorize: Ink.text-faint;
+                }
+                Text {
+                    text: "No objects in this image yet";
+                    font-size: Ink.fs-dialog-title;
+                    font-weight: 600;
+                    color: Ink.text;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+                InkHint {
+                    text: "Run the preview, or draw some in annotate mode.";
+                    horizontal-alignment: center;
+                }
             }
 
             if ObjectListState.is_scanning: Rectangle {

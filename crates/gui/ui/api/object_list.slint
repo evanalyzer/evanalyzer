@@ -90,6 +90,13 @@ export struct ObjectCardSlint {
 export global ObjectListState {
     in-out property <bool> is_scanning: false;
     in-out property <int> scroll_to_object_index: -1;
+    // +1 for each scroll request: the list scrolls to
+    // `scroll_to_object_index` also when that stayed the same (scrolled
+    // away, then the same object clicked on the image again).
+    in-out property <int> scroll-seq: 0;
+    // The selected object's place in the list shown (filtered, 0-based);
+    // -1: none selected, or not in the list. Object details shows it.
+    in-out property <int> selected-index: -1;
     // Filled by Rust from the open image's objects.
     in property <[ObjectItemDataSlint]> object_list: [];
 

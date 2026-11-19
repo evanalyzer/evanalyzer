@@ -2756,28 +2756,44 @@ export component PipelinesPanel inherits Rectangle {
     VerticalLayout {
         spacing: 0px;
 
-        // -- Expanded: the head, then the pipelines in a rounded inset a
-        // tone darker than the panel --
-        if root.list-shown: Rectangle {
+        // -- The head, always: a click on the title folds the list to its
+        // selected row (caret as the other panels' heads, Image info) --
+        HorizontalLayout {
             vertical-stretch: 0;
-            height: tray.preferred-height;
-
-            tray := VerticalLayout {
-                spacing: 0px;
-                padding-bottom: 2px;
-
-                HorizontalLayout {
-                    height: Ink.head-h;
-                    padding-left: 14px;
-                    padding-right: 8px;
-                    spacing: 6px;
-                    Text {
-                        text: "Pipelines";
-                        font-size: Ink.fs-dialog-title;
-                        font-weight: 600;
-                        color: Ink.text;
-                        vertical-alignment: center;
+            height: Ink.head-h;
+            padding-left: root.pipeline-selected ? 10px : 14px;
+            padding-right: 8px;
+            spacing: 6px;
+            if root.pipeline-selected: Image {
+                y: (parent.height - self.height) / 2;
+                source: root.list-shown ? InkIcons.caret-down : InkIcons.caret-right;
+                width: 10px;
+                height: 10px;
+                colorize: Ink.text-mute;
+                accessible-role: none;
+            }
+            Text {
+                text: "Pipelines";
+                font-size: Ink.fs-dialog-title;
+                font-weight: 600;
+                color: Ink.text;
+                vertical-alignment: center;
+                accessible-role: button;
+                accessible-label: "Pipelines";
+                accessible-expanded: root.list-shown;
+                accessible-action-default => {
+                    if root.pipeline-selected {
+                        root.toggle-list();
                     }
+                }
+                TouchArea {
+                    enabled: root.pipeline-selected;
+                    mouse-cursor: root.pipeline-selected ? pointer : default;
+                    clicked => {
+                        root.toggle-list();
+                    }
+                }
+            }
 
                     Text {
                         horizontal-stretch: 1;
@@ -2800,19 +2816,17 @@ export component PipelinesPanel inherits Rectangle {
                             }
                         }
                     }
+        }
 
-                    if root.pipeline-selected: VerticalLayout {
-                        alignment: center;
-                        InkIconButton {
-                            size: 24px;
-                            icon: InkIcons.caret-up;
-                            label: "Collapse to the switcher";
-                            clicked => {
-                                root.toggle-list();
-                            }
-                        }
-                    }
-                }
+        // -- Unfolded: the pipelines in a rounded inset a tone darker than
+        // the panel --
+        if root.list-shown: Rectangle {
+            vertical-stretch: 0;
+            height: tray.preferred-height;
+
+            tray := VerticalLayout {
+                spacing: 0px;
+                padding-bottom: 2px;
 
                 // At most six rows; more scroll.
                 // 5 px above and below the rows: room for the insert line
@@ -2893,15 +2907,14 @@ export component PipelinesPanel inherits Rectangle {
             }
         }
 
-        // -- Collapsed (design S1): the list folded to its selected row -
-        // the same row as unfolded, in the same inset; the eye, then ▾
-        // unfolds the list (a click on the row too). Ctrl PgUp / PgDn
+        // -- Folded (design S1): the list folded to its selected row, under
+        // the head - the same row as unfolded, in the same inset; a click
+        // on the row (or the head's title) unfolds it. Ctrl PgUp / PgDn
         // still switch --
         if root.pipeline-selected && !root.list-shown: HorizontalLayout {
             vertical-stretch: 0;
             padding-left: 8px;
             padding-right: 8px;
-            padding-top: 8px;
             padding-bottom: 2px;
             Rectangle {
                 height: root.pipeline-row-h + 8px;
@@ -2932,17 +2945,6 @@ export component PipelinesPanel inherits Rectangle {
                             }
                             more-clicked => {
                                 root.open-pipeline-menu(p.id, p.name, i, Ink.head-h);
-                            }
-                        }
-                        VerticalLayout {
-                            alignment: center;
-                            InkIconButton {
-                                size: 24px;
-                                icon: InkIcons.caret-down;
-                                label: "Unfold the pipelines";
-                                clicked => {
-                                    root.toggle-list();
-                                }
                             }
                         }
                     }

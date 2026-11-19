@@ -34,7 +34,6 @@ import {
     InkButtonKind,
     InkIconButton,
 } from "../ink/ink.slint";
-import { PipelineFocusState } from "../api/pipeline_focus.slint";
 
 export component ClassificationPanel inherits Rectangle {
     // In the results' split view: the analysis' classes on the image shown
@@ -78,17 +77,13 @@ export component ClassificationPanel inherits Rectangle {
 
         head := InkPanelHead {
             title: "Classes";
-            count: root.classes.length;
             closable: false;
             foldable: true;
             borderless: true;
             folded: LayoutState.classes-folded;
-            // A pipeline in focus: its classes only - a chip, ✕ shows all.
-            chip-text: !root.in-split && PipelineFocusState.focused-pipeline-name != "" ? "◎ " + PipelineFocusState.focused-pipeline-name : "";
-            chip-tip: "Focused on the pipeline “" + PipelineFocusState.focused-pipeline-name + "” - only its classes are shown. ✕ shows all.";
-            chip-removed => {
-                PipelineFocusState.exit();
-            }
+            // The selected class, folded or not (as Image shows its channel).
+            summary: ClassificationState.selected_class_id >= 0 ? ClassificationState.selected_class_name : "";
+            summary-always: true;
             fold-toggled => {
                 LayoutState.classes-folded = !LayoutState.classes-folded;
                 LayoutState.panels-changed();

@@ -1323,6 +1323,12 @@ mod tests {
         // `changed` handlers run between frames - as after each step here.
         let frame = slint::platform::update_timers_and_animations;
         frame();
+        // Calibration starts folded: open it.
+        ElementHandle::find_by_accessible_label(&ui, "Calibration")
+            .next()
+            .expect("the Calibration part")
+            .invoke_accessible_default_action();
+        frame();
         field().set_accessible_value("7");
         assert_eq!(field().accessible_value().unwrap(), "7");
         meta_ui.invoke_pixel_size_changed(7.0, 3.0, 4.0);

@@ -320,7 +320,6 @@ export component ImageControlPanel inherits Rectangle {
 
         InkPanelHead {
             title: "Image";
-            count: ChannelState.channels.length > 0 ? (ImageMetaData.is-rgb ? "RGB · " : "") + ChannelState.channels.length + (ChannelState.channels.length == 1 ? " channel" : " channels") : "";
             subtitle: ImageMetaData.nr_series > 1 ? "Series \{ChannelState.selected_series + 1} of \{ImageMetaData.nr_series}" : "";
             // Over the image the title folds it; in the results' split
             // view (a drawer) ✕ closes the drawer.

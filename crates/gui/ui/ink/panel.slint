@@ -54,11 +54,14 @@ export component InkPanelHead inherits Rectangle {
     in property <bool> has-more: false;
     /// No line below it.
     in property <bool> borderless: false;
-    /// A click on the title folds the panel to its head (▾ open, ▸ folded).
+    /// A click on the title folds the panel to its head (caret down open,
+    /// right folded - as Image info).
     in property <bool> foldable: false;
     in property <bool> folded: false;
     /// Folded: a short summary at the right ("CY5 · 3 on").
     in property <string> summary;
+    /// The summary also while open (nothing else at its place then).
+    in property <bool> summary-always: false;
     /// A button before +, its icon and what it does ("" none).
     in property <image> action-icon;
     in property <string> action-label;
@@ -85,7 +88,7 @@ export component InkPanelHead inherits Rectangle {
     accessible-label: root.title;
 
     HorizontalLayout {
-        padding-left: root.foldable ? 6px : 14px;
+        padding-left: root.foldable ? 4px : 14px;
         padding-right: 6px;
         spacing: 8px;
 
@@ -104,8 +107,6 @@ export component InkPanelHead inherits Rectangle {
             y: (Ink.head-h - self.height) / 2;
             height: 30px;
             width: fold-row.preferred-width;
-            border-radius: Ink.radius-md;
-            background: fold-ta.has-hover ? Ink.hover : transparent;
             accessible-role: button;
             accessible-label: root.title;
             accessible-expanded: !root.folded;
@@ -116,13 +117,12 @@ export component InkPanelHead inherits Rectangle {
                 padding-left: 6px;
                 padding-right: 8px;
                 spacing: 6px;
-                Text {
+                Image {
+                    y: (parent.height - self.height) / 2;
+                    source: root.folded ? InkIcons.caret-right : InkIcons.caret-down;
                     width: 10px;
-                    text: root.folded ? "▸" : "▾";
-                    font-size: Ink.fs-caption;
-                    color: Ink.text-mute;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+                    height: 10px;
+                    colorize: Ink.text-mute;
                     accessible-role: none;
                 }
                 Text {
@@ -139,12 +139,6 @@ export component InkPanelHead inherits Rectangle {
                 clicked => {
                     root.fold-toggled();
                 }
-            }
-            InkTipZone {
-                width: 100%;
-                height: 100%;
-                wanted: fold-ta.has-hover && !fold-ta.pressed;
-                text: root.folded ? "Unfold " + root.title : "Fold " + root.title;
             }
         }
 
@@ -165,7 +159,7 @@ export component InkPanelHead inherits Rectangle {
             overflow: elide;
         }
 
-        if root.folded && root.summary != "": Text {
+        if (root.folded || root.summary-always) && root.summary != "": Text {
             text: root.summary;
             font-family: Ink.font-mono;
             font-size: Ink.fs-secondary;

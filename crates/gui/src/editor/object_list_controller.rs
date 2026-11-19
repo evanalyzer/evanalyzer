@@ -138,6 +138,11 @@ impl ObjectListController {
                     ..ObjectFilter::parse(state.get_filter_class(), &state.get_filter_text())
                 };
                 let visible_rows = compute_visible_rows(&bridge_ptr.app_state, &filter);
+                // The selection stays; its place in the new list.
+                state.set_selected_index(shown_index(
+                    &visible_rows,
+                    state.get_selected_object().id,
+                ));
                 let nr_of_bits = current_image_nr_of_bits(&bridge_ptr.app_state);
                 let bridge = Rc::new(ObjectModalBridge {
                     app_state: bridge_ptr.app_state.clone(),
@@ -219,10 +224,20 @@ impl ObjectListController {
                             nr_of_bits,
                         )
                     });
+                    // Its place in the list shown (filtered) - the list's
+                    // rows and Object details count in that list.
+                    let shown = class_state
+                        .get_object_list()
+                        .as_any()
+                        .downcast_ref::<ObjectModalBridge>()
+                        .map_or(-1, |bridge| shown_index(&bridge.visible_rows, index + 1));
+                    class_state.set_selected_index(shown);
                     if scroll_to {
-                        class_state.set_scroll_to_object_index(index);
+                        class_state.set_scroll_to_object_index(shown);
+                        class_state.set_scroll_seq(class_state.get_scroll_seq().wrapping_add(1));
                     }
                 } else {
+                    class_state.set_selected_index(-1);
                     class_state.set_selected_object(ObjectItemDataSlint::default());
                     class_state.set_selected_card(Default::default());
                 }
@@ -238,6 +253,12 @@ impl Model for ObjectModalBridge {
 
     fn row_count(&self) -> usize {
         self.visible_rows.len()
+    }
+
+    // For `sync_selected_object_to_slint`: the selection's place in the
+    // shown rows (Slint's default gives `()`, the downcast then fails).
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 
     fn row_data(&self, row: usize) -> Option<Self::Data> {
@@ -298,6 +319,18 @@ impl Model for ObjectModalBridge {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// The place in the list shown (0-based) of the object with Slint `id`
+/// (its row in the combined list + 1, see `resolve_object_id`); -1 when
+/// none is selected or the filter hides it. `visible_rows` is ascending.
+fn shown_index(visible_rows: &[usize], id: i32) -> i32 {
+    if id <= 0 {
+        return -1;
+    }
+    visible_rows
+        .binary_search(&((id - 1) as usize))
+        .map_or(-1, |i| i as i32)
+}
 
 /// Indices into the combined (manual ++ preview) object list that should be shown in
 /// the list panel, respecting `hide_unclassified_objects` and `filter`.
@@ -919,6 +952,24 @@ mod tests {
         };
         assert_eq!(format_area_nm2(1000, &unit_px), "1.0 k");
         assert_eq!(format_area_nm2(1_000_000, &unit_px), "1.00 M");
+    }
+
+    /// `sync_selected_object_to_slint` finds the shown rows through the
+    /// `ModelRc` Slint holds.
+    #[test]
+    fn the_list_model_downcasts_back_to_the_bridge() {
+        let ui_state = test_ui_state_with_project(project_with_one_image());
+        let model = ModelRc::new(Rc::new(bridge_for(&ui_state)));
+        assert!(model.as_any().downcast_ref::<ObjectModalBridge>().is_some());
+    }
+
+    #[test]
+    fn shown_index_is_the_place_in_the_filtered_list() {
+        let visible = [1, 4, 7];
+        assert_eq!(shown_index(&visible, 5), 1); // row 4
+        assert_eq!(shown_index(&visible, 8), 2); // row 7
+        assert_eq!(shown_index(&visible, 1), -1); // row 0: filtered out
+        assert_eq!(shown_index(&visible, 0), -1); // none selected
     }
 
     // -- compute_visible_rows / precompute_label_counts -----------------------
