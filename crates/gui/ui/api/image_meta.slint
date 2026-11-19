@@ -22,6 +22,24 @@ export struct WavelengthOption {
     color: color,
 }
 
+// One channel's acquisition as the file says it, each value ready to show
+// ("250 ms"); "" = the file doesn't have it (the row is left out).
+export struct ChannelAcq {
+    fluor: string,
+    contrast: string,
+    excitation: string,
+    exposure: string,
+    gain: string,
+    binning: string,
+    pinhole: string,
+}
+
+// One key and value of the file's own metadata (Format metadata).
+export struct MetaPair {
+    key: string,
+    value: string,
+}
+
 // ----------------------------------------------------------
 export global ImageMetaData {
     in property <string> image_name: "No image opened";
@@ -41,6 +59,28 @@ export global ImageMetaData {
     in property <float> pixel_size_z: 0.0;
 
     in property <string> pixel_type: "";
+    // Image info's values, ready to show; "" = not in the file (left out).
+    in property <string> series_name: "";
+    in property <string> description: "";
+    in property <string> acquired: "";
+    // Resolution levels of a pyramid ("4 · 1, 2, 4, 8×"), "" one level.
+    in property <string> levels: "";
+    in property <string> stage_position: "";
+    in property <string> objective_model: "";
+    in property <string> objective_magnification: "";
+    in property <string> objective_na: "";
+    in property <string> objective_immersion: "";
+    // Per channel (the order of `ChannelState.channels`).
+    in property <[ChannelAcq]> channel_acq: [];
+    // Format metadata (the file's own keys): asked for on opening the
+    // dialog, filled by Rust; `format_meta_loading` while it reads.
+    in property <[MetaPair]> format_meta: [];
+    in property <bool> format_meta_loading: false;
+    in-out property <bool> format_meta_open: false;
+    in property <string> format_meta_error: "";
+    in-out property <string> format_meta_query: "";
+    callback format_meta_requested();
+    callback format_meta_query_changed(string);
     in property <int> nr_series: 0;
     // The project has chosen its series (it counts for every image) - an
     // image with several asks once while not.

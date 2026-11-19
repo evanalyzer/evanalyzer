@@ -234,6 +234,10 @@ fn native_paths(request: Request) -> Request {
         Request::ReadImageMeta { path } => Request::ReadImageMeta {
             path: native_path(path),
         },
+        Request::ReadFormatMetadata { path, series } => Request::ReadFormatMetadata {
+            path: native_path(path),
+            series,
+        },
         Request::OpenResults { path } => Request::OpenResults {
             path: native_path(path),
         },
@@ -561,6 +565,12 @@ impl Session {
                 Ok(meta) => self.reply(id, Reply::ImageMeta(meta), none()),
                 Err(e) => self.fail(id, &e),
             },
+            Request::ReadFormatMetadata { path, series } => {
+                match self.backend.read_format_metadata(&path, series) {
+                    Ok(pairs) => self.reply(id, Reply::FormatMetadata(pairs), none()),
+                    Err(e) => self.fail(id, &e),
+                }
+            }
             Request::OpenResults { path } => match self.backend.open_results(&path) {
                 Ok(source) => {
                     let handle = self.next_handle.fetch_add(1, Ordering::Relaxed);

@@ -294,6 +294,7 @@ pub mod preview {
 }
 
 pub mod images {
+    pub use crate::api::FileChannel;
     pub use crate::api::ImageChannel;
     pub use crate::api::ImageContainer;
     pub use crate::api::ImageInfo;

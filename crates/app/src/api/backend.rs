@@ -77,6 +77,19 @@ pub trait Backend: Send + Sync {
     /// (one reader instead of a pool), for scanning folders of images.
     fn read_image_meta(&self, path: &Path) -> Result<ImageMeta, InternalErrors>;
 
+    /// The file's own metadata of one series that [`ImageMeta`] doesn't
+    /// map (Image info › Format metadata), as key/value pairs - read on
+    /// request. A backend that can't: an error the dialog shows.
+    fn read_format_metadata(
+        &self,
+        _path: &Path,
+        _series: i32,
+    ) -> Result<Vec<(String, String)>, InternalErrors> {
+        Err(InternalErrors::Io(
+            "This backend can't read the file's format metadata".into(),
+        ))
+    }
+
     /// Where pipeline/project templates live on the backend's machine:
     /// the user's own templates (new ones are saved there) and the ones
     /// shipped with the application.

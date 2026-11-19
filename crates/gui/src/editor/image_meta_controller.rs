@@ -38,6 +38,9 @@ pub struct ImageMetaController {
     pub(crate) ui: slint::Weak<AppWindow>,
     pub(crate) app_state: Arc<UiState>,
     pub(crate) viewport_controller: Arc<ViewportController>,
+    /// The open dialog's format metadata (all of it; the search filters
+    /// what's shown). Empty while the dialog is closed.
+    format_meta: std::sync::Mutex<Vec<(String, String)>>,
 }
 
 impl ImageMetaController {
@@ -50,7 +53,75 @@ impl ImageMetaController {
             ui,
             app_state,
             viewport_controller,
+            format_meta: std::sync::Mutex::new(Vec::new()),
         }
+    }
+
+    /// Image info › Format metadata: reads the open image's own metadata
+    /// (the shown series) in the background and shows it in the dialog.
+    pub(crate) fn load_format_metadata(self: &Arc<Self>) {
+        let (path, series) = {
+            let project = self.app_state.get_project();
+            (
+                project.get_current_image_path_cloned(),
+                project.get_selected_series_idx(),
+            )
+        };
+        let ui_weak = self.ui.clone();
+        let _ = crate::helper::ui_thread::invoke_from_event_loop({
+            let ui_weak = ui_weak.clone();
+            move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    let meta = ui.global::<ImageMetaData>();
+                    meta.set_format_meta_loading(true);
+                    meta.set_format_meta_error("".into());
+                    meta.set_format_meta(Default::default());
+                }
+            }
+        });
+        let this = Arc::clone(self);
+        std::thread::spawn(move || {
+            let result = match path {
+                Some(path) => this.app_state.read_format_metadata(&path, series),
+                None => Err(InternalErrors::Io("No image is open".into())),
+            };
+            let (pairs, error) = match result {
+                Ok(pairs) => (pairs, String::new()),
+                Err(e) => (Vec::new(), e.to_string()),
+            };
+            *this.format_meta.lock().unwrap_or_else(|e| e.into_inner()) = pairs;
+            let this2 = Arc::clone(&this);
+            let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    let meta = ui.global::<ImageMetaData>();
+                    meta.set_format_meta_loading(false);
+                    meta.set_format_meta_error(error.into());
+                    let query = meta.get_format_meta_query().to_string();
+                    this2.show_format_metadata(&ui, &query);
+                }
+            });
+        });
+    }
+
+    /// The dialog's rows: the pairs whose key or value contains `query`
+    /// (any case); all for an empty query.
+    fn show_format_metadata(&self, ui: &AppWindow, query: &str) {
+        let q = query.trim().to_lowercase();
+        let rows: Vec<crate::MetaPair> = self
+            .format_meta
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .filter(|(k, v)| {
+                q.is_empty() || k.to_lowercase().contains(&q) || v.to_lowercase().contains(&q)
+            })
+            .map(|(k, v)| crate::MetaPair {
+                key: k.clone().into(),
+                value: v.clone().into(),
+            })
+            .collect();
+        ui.global::<ImageMetaData>()
+            .set_format_meta(std::rc::Rc::new(slint::VecModel::from(rows)).into());
     }
 
     /// Attach UI callbacks related to image operations.
@@ -91,6 +162,22 @@ impl ImageMetaController {
             ui.global::<ImageMetaData>().on_reset_pixel_sizes(move || {
                 manager.reset_manual_pixel_sizes();
             });
+
+            // Image info › Format metadata: read on opening, filtered by
+            // the search.
+            let manager = Arc::clone(self);
+            ui.global::<ImageMetaData>()
+                .on_format_meta_requested(move || {
+                    manager.load_format_metadata();
+                });
+            let manager = Arc::clone(self);
+            let ui_weak = self.ui.clone();
+            ui.global::<ImageMetaData>()
+                .on_format_meta_query_changed(move |query| {
+                    if let Some(ui) = ui_weak.upgrade() {
+                        manager.show_format_metadata(&ui, &query);
+                    }
+                });
 
             // Channel colour chooser: the tiles, and setting/resetting a
             // channel's emission wavelength for the project.
@@ -325,6 +412,16 @@ impl ImageMetaController {
                     meta.set_storage_size("".into());
                     meta.set_magnification("".into());
                     meta.set_pixel_type("".into());
+                    meta.set_series_name("".into());
+                    meta.set_description("".into());
+                    meta.set_acquired("".into());
+                    meta.set_levels("".into());
+                    meta.set_stage_position("".into());
+                    meta.set_objective_model("".into());
+                    meta.set_objective_magnification("".into());
+                    meta.set_objective_na("".into());
+                    meta.set_objective_immersion("".into());
+                    meta.set_channel_acq(Default::default());
                     meta.set_nr_series(0);
                     meta.set_nr_c_stacks(0);
                     meta.set_nr_z_stacks(0);
@@ -549,7 +646,46 @@ impl ImageMetaController {
                 .set_magnification(format!("x{}", image_meta.objective.magnification).into());
             image_meta_ui
                 .set_size(format!("{}x{} px", pyramid_info.width, pyramid_info.height).into());
-            image_meta_ui.set_pixel_type(format!("{} bits", pyramid_info.nr_bits).into());
+            image_meta_ui.set_pixel_type(
+                pixel_type_text(pyramid_info.nr_bits, series_info.significant_bits).into(),
+            );
+
+            // --- Image info's other values (ready to show, "" = not in the file) ---
+            image_meta_ui.set_series_name(series_info.name.clone().into());
+            image_meta_ui.set_description(series_info.description.trim().to_string().into());
+            image_meta_ui.set_acquired(acquired_text(&series_info.acquisition_date).into());
+            image_meta_ui.set_levels(levels_text(series_info).into());
+            image_meta_ui.set_stage_position(stage_text(series_info.stage_position_nm).into());
+            let objective = &image_meta.objective;
+            image_meta_ui.set_objective_model(
+                [objective.manufacturer.trim(), objective.model.trim()]
+                    .iter()
+                    .filter(|s| !s.is_empty())
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .into(),
+            );
+            image_meta_ui.set_objective_magnification(
+                if objective.magnification > 0.0 {
+                    format!("{}×", trim_number(objective.magnification as f64, 1))
+                } else {
+                    String::new()
+                }
+                .into(),
+            );
+            image_meta_ui.set_objective_na(
+                if objective.numerical_aperture > 0.0 {
+                    format!("{:.2}", objective.numerical_aperture)
+                } else {
+                    String::new()
+                }
+                .into(),
+            );
+            image_meta_ui.set_objective_immersion(objective.immersion.trim().to_string().into());
+            let acq: Vec<crate::ChannelAcq> =
+                series_info.channels.values().map(channel_acq).collect();
+            image_meta_ui.set_channel_acq(std::rc::Rc::new(slint::VecModel::from(acq)).into());
 
             // --- Pixel size (an unknown z shown as 0, as the reader's) ---
             let pixel_size_z = pixel_sizes.z.unwrap_or(0.0);
@@ -686,6 +822,118 @@ impl ImageMetaController {
 /// colour: the project's (`project_value`, then "edited") if set, else the
 /// image's own from its metadata, else nothing (an empty text). Unlike
 /// `ProjectExt::get_effective_frame_interval`, no default is shown.
+/// "16 bit", or "16 bit · 12 used" when the file uses fewer bits.
+fn pixel_type_text(bits: u16, significant: Option<u8>) -> String {
+    match significant {
+        Some(used) if (used as u16) < bits && used > 0 => format!("{bits} bit · {used} used"),
+        _ => format!("{bits} bit"),
+    }
+}
+
+/// The acquisition date as "2022-12-15 14:32" (ISO 8601 cut to minutes).
+fn acquired_text(iso: &str) -> String {
+    let t = iso.trim().replacen('T', " ", 1);
+    if t.len() > 16 && t.is_char_boundary(16) {
+        t[..16].to_string()
+    } else {
+        t
+    }
+}
+
+/// A pyramid's levels: "4 · 1, 2, 4, 8×"; one level: "".
+fn levels_text(info: &evanalyzer_app::images::ImageInfo) -> String {
+    if info.resolutions.len() < 2 {
+        return String::new();
+    }
+    let base = info
+        .resolutions
+        .get(&0)
+        .map(|r| r.width.max(1))
+        .unwrap_or(1) as f64;
+    let factors: Vec<String> = info
+        .resolutions
+        .values()
+        .map(|r| trim_number(base / r.width.max(1) as f64, 1))
+        .collect();
+    format!("{} · {}×", info.resolutions.len(), factors.join(", "))
+}
+
+/// The stage position in µm (mm from 10 mm on): "x 110.90 · y 108.53 mm".
+fn stage_text(pos: [Option<f64>; 3]) -> String {
+    let known: Vec<(char, f64)> = ['x', 'y', 'z']
+        .iter()
+        .zip(pos)
+        .filter_map(|(axis, v)| v.map(|v| (*axis, v)))
+        .collect();
+    if known.is_empty() {
+        return String::new();
+    }
+    let in_mm = known.iter().any(|(_, v)| v.abs() >= 1e7);
+    let (div, unit, digits) = if in_mm {
+        (1e6, "mm", 2)
+    } else {
+        (1e3, "µm", 1)
+    };
+    let parts: Vec<String> = known
+        .iter()
+        .map(|(axis, v)| format!("{axis} {}", trim_number(v / div, digits)))
+        .collect();
+    format!("{} {unit}", parts.join(" · "))
+}
+
+/// One channel's acquisition values, ready to show ("" = not in the file).
+fn channel_acq(c: &evanalyzer_app::images::FileChannel) -> crate::ChannelAcq {
+    let exposure = c.exposure_s.map(|s| {
+        if s < 1.0 {
+            format!("{} ms", trim_number(s as f64 * 1000.0, 1))
+        } else {
+            format!("{} s", trim_number(s as f64, 2))
+        }
+    });
+    let gain = match (c.detector_gain, c.detector_offset) {
+        (Some(g), Some(o)) => format!(
+            "{} · offset {}",
+            trim_number(g as f64, 2),
+            trim_number(o as f64, 1)
+        ),
+        (Some(g), None) => trim_number(g as f64, 2),
+        (None, Some(o)) => format!("offset {}", trim_number(o as f64, 1)),
+        (None, None) => String::new(),
+    };
+    crate::ChannelAcq {
+        fluor: c.fluor.trim().to_string().into(),
+        contrast: c.contrast_method.trim().to_string().into(),
+        excitation: if c.excitation_wave_length > 0.0 {
+            format!("{} nm", trim_number(c.excitation_wave_length as f64, 1))
+        } else {
+            String::new()
+        }
+        .into(),
+        exposure: exposure.unwrap_or_default().into(),
+        gain: gain.into(),
+        binning: c
+            .binning
+            .map(|(x, y)| format!("{x} × {y}"))
+            .unwrap_or_default()
+            .into(),
+        pinhole: c
+            .pinhole_nm
+            .map(|nm| format!("{} µm", trim_number(nm as f64 / 1000.0, 2)))
+            .unwrap_or_default()
+            .into(),
+    }
+}
+
+/// A number with at most `digits` decimals and no trailing zeros ("0.8", "20").
+fn trim_number(v: f64, digits: usize) -> String {
+    let s = format!("{v:.digits$}");
+    if s.contains('.') {
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        s
+    }
+}
+
 fn frame_interval_shown(project_value: Option<f32>, image_value: Option<f32>) -> (String, bool) {
     let valid = |v: Option<f32>| v.filter(|v| v.is_finite() && *v > 0.0);
     match (valid(project_value), valid(image_value)) {
@@ -942,7 +1190,8 @@ mod tests {
         assert_eq!(meta_ui.get_nr_series(), meta.series.len() as i32);
         assert_eq!(meta_ui.get_series_list().row_count(), meta.series.len());
         assert!(meta_ui.get_size().ends_with(" px"));
-        assert!(meta_ui.get_pixel_type().ends_with(" bits"));
+        // "16 bit", or "16 bit · 12 used".
+        assert!(meta_ui.get_pixel_type().contains(" bit"));
         // The fixture project overrides pixel sizes with 0.5 x 0.5 x 1.
         assert_eq!(meta_ui.get_pixel_size_x(), 0.5);
         assert_eq!(meta_ui.get_pixel_size_str(), "0.5x0.5x1.0 nm/px");
@@ -1062,9 +1311,12 @@ mod tests {
         ui.window().set_size(slint::LogicalSize::new(1500.0, 900.0));
         ui.global::<crate::LayoutState>()
             .set_mode(crate::WorkspaceMode::Images);
+        // Image info starts folded to its head.
+        ui.global::<crate::LayoutState>()
+            .set_image_info_folded(false);
         let meta_ui = ui.global::<ImageMetaData>();
         let field = || {
-            ElementHandle::find_by_accessible_label(&ui, "Pixel size in nm")
+            ElementHandle::find_by_accessible_label(&ui, "Pixel size X in nm")
                 .next()
                 .expect("the pixel size field")
         };

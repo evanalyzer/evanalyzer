@@ -40,7 +40,7 @@ export component ClassSelectDialog inherits InkDialog {
                 alignment: start;
                 for data in ClassificationState.classes_list: InkListRow {
                     title: data.name;
-                    tag: data.id < 10 ? "0" + data.id : data.id;
+                    lead: data.id;
                     swatch: data.color;
                     trailing: data.count;
                     selected: ClassSelectDialogState.selected_class_id == data.id;

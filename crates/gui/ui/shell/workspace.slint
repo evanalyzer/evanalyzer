@@ -17,8 +17,8 @@ import { ImagesListPanel } from "../editor/images_list_panel.slint";
 import { ImageMetaPanel } from "../editor/image_meta_panel.slint";
 import { ClassificationPanel } from "../editor/classification_panel.slint";
 import { ObjectListPanel } from "../editor/object_list_panel.slint";
+import { ObjectDetailsPlace, ObjectActions } from "../editor/object_list_panel.slint";
 import { ObjectDetails } from "../editor/object_details.slint";
-import { ObjectDetailsPlace } from "../editor/object_list_panel.slint";
 import { ObjectListState } from "../api/object_list.slint";
 import { ImageControlPanel } from "../editor/image_control_panel.slint";
 import { MeasurementsPanel } from "../editor/measurements_panel.slint";
@@ -40,6 +40,12 @@ global Float {
     out property <length> gap: Places.gap;
     out property <length> left-w: Places.left-w;
     out property <length> right-w: Places.right-w;
+}
+
+// The line between two sections of the right sidebar.
+component SideLine inherits Rectangle {
+    height: 1px;
+    background: Ink.border;
 }
 
 export component Workspace inherits Rectangle {
@@ -259,50 +265,45 @@ export component Workspace inherits Rectangle {
     // over the image's right side (its head's "Image"), above the
     // navigator - the same panels, not second ones.
     property <bool> split-image-panel: root.split && ResultsState.split-image-panel;
-    if root.right-shown || root.split-image-panel: VerticalLayout {
+    // One panel, its sections one below the other: Image, Classes, Objects,
+    // Measurements. Classes sit right above Objects - the class picked
+    // there filters the objects. A folded section keeps its head; only an
+    // open Objects list stretches the panel to the column's height, else
+    // the panel ends after its last section.
+    property <bool> side-image: LayoutState.image-open || root.split-image-panel;
+    property <bool> side-classes: LayoutState.classes-open || root.split-image-panel;
+    property <bool> side-objects: root.objects-in-column && !root.split-image-panel;
+    property <bool> side-measurements: root.measurements-shown && !root.split-image-panel;
+    if root.right-shown || root.split-image-panel: side := InkPanel {
+        property <length> room: root.split-image-panel ? max(160px, root.pane-h - root.strip-h - 56px - 150px) : parent.height - 2 * Float.gap;
+        property <bool> fills: root.side-objects && !LayoutState.objects-folded;
         x: root.split-image-panel ? root.pane-x + root.pane-w - Float.right-w - 10px : parent.width - Float.right-w - Float.gap;
         y: root.split-image-panel ? 12px + 56px : Float.gap;
         width: Float.right-w;
-        height: root.split-image-panel ? max(160px, root.pane-h - root.strip-h - 56px - 150px) : parent.height - 2 * Float.gap;
-        spacing: 8px;
+        height: self.fills ? self.room : min(self.room, self.preferred-height);
 
-        // A folded panel keeps its head; Objects (open) takes the rest.
+        if root.side-image: ImageControlPanel {
+            in-split: root.split-image-panel;
+            vertical-stretch: 0;
+        }
+
         // The same Classes panel - in the split view the analysis'
         // classes on the image.
-        if LayoutState.classes-open || root.split-image-panel: InkPanel {
+        if root.side-image && root.side-classes: SideLine { }
+        if root.side-classes: ClassificationPanel {
+            in-split: root.split-image-panel;
             vertical-stretch: 0;
             max-height: 340px;
-            ClassificationPanel {
-                in-split: root.split-image-panel;
-            }
         }
 
-        if LayoutState.image-open || root.split-image-panel: InkPanel {
-            vertical-stretch: 1;
-            // No taller than its channels need: the Objects panel takes the
-            // rest.
-            max-height: image-control.preferred-height;
-            image-control := ImageControlPanel {
-                in-split: root.split-image-panel;
-                vertical-stretch: 1;
-            }
-        }
-
-        if root.measurements-shown && !root.split-image-panel: InkPanel {
-            vertical-stretch: 0;
-            MeasurementsPanel { }
-        }
-
-        if root.objects-in-column && !root.split-image-panel: InkPanel {
+        if (root.side-image || root.side-classes) && root.side-objects: SideLine { }
+        if root.side-objects: ObjectListPanel {
             vertical-stretch: LayoutState.objects-folded ? 0 : 1;
-            ObjectListPanel {
-                vertical-stretch: LayoutState.objects-folded ? 0 : 1;
-            }
         }
 
-        // Nothing to fill the column: the panels keep their size, at the top.
-        if !(root.objects-in-column && !LayoutState.objects-folded && !root.split-image-panel): Rectangle {
-            vertical-stretch: 1;
+        if (root.side-image || root.side-classes || root.side-objects) && root.side-measurements: SideLine { }
+        if root.side-measurements: MeasurementsPanel {
+            vertical-stretch: 0;
         }
     }
 
@@ -372,14 +373,66 @@ export component Workspace inherits Rectangle {
         }
     }
 
-    // -- The selected object's details: left of the Objects list, level
-    // with its selected row (inside the window) --
-    if root.right-shown && root.objects-in-column && !LayoutState.objects-folded && !root.tuning-shown && ObjectListState.selected_object.id != 0: ObjectDetails {
-        x: parent.width - Float.right-w - 2 * Float.gap - self.width;
-        // Above the bar at the bottom of the image (40 px).
-        y: clamp(ObjectDetailsPlace.row-y - root.absolute-position.y - 8px, Float.gap, max(Float.gap, parent.height - 2 * Float.gap - 40px - root.bottom-room - self.height));
-        width: 300px;
-        max-card-height: max(160px, (parent.height - 2 * Float.gap - 40px - root.bottom-room) * 0.7);
+    // -- The selected object's details (⤢ Details / double click): left of
+    // the sidebar, top-aligned, the column's height. It follows the
+    // selection; ✕ closes it until the next ⤢ --
+    if root.right-shown && root.side-objects && !root.split-image-panel && ObjectListState.details-open && ObjectListState.selected_object.id != 0: InkPanel {
+        x: parent.width - 2 * Float.right-w - 2 * Float.gap;
+        y: Float.gap;
+        width: Float.right-w;
+        height: parent.height - 2 * Float.gap - root.bottom-room;
+        HorizontalLayout {
+            height: Ink.head-h;
+            padding-left: Ink.pad-panel;
+            padding-right: 6px;
+            spacing: 2px;
+            Text {
+                horizontal-stretch: 1;
+                text: "Object details";
+                font-size: Ink.fs-dialog-title;
+                font-weight: 600;
+                color: Ink.text;
+                vertical-alignment: center;
+            }
+            InkIconButton {
+                y: (parent.height - self.height) / 2;
+                size: 24px;
+                icon: InkIcons.caret-up;
+                label: "Previous object";
+                clicked => {
+                    ObjectListState.step-delta = -1;
+                    ObjectListState.step-seq += 1;
+                }
+            }
+            InkIconButton {
+                y: (parent.height - self.height) / 2;
+                size: 24px;
+                icon: InkIcons.caret-down;
+                label: "Next object";
+                clicked => {
+                    ObjectListState.step-delta = 1;
+                    ObjectListState.step-seq += 1;
+                }
+            }
+            InkIconButton {
+                y: (parent.height - self.height) / 2;
+                size: 24px;
+                icon: InkIcons.close;
+                label: "Close the details";
+                clicked => {
+                    ObjectListState.details-open = false;
+                }
+            }
+        }
+        ObjectDetails {
+            vertical-stretch: 1;
+        }
+        InkDivider { }
+        ObjectActions {
+            padding: 8px;
+            padding-left: Ink.pad-panel;
+            editable: ObjectListState.selected_object.editable;
+        }
     }
 
     // -- The objects as a table: at the bottom, between the left and the

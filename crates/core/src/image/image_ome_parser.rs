@@ -101,6 +101,15 @@ pub(crate) fn build_image_meta(
         let is_rgb = series.samples_per_pixel >= 3;
 
         let mut info = ImageInfo {
+            name: series.name.clone().unwrap_or_default(),
+            description: series.description.clone().unwrap_or_default(),
+            acquisition_date: series.acquisition_date.clone().unwrap_or_default(),
+            significant_bits: series.significant_bits,
+            stage_position_nm: series
+                .stage_position
+                .as_ref()
+                .map(|p| [p.x_nm, p.y_nm, p.z_nm])
+                .unwrap_or([None; 3]),
             nr_c_stacks: (series.size_c.max(1) * split) as i32,
             nr_z_stacks: series.size_z.max(1) as i32,
             nr_t_stacks: series.size_t.max(1) as i32,
@@ -134,6 +143,17 @@ pub(crate) fn build_image_meta(
                     contrast_method: source
                         .and_then(|c| c.contrast_method.clone())
                         .unwrap_or_default(),
+                    // The acquisition values of the channel (an RGB
+                    // image's split samples share the one channel's).
+                    fluor: source.and_then(|c| c.fluor.clone()).unwrap_or_default(),
+                    excitation_wave_length: source
+                        .and_then(|c| c.excitation_wavelength_nm)
+                        .unwrap_or(0.0) as f32,
+                    exposure_s: source.and_then(|c| c.exposure_s).map(|v| v as f32),
+                    detector_gain: source.and_then(|c| c.detector_gain).map(|v| v as f32),
+                    detector_offset: source.and_then(|c| c.detector_offset).map(|v| v as f32),
+                    binning: source.and_then(|c| c.binning),
+                    pinhole_nm: source.and_then(|c| c.pinhole_size_nm).map(|v| v as f32),
                 },
             );
         }
@@ -150,6 +170,8 @@ pub(crate) fn build_image_meta(
                 manufacturer: objective.manufacturer.clone().unwrap_or_default(),
                 model: objective.model.clone().unwrap_or_default(),
                 magnification: objective.magnification.unwrap_or(0.0) as f32,
+                numerical_aperture: objective.numerical_aperture.unwrap_or(0.0) as f32,
+                immersion: objective.immersion.clone().unwrap_or_default(),
             };
             objective_set = true;
         }

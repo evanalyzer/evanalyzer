@@ -123,6 +123,12 @@ pub(crate) enum Request {
     ReadImageMeta {
         path: PathBuf,
     },
+    /// The file's own metadata of one series (Image info › Format
+    /// metadata). An older server fails just this request.
+    ReadFormatMetadata {
+        path: PathBuf,
+        series: i32,
+    },
     OpenResults {
         path: PathBuf,
     },
@@ -307,6 +313,7 @@ pub(crate) enum Reply {
     /// One blob of pixels per channel, in order.
     Tile(Vec<WireChannel>),
     ImageMeta(ImageMeta),
+    FormatMetadata(Vec<(String, String)>),
     ResultsOpened {
         handle: u64,
     },

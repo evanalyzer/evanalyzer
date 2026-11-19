@@ -11,13 +11,15 @@
 import { Ink } from "palette.slint";
 import { InkIcons } from "icons.slint";
 import { InkIconButton } from "button.slint";
-import { InkBadge } from "marker.slint";
+import { InkBadge, InkChip } from "marker.slint";
 import { InkTipZone } from "tooltip.slint";
+import { InkSwitch } from "toggle.slint";
 
 /// A floating panel over the image: glass, a soft border, a shadow. Content
 /// usually starts with an `InkPanelHead`.
 export component InkPanel inherits Rectangle {
     background: Ink.glass;
+    backdrop-blur: Ink.backdrop;
     border-radius: Ink.radius-lg;
     border-width: 1px;
     border-color: Ink.border;
@@ -62,6 +64,14 @@ export component InkPanelHead inherits Rectangle {
     in property <string> action-label;
     in property <bool> action-enabled: true;
     in property <string> action-disabled-reason;
+    /// A removable chip at the right ("◎ CY5" - a focus); "" none.
+    in property <string> chip-text;
+    in property <string> chip-tip;
+    callback chip-removed;
+    /// A switch at the right while open ("Grayscale"); "" none.
+    in property <string> switch-text;
+    in property <bool> switch-checked;
+    callback switch-toggled(bool);
     callback close;
     callback fold-toggled;
     callback action;
@@ -167,6 +177,36 @@ export component InkPanelHead inherits Rectangle {
         HorizontalLayout {
             spacing: 2px;
             alignment: end;
+            if root.chip-text != "": Rectangle {
+                width: min(focus-chip.preferred-width, 120px);
+                focus-chip := InkChip {
+                    y: (Ink.head-h - self.height) / 2;
+                    width: parent.width;
+                    text: root.chip-text;
+                    selected: true;
+                    removable: true;
+                    remove => {
+                        root.chip-removed();
+                    }
+                }
+                InkTipZone {
+                    width: 100%;
+                    height: 100%;
+                    wanted: chip-ta.has-hover;
+                    text: root.chip-tip;
+                }
+                chip-ta := TouchArea {
+                    width: parent.width - 18px;
+                }
+            }
+            if root.switch-text != "" && !root.folded: InkSwitch {
+                y: (Ink.head-h - self.height) / 2;
+                text: root.switch-text;
+                checked: root.switch-checked;
+                toggled(on) => {
+                    root.switch-toggled(on);
+                }
+            }
             if root.action-label != "": InkIconButton {
                 y: (Ink.head-h - self.height) / 2;
                 size: 24px;
@@ -294,7 +334,8 @@ export component InkDialog inherits Rectangle {
         height: root.sheet ? root.room-h : root.card-height > 0 ? min(root.card-height, root.room-h) : min(layout.preferred-height, root.room-h);
         x: clamp((root.anchor-x >= 0 ? (root.from-right ? parent.width - self.width - root.anchor-x : root.anchor-x) : root.sheet ? parent.width - self.width - 12px : (parent.width - self.width) / 2) + root.drag-x, 0px, max(0px, parent.width - self.width));
         y: clamp((root.anchor-y >= 0 ? (root.from-bottom ? parent.height - self.height - root.anchor-y : root.anchor-y) : root.modal ? (parent.height - self.height) / 2 : root.top) + root.drag-y, 0px, max(0px, parent.height - self.height));
-        background: Ink.panel;
+        background: Ink.panel-blur ? Ink.glass : Ink.panel;
+        backdrop-blur: Ink.backdrop;
         border-radius: Ink.radius-lg;
         border-width: 1px;
         border-color: Ink.border;

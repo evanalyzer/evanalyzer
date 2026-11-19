@@ -3665,7 +3665,7 @@ Used by: tinyvec_macros 0.1.1
 
 ==============================================================================
 Apache License 2.0
-Used by: rust_xlsxwriter 0.102.0
+Used by: rust_xlsxwriter 0.103.0
 ==============================================================================
 
                                  Apache License
@@ -4907,7 +4907,7 @@ Used by: ntapi 0.4.3
 
 ==============================================================================
 Apache License 2.0
-Used by: clap 4.6.7, clap_builder 4.6.7, clap_derive 4.6.7
+Used by: clap 4.6.8, clap_builder 4.6.7, clap_derive 4.6.8
 ==============================================================================
 
                                  Apache License
@@ -6346,7 +6346,7 @@ limitations under the License.
 
 ==============================================================================
 Apache License 2.0
-Used by: ctrlc 3.5.2
+Used by: ctrlc 3.5.3
 ==============================================================================
 
                               Apache License
@@ -9244,7 +9244,7 @@ limitations under the License.
 
 ==============================================================================
 Apache License 2.0
-Used by: async-recursion 1.1.1, gif 0.14.2, glow 0.18.0, keyboard-types 0.7.0, weezl 0.1.12, weezl 0.2.1
+Used by: async-recursion 1.1.1, gif 0.14.2, glow 0.18.0, keyboard-types 0.8.3, weezl 0.1.12, weezl 0.2.1
 ==============================================================================
 
                               Apache License
@@ -9451,7 +9451,7 @@ limitations under the License.
 
 ==============================================================================
 Apache License 2.0
-Used by: ahash 0.8.12, aligned 0.4.3, arbitrary 1.4.2, arrayvec 0.7.8, as-slice 0.2.1, async-channel 2.5.0, async-executor 1.14.0, async-io 2.6.0, async-lock 3.4.2, async-process 2.5.0, async-signal 0.2.14, async-task 4.7.1, atomic-waker 1.1.2, autocfg 1.5.1, base64 0.22.1, base64 0.23.1, bitflags 1.3.2, bitflags 2.13.1, bitstream-io 4.10.0, blocking 1.6.2, bumpalo 3.20.3, by_address 1.2.1, bzip2 0.4.4, bzip2-sys 0.1.13+1.0.8, cast 0.3.0, cc 1.4.1, cexpr 0.6.0, cfg-if 1.0.4, cgl 0.3.2, concurrent-queue 2.5.0, const-random 0.1.18, const-random-macro 0.1.16, core-foundation 0.9.4, core-foundation-sys 0.8.7, core-graphics 0.23.2, core-graphics-types 0.1.3, countme 3.0.1, critical-section 1.2.0, crossbeam-channel 0.5.16, crossbeam-deque 0.8.7, crossbeam-epoch 0.9.20, crossbeam-utils 0.8.22, data-url 0.3.2, derive_arbitrary 1.4.2, displaydoc 0.2.7, either 1.17.0, embedded-hal 0.2.7, embedded-hal 1.0.0, embedded-hal-async 1.0.0, enumset 1.1.14, enumset_derive 0.15.0, equivalent 1.0.2, errno 0.3.14, euclid 0.22.14, event-listener 5.4.2, event-listener-strategy 0.5.4, fastrand 2.5.0, filetime 0.2.29, find-msvc-tools 0.1.10, fixedbitset 0.5.7, flate2 1.1.9, fnv 1.0.7, fontique 0.11.1, form_urlencoded 1.2.2, futures-lite 2.6.1, gethostname 1.1.0, glob 0.3.4, hashbrown 0.14.5, hashbrown 0.15.5, hashbrown 0.16.1, hashbrown 0.17.1, heck 0.5.0, hermit-abi 0.5.2, htmlparser 0.2.1, httparse 1.10.1, idna 1.1.0, idna_adapter 1.2.2, indexmap 2.14.2, itertools 0.13.0, itertools 0.14.0, itertools 0.15.0, jobserver 0.1.35, js-sys 0.3.103, lazy_static 1.5.0, libfuzzer-sys 0.4.13, linux-raw-sys 0.12.1, linux-raw-sys 0.4.15, lock_api 0.4.14, log 0.4.35, matrixmultiply 0.3.11, muda 0.19.3, nb 0.1.3, nb 1.1.0, ndarray 0.16.1, ndarray 0.17.2, num 0.4.3, num-bigint 0.4.8, num-complex 0.4.6, num-derive 0.4.2, num-integer 0.1.46, num-iter 0.1.46, num-rational 0.4.2, num-traits 0.2.19, once_cell 1.21.4, ordered-stream 0.2.0, parking 2.2.1, parking_lot 0.12.5, parking_lot_core 0.9.12, parlance 0.1.0, parley 0.11.1, parley_data 0.11.1, percent-encoding 2.3.2, petgraph 0.8.3, piper 0.2.5, pkg-config 0.3.33, plain 0.2.3, png 0.18.1, polling 3.11.0, postcard 1.1.3, primal-check 0.3.4, rawpointer 0.2.1, rayon 1.12.0, rayon-core 1.13.0, regex 1.13.1, regex-automata 0.4.18, regex-syntax 0.8.11, renderdoc-sys 1.1.0, ring 0.17.14, rowan 0.17.0, roxmltree 0.21.1, rustc-hash 1.1.0, rustc_version 0.4.1, rustix 0.38.44, rustix 1.1.4, rustls 0.23.46, scoped-tls 1.0.1, scoped-tls-hkt 0.1.5, scopeguard 1.2.0, signal-hook-registry 1.4.8, simd_cesu8 1.2.0, simplecss 0.2.2, smallvec 1.15.2, smol_str 0.2.2, smol_str 0.3.6, spin_on 0.1.1, stable_deref_trait 1.2.1, svgtypes 0.16.1, swash 0.2.10, tar 0.4.46, tempfile 3.27.0, ttf-parser 0.25.1, tungstenite 0.30.0, unicase 2.9.0, unicode-bidi 0.3.18, unicode-segmentation 1.13.3, unicode-vo 0.1.0, unicode-width 0.2.2, unicode-xid 0.2.6, url 2.5.8, uuid 1.29.0, version_check 0.9.5, wasi 0.11.1+wasi-snapshot-preview1, wasip2 1.0.4+wasi-0.2.12, wasm-bindgen 0.2.126, wasm-bindgen-futures 0.4.76, wasm-bindgen-macro 0.2.126, wasm-bindgen-macro-support 0.2.126, wasm-bindgen-shared 0.2.126, web-sys 0.3.103, wit-bindgen 0.57.1, wl-clipboard-rs 0.9.4, xattr 1.6.1, yasna 0.6.0
+Used by: ahash 0.8.12, aligned 0.4.3, arbitrary 1.4.2, arrayvec 0.7.8, as-slice 0.2.1, async-channel 2.5.0, async-executor 1.14.0, async-io 2.6.0, async-lock 3.4.2, async-process 2.5.0, async-signal 0.2.14, async-task 4.7.1, atomic-waker 1.1.2, autocfg 1.5.1, base64 0.22.1, base64 0.23.1, bitflags 1.3.2, bitflags 2.13.1, bitstream-io 4.10.0, blocking 1.6.2, bumpalo 3.20.3, by_address 1.2.1, bzip2 0.4.4, bzip2-sys 0.1.13+1.0.8, cast 0.3.0, cc 1.4.1, cexpr 0.6.0, cfg-if 1.0.4, cgl 0.3.2, concurrent-queue 2.5.0, const-random 0.1.18, const-random-macro 0.1.16, core-foundation 0.9.4, core-foundation-sys 0.8.7, core-graphics 0.23.2, core-graphics-types 0.1.3, countme 3.0.1, critical-section 1.2.0, crossbeam-channel 0.5.16, crossbeam-deque 0.8.7, crossbeam-epoch 0.9.20, crossbeam-utils 0.8.22, data-url 0.3.2, derive_arbitrary 1.4.2, displaydoc 0.2.7, either 1.17.0, embedded-hal 0.2.7, embedded-hal 1.0.0, embedded-hal-async 1.0.0, enumset 1.1.14, enumset_derive 0.15.0, equivalent 1.0.2, errno 0.3.14, euclid 0.22.14, event-listener 5.4.2, event-listener-strategy 0.5.4, fastrand 2.5.0, filetime 0.2.29, find-msvc-tools 0.1.10, flate2 1.1.9, fnv 1.0.7, fontique 0.12.0, form_urlencoded 1.2.2, futures-lite 2.6.1, gethostname 1.1.0, glob 0.3.4, hashbrown 0.14.5, hashbrown 0.15.5, hashbrown 0.16.1, hashbrown 0.17.1, heck 0.5.0, hermit-abi 0.5.2, htmlparser 0.2.1, httparse 1.10.1, idna 1.1.0, idna_adapter 1.2.2, indexmap 2.14.2, itertools 0.14.0, itertools 0.15.0, jobserver 0.1.35, js-sys 0.3.103, lazy_static 1.5.0, libfuzzer-sys 0.4.13, linux-raw-sys 0.12.1, linux-raw-sys 0.4.15, lock_api 0.4.14, log 0.4.35, matrixmultiply 0.3.11, muda 0.21.2, nb 0.1.3, nb 1.1.0, ndarray 0.16.1, ndarray 0.17.2, num 0.4.3, num-bigint 0.4.8, num-complex 0.4.6, num-derive 0.4.2, num-integer 0.1.46, num-iter 0.1.46, num-rational 0.4.2, num-traits 0.2.19, once_cell 1.21.4, ordered-stream 0.2.0, parking 2.2.1, parking_lot 0.12.5, parking_lot_core 0.9.12, parlance 0.1.1, parley 0.12.0, parley_data 0.12.0, percent-encoding 2.3.2, piper 0.2.5, pkg-config 0.3.33, plain 0.2.3, png 0.18.1, polling 3.11.0, postcard 1.1.3, primal-check 0.3.4, rawpointer 0.2.1, rayon 1.12.0, rayon-core 1.13.0, regex 1.13.2, regex-automata 0.4.19, regex-syntax 0.8.12, renderdoc-sys 1.1.0, ring 0.17.14, rowan 0.17.0, roxmltree 0.21.1, rustc-hash 1.1.0, rustc_version 0.4.1, rustix 0.38.44, rustix 1.1.4, rustls 0.23.46, scoped-tls 1.0.1, scoped-tls-hkt 0.1.5, scopeguard 1.2.0, signal-hook-registry 1.4.8, simd_cesu8 1.2.0, simplecss 0.2.2, smallvec 1.16.6, smol_str 0.2.2, smol_str 0.3.6, spin_on 0.1.1, stable_deref_trait 1.2.1, svgtypes 0.16.1, swash 0.2.10, tar 0.4.46, tempfile 3.27.0, ttf-parser 0.25.1, tungstenite 0.30.0, unicase 2.9.0, unicode-bidi 0.3.18, unicode-segmentation 1.13.3, unicode-vo 0.1.0, unicode-width 0.2.2, unicode-xid 0.2.6, url 2.5.8, uuid 1.29.0, version_check 0.9.5, wasi 0.11.1+wasi-snapshot-preview1, wasip2 1.0.4+wasi-0.2.12, wasm-bindgen 0.2.126, wasm-bindgen-futures 0.4.76, wasm-bindgen-macro 0.2.126, wasm-bindgen-macro-support 0.2.126, wasm-bindgen-shared 0.2.126, web-sys 0.3.103, wit-bindgen 0.57.1, xattr 1.6.1, yasna 0.6.0
 ==============================================================================
 
                               Apache License
@@ -13099,7 +13099,7 @@ limitations under the License.
 
 ==============================================================================
 Apache License 2.0
-Used by: ab_glyph 0.2.32, ab_glyph_rasterizer 0.1.10, accesskit 0.24.1, accesskit_atspi_common 0.19.1, accesskit_consumer 0.38.0, accesskit_ios 0.1.2, accesskit_macos 0.26.3, accesskit_unix 0.22.1, accesskit_windows 0.34.0, accesskit_winit 0.33.2, allocator-api2 0.2.21, android-activity 0.6.1, android_system_properties 0.1.6, anyhow 1.0.104, arboard 3.6.1, async-trait 0.1.91, burn-backend 0.21.0, burn-ir 0.21.0, burn-nn 0.21.0, burn-optim 0.21.0, const-field-offset 0.2.1, const-field-offset-macro 0.2.1, cubecl-zspace 0.10.0, dirs 7.0.0, dirs-sys 0.5.0, dispatch2 0.3.1, document-features 0.2.12, dyn-clone 1.0.20, embassy-futures 0.1.2, embassy-time 0.5.1, embassy-time-driver 0.2.2, erased-serde 0.4.10, fdeflate 0.3.7, fearless_simd 1.1.0, femtovg 0.27.0, field-offset 0.3.6, gl_generator 0.14.0, half 2.7.1, hayro-jpeg2000 0.4.1, ident_case 1.0.1, image 0.25.10, image-webp 0.2.4, inventory 0.3.24, itoa 1.0.18, jni 0.22.4, jni-macros 0.22.4, jni-sys-macros 0.4.1, khronos_api 3.1.0, kornia-algebra 0.2.0, kornia-image 0.2.0, kornia-imgproc 0.2.0, kornia-tensor 0.2.0, libc 0.2.191, linebender_resource_handle 0.1.1, litrs 1.0.0, lyon_algorithms 1.0.20, lyon_extra 1.1.0, lyon_geom 1.0.19, lyon_path 1.0.19, miniz_oxide 0.8.9, naga 30.0.1, naga-types 30.0.1, ndk 0.9.0, ndk-context 0.1.1, ndk-sys 0.6.0+11769913, num-conv 0.2.2, num_enum 0.7.6, num_enum_derive 0.7.6, objc2-app-kit 0.3.2, objc2-core-foundation 0.3.2, objc2-core-graphics 0.3.2, objc2-core-text 0.3.2, objc2-io-kit 0.3.2, objc2-metal 0.3.2, objc2-open-directory 0.3.2, objc2-quartz-core 0.3.2, objc2-ui-kit 0.3.2, owned_ttf_parser 0.25.1, paste 1.0.15, pastey 0.1.1, pastey 0.2.3, petname-macros 3.2.0, pin-project 1.1.13, pin-project-internal 1.1.13, pin-project-lite 0.2.17, portable-atomic 1.15.0, portable-atomic-util 0.2.7, prettyplease 0.2.37, proc-macro2 1.0.107, profiling 1.0.18, profiling-procmacros 1.0.18, quote 1.0.47, r-efi 5.3.0, r-efi 6.0.0, rand 0.10.3, rand 0.8.7, rand 0.9.5, rand_chacha 0.9.0, range-alloc 0.1.5, raw-window-handle 0.6.2, rcgen 0.14.10, ref-cast 1.0.26, ref-cast-impl 1.0.26, resvg 0.48.1, rhai 1.27.0, rhai_codegen 3.3.0, rpassword 7.5.4, rtoolbox 0.0.6, rustc-hash 2.1.3, rustversion 1.0.23, ryu 1.0.23, safetensors 0.3.3, semver 1.0.28, serde 1.0.229, serde_bytes 0.11.19, serde_core 1.0.229, serde_derive 1.0.229, serde_derive_internals 0.30.0, serde_json 1.0.154, serde_path_to_error 0.1.20, serde_repr 0.1.21, serde_yaml 0.9.34+deprecated, shlex 1.3.0, shlex 2.0.1, simdutf8 0.1.5, siphasher 1.0.3, spirv 0.4.0+sdk-1.4.341.0, syn 2.0.119, syn 3.0.9, task-local 0.1.1, thin-vec 0.2.21, thiserror 1.0.69, thiserror 2.0.21, thiserror-impl 1.0.69, thiserror-impl 2.0.21, time 0.3.55, time-core 0.1.9, tiny-xlib 0.2.5, torch-sys 0.26.0, typed-index-collections 3.5.0, typed-path 0.13.0, typeid 1.0.3, typetag 0.2.23, typetag-impl 0.2.23, unicode-ident 1.0.24, ureq-proto 0.6.0, usvg 0.48.1, utf8-zero 0.8.1, utf8parse 0.2.2, vtable 0.5.0, vtable-macro 0.5.0, wgpu 30.0.1, wgpu-core 30.0.1, wgpu-core-deps-apple 30.0.1, wgpu-core-deps-windows-linux-android 30.0.1, wgpu-hal 30.0.1, wgpu-naga-bridge 30.0.1, wgpu-types 30.0.1, wide 1.5.0, winapi-i686-pc-windows-gnu 0.4.0, winapi-x86_64-pc-windows-gnu 0.4.0, zstd-safe 5.0.2+zstd.1.5.2, zstd-sys 2.0.16+zstd.1.5.7, zune-inflate 0.2.54
+Used by: ab_glyph 0.2.32, ab_glyph_rasterizer 0.1.10, accesskit 0.25.2, accesskit_atspi_common 0.21.1, accesskit_consumer 0.39.2, accesskit_ios 0.2.2, accesskit_macos 0.27.2, accesskit_unix 0.24.1, accesskit_windows 0.35.2, accesskit_winit 0.34.2, allocator-api2 0.2.21, android-activity 0.6.1, android_system_properties 0.1.6, anyhow 1.0.104, arboard 3.6.1, async-trait 0.1.91, burn-backend 0.21.0, burn-ir 0.21.0, burn-nn 0.21.0, burn-optim 0.21.0, const-field-offset 0.2.1, const-field-offset-macro 0.2.1, cubecl-zspace 0.10.0, dirs 7.0.0, dirs-sys 0.5.0, dispatch2 0.3.1, document-features 0.2.12, dyn-clone 1.0.20, embassy-futures 0.1.2, embassy-time 0.5.1, embassy-time-driver 0.2.2, erased-serde 0.4.10, fdeflate 0.3.7, fearless_simd 1.1.0, femtovg 0.28.0, field-offset 0.3.6, gl_generator 0.14.0, half 2.7.1, hayro-jpeg2000 0.4.1, ident_case 1.0.1, image 0.25.10, image-webp 0.2.4, inventory 0.3.24, itoa 1.0.18, jni 0.22.4, jni-macros 0.22.4, jni-sys-macros 0.4.1, khronos_api 3.1.0, kornia-algebra 0.2.0, kornia-image 0.2.0, kornia-imgproc 0.2.0, kornia-tensor 0.2.0, libc 0.2.191, linebender_resource_handle 0.1.1, litrs 1.0.0, lyon_algorithms 1.0.20, lyon_extra 1.1.0, lyon_geom 1.0.19, lyon_path 1.0.19, miniz_oxide 0.8.9, naga 30.0.1, naga-types 30.0.1, ndk 0.9.0, ndk-context 0.1.1, ndk-sys 0.6.0+11769913, num-conv 0.2.2, num_enum 0.7.6, num_enum_derive 0.7.6, objc2-app-kit 0.3.2, objc2-core-foundation 0.3.2, objc2-core-graphics 0.3.2, objc2-core-text 0.3.2, objc2-io-kit 0.3.2, objc2-metal 0.3.2, objc2-open-directory 0.3.2, objc2-quartz-core 0.3.2, objc2-ui-kit 0.3.2, owned_ttf_parser 0.25.1, parley_engine 0.12.0, paste 1.0.15, pastey 0.1.1, pastey 0.2.3, petname-macros 3.2.0, pin-project 1.1.13, pin-project-internal 1.1.13, pin-project-lite 0.2.17, portable-atomic 1.15.0, portable-atomic-util 0.2.7, prettyplease 0.3.0, proc-macro2 1.0.107, profiling 1.0.18, profiling-procmacros 1.0.18, quote 1.0.47, r-efi 5.3.0, r-efi 6.0.0, rand 0.10.3, rand 0.8.7, rand 0.9.5, rand_chacha 0.9.0, range-alloc 0.1.5, raw-window-handle 0.6.2, rcgen 0.14.10, ref-cast 1.0.26, ref-cast-impl 1.0.26, resvg 0.49.0, rhai 1.27.0, rhai_codegen 3.3.0, rpassword 7.5.5, rtoolbox 0.0.6, rustc-hash 2.1.3, rustversion 1.0.23, ryu 1.0.23, safetensors 0.3.3, semver 1.0.28, serde 1.0.229, serde_bytes 0.11.19, serde_core 1.0.229, serde_derive 1.0.229, serde_derive_internals 0.30.0, serde_json 1.0.154, serde_path_to_error 0.1.20, serde_repr 0.1.21, serde_yaml 0.9.34+deprecated, shlex 2.0.1, simdutf8 0.1.5, siphasher 1.0.3, spirv 0.4.0+sdk-1.4.341.0, syn 2.0.119, syn 3.0.10, task-local 0.1.1, thin-vec 0.2.21, thiserror 1.0.69, thiserror 2.0.21, thiserror-impl 1.0.69, thiserror-impl 2.0.21, time 0.3.55, time-core 0.1.9, tiny-xlib 0.2.5, torch-sys 0.26.0, typed-index-collections 3.5.0, typed-path 0.13.0, typeid 1.0.3, typetag 0.2.23, typetag-impl 0.2.23, unicode-ident 1.0.24, ureq-proto 0.6.0, usvg 0.49.0, utf8-zero 0.8.1, utf8parse 0.2.2, vtable 0.5.1, vtable-macro 0.5.1, wgpu 30.0.1, wgpu-core 30.0.1, wgpu-core-deps-apple 30.0.1, wgpu-core-deps-windows-linux-android 30.0.1, wgpu-hal 30.0.1, wgpu-naga-bridge 30.0.1, wgpu-types 30.0.1, wide 1.5.0, winapi-i686-pc-windows-gnu 0.4.0, winapi-x86_64-pc-windows-gnu 0.4.0, zstd-safe 5.0.2+zstd.1.5.2, zstd-sys 2.0.16+zstd.1.5.7, zune-inflate 0.2.54
 ==============================================================================
 
 Apache License
@@ -13633,7 +13633,7 @@ DAMAGE.
 
 ==============================================================================
 BSD 3-Clause "New" or "Revised" License
-Used by: bindgen 0.72.1
+Used by: bindgen 0.73.2
 ==============================================================================
 
 BSD 3-Clause License
@@ -14027,7 +14027,7 @@ express Statement of Purpose.
 
 ==============================================================================
 Community Data License Agreement Permissive 2.0
-Used by: webpki-roots 1.0.11
+Used by: webpki-roots 1.0.12
 ==============================================================================
 
 # Community Data License Agreement - Permissive - Version 2.0
@@ -14772,7 +14772,7 @@ CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ==============================================================================
 ISC License
-Used by: libloading 0.8.9, libloading 0.9.0
+Used by: libloading 0.8.9, libloading 0.9.1
 ==============================================================================
 
 Copyright © 2015, Simonas Kazlauskas
@@ -14815,7 +14815,7 @@ third-party/chromium/LICENSE.
 
 ==============================================================================
 LicenseRef-Slint-Royalty-free-2.0
-Used by: i-slint-backend-selector 1.18.1, i-slint-backend-winit 1.18.1, i-slint-common 1.18.1, i-slint-compiler 1.18.1, i-slint-core 1.18.1, i-slint-core-macros 1.18.1, i-slint-renderer-femtovg 1.18.1, i-slint-renderer-skia 1.18.1, i-slint-renderer-software 1.18.1, slint 1.18.1, slint-build 1.18.1, slint-macros 1.18.1
+Used by: i-slint-backend-selector 1.19.0, i-slint-backend-winit 1.19.0, i-slint-common 1.19.0, i-slint-compiler 1.19.0, i-slint-core 1.19.0, i-slint-core-macros 1.19.0, i-slint-renderer-femtovg 1.19.0, i-slint-renderer-skia 1.19.0, i-slint-renderer-software 1.19.0, slint 1.19.0, slint-build 1.19.0, slint-macros 1.19.0
 ==============================================================================
 
 # Slint Royalty-free Desktop, Mobile, and Web Applications License
@@ -15068,7 +15068,7 @@ IN THE SOFTWARE.
 
 ==============================================================================
 MIT License
-Used by: wayland-backend 0.3.16, wayland-client 0.31.15, wayland-cursor 0.31.14, wayland-protocols 0.32.13, wayland-protocols-plasma 0.3.12, wayland-protocols-wlr 0.3.12, wayland-scanner 0.31.11, wayland-sys 0.31.11
+Used by: wayland-backend 0.3.16, wayland-client 0.31.15, wayland-cursor 0.31.14, wayland-protocols 0.32.13, wayland-protocols-experimental 20250721.0.1, wayland-protocols-misc 0.3.12, wayland-protocols-plasma 0.3.12, wayland-protocols-wlr 0.3.12, wayland-scanner 0.31.11, wayland-sys 0.31.11
 ==============================================================================
 
 Copyright (c) 2015 Elinor Berger
@@ -15233,7 +15233,32 @@ DEALINGS IN THE SOFTWARE.
 
 ==============================================================================
 MIT License
-Used by: smithay-client-toolkit 0.19.2
+Used by: smithay-clipboard 0.7.3
+==============================================================================
+
+Copyright (c) 2018 Lucas Timmins & Victor Berger
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+==============================================================================
+MIT License
+Used by: smithay-client-toolkit 0.19.2, smithay-client-toolkit 0.20.0
 ==============================================================================
 
 Copyright (c) 2018 Victor Berger
@@ -15258,7 +15283,7 @@ THE SOFTWARE.
 
 ==============================================================================
 MIT License
-Used by: calloop 0.13.0
+Used by: calloop 0.13.0, calloop 0.14.4
 ==============================================================================
 
 Copyright (c) 2018 Victor Berger
@@ -15445,7 +15470,7 @@ THE SOFTWARE.
 
 ==============================================================================
 MIT License
-Used by: calloop-wayland-source 0.3.0
+Used by: calloop-wayland-source 0.3.0, calloop-wayland-source 0.4.1
 ==============================================================================
 
 Copyright (c) 2023 Kirill Chibisov
@@ -15495,7 +15520,7 @@ SOFTWARE.
 
 ==============================================================================
 MIT License
-Used by: zbus 5.18.0, zbus_macros 5.18.0, zbus_names 4.3.4, zbus_xml 5.2.1, zvariant 5.13.1, zvariant_derive 5.13.1
+Used by: zbus 5.19.0, zbus_macros 5.19.0, zbus_names 4.3.4, zbus_xml 5.2.1, zvariant 5.15.1, zvariant_derive 5.15.1
 ==============================================================================
 
 Copyright (c) 2024 Zeeshan Ali Khan & zbus contributors
@@ -15526,7 +15551,38 @@ DEALINGS IN THE SOFTWARE.
 
 ==============================================================================
 MIT License
-Used by: synstructure 0.13.2
+Used by: zcheapstr 1.2.0
+==============================================================================
+
+Copyright (c) 2026 Zeeshan Ali Khan & zcheapstr contributors
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+==============================================================================
+MIT License
+Used by: synstructure 0.13.2, synstructure 0.14.0
 ==============================================================================
 
 Copyright 2016 Nika Layzell
@@ -15536,6 +15592,39 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+==============================================================================
+MIT License
+Used by: parley_emoji 0.12.0
+==============================================================================
+
+Copyright 2020 the Parley Authors
+Copyright (c) 2026 Christian Hansen <chansen@cpan.org>
+<https://github.com/chansen/c-emoji>
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
 
 ==============================================================================
 MIT License
@@ -15635,33 +15724,6 @@ Used by: atoi 2.0.0
 MIT License
 
 Copyright (c) 2017 
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-==============================================================================
-MIT License
-Used by: tree_magic_mini 3.2.2
-==============================================================================
-
-MIT License
-
-Copyright (c) 2017 Aaron Hancock
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -16427,7 +16489,7 @@ SOFTWARE.
 
 ==============================================================================
 MIT License
-Used by: fast-uuid-v7 0.1.10
+Used by: fast-uuid-v7 0.1.11
 ==============================================================================
 
 MIT License
@@ -16454,7 +16516,7 @@ SOFTWARE.
 
 ==============================================================================
 MIT License
-Used by: block2 0.5.1, block2 0.6.2, dispatch 0.2.0, dpi 0.1.2, duckdb 1.10505.0, libm 0.2.16, objc-sys 0.3.5, objc2 0.5.2, objc2 0.6.4, objc2-app-kit 0.2.2, objc2-encode 4.1.0, objc2-foundation 0.2.2, objc2-foundation 0.3.2, objc2-ui-kit 0.2.2, pulp-wasm-simd-flag 0.1.1, rspolib 0.1.2, simd_helpers 0.1.0, skia-bindings 0.153.3, skia-safe 0.153.3, taffy 0.10.1, void 1.0.2
+Used by: block2 0.5.1, block2 0.6.2, dispatch 0.2.0, dpi 0.1.2, duckdb 1.10505.0, libm 0.2.16, objc-sys 0.3.5, objc2 0.5.2, objc2 0.6.5, objc2-app-kit 0.2.2, objc2-encode 4.1.0, objc2-foundation 0.2.2, objc2-foundation 0.3.2, objc2-ui-kit 0.2.2, pulp-wasm-simd-flag 0.1.1, rspolib 0.1.2, simd_helpers 0.1.0, skia-bindings 0.157.0, skia-safe 0.157.0, taffy 0.15.1, void 1.0.2
 ==============================================================================
 
 MIT License
@@ -16557,7 +16619,7 @@ OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ==============================================================================
 MIT License
-Used by: endi 1.1.1, unsafe-libyaml 0.2.11, x11-dl 2.21.0, zbus-lockstep 0.5.2, zbus-lockstep-macros 0.5.2, zmij 1.0.23, zvariant_utils 3.5.0
+Used by: endi 1.1.1, unsafe-libyaml 0.2.11, x11-dl 2.21.0, zbus-lockstep 0.5.2, zbus-lockstep-macros 0.5.2, zmij 1.0.23, zvariant_utils 4.2.0
 ==============================================================================
 
 Permission is hereby granted, free of charge, to any
@@ -16802,7 +16864,7 @@ THE SOFTWARE.
 
 ==============================================================================
 MIT License
-Used by: phf 0.13.1, phf_generator 0.13.1, phf_macros 0.13.1, phf_shared 0.13.1
+Used by: phf 0.14.0, phf_generator 0.14.0, phf_macros 0.14.0, phf_shared 0.14.0
 ==============================================================================
 
 The MIT License (MIT)
@@ -16938,7 +17000,7 @@ THE SOFTWARE.
 
 ==============================================================================
 MIT License
-Used by: sysinfo 0.40.1
+Used by: sysinfo 0.40.4
 ==============================================================================
 
 The MIT License (MIT)
@@ -17509,31 +17571,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-==============================================================================
-MIT License
-Used by: os_pipe 1.2.3
-==============================================================================
-
-The MIT License (MIT)
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
 
 ==============================================================================
 MIT License
@@ -18426,7 +18463,7 @@ authorization of the copyright holder.
 
 ==============================================================================
 Unicode License v3
-Used by: fixed_decimal 0.7.2, icu_collections 2.2.0, icu_decimal 2.2.0, icu_decimal_data 2.2.0, icu_locale 2.2.0, icu_locale_core 2.2.0, icu_locale_data 2.2.0, icu_normalizer 2.2.0, icu_normalizer_data 2.2.0, icu_properties 2.2.0, icu_properties_data 2.2.0, icu_provider 2.2.0, icu_segmenter 2.2.0, icu_segmenter_data 2.2.0, litemap 0.8.2, potential_utf 0.1.5, tinystr 0.8.3, writeable 0.6.3, yoke 0.8.3, yoke-derive 0.8.2, zerofrom 0.1.8, zerofrom-derive 0.1.7, zerotrie 0.2.4, zerovec 0.11.6, zerovec-derive 0.11.3
+Used by: fixed_decimal 0.7.3, icu_collections 2.4.0, icu_decimal 2.4.0, icu_decimal_data 2.4.0, icu_locale_core 2.4.0, icu_locale_fallback 2.4.0, icu_locale_fallback_data 2.4.0, icu_normalizer 2.4.0, icu_normalizer_data 2.4.0, icu_properties 2.4.0, icu_properties_data 2.4.0, icu_provider 2.4.0, icu_segmenter 2.4.0, icu_segmenter_data 2.4.0, litemap 0.8.2, potential_utf 0.1.5, tinystr 0.8.5, writeable 0.6.4, yoke 0.8.4, yoke-derive 0.8.4, zerofrom 0.1.8, zerofrom-derive 0.1.7, zerotrie 0.2.5, zerovec 0.11.9, zerovec-derive 0.11.7
 ==============================================================================
 
 UNICODE LICENSE V3

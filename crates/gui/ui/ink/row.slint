@@ -8,11 +8,12 @@ import { InkIcons } from "icons.slint";
 import { InkTipSide, InkTipZone } from "tooltip.slint";
 import { InkIconButton } from "button.slint";
 
-/// A list row: a color, a title and a dimmer second text, a mono value at
-/// the right (a count), an eye to show/hide and a ⋯. Every list's rule:
-/// hovered `Ink.row-hover`, selected a lifted row with a ring
-/// (`Ink.row-lift`); the eye on hover or selected and a crossed eye always,
-/// ⋯ on hover or selected, each in a slot that keeps its width. The
+/// A list row: an id, a color, a title and a dimmer second text, a mono
+/// value at the right (a count), ⋯ and an eye to show/hide. Every list's
+/// rule: hovered `Ink.row-hover`, selected a lifted row with a ring
+/// (`Ink.row-lift`); the eye always at the far right - faint while shown,
+/// full on hover or selected, a crossed eye in full while hidden; ⋯ on
+/// hover or selected, in the count's place (the row keeps its width). The
 /// buttons are inside the row's touch area: over them the row stays hovered.
 export component InkListRow inherits Rectangle {
     in property <string> title;
@@ -33,8 +34,10 @@ export component InkListRow inherits Rectangle {
     in property <color> mark: transparent;
     /// Title in mono (file names, ids).
     in property <bool> mono: false;
-    /// A short mono text before the title (an id: "01").
+    /// A short mono text before the title ("+2").
     in property <string> tag;
+    /// An id at the very left, before the color ("1").
+    in property <string> lead;
     /// A ⋯ at the right, shown on hover and when selected.
     in property <bool> has-more: false;
     out property <bool> has-hover: ta.has-hover;
@@ -44,6 +47,8 @@ export component InkListRow inherits Rectangle {
     // Hidden: every list's rule - the row's content at 50 %, the buttons
     // (the crossed eye) in full.
     property <float> dim: root.shown ? 1.0 : 0.5;
+    // ⋯ shows in the count's place.
+    property <bool> menu-on: root.has-more && (ta.has-hover || root.selected);
     callback clicked;
     callback double-clicked;
     callback eye-toggled;
@@ -99,6 +104,18 @@ export component InkListRow inherits Rectangle {
                 padding-right: 4px;
                 spacing: 8px;
 
+                // A fixed column, right-aligned: 1 and 11 line up.
+                if root.lead != "": Text {
+                    width: max(16px, self.preferred-width);
+                    text: root.lead;
+                    font-size: Ink.fs-secondary;
+                    font-family: Ink.font-mono;
+                    color: Ink.text-mute;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                    opacity: root.dim;
+                }
+
                 Rectangle {
                     width: root.swatch != transparent || root.icon.width > 0 ? 14px : 0px;
                     Rectangle {
@@ -118,9 +135,7 @@ export component InkListRow inherits Rectangle {
                     }
                 }
 
-                Text {
-                    visible: root.tag != "";
-                    width: root.tag == "" ? 0px : self.preferred-width;
+                if root.tag != "": Text {
                     text: root.tag;
                     font-size: Ink.fs-secondary;
                     font-family: Ink.font-mono;
@@ -194,38 +209,44 @@ export component InkListRow inherits Rectangle {
                     }
                 }
 
-                Text {
-                    text: root.trailing;
-                    font-size: Ink.fs-secondary;
-                    font-family: Ink.font-mono;
-                    color: Ink.text-mute;
-                    vertical-alignment: center;
-                    opacity: root.dim;
-                }
-
-                // The eye, then ⋯ last; each slot keeps its width.
+                // The count, or ⋯ in its place; then the eye, last.
                 Rectangle {
-                    width: root.has-eye ? 22px : 0px;
-                    if root.has-eye && (!root.shown || ta.has-hover || root.selected): InkIconButton {
-                        size: 22px;
-                        on-row: true;
-                        icon: root.shown ? InkIcons.visible : InkIcons.hidden;
-                        label: root.shown ? "Hide" : "Show";
-                        clicked => {
-                            root.eye-toggled();
-                        }
+                    width: max(trailing-text.preferred-width, root.has-more || root.more-slot ? 22px : 0px);
+                    trailing-text := Text {
+                        x: parent.width - self.width;
+                        width: self.preferred-width;
+                        visible: !root.menu-on;
+                        text: root.trailing;
+                        font-size: Ink.fs-secondary;
+                        font-family: Ink.font-mono;
+                        color: Ink.text-mute;
+                        vertical-alignment: center;
+                        opacity: root.dim;
                     }
-                }
-
-                Rectangle {
-                    width: root.has-more || root.more-slot ? 22px : 0px;
-                    if root.has-more && (ta.has-hover || root.selected): InkIconButton {
+                    if root.menu-on: InkIconButton {
+                        x: parent.width - self.width;
                         size: 22px;
                         on-row: true;
                         icon: InkIcons.more;
                         label: "Actions";
                         clicked => {
                             root.context-menu(root.width - 24px, root.height);
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: root.has-eye ? 22px : 0px;
+                    if root.has-eye: Rectangle {
+                        opacity: root.shown && !ta.has-hover && !root.selected ? 0.4 : 1.0;
+                        InkIconButton {
+                            size: 22px;
+                            on-row: true;
+                            icon: root.shown ? InkIcons.visible : InkIcons.hidden;
+                            label: root.shown ? "Hide" : "Show";
+                            clicked => {
+                                root.eye-toggled();
+                            }
                         }
                     }
                 }

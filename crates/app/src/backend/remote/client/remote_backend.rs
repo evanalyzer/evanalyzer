@@ -240,6 +240,21 @@ impl Backend for RemoteBackend {
         }
     }
 
+    fn read_format_metadata(
+        &self,
+        path: &Path,
+        series: i32,
+    ) -> Result<Vec<(String, String)>, InternalErrors> {
+        let request = Request::ReadFormatMetadata {
+            path: path.to_path_buf(),
+            series,
+        };
+        match self.files.call(request, Vec::new())?.msg {
+            Reply::FormatMetadata(pairs) => Ok(pairs),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
     fn template_folders(&self) -> Result<TemplateFolders, InternalErrors> {
         match self.files.call(Request::TemplateFolders, Vec::new())?.msg {
             Reply::TemplateFolders(folders) => Ok(folders),

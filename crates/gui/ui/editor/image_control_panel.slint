@@ -12,7 +12,7 @@ import { ViewportObjectState } from "../api/viewport.slint";
 import { LayoutState } from "../api/layout.slint";
 import { ResultsState } from "../api/results.slint";
 import { PipelinesPanelState } from "../api/pipelines.slint";
-import { Ink, InkIcons, InkPanelHead, InkSwitch, InkNumberField, InkTextField, InkSegmented, InkCaption, InkIconButton, InkButton, InkButtonKind, InkDivider, InkMenuFrame, InkMenuItem, InkCheckList } from "../ink/ink.slint";
+import { Ink, InkIcons, InkPanelHead, InkSwitch, InkNumberField, InkTextField, InkSegmented, InkCaption, InkIconButton, InkButton, InkButtonKind, InkDivider, InkMenuFrame, InkMenuItem, InkMenuSeparator, InkCheckList } from "../ink/ink.slint";
 
 // One channel: its color (a click switches it on/off), name, index. The
 // selected one is the histogram's.
@@ -45,9 +45,20 @@ component ChannelRow inherits Rectangle {
             }
 
             HorizontalLayout {
-                padding-left: 6px;
+                padding-left: 8px;
                 padding-right: 4px;
                 spacing: 8px;
+                // The index at the left, like the classes' ids.
+                Text {
+                    width: max(16px, self.preferred-width);
+                    text: root.idx;
+                    font-size: Ink.fs-secondary;
+                    font-family: Ink.font-mono;
+                    color: Ink.text-mute;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                    opacity: root.active ? 1.0 : 0.5;
+                }
                 swatch := Rectangle {
                     y: (parent.height - self.height) / 2;
                     width: 12px;
@@ -78,19 +89,12 @@ component ChannelRow inherits Rectangle {
                     overflow: elide;
                     accessible-role: none;
                 }
-                Text {
-                    text: "ch " + root.idx;
-                    font-size: Ink.fs-secondary;
-                    font-family: Ink.font-mono;
-                    color: Ink.text-mute;
-                    opacity: root.active ? 1.0 : 0.5;
-                    vertical-alignment: center;
-                }
-                // Every list's rule: the eye on hover or selected, a crossed
-                // eye always while hidden; its slot keeps its width.
+                // Every list's rule: the eye always - faint while shown,
+                // full on hover or selected, a crossed eye while hidden.
                 Rectangle {
                     width: 22px;
-                    if !root.active || root.selected || ta.has-hover: InkIconButton {
+                    opacity: root.active && !root.selected && !ta.has-hover ? 0.4 : 1.0;
+                    InkIconButton {
                         y: (parent.height - self.height) / 2;
                         size: 22px;
                         on-row: true;
@@ -133,7 +137,7 @@ component Histogram inherits VerticalLayout {
     accessible-label: "Histogram";
 
     face := Rectangle {
-        height: 120px;
+        height: 72px;
         background: Ink.field;
         border-radius: Ink.radius-sm;
         border-width: 1px;
@@ -176,19 +180,6 @@ component Histogram inherits VerticalLayout {
             x: parent.width * HistogramState.histogram_max_val - 1px;
             width: 2px;
             background: root.dragging-max ? Ink.focus : Ink.text;
-        }
-
-        // The values at their lines: black right of its line, white left
-        // of its line - both inside the box.
-        LineValue {
-            x: clamp(parent.width * HistogramState.histogram_min_val + 4px, 2px, parent.width - self.width - 2px);
-            y: 3px;
-            text: HistogramText.shown(HistogramState.histogram_min_val_abs);
-        }
-        LineValue {
-            x: clamp(parent.width * HistogramState.histogram_max_val - self.width - 4px, 2px, parent.width - self.width - 2px);
-            y: 16px;
-            text: HistogramText.shown(HistogramState.histogram_max_val_abs);
         }
 
         TouchArea {
@@ -235,18 +226,31 @@ component Histogram inherits VerticalLayout {
         }
     }
 
-    // The axis' ends.
-    HorizontalLayout {
+    // Below the box: black and white under their lines, the axis' ends
+    // at the corners while they don't collide with them.
+    Rectangle {
+        height: 14px;
+        black := LineValue {
+            x: clamp(parent.width * HistogramState.histogram_min_val - self.width / 2, 0px, parent.width - self.width);
+            text: HistogramText.shown(HistogramState.histogram_min_val_abs);
+            color: Ink.text;
+        }
+        white := LineValue {
+            x: clamp(parent.width * HistogramState.histogram_max_val - self.width / 2, max(0px, black.x + black.width + 6px), parent.width - self.width);
+            text: HistogramText.shown(HistogramState.histogram_max_val_abs);
+            color: Ink.text;
+        }
         LineValue {
+            x: 0px;
+            visible: black.x > self.width + 6px;
             text: HistogramText.shown(HistogramState.histogram_min_lim);
-            color: Ink.text-mute;
-        }
-        Rectangle {
-            horizontal-stretch: 1;
+            color: Ink.text-faint;
         }
         LineValue {
+            x: parent.width - self.width;
+            visible: white.x + white.width + 6px < self.x;
             text: HistogramText.shown(HistogramState.histogram_max_lim);
-            color: Ink.text-mute;
+            color: Ink.text-faint;
         }
     }
 }
@@ -324,6 +328,13 @@ export component ImageControlPanel inherits Rectangle {
             folded: root.folded;
             summary: root.channel-name != "" ? root.channel-name + " · " + root.active-count + " on" : "";
             closable: root.in-split;
+            borderless: !root.in-split;
+            switch-text: "Grayscale";
+            switch-checked: ChannelState.grayscale;
+            switch-toggled(on) => {
+                ChannelState.grayscale = on;
+                ChannelState.grayscale_toggled(on);
+            }
             fold-toggled => {
                 LayoutState.image-folded = !LayoutState.image-folded;
                 LayoutState.panels-changed();
@@ -379,26 +390,11 @@ export component ImageControlPanel inherits Rectangle {
             }
         }
 
-        if !root.folded: InkDivider { }
-
         if !root.folded: VerticalLayout {
             padding: Ink.pad-panel;
-            padding-top: 8px;
+            padding-top: 4px;
             spacing: 8px;
 
-            // Show objects and their opacity: in the bar at the bottom of
-            // the image (with Z and T), so they are there with this panel
-            // folded too.
-            HorizontalLayout {
-                InkSwitch {
-                    text: "Grayscale";
-                    checked: ChannelState.grayscale;
-                    toggled(on) => {
-                        ChannelState.grayscale = on;
-                        ChannelState.grayscale_toggled(on);
-                    }
-                }
-            }
 
             // A colour image: one range for red, green and blue keeps the
             // colours true; unlinked, each colour has its own.
@@ -409,51 +405,6 @@ export component ImageControlPanel inherits Rectangle {
                     toggled(on) => {
                         ChannelState.rgb-linked = on;
                         ChannelState.rgb_linked_toggled(on);
-                    }
-                }
-            }
-
-            InkDivider { }
-
-            // -- Histogram --
-            HorizontalLayout {
-                spacing: 6px;
-                InkCaption {
-                    horizontal-stretch: 1;
-                    text: "HISTOGRAM" + (HistogramState.side == 1 ? " · breakpoint" : ImageMetaData.is-rgb && ChannelState.rgb-linked ? " · RGB" : root.channel-name != "" ? " · " + root.channel-name : "");
-                    overflow: elide;
-                }
-
-                // Every channel (the original's only) or the selected one.
-                auto-scale := InkButton {
-                    small: true;
-                    kind: InkButtonKind.quiet;
-                    icon: InkIcons.caret-down;
-                    text: "Auto-scale";
-                    clicked => {
-                        auto-scale-menu.show();
-                    }
-                }
-
-                auto-scale-menu := PopupWindow {
-                    x: auto-scale.x + auto-scale.width - 180px;
-                    y: auto-scale.y + auto-scale.height;
-                    InkMenuFrame {
-                        open-y: auto-scale.absolute-position.y + auto-scale.height;
-                        menu-width: 180px;
-                        InkMenuItem {
-                            text: "All channels";
-                            enabled: HistogramState.side == 0;
-                            clicked => {
-                                HistogramState.auto_adjust_all_clicked();
-                            }
-                        }
-                        InkMenuItem {
-                            text: "Selected channel";
-                            clicked => {
-                                HistogramState.auto_adjust_clicked();
-                            }
-                        }
                     }
                 }
             }
@@ -469,37 +420,70 @@ export component ImageControlPanel inherits Rectangle {
                 }
             }
 
-            Histogram { }
-
-            // Log counts; the values to type in; this image's scaling for
-            // all (the original's only).
-            HorizontalLayout {
-                spacing: 6px;
-                InkSwitch {
-                    text: "Log";
-                    checked: HistogramState.log-scale;
-                    toggled(on) => {
-                        HistogramState.log-scale = on;
-                        HistogramState.log-scale-changed(on);
+            // The selected channel's histogram (the row lifted above) and
+            // its numbers; everything else in its ⋯ (design H3). A double
+            // click auto-scales. (Show objects and their opacity: in the bar
+            // at the bottom of the image, with Z and T.)
+            Rectangle {
+                min-height: hist.min-height;
+                preferred-height: hist.preferred-height;
+                hist := Histogram {
+                    width: parent.width;
+                    height: parent.height;
+                }
+                hist-more := InkIconButton {
+                    x: parent.width - self.width - 4px;
+                    y: 4px;
+                    size: 22px;
+                    icon: InkIcons.more;
+                    label: "Histogram actions";
+                    clicked => {
+                        hist-menu.show();
                     }
                 }
-                Rectangle {
-                    horizontal-stretch: 1;
-                }
-                InkButton {
-                    small: true;
-                    kind: InkButtonKind.quiet;
-                    text: root.show-values ? "Values ‹" : "Values ›";
-                    clicked => {
-                        root.show-values = !root.show-values;
-                    }
-                }
-                if HistogramState.side == 0: InkButton {
-                    small: true;
-                    kind: InkButtonKind.quiet;
-                    text: "Use for all images";
-                    clicked => {
-                        HistogramState.apply-to-all-images();
+                hist-menu := PopupWindow {
+                    x: parent.width - 230px;
+                    y: 28px;
+                    InkMenuFrame {
+                        open-y: hist-more.absolute-position.y + hist-more.height;
+                        menu-width: 230px;
+                        InkMenuItem {
+                            text: "Auto-scale this channel";
+                            clicked => {
+                                HistogramState.auto_adjust_clicked();
+                            }
+                        }
+                        InkMenuItem {
+                            text: "Auto-scale all channels";
+                            enabled: HistogramState.side == 0;
+                            clicked => {
+                                HistogramState.auto_adjust_all_clicked();
+                            }
+                        }
+                        InkMenuSeparator { }
+                        InkMenuItem {
+                            text: "Black / white and axis values";
+                            checked: root.show-values;
+                            clicked => {
+                                root.show-values = !root.show-values;
+                            }
+                        }
+                        InkMenuItem {
+                            text: "Log counts";
+                            checked: HistogramState.log-scale;
+                            clicked => {
+                                HistogramState.log-scale = !HistogramState.log-scale;
+                                HistogramState.log-scale-changed(HistogramState.log-scale);
+                            }
+                        }
+                        InkMenuSeparator { }
+                        InkMenuItem {
+                            text: "Apply to all images";
+                            enabled: HistogramState.side == 0;
+                            clicked => {
+                                HistogramState.apply-to-all-images();
+                            }
+                        }
                     }
                 }
             }

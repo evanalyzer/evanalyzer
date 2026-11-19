@@ -174,6 +174,16 @@ impl Backend for LocalBackend {
         Ok(reader.get_image_meta().clone())
     }
 
+    fn read_format_metadata(
+        &self,
+        path: &Path,
+        series: i32,
+    ) -> Result<Vec<(String, String)>, InternalErrors> {
+        let path = self.files.check(path)?;
+        let reader = ImageReader::new(&path, ReadMode::SplitChannels)?;
+        reader.format_metadata(series)
+    }
+
     fn template_folders(&self) -> Result<TemplateFolders, InternalErrors> {
         Ok(match &self.user_folder {
             Some(user_folder) => TemplateFolders {

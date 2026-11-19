@@ -10,6 +10,7 @@ import {
     InkScheme,
     InkIcons,
     InkSegmented,
+    InkSwitch,
     InkButton,
     InkButtonKind,
     InkIconButton,
@@ -138,6 +139,7 @@ component QuickImageRow inherits Rectangle {
             y: (parent.height - self.height) / 2;
             source: root.current ? InkIcons.check : InkIcons.images;
             width: 13px;
+            height: 13px;
             colorize: root.current ? Ink.text : Ink.text-mute;
         }
 
@@ -351,6 +353,7 @@ component ImageChip inherits Rectangle {
                         y: (parent.height - self.height) / 2;
                         source: InkIcons.images;
                         width: 13px;
+                        height: 13px;
                         colorize: Ink.text-mute;
                     }
 
@@ -397,6 +400,7 @@ component ImageChip inherits Rectangle {
                         y: (parent.height - self.height) / 2;
                         source: InkIcons.caret-down;
                         width: 9px;
+                        height: 9px;
                         colorize: Ink.text-dim;
                     }
                 }
@@ -1263,6 +1267,21 @@ export component TopBar inherits Rectangle {
                         selected: Appearance.size-index;
                         picked(i) => {
                             Appearance.pick-size(i);
+                        }
+                    }
+                }
+                // Blur behind panels and dialogs (Skia / FemtoVG only -
+                // the software renderer, the Windows build, draws none).
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    padding-top: 4px;
+                    padding-bottom: 4px;
+                    InkSwitch {
+                        text: "Blur behind panels";
+                        checked: Ink.panel-blur;
+                        toggled(on) => {
+                            Appearance.set-panel-blur(on);
                         }
                     }
                 }

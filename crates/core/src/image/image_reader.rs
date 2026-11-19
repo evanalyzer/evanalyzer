@@ -333,6 +333,25 @@ impl ImageReader {
         return self.image_meta.as_ref();
     }
 
+    /// The file's own metadata of `series` that isn't mapped to
+    /// [`ImageMeta`] (camera, filters, light source …), as key/value pairs
+    /// in file order; an embedded document (e.g. OME-XML) as one pair with
+    /// its size. Parsed on request, not kept.
+    pub fn format_metadata(&self, series: i32) -> Result<Vec<(String, String)>, InternalErrors> {
+        let meta = self
+            .inner
+            .original_metadata(series.max(0) as usize)
+            .map_err(scopeio_err)?;
+        let mut pairs = meta.pairs;
+        pairs.extend(meta.documents.into_iter().map(|(name, doc)| {
+            (
+                name,
+                format!("(document, {} characters)", doc.chars().count()),
+            )
+        }));
+        Ok(pairs)
+    }
+
     pub fn get_current_image_path(&self) -> &PathBuf {
         return &self.current_path;
     }

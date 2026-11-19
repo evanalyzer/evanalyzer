@@ -473,6 +473,12 @@ impl ImagesListController {
     /// - If the UI has been dropped the callback is a no-op (the weak upgrade
     ///   fails). Any errors from scheduling are ignored via `.ok()`.
     pub fn attach_callbacks(self: &Arc<Self>) {
+        if let Some(ui) = self.ui.upgrade() {
+            let state = ui.global::<ImagesListState>();
+            state.on_folder_name(|path| folder_split(&path).1.into());
+            state.on_folder_parent(|path| folder_split(&path).0.into());
+        }
+
         // The plate follows previews and opened analyses. Weak: `UiState`
         // keeps the listener, and this controller keeps `UiState`.
         let weak = Arc::downgrade(self);
@@ -1010,8 +1016,36 @@ fn build_plate(
     }
 }
 
+/// A folder path split into what comes before its last name (with the
+/// trailing separator) and the last name: "/home/a/C14" → ("/home/a/", "C14").
+fn folder_split(path: &str) -> (String, String) {
+    let trimmed = path.trim_end_matches(['/', '\\']);
+    match trimmed.rfind(['/', '\\']) {
+        Some(i) => (trimmed[..=i].to_string(), trimmed[i + 1..].to_string()),
+        None => (String::new(), trimmed.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_folder_path_splits_into_its_start_and_its_last_name() {
+        assert_eq!(
+            super::folder_split("/home/a/C14"),
+            ("/home/a/".into(), "C14".into())
+        );
+        assert_eq!(
+            super::folder_split("/home/a/C14/"),
+            ("/home/a/".into(), "C14".into())
+        );
+        assert_eq!(
+            super::folder_split("C:\\data\\plate1"),
+            ("C:\\data\\".into(), "plate1".into())
+        );
+        assert_eq!(super::folder_split("plate1"), ("".into(), "plate1".into()));
+    }
+
     use super::*;
 
     /// The selected image's row: whole paths, not a substring - "1.tif"
@@ -1064,14 +1098,14 @@ mod tests {
         };
         assert!(top_row_y("img000").is_some(), "the list at its top");
 
-        // Scrolled down by 100 rows (44 px each).
-        state.set_list_scroll_y(-4400.0);
+        // Scrolled down by 100 rows (30 px each).
+        state.set_list_scroll_y(-3000.0);
         layout.set_mode(WorkspaceMode::Pipelines);
         assert!(top_row_y("img100").is_none(), "the images panel is away");
         layout.set_mode(WorkspaceMode::Images);
         let shown = top_row_y("img100").expect("row 100 shown again");
         assert!(top_row_y("img000").is_none(), "not back at the top");
-        assert_eq!(state.get_list_scroll_y(), -4400.0, "nothing reset it");
+        assert_eq!(state.get_list_scroll_y(), -3000.0, "nothing reset it");
 
         // Shown once more: the very same place.
         layout.set_mode(WorkspaceMode::Pipelines);

@@ -15,5 +15,6 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 pub use evanalyzer_core::{
-    ImageChannel, ImageContainer, ImageInfo, ImageMeta, ManagedImage, Point2d, PyramidInfo,
+    ChannelInfo as FileChannel, ImageChannel, ImageContainer, ImageInfo, ImageMeta, ManagedImage,
+    Point2d, PyramidInfo,
 };

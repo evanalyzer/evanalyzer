@@ -104,6 +104,12 @@ pub struct AppSettings {
     /// own scale (Windows display scaling, …) is not used.
     #[serde(default)]
     pub interface_size: InterfaceSize,
+    /// EVA › View › "Blur behind panels": panels and dialogs blur what is
+    /// behind them. Off by default (it costs GPU/CPU while the image
+    /// moves); only drawn by the Skia / FemtoVG renderers, not the
+    /// software one (the Windows build).
+    #[serde(default)]
+    pub panel_blur: bool,
 }
 
 /// The GUI's size in percent: one of [`InterfaceSize::PRESETS`]. A value
@@ -242,9 +248,9 @@ impl Default for PanelSettings {
             classes_folded: false,
             image_folded: false,
             objects_folded: false,
-            measurements_folded: false,
+            measurements_folded: true,
             image_bar_folded: false,
-            pipelines_list_open: false,
+            pipelines_list_open: true,
             navigator: NavigatorMode::Auto,
             step_values_below: false,
         }

@@ -337,6 +337,16 @@ impl AppHandle {
         Ok(self.get_image_source(new_path)?.meta().clone())
     }
 
+    /// The file's own metadata of one series of the image at `path`
+    /// (Image info › Format metadata), read on request through the backend.
+    pub fn read_format_metadata(
+        &self,
+        path: &PathBuf,
+        series: i32,
+    ) -> Result<Vec<(String, String)>, InternalErrors> {
+        self.backend().read_format_metadata(path, series)
+    }
+
     /// Returns the opened image at `new_path`, opening it through the
     /// backend only if it isn't the one already cached. The lock is held
     /// while opening, so concurrent callers asking for the same new path

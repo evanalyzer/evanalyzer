@@ -38,6 +38,10 @@ export global ImagesListState {
     callback new_image_root_folder_clicked();
     callback open_images_folder_clicked();
     callback refresh_images_clicked();
+    // A folder's last name ("C14") and what comes before it ("/home/…/uni"),
+    // for showing a long path: its start cut, its last folder whole.
+    pure callback folder_name(string) -> string;
+    pure callback folder_parent(string) -> string;
     callback image_selected(string);
     // Incremented (never read for its value) by the Ctrl+F global shortcut
     // (see shortcuts.slint) to move keyboard focus into the search field

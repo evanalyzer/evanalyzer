@@ -29,24 +29,25 @@ export component SourcePill inherits Rectangle {
         : root.is-scratch ? "Scratchpad" : "None";
 
     width: row.preferred-width;
-    height: 18px;
-    border-radius: 4px;
-    border-width: 1px;
-    border-color: root.is-scratch ? Ink.warn.with-alpha(0.45) : root.is-none ? Ink.text-faint : Ink.border;
-    background: root.is-scratch ? Ink.warn-tint : root.is-none ? transparent : root.is-slot ? Ink.raised : Ink.panel;
+    height: 20px;
+    border-radius: 10px;
+    // A soft pill (design P1); Scratchpad amber, None only an outline.
+    border-width: root.is-scratch || root.is-none ? 1px : 0px;
+    border-color: root.is-scratch ? Ink.warn.with-alpha(0.45) : Ink.text-faint;
+    background: root.is-scratch ? Ink.warn-tint : root.is-none ? transparent : Ink.row-button-hover;
     accessible-role: text;
     accessible-label: "Source " + root.label;
 
     row := HorizontalLayout {
-        padding-left: 4px;
-        padding-right: 6px;
+        padding-left: 7px;
+        padding-right: 8px;
         spacing: 5px;
         alignment: start;
         Rectangle {
             y: (parent.height - self.height) / 2;
             width: 8px;
             height: 8px;
-            border-radius: root.is-slot ? 4px : 2px;
+            border-radius: 4px;
             background: root.is-channel
                 ? (root.index >= 0 && root.index < ChannelState.channels.length ? ChannelState.channels[root.index].color : Ink.text-faint)
                 : root.is-scratch ? Ink.warn : transparent;
@@ -58,16 +59,15 @@ export component SourcePill inherits Rectangle {
             text: root.label;
             font-size: Ink.fs-caption;
             font-family: Ink.font-mono;
-            font-weight: 500;
-            color: root.is-none ? Ink.text-dim : Ink.text;
+            color: Ink.text-dim;
             vertical-alignment: center;
         }
     }
 }
 
-// A pipeline's row: its place, name, source, steps on/total and the eye
-// (in the run or not). Hovered: the number turns into the drag grip and ⋯
-// takes the count's place - fixed columns, so the source label never moves.
+// A pipeline's row: its place, source, name, steps on/total and the eye
+// (in the run or not) at the far right. Hovered: the number turns into the
+// drag grip and ⋯ takes the count's place - fixed columns, nothing moves.
 // The shown pipeline is a lifted row with a ring (as the open image).
 export component PipelineRow inherits Rectangle {
     in property <Pipeline> pipeline;
@@ -192,19 +192,10 @@ export component PipelineRow inherits Rectangle {
                     }
                 }
 
-                Text {
-                    horizontal-stretch: 1;
-                    text: root.pipeline.name;
-                    font-size: Ink.fs-body;
-                    font-weight: 400;
-                    color: Ink.text;
-                    opacity: root.dim;
-                    overflow: elide;
-                    vertical-alignment: center;
-                }
-
+                // The source first, in a column of its own: the names line
+                // up after it.
                 Rectangle {
-                    width: 92px;
+                    width: 84px;
                     opacity: root.dim;
                     SourcePill {
                         x: 0px;
@@ -214,39 +205,33 @@ export component PipelineRow inherits Rectangle {
                     }
                 }
 
-                // Steps on/total.
                 Text {
-                    width: 36px;
-                    text: "\{root.pipeline.enabled-step-count}/\{root.pipeline.total-step-count}";
-                    font-size: Ink.fs-caption;
-                    font-family: Ink.font-mono;
-                    color: root.mute;
+                    horizontal-stretch: 1;
+                    text: root.pipeline.name;
+                    font-size: Ink.fs-body;
+                    font-weight: root.active ? 600 : 400;
+                    color: Ink.text;
                     opacity: root.dim;
-                    horizontal-alignment: right;
+                    overflow: elide;
                     vertical-alignment: center;
                 }
 
-                // The buttons in every list's order: eye, then ⋯ last.
-                // In the run: an eye on hover or selected; not: a crossed eye.
+                // Steps on/total - on hover or selected ⋯ takes its place
+                // (the column keeps its width, nothing moves).
                 Rectangle {
-                    width: 22px;
-                    if !root.pipeline.enabled || ((root.hovered || root.active) && !root.dragging): InkIconButton {
-                        y: (parent.height - self.height) / 2;
-                        size: 22px;
-                        on-row: true;
-                        icon: root.pipeline.enabled ? InkIcons.visible : InkIcons.hidden;
-                        label: root.pipeline.enabled ? "Leave out of the run" : "Include in the run";
-                        clicked => {
-                            root.toggled();
-                        }
+                    width: 36px;
+                    if !((root.hovered || root.active) && !root.dragging): Text {
+                        width: 100%;
+                        text: "\{root.pipeline.enabled-step-count}/\{root.pipeline.total-step-count}";
+                        font-size: Ink.fs-caption;
+                        font-family: Ink.font-mono;
+                        color: root.mute;
+                        opacity: root.dim;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
                     }
-                }
-
-                // ⋯ on hover or selected; its column keeps its width, so
-                // nothing moves.
-                Rectangle {
-                    width: 22px;
                     if (root.hovered || root.active) && !root.dragging: InkIconButton {
+                        x: parent.width - self.width;
                         y: (parent.height - self.height) / 2;
                         size: 22px;
                         on-row: true;
@@ -254,6 +239,23 @@ export component PipelineRow inherits Rectangle {
                         label: "Pipeline actions";
                         clicked => {
                             root.more-clicked();
+                        }
+                    }
+                }
+
+                // The eye last, always: faint while in the run, full on
+                // hover or selected, a crossed eye in full while left out.
+                Rectangle {
+                    width: 22px;
+                    opacity: root.pipeline.enabled && !root.hovered && !root.active ? 0.4 : 1.0;
+                    InkIconButton {
+                        y: (parent.height - self.height) / 2;
+                        size: 22px;
+                        on-row: true;
+                        icon: root.pipeline.enabled ? InkIcons.visible : InkIcons.hidden;
+                        label: root.pipeline.enabled ? "Leave out of the run" : "Include in the run";
+                        clicked => {
+                            root.toggled();
                         }
                     }
                 }

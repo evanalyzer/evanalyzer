@@ -26,6 +26,10 @@ export component InkTextField inherits Rectangle {
     in property <string> label;
     /// Takes the keyboard focus when it appears.
     in property <bool> autofocus: false;
+    /// A unit inside the field, at its right ("nm"); "" none.
+    in property <string> suffix;
+    /// The value differs from the file's (changed by the user): blue.
+    in property <bool> edited-mark: false;
     out property <bool> has-focus: input.has-focus;
     callback edited(string);
     callback accepted(string);
@@ -59,7 +63,7 @@ export component InkTextField inherits Rectangle {
         border-radius: Ink.radius-sm;
         background: Ink.field;
         border-width: 1px;
-        border-color: input.has-focus ? Ink.focus : ta.has-hover && root.enabled ? Ink.text-faint : Ink.border;
+        border-color: input.has-focus || root.edited-mark ? Ink.focus : ta.has-hover && root.enabled ? Ink.text-faint : Ink.border;
         opacity: root.enabled ? 1.0 : 0.5;
         clip: true;
 
@@ -81,9 +85,20 @@ export component InkTextField inherits Rectangle {
             accessible-role: none;
         }
 
+        unit := Text {
+            x: parent.width - self.width - 7px;
+            height: parent.height;
+            visible: root.suffix != "";
+            text: root.suffix;
+            font-size: Ink.fs-caption;
+            color: Ink.text-mute;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+
         input := TextInput {
             x: 8px;
-            width: parent.width - 16px;
+            width: parent.width - 16px - (root.suffix != "" ? unit.width + 4px : 0px);
             height: parent.height;
             text <=> root.text;
             enabled: root.enabled;
@@ -92,7 +107,7 @@ export component InkTextField inherits Rectangle {
             vertical-alignment: center;
             font-size: Ink.fs-body;
             font-family: root.mono ? Ink.font-mono : Ink.font-sans;
-            color: Ink.text;
+            color: root.edited-mark ? Ink.focus : Ink.text;
             selection-background-color: Ink.focus-ring;
             selection-foreground-color: Ink.text;
             accessible-label: root.label;

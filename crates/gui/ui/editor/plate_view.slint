@@ -20,7 +20,7 @@ global PlateText {
 // The color of a well's (or an image's) state.
 export global WellColor {
     pure public function of(s: WellState) -> color {
-        s == WellState.analysed ? Ink.text-dim
+        s == WellState.analysed ? Ink.ok
             : s == WellState.preview ? Ink.warn
             : s == WellState.new ? Ink.text-faint
             : transparent

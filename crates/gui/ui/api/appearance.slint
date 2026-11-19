@@ -45,4 +45,12 @@ export global Appearance {
     public function smaller() {
         self.pick-size(self.size-index - 1);
     }
+
+    // "Blur behind panels" (user setting): Rust applies the remembered one
+    // at start; a change is for Rust to remember.
+    callback panel-blur-changed(bool);
+    public function set-panel-blur(on: bool) {
+        Ink.panel-blur = on;
+        self.panel-blur-changed(on);
+    }
 }

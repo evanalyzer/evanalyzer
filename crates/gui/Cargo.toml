@@ -33,7 +33,7 @@ tungstenite = { workspace = true }
 rustls = { workspace = true }
 rcgen = { workspace = true }
 ring = { workspace = true }
-i-slint-backend-testing = "=1.18.1"
+i-slint-backend-testing = "=1.19.0"
 duckdb = { workspace = true, features = ["bundled", "parquet"] }
 tempfile = { workspace = true }
 

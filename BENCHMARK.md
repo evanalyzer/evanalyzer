@@ -2657,3 +2657,45 @@ a run on a computer with little RAM.
   `bench_pipeline <workdir> --images 200 --size 2048 --threads 8`
   (~7 s, ~1 GB RSS) and `bench_export <out.evadb>` (~33 s, ~2.4 GB),
   measured 2026-10-21 (see the Peak RAM overview).
+
+## Slint 1.18.1 → 1.19.0, and blur behind panels (2026-11-19)
+
+### Repaints, software renderer (= the Windows build)
+
+The UI of the last commit (before the panel redesign), built twice with
+the same harness (scratch tool: the real `AppWindow`, `MinimalSoftwareWindow`,
+1920 × 1080, the image moved every frame, 300 full frames), only the Slint
+version differs. 5 rounds per mode, the order alternated, 10 s between runs.
+
+| | 1.18.1 | 1.19.0 |
+| --- | --- | --- |
+| Full frame, Pipelines (median) | 5.06-5.36 ms | 7.15-7.52 ms (+40 %) |
+| Full frame, Images (median) | 5.36-5.66 ms | 7.53-7.72 ms (+38 %) |
+| Full frame, panels hidden (median) | 2.59-2.62 ms | 2.06-2.10 ms (−20 %) |
+| Window created | 6-9 ms | 6-8 ms |
+| Peak RSS | 51.2-53.9 MB | 52.8-54.9 MB (+1.2 MB) |
+| Harness binary | 111.0 MB | 105.9 MB |
+
+The slowdown with panels is new work, not a regression of the old: 1.19's
+software renderer draws drop shadows (1.18 skipped them), and the floating
+panels' 24 px shadows are blurred every full frame. Without panels 1.19 is
+faster.
+
+### Blur behind panels (`Ink.panel-blur`), Skia OpenGL
+
+The redesigned UI in a real window: winit + Skia OpenGL under Xvfb with Mesa
+llvmpipe (OpenGL computed on the CPU - a PC without a usable GPU), the image
+moved every 8 ms, 5 s measured after 1 s warm-up; vsync caps at ~62 fps.
+3 rounds, alternated.
+
+| | blur off | blur on |
+| --- | --- | --- |
+| fps (22 threads) | 62.4 | 48.8-49.7 (−21 %) |
+| CPU per frame (all threads) | 119-121 ms | 160-163 ms (+34 %) |
+| fps, dialog open | 56.6 | 43.8 |
+| fps, 2 render threads (`LP_NUM_THREADS=2`) | 31.3-31.5 | 24.7-25.0 (−20 %) |
+| CPU per frame, 2 threads | 54 ms | 69-70 ms (+29 %) |
+| RSS | 238 MB | 244-245 MB (+6.5 MB) |
+
+Not measured: a real GPU (where the blur costs far less), the FemtoVG
+renderer, Windows.

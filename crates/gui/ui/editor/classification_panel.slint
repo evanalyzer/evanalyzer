@@ -34,7 +34,7 @@ import {
     InkButtonKind,
     InkIconButton,
 } from "../ink/ink.slint";
-import { FocusBanner } from "pipeline_focus.slint";
+import { PipelineFocusState } from "../api/pipeline_focus.slint";
 
 export component ClassificationPanel inherits Rectangle {
     // In the results' split view: the analysis' classes on the image shown
@@ -81,7 +81,14 @@ export component ClassificationPanel inherits Rectangle {
             count: root.classes.length;
             closable: false;
             foldable: true;
+            borderless: true;
             folded: LayoutState.classes-folded;
+            // A pipeline in focus: its classes only - a chip, ✕ shows all.
+            chip-text: !root.in-split && PipelineFocusState.focused-pipeline-name != "" ? "◎ " + PipelineFocusState.focused-pipeline-name : "";
+            chip-tip: "Focused on the pipeline “" + PipelineFocusState.focused-pipeline-name + "” - only its classes are shown. ✕ shows all.";
+            chip-removed => {
+                PipelineFocusState.exit();
+            }
             fold-toggled => {
                 LayoutState.classes-folded = !LayoutState.classes-folded;
                 LayoutState.panels-changed();
@@ -116,11 +123,11 @@ export component ClassificationPanel inherits Rectangle {
             padding: 4px;
             spacing: 4px;
 
-            if !root.in-split: FocusBanner { }
 
             Rectangle {
                 vertical-stretch: 1;
-                min-height: 60px;
+                // Every class while there are a few; more than five scroll.
+                min-height: min(rows.preferred-height, 5 * Ink.row-h);
                 preferred-height: rows.preferred-height;
 
                 // With a scrollbar: there may be more classes than room.
@@ -130,7 +137,7 @@ export component ClassificationPanel inherits Rectangle {
                         spacing: 0px;
                         for data in root.classes: InkListRow {
                             title: data.name;
-                            tag: data.id < 10 ? "0" + data.id : data.id;
+                            lead: data.id;
                             swatch: data.color;
                             // Not written to the results.
                             badge: data.intermediate ? "not stored" : "";

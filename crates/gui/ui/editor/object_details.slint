@@ -165,24 +165,16 @@ component IntensityLine inherits HorizontalLayout {
     }
 }
 
+// The selected object's card, in the Objects section of the right
+// sidebar (in the list's place; the section's head row goes back and steps
+// through the objects). Taller than its room: it scrolls inside.
 export component ObjectDetails inherits Rectangle {
     property <ObjectItemDataSlint> sel: ObjectListState.selected_object;
-    // Taller than this: the card scrolls inside.
-    in property <length> max-card-height: 600px;
 
-    height: min(body.preferred-height, root.max-card-height);
-    background: Ink.glass;
-    border-radius: Ink.radius-lg;
-    border-width: 1px;
-    border-color: Ink.border;
-    drop-shadow-blur: 24px;
-    drop-shadow-offset-y: 8px;
-    drop-shadow-color: Ink.shadow;
+    min-height: 80px;
+    preferred-height: body.preferred-height;
     accessible-role: groupbox;
     accessible-label: "Object " + root.sel.label_name;
-
-    // Clicks stay on the card, not the image under it.
-    TouchArea { }
 
     Flickable {
         content-height: body.preferred-height;
@@ -190,33 +182,28 @@ export component ObjectDetails inherits Rectangle {
     body := VerticalLayout {
         width: parent.width;
         padding: Ink.pad-panel;
-        padding-top: 8px;
+        padding-top: 2px;
         spacing: 6px;
 
         HorizontalLayout {
-            spacing: 6px;
-            InkCaption {
-                horizontal-stretch: 1;
-                text: "OBJECT " + root.sel.label_name;
-                overflow: elide;
+            spacing: 8px;
+            Text {
+                text: root.sel.label_name;
+                font-size: 18px;
+                font-weight: 600;
+                font-family: Ink.font-mono;
+                color: Ink.text;
                 vertical-alignment: center;
             }
-            InkIconButton {
-                size: 22px;
-                icon: InkIcons.close;
-                label: "Unselect";
-                clicked => {
-                    ObjectListState.selected_object = { id: 0 };
-                    ObjectListState.object_selected(-1);
-                }
+            Text {
+                horizontal-stretch: 1;
+                text: root.sel.editable ? "annotation" : "pipeline · read-only";
+                font-size: Ink.fs-caption;
+                color: Ink.text-mute;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+                overflow: elide;
             }
-        }
-
-        if root.sel.display_name != "": Text {
-            text: root.sel.display_name;
-            font-size: Ink.fs-secondary;
-            color: Ink.text-mute;
-            overflow: elide;
         }
 
         // Its classes, each removable.
@@ -351,11 +338,6 @@ export component ObjectDetails inherits Rectangle {
             }
         }
 
-        if !root.sel.editable: Text {
-            text: "From the pipeline · read-only";
-            font-size: Ink.fs-caption;
-            color: Ink.text-mute;
-        }
     }
     }
 }

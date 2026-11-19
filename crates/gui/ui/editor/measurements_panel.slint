@@ -21,6 +21,7 @@ export component MeasurementsPanel inherits Rectangle {
             title: "Measurements";
             count: MeasurementsState.rows.length;
             foldable: true;
+            borderless: true;
             folded: LayoutState.measurements-folded;
             summary: "visible part";
             fold-toggled => {

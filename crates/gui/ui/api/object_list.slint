@@ -102,6 +102,13 @@ export global ObjectListState {
     in-out property <bool> card-intensity-more: false;
     in-out property <bool> card-steps-open: false;
     in-out property <bool> card-relations-open: false;
+    // The details panel (left of the sidebar) is open: ⤢ Details or a
+    // double click on a row; it follows the selection.
+    in-out property <bool> details-open: false;
+    // The details panel's ↑ ↓: a step through the list (`step-delta` rows),
+    // done by the list - `step-seq` counts the requests.
+    in-out property <int> step-delta: 0;
+    in-out property <int> step-seq: 0;
 
     // The objects shown: of this class (-1 all) and matching the search
     // ("12" an id, "area > 50", "circ < 0.6", a class name; terms split by

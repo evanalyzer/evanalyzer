@@ -646,6 +646,16 @@ impl UiState {
         self.app.get_image_meta(new_path)
     }
 
+    /// The file's own metadata of one series (Image info › Format
+    /// metadata), read on request through the backend.
+    pub fn read_format_metadata(
+        &self,
+        path: &PathBuf,
+        series: i32,
+    ) -> Result<Vec<(String, String)>, InternalErrors> {
+        self.app.read_format_metadata(path, series)
+    }
+
     /// Returns the cached opened image for the given path, opening it
     /// through the backend (local readers or a server) if needed.
     pub fn get_image_source(
@@ -1159,6 +1169,13 @@ fn apply_user_settings(ui: &AppWindow, ui_state: &Arc<UiState>) {
         });
     }
 
+    {
+        let ui_state = Arc::clone(ui_state);
+        ui.global::<Appearance>().on_panel_blur_changed(move |on| {
+            ui_state.update_app_settings(|settings| settings.panel_blur = on);
+        });
+    }
+
     let ui_state = Arc::clone(ui_state);
     ui.global::<Appearance>().on_scheme_changed(move |scheme| {
         ui_state
@@ -1239,6 +1256,8 @@ pub(crate) fn apply_appearance(ui: &AppWindow, ui_state: &UiState) {
     // it) - only the menu's selection.
     ui.global::<Appearance>()
         .set_size_index(ui_state.interface_size().index() as i32);
+    ui.global::<crate::Ink>()
+        .set_panel_blur(ui_state.load_app_settings().panel_blur);
 }
 
 fn color_scheme_to_ui(scheme: ColorScheme) -> InkScheme {

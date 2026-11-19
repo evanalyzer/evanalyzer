@@ -24,7 +24,9 @@ export global LayoutState {
     in-out property <bool> classes-folded: false;
     in-out property <bool> image-folded: false;
     in-out property <bool> objects-folded: false;
-    in-out property <bool> measurements-folded: false;
+    in-out property <bool> measurements-folded: true;
+    // Images: the Image info under the list folded to its head.
+    in-out property <bool> image-info-folded: true;
     /// The navigator: 0 auto (only while zoomed in), 1 always, 2 never.
     in-out property <int> navigator-mode: 0;
     /// The step rows' values on a second line under the name (not
@@ -43,7 +45,7 @@ export global LayoutState {
     /// pill.
     in-out property <bool> stack-bar-folded: false;
     /// The Pipelines panel shows the list of pipelines above the steps.
-    in-out property <bool> pipelines-list-open: false;
+    in-out property <bool> pipelines-list-open: true;
 
     /// The Tuning panel (the pinned settings) is put away.
     in-out property <bool> tuning-hidden: false;

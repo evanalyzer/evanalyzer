@@ -279,10 +279,16 @@ fn intensity_rows(
                 .collect()
         })
         .unwrap_or_default();
-    object
+    // In channel order, as in the Image panel and the objects list - the
+    // object keeps its intensities in the order they were measured.
+    let mut measured: Vec<(&i32, _)> = object
         .intensities
         .iter()
         .filter(|(channel, _)| **channel >= 0 && (!rgb || **channel == 0))
+        .collect();
+    measured.sort_by_key(|(channel, _)| **channel);
+    measured
+        .into_iter()
         .map(|(channel, values)| {
             let color = colors
                 .get(channel)
@@ -467,6 +473,26 @@ mod tests {
 
         project.set_grayscale(true);
         assert_eq!(channel_colors(&project), colored, "grayscale keeps them");
+    }
+
+    /// The intensity rows follow the channels' order, not the order the
+    /// object's intensities were measured in (a pipeline may measure
+    /// channel 2 first).
+    #[test]
+    fn the_intensity_rows_are_in_channel_order() {
+        let mut object = square(4);
+        for channel in [2, 0, 1] {
+            object.intensities.insert(
+                channel,
+                evanalyzer_cfg::settings::object_settings::IntensitySettings {
+                    avg_intensity: channel as f64 * 10.0,
+                    ..Default::default()
+                },
+            );
+        }
+        let rows = intensity_rows(&object, &ProjectWithRuntime::default(), false, Some(16));
+        let names: Vec<String> = rows.iter().map(|r| r.name.to_string()).collect();
+        assert_eq!(names, ["Channel 0", "Channel 1", "Channel 2"]);
     }
 
     #[test]

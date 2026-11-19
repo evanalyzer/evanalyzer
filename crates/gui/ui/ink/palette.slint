@@ -42,7 +42,12 @@ export global Ink {
     /// Panels, bars, popovers.
     out property <color> panel: root.pick(#FFFFFF, #18181B, #2A2A30);
     /// A floating panel over the image (`panel`, a little see-through).
-    out property <color> glass: root.pick(#FFFFFFF2, #18181BF0, #2A2A30F0);
+    out property <color> glass: root.panel-blur ? root.pick(#FFFFFFA8, #18181B9E, #2A2A30A3) : root.pick(#FFFFFFF2, #18181BF0, #2A2A30F0);
+    /// User setting "Blur behind panels": panels and dialogs blur what is
+    /// behind them (`glass` more see-through then). Only the Skia and
+    /// FemtoVG renderers draw the blur (not the software renderer).
+    in-out property <bool> panel-blur: false;
+    out property <length> backdrop: root.panel-blur ? 24px : 0px;
     /// Raised elements on a panel: the EVA button, segmented tracks.
     out property <color> raised: root.pick(#F1F1F3, #27272A, #36363D);
     /// Text fields, spinners, pickers.

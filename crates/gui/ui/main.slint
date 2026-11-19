@@ -5,6 +5,7 @@ import { AnalysisRunningCloseState, AppInfoState, ChannelInfo, ChannelState, Con
 import { ToolbarState } from "api/toolbar.slint";
 import { RetainedTile, ToolState, ViewportObjectState, ViewportState } from "api/viewport.slint";
 import { ImageMetaData } from "api/image_meta.slint";
+import { FormatMetaDialog } from "editor/image_meta_panel.slint";
 import { ProjectSettingsSlint, ProjectSettingsState, ViewportMemoryState } from "api/project_settings.slint";
 import { ImageItemData, ImagesListState, PlateWell, WellState } from "api/images_list.slint";
 import { ClassificationState } from "api/classification.slint";
@@ -278,6 +279,14 @@ export component AppWindow inherits Window {
 
                 BottomBar { }
             }
+        }
+
+        // Image info › Format metadata: its own dialog, not one of
+        // `active_dialog`'s (it can be open on its own).
+        if ImageMetaData.format_meta_open: Rectangle {
+            width: 100%;
+            height: 100%;
+            FormatMetaDialog { }
         }
 
         // The "Overlay Manager". Wrapped in `DialogShortcuts` (see
