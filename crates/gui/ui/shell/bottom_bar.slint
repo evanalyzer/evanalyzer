@@ -205,9 +205,7 @@ export component BottomBar inherits Rectangle {
                         text: ImagePixelInfo.pixel_value;
                         mono: true;
                     }
-                    InkBarSeparator {
-                        y: (parent.height - self.height) / 2;
-                    }
+                    InkBarSeparator { }
                     InkStatusItem {
                         icon: ViewportState.opening || !ViewportState.high_res_ready ? InkIcons.busy : InkIcons.check;
                         text: ViewportObjectState.is_drawing ? "Drawing" : ViewportState.opening ? "Opening" : !ViewportState.high_res_ready ? "Rendering" : "Ready";
@@ -217,9 +215,7 @@ export component BottomBar inherits Rectangle {
                         mono: true;
                     }
                 }
-                InkBarSeparator {
-                    y: (parent.height - self.height) / 2;
-                }
+                InkBarSeparator { }
                 InkStatusItem {
                     icon: !ConnectionState.remote ? InkIcons.computer : InkIcons.server;
                     tone: !ConnectionState.remote ? InkTone.neutral

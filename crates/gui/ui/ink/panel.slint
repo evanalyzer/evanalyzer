@@ -501,9 +501,12 @@ export component InkDivider inherits Rectangle {
 /// A short line between groups of buttons in a bar.
 export component InkBarSeparator inherits Rectangle {
     width: 13px;
-    height: 18px;
+    // As high as its row (no fixed height: a fixed one sat at the top of a
+    // taller row); the 18 px line centred in it.
+    min-height: 18px;
     Rectangle {
         width: 1px;
+        height: 18px;
         background: Ink.border;
     }
 }
