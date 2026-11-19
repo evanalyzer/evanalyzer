@@ -19,6 +19,17 @@
 # Dev-dependencies (test helpers like i-slint-backend-testing) never ship.
 ignore-dev-dependencies = true
 
+# Only the platforms we ship (.cargo/config.toml build-* aliases) - crates
+# that other platforms would pull in (e.g. Skia, which Slint always uses on
+# iOS) are not in our binaries, so not in the list.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+    "aarch64-apple-darwin",
+]
+
 accepted = [
     "Apache-2.0",
     "MIT",
@@ -117,14 +128,6 @@ accepted = ["LicenseRef-Slint-Royalty-free-2.0"]
 [i-slint-renderer-femtovg.clarify]
 license = "LicenseRef-Slint-Royalty-free-2.0"
 [[i-slint-renderer-femtovg.clarify.files]]
-path = "LICENSES/LicenseRef-Slint-Royalty-free-2.0.md"
-license = "LicenseRef-Slint-Royalty-free-2.0-text"
-checksum = "5167f5056e850419106ab6265efbdca7cba4d99c849d1445ca0bbf6a1e2315fe"
-[i-slint-renderer-skia]
-accepted = ["LicenseRef-Slint-Royalty-free-2.0"]
-[i-slint-renderer-skia.clarify]
-license = "LicenseRef-Slint-Royalty-free-2.0"
-[[i-slint-renderer-skia.clarify.files]]
 path = "LICENSES/LicenseRef-Slint-Royalty-free-2.0.md"
 license = "LicenseRef-Slint-Royalty-free-2.0-text"
 checksum = "5167f5056e850419106ab6265efbdca7cba4d99c849d1445ca0bbf6a1e2315fe"

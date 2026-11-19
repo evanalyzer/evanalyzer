@@ -2598,6 +2598,8 @@ graphics driver).
 | Propagation, one 67 MP image (8192²) | 1.55 GB (test process) | 2026-10-22 | Propagation |
 | Relate Objects, 416,000 spots in 42,000 cells | 577 MB (test process, 475 MB of it the objects) | 2026-10-23 | Relate Objects |
 | Writing results: 1776 images × 2150 objects | ~2.4 GB (2.56 GB with masks) | 2026-10-23 | Object masks in the results |
+| App idle, project open: software / Skia / FemtoVG-wgpu renderer | 79 / 127 / 142 MB | 2026-11-19 | Renderers |
+| App with a 5-ch z-stack zoomed and panned: software / Skia / FemtoVG-wgpu | 365 / 413 / 440 MB | 2026-11-19 | Renderers |
 | Writing results: 1776 images × 2150 objects, 6 channels with intensity spread | 2.57-2.64 GB (gray values only; 3.12-3.27 GB with normalized copies) | 2026-10-24 | Intensities in gray values only |
 | Running a pipeline with intensity spread: 200 images 2048², 8 threads | 1.1-1.16 GB | 2026-10-24 | Measurement storage and object intensity spread |
 | Expand Without Overlap, 42,000 objects on 8192², margin 8 / 100 px | 255 / 861 MB (test process; 100 px measured before the smaller feature transform) | 2026-10-24 | Expand Without Overlap |
@@ -2699,3 +2701,50 @@ moved every 8 ms, 5 s measured after 1 s warm-up; vsync caps at ~62 fps.
 
 Not measured: a real GPU (where the blur costs far less), the FemtoVG
 renderer, Windows.
+
+## Renderers: Skia vs FemtoVG-wgpu vs software (2026-11-19)
+
+Which renderer to keep as the one GPU renderer (software stays the
+fallback). One release build with all three compiled in (Linux), the
+renderer picked per run with Slint's `SLINT_BACKEND=winit-<name>`. The real
+app on headless sway (wlroots, GLES) on the **real Intel Arc iGPU (Meteor
+Lake)**, 1920 × 1080, scale 1; input through a virtual pointer. Xvfb is no
+use for this: there every "GPU" renderer silently runs on llvmpipe (the new
+`Renderer:` log line showed it). Per run: first frame (window mapped), idle
+after 6 s, a UI hover workload (rows of both panels, ~4 s), open a 5-channel
+16-bit z-stack (9343 × 27143), wheel zoom 30 steps, drag-pan 4 × 60 moves.
+3 rounds, order rotated, 10 s between runs; spread in brackets. Scratch
+tools: `renderer_bench.py` + `vpointer.py` (scratchpad, not in the repo).
+
+| | Skia (wgpu/Vulkan) | FemtoVG-wgpu (Vulkan) | Software |
+| --- | --- | --- | --- |
+| First frame | 82 ms | 106-116 ms | 28 ms |
+| Idle RSS | 126-127 MB | 141-142 MB | 79 MB |
+| Idle CPU | 0 % | 0 % | 0 % |
+| CPU, UI hover | 0.12-0.15 s | 0.13 s | 0.09-0.11 s |
+| CPU, wheel zoom | 0.14 s | 0.14 s | 0.40 s |
+| CPU, drag-pan | 0.40-0.51 s | 0.35-0.39 s | 0.95-1.04 s |
+| fps while panning (vsync 60) | 60-61 | 60-61 | 60-61 |
+| Peak RSS | 409-413 MB | 439-440 MB | 362-365 MB |
+
+2 cores (`taskset -c 0,1`, a cheap PC's CPU): the same picture - drag-pan
+0.41-0.43 / 0.34-0.41 / 0.96-1.00 s, peak 324-327 / 349-359 / 277-278 MB,
+all at 60 fps.
+
+- Panning and zooming the image: both GPU renderers need less than half the
+  CPU of software; FemtoVG-wgpu ~20 % less than Skia while panning.
+- RAM: a GPU renderer costs ~50 MB (Skia) / ~60 MB (FemtoVG-wgpu) more at
+  idle than software (driver + wgpu device), +25-30 MB FemtoVG-wgpu over Skia.
+- UI-only redraws (hover) are cheapest in software - it redraws only the
+  changed rows.
+- Looks: Skia and FemtoVG-wgpu draw nearly the same pixels (31,665 differ
+  out of 2 M, glyph edges), software only text antialiasing and ±1 colour
+  steps. But Skia lays out the image chip in the top bar narrower: it cuts
+  the file name at "Image_045_M5_M…" where FemtoVG-wgpu and software show
+  "Image_045_M5_MEV_Sk3_Zstack_4…".
+
+Not measured: Windows / macOS, a discrete or an old GPU, HiDPI (software's
+cost grows with the pixel count), binary size per renderer (needs a build
+with only one). The compositor here has no dmabuf (headless backend), so
+GPU frames are copied through shared memory - on a real desktop the GPU
+renderers' CPU numbers are probably lower still.

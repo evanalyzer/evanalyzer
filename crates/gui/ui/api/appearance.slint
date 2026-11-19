@@ -54,3 +54,16 @@ export global Appearance {
         self.panel-blur-changed(on);
     }
 }
+
+// The renderer, set by Rust once the first frame is drawn. `slow`: the
+// GPU renderer ended up on a CPU adapter (remote desktop, virtual machine,
+// no driver) - the status bar says so until Draw in software is on and the
+// app starts again.
+export global RendererState {
+    in property <bool> slow: false;
+    // What draws now, e.g. "wgpu - Vulkan, llvmpipe (CPU emulation)".
+    in property <string> description;
+    // Draw in software was turned on from the status bar (next start).
+    in-out property <bool> software-on: false;
+    callback turn-on-software();
+}

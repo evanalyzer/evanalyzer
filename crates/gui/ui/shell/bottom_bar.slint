@@ -3,13 +3,13 @@
 
 // shell/bottom_bar.slint — the bar at the bottom: the modes (Images,
 // Pipelines, Results) and the status - where the work runs, what the
-// viewport does, objects, zoom.
+// viewport does, zoom, and a slow renderer.
 
-import { Ink, InkIcons, InkTone, InkModeTab, InkStatusItem, InkBarSeparator, InkKbd } from "../ink/ink.slint";
+import { Ink, InkIcons, InkTone, InkModeTab, InkStatusItem, InkBarSeparator, InkKbd, InkButton, InkButtonKind } from "../ink/ink.slint";
+import { RendererState } from "../api/appearance.slint";
 import { LayoutState, WorkspaceMode } from "../api/layout.slint";
 import { ConnectionState, ImagePixelInfo } from "../api/state.slint";
 import { ViewportObjectState, ViewportState } from "../api/viewport.slint";
-import { ClassificationState } from "../api/classification.slint";
 import { ResultsRailMode, ResultsState } from "../api/results.slint";
 import { StartState } from "../api/start.slint";
 import { PipelineRunningState } from "../api/pipeline_running.slint";
@@ -18,6 +18,80 @@ component HintText inherits Text {
     font-size: Ink.fs-secondary;
     color: Ink.text-dim;
     vertical-alignment: center;
+}
+
+// "Slow drawing": the GPU renderer draws through CPU emulation. Stays until
+// Draw in software is on (it takes effect at the next start); a click
+// explains it and offers to turn it on.
+component SlowDrawingItem inherits Rectangle {
+    width: item.preferred-width;
+    height: 22px;
+
+    item := InkStatusItem {
+        icon: InkIcons.warning;
+        tone: InkTone.warn;
+        text: "Slow drawing";
+        clickable: true;
+        clicked => {
+            card.show();
+        }
+    }
+
+    card := PopupWindow {
+        x: 0px;
+        y: -body.preferred-height - 8px;
+        width: 380px;
+        close-policy: close-on-click-outside;
+
+        body := Rectangle {
+            background: Ink.panel;
+            border-radius: Ink.radius-lg;
+            border-width: 1px;
+            border-color: Ink.border;
+            drop-shadow-blur: 24px;
+            drop-shadow-offset-y: 8px;
+            drop-shadow-color: Ink.shadow;
+            accessible-role: groupbox;
+            accessible-label: "Slow drawing";
+
+            VerticalLayout {
+                padding: 14px;
+                spacing: 10px;
+                Text {
+                    text: RendererState.software-on ? "Draw in software is on" : "Drawing is slow on this computer";
+                    font-size: Ink.fs-body;
+                    font-weight: 600;
+                    color: Ink.text;
+                }
+                Text {
+                    text: RendererState.software-on
+                        ? "It takes effect when EVAnalyzer starts again. You can switch it back in Settings › Viewport."
+                        : "The graphics card can't be used here (remote desktop, virtual machine or no driver), so the screen is computed through CPU emulation. Draw in software is much faster and uses less RAM.";
+                    font-size: Ink.fs-secondary;
+                    color: Ink.text-dim;
+                    wrap: word-wrap;
+                }
+                if !RendererState.software-on: Text {
+                    text: "Now: " + RendererState.description;
+                    font-size: Ink.fs-secondary;
+                    font-family: Ink.font-mono;
+                    color: Ink.text-mute;
+                    wrap: word-wrap;
+                }
+                if !RendererState.software-on: HorizontalLayout {
+                    alignment: start;
+                    InkButton {
+                        small: true;
+                        kind: InkButtonKind.primary;
+                        text: "Turn on Draw in software";
+                        clicked => {
+                            RendererState.turn-on-software();
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 export component BottomBar inherits Rectangle {
@@ -115,6 +189,9 @@ export component BottomBar inherits Rectangle {
                 if !StartState.active && LayoutState.mode == WorkspaceMode.results && ResultsState.split && ResultsState.database-name != "" && ResultsState.split-offered: InkStatusItem {
                     text: "Split view · " + (ResultsState.rail-mode == ResultsRailMode.matrix ? "plate" : ResultsState.rail-mode == ResultsRailMode.charts ? "chart" : "list") + " and image";
                 }
+                if RendererState.slow: SlowDrawingItem {
+                    y: (parent.height - self.height) / 2;
+                }
                 // Under the pointer.
                 if !StartState.active && LayoutState.mode != WorkspaceMode.results: HorizontalLayout {
                     spacing: 2px;
@@ -134,11 +211,6 @@ export component BottomBar inherits Rectangle {
                     InkStatusItem {
                         icon: ViewportState.opening || !ViewportState.high_res_ready ? InkIcons.busy : InkIcons.check;
                         text: ViewportObjectState.is_drawing ? "Drawing" : ViewportState.opening ? "Opening" : !ViewportState.high_res_ready ? "Rendering" : "Ready";
-                    }
-                    InkStatusItem {
-                        icon: InkIcons.objects;
-                        text: ClassificationState.total_visible_objects + " objects";
-                        mono: true;
                     }
                     InkStatusItem {
                         text: "Zoom " + round(ViewportState.zoom_factor * 100) + "%";

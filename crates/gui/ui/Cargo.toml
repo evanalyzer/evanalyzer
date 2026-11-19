@@ -6,18 +6,24 @@ authors = { workspace = true }
 license = { workspace = true }
 publish = { workspace = true }
 
-# For Linux/macOS: slint's defaults plus Skia
-[target.'cfg(not(target_os = "windows"))'.dependencies]
-slint = { workspace = true, features = ["default", "renderer-skia"] }
-
-# For Windows: Use Software Renderer (No Skia/VC++ requirement)
-[target.'cfg(target_os = "windows")'.dependencies]
+# One renderer on every OS (decided 2026-11-19, see BENCHMARK.md
+# "Renderers"): FemtoVG on wgpu (Direct3D 12 / Metal / Vulkan, pure Rust),
+# Slint's software renderer as the fallback when no GPU renderer can start
+# and for Settings › Viewport › Draw in software. `unstable-wgpu-30` names
+# the graphics card in the "Renderer:" log line.
+[dependencies]
 slint = { workspace = true, features = [
     "std",
     "compat-1-2",
-    "renderer-software",
     "backend-winit",
+    "renderer-femtovg-wgpu",
+    "renderer-software",
+    "unstable-wgpu-30",
 ] }
+
+# Linux/macOS also had these from Slint's defaults before - kept as they were.
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+slint = { workspace = true, features = ["accessibility", "system-tray"] }
 
 [build-dependencies]
 slint-build = { workspace = true }

@@ -37,6 +37,7 @@ mod file_browser;
 mod helper;
 mod license_text;
 mod remote;
+mod renderer;
 mod third_party_licenses;
 mod undo_history;
 
@@ -819,30 +820,6 @@ pub fn create() -> GuiFrontend {
 
 static PROCESS_START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
 
-/// Settings › Viewport › Draw in software: Slint's own software renderer
-/// instead of the graphics card - chosen before the window exists (so it
-/// takes effect at the next start). `SLINT_BACKEND` set in the environment
-/// wins.
-fn choose_renderer() {
-    if std::env::var_os("SLINT_BACKEND").is_some() {
-        return;
-    }
-    let software = evanalyzer_app::backends::local::LocalBackend::default()
-        .load_app_settings()
-        .map(|settings| settings.viewport.software_renderer)
-        .unwrap_or(false);
-    if !software {
-        return;
-    }
-    match slint::BackendSelector::new()
-        .renderer_name("software".into())
-        .select()
-    {
-        Ok(()) => log::info!("Drawing in software (Settings › Viewport)"),
-        Err(e) => log::warn!("Could not draw in software, using the default renderer: {e}"),
-    }
-}
-
 /// Called first in `main`: the startup phases are logged (debug) from
 /// here on.
 pub fn mark_process_start() {
@@ -874,8 +851,9 @@ fn run(
     }
 
     startup_phase("GUI start");
-    choose_renderer();
+    let renderer_request = renderer::choose();
     let ui = AppWindow::new()?;
+    renderer::log_active(&ui, renderer_request);
     crate::helper::markdown::attach(&ui);
     let ui_handle = ui.as_weak();
     startup_phase("window created");
@@ -892,6 +870,7 @@ fn run(
     // sitting in the shared `ProjectWithRuntime` `ui_state` now points at).
     ui_state.set_window_title(false);
     apply_user_settings(&ui, &ui_state);
+    attach_turn_on_software(&ui, Arc::clone(&ui_state));
     attach_system_info(&ui, Arc::clone(&ui_state));
     ui_state.attach_file_browser(&ui);
 
@@ -914,6 +893,23 @@ fn run(
     let _connection_watch = show_connection(&ui, move || app.backend(), editor.on_reconnected());
 
     ui.run()
+}
+
+/// Status bar › Slow drawing › Turn on Draw in software: the setting saved
+/// on this computer (in effect from the next start) and shown in Settings.
+fn attach_turn_on_software(ui: &AppWindow, ui_state: Arc<UiState>) {
+    let ui_weak = ui.as_weak();
+    ui.global::<RendererState>().on_turn_on_software(move || {
+        let mut settings = ui_state.viewport_memory_settings();
+        settings.software_renderer = true;
+        ui_state.save_viewport_memory_settings(settings);
+        log::info!("Draw in software turned on - in effect from the next start");
+        if let Some(ui) = ui_weak.upgrade() {
+            ui.global::<ViewportMemoryState>()
+                .set_software_renderer(true);
+            ui.global::<RendererState>().set_software_on(true);
+        }
+    });
 }
 
 /// "Linux x86_64", "macOS aarch64", "Windows x86_64" - for the About.
