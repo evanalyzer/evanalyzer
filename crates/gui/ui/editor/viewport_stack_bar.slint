@@ -189,6 +189,7 @@ export component StackBar inherits Rectangle {
     height: 40px;
     width: root.folded ? pill.preferred-width : min(bar.preferred-width, root.room);
     background: Ink.glass;
+    backdrop-blur: Ink.backdrop;
     border-radius: Ink.radius-lg;
     border-width: 1px;
     border-color: Ink.border;

@@ -139,10 +139,8 @@ impl ObjectListController {
                 };
                 let visible_rows = compute_visible_rows(&bridge_ptr.app_state, &filter);
                 // The selection stays; its place in the new list.
-                state.set_selected_index(shown_index(
-                    &visible_rows,
-                    state.get_selected_object().id,
-                ));
+                state
+                    .set_selected_index(shown_index(&visible_rows, state.get_selected_object().id));
                 let nr_of_bits = current_image_nr_of_bits(&bridge_ptr.app_state);
                 let bridge = Rc::new(ObjectModalBridge {
                     app_state: bridge_ptr.app_state.clone(),

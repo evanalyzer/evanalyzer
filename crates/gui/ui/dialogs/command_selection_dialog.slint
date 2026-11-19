@@ -374,7 +374,7 @@ component DetailPane inherits Rectangle {
     in property <bool> removable: false;
     callback remove();
 
-    background: Ink.panel;
+    background: transparent;
 
     if !has-selection: VerticalLayout {
         alignment: center;
@@ -704,7 +704,7 @@ export component CommandSelectionDialog inherits InkDialog {
 
             if !root.filter-modules: Rectangle {
                 height: 40px;
-                background: Ink.panel;
+                background: transparent;
                 HorizontalLayout {
                     padding-left: 16px;
                     padding-right: 16px;
@@ -853,7 +853,7 @@ export component CommandSelectionDialog inherits InkDialog {
                     // LIST
                 Rectangle {
                         width: PickerStyle.list-col-w;
-                        background: Ink.panel;
+                        background: transparent;
                    // border-right-width: 0;
 
                     ScrollView {

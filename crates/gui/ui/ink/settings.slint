@@ -116,7 +116,9 @@ export component InkSettingsHead inherits VerticalLayout {
 
 // A rounded panel the rows of a section sit on.
 export component InkSettingsCard inherits Rectangle {
-    background: Ink.panel;
+    // On a dialog's surface: its colour - see-through with blur behind
+    // panels, like the dialog.
+    background: transparent;
     border-radius: Ink.radius-lg;
     border-width: 1px;
     border-color: Ink.border-soft;
