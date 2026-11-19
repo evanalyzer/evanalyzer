@@ -20,7 +20,10 @@
 //! Filter's median or Rolling Ball, the shift with phase correlation
 //! (`libs::phase_correlation`) and applied with `libs::translate`, the
 //! Gaussians with the discrete Gaussian of `libs::scale_space`, the fit a
-//! Huber M-estimate (Huber 1964) by iteratively reweighted least squares.
+//! Huber M-estimate (Huber 1964) by iteratively reweighted least squares,
+//! the influence of the reference's brightest pixels limited (Mallows'
+//! GM-estimator, Hampel et al. 1986) and the pixels far off the line on
+//! either side left out.
 //!
 //! Runs per tile: the estimates are made on the tile, which is the whole
 //! image up to 4096 px (see [`EstimationScope`]).
@@ -307,8 +310,12 @@ pub enum ShiftInterpolation {
 #[derive(Clone, Copy, PartialEq, Debug, CommandsMeta)]
 pub enum Factor {
     /// Fitted per image: a robust line through the structure's pixels
-    /// (reference above its noise), EVs (bright in the target only) left
-    /// out.
+    /// (reference above its noise), pixels bright in only one channel left
+    /// out - EVs in the target as well as dots in the reference only (e.g.
+    /// dye aggregates). The fit is used when it is precise (see Max
+    /// Uncertainty). A precise factor of about 0 is a result too (the
+    /// target shows nothing of the reference, e.g. a field without serum):
+    /// a negative one is set to 0.
     RobustFit {
         /// Fit pixels: reference above its median + this × its noise.
         #[cmdsmeta(default = 4.0, min = 0.0, max = 100.0, step = 0.5)]
@@ -316,18 +323,23 @@ pub enum Factor {
         /// Fit pixels: reference also above this percentile.
         #[cmdsmeta(default = 50.0, min = 0.0, max = 100.0, step = 1.0)]
         min_percentile: f32,
-        /// Pixels this many times the noise above the line (EVs) are left
-        /// out.
+        /// Pixels this many times the noise above the line (EVs) or below
+        /// it (dots in the reference only) are left out.
         #[cmdsmeta(default = 3.0, min = 0.5, max = 100.0, step = 0.5)]
         outlier_k: f32,
         /// Fit the offset `b` too; otherwise the line goes through 0.
         #[cmdsmeta(default = true)]
         fit_offset: bool,
-        /// Below this R² the fallback is used.
-        #[cmdsmeta(default = 0.5, min = 0.0, max = 1.0, step = 0.05)]
-        min_r2: f32,
-        /// The factor used when the fit fails.
-        #[cmdsmeta(default = 1.0, min = 0.0, max = 1000.0, step = 0.01)]
+        /// The fit is used when its uncertainty moves the subtracted signal
+        /// at the reference's bright pixels (99th percentile of the fit
+        /// pixels) by less than this many times the noise; otherwise the
+        /// fallback. Unlike R² it accepts a precise factor of about 0
+        /// (nothing of the reference in the target). Real images: 0.01 -
+        /// 0.05.
+        #[cmdsmeta(default = 0.25, min = 0.01, max = 10.0, step = 0.05)]
+        max_uncertainty: f32,
+        /// The factor used when the fit fails (0 = subtract nothing).
+        #[cmdsmeta(default = 0.0, min = 0.0, max = 1000.0, step = 0.01)]
         fallback: f32,
         /// A fitted factor below this uses the fallback.
         #[cmdsmeta(default = 0.0, min = 0.0, max = 1000.0, step = 0.01)]
@@ -392,7 +404,18 @@ pub enum OutputImage {
 const MIN_FIT_PIXELS: usize = 1000;
 /// Huber's tuning constant (95 % efficiency for normal errors).
 const HUBER_K: f64 = 1.345;
-const MAX_ITERATIONS: usize = 20;
+/// Rounds of the fit; it settles within about 10 - 30 on real images.
+const MAX_ITERATIONS: usize = 100;
+/// Leverage limit of the fit: a pixel further than this many times the
+/// spread (MAD) from the fit pixels' median reference pulls the line only
+/// with weight `LEVERAGE_K · spread / distance` (Mallows' GM-estimator,
+/// Hampel et al. 1986). Without it a few very bright reference pixels -
+/// dots in the reference only, or the structure's brightest pixels - decide
+/// the line, and a fit on a weak target slides to a flat line (a ≈ 0).
+const LEVERAGE_K: f64 = 2.0;
+/// The fit has settled once a round changes `a` by less than this part of
+/// its uncertainty (and `b` by less than this part of the noise).
+const SETTLE_FRACTION: f64 = 0.01;
 /// Fewer pixels give no noise estimate (Significance).
 const MIN_NOISE_PIXELS: usize = 100;
 /// The window of the local noise (Significance): (2·10 + 1)² px, about
@@ -559,6 +582,7 @@ impl ImageAlgorithm for SubtractReferenceChannel {
         }
         if matches!(self.factor, Factor::RobustFit { .. }) {
             papers.push(&HUBER_1964);
+            papers.push(&HAMPEL_1986);
         }
         papers
     }
@@ -676,6 +700,12 @@ struct Fit {
     r2: f64,
     /// Pixels in the final fit.
     kept: usize,
+    /// `a` and `b` stopped changing within [`MAX_ITERATIONS`].
+    settled: bool,
+    /// How far the uncertainty of `a` moves the subtracted signal at the
+    /// fit pixels' bright end (99th percentile of the reference), in units
+    /// of the noise (see `Factor::RobustFit::max_uncertainty`).
+    uncertainty: f64,
 }
 
 impl SubtractReferenceChannel {
@@ -833,7 +863,7 @@ impl SubtractReferenceChannel {
                 min_percentile,
                 outlier_k,
                 fit_offset,
-                min_r2,
+                max_uncertainty,
                 fallback: fallback_value,
                 min_value,
                 max_value,
@@ -849,14 +879,19 @@ impl SubtractReferenceChannel {
                     fit_offset,
                 );
                 let fraction = fit.as_ref().map_or(0.0, |f| f.kept as f64 / len as f64);
+                // A precise negative factor: nothing of the reference in the
+                // target (subtracting it would add the reference).
+                let clamped = |f: &Fit| if f.a < 0.0 { (0.0, 0.0) } else { (f.a, f.b) };
                 match fit {
                     Some(f)
-                        if f.kept >= MIN_FIT_PIXELS
-                            && f.r2 >= min_r2 as f64
-                            && f.a >= min_value as f64
-                            && f.a <= max_value as f64 =>
+                        if f.settled
+                            && f.kept >= MIN_FIT_PIXELS
+                            && f.uncertainty <= max_uncertainty as f64
+                            && clamped(&f).0 >= min_value as f64
+                            && clamped(&f).0 <= max_value as f64 =>
                     {
-                        (f.a, f.b, f.r2, fraction)
+                        let (a, b) = clamped(&f);
+                        (a, b, f.r2, fraction)
                     }
                     fit => {
                         warn!(
@@ -865,7 +900,13 @@ impl SubtractReferenceChannel {
                             image_name(),
                             fit.as_ref()
                                 .map_or("no structure above the noise".to_string(), |f| {
-                                    format!("a {:.4}, R² {:.3}, {} pixels", f.a, f.r2, f.kept)
+                                    format!(
+                                        "a {:.4}, uncertainty {:.2} × noise, {} pixels{}",
+                                        f.a,
+                                        f.uncertainty,
+                                        f.kept,
+                                        if f.settled { "" } else { ", did not settle" }
+                                    )
                                 }),
                         );
                         fallback = true;
@@ -1300,7 +1341,25 @@ fn robust_fit(
         b = median_in_place(work) as f64;
     }
     let scale = pairs.iter().map(|(sv, _)| sv.abs() as f64).sum::<f64>() / pairs.len() as f64;
+    // The leverage limit: the reference's median and spread over the fit
+    // pixels.
+    work.clear();
+    work.extend(pairs.iter().map(|(_, tv)| *tv));
+    let t_median = median_in_place(work) as f64;
+    for v in work.iter_mut() {
+        *v = (*v as f64 - t_median).abs() as f32;
+    }
+    let t_reach = LEVERAGE_K * (median_in_place(work) * MAD_TO_SIGMA) as f64;
+    let leverage = |tv: f64| {
+        let distance = (tv - t_median).abs();
+        if t_reach > 0.0 && distance > t_reach {
+            t_reach / distance
+        } else {
+            1.0
+        }
+    };
 
+    let mut settled = false;
     for _ in 0..MAX_ITERATIONS {
         // Robust sigma of the residuals.
         work.clear();
@@ -1312,23 +1371,33 @@ fn robust_fit(
         let sigma = ((median_in_place(work) * MAD_TO_SIGMA) as f64).max(1e-12 * scale.max(1e-30));
         let cutoff = outlier_k as f64 * sigma;
 
-        // Weighted least squares, the EVs (far above the line) left out.
+        // Weighted least squares (Huber, leverage limited), the pixels far
+        // off the line left out on both sides: EVs above it, dots in the
+        // reference only below it.
+        // Left out above only, those below tilt the line down, the
+        // structure's brightest pixels then lie above it and are left out
+        // in turn - the line keeps sinking towards a = 0.
         let (mut sw, mut st, mut ss, mut stt, mut sst) = (0.0f64, 0.0, 0.0, 0.0, 0.0);
+        // Σ w², Σ w² t, Σ w² t²: the uncertainty of `a` (settling).
+        let (mut sw2, mut sw2t, mut sw2tt) = (0.0f64, 0.0, 0.0);
         let mut kept = 0usize;
         for &(sv, tv) in &pairs {
             let (sv, tv) = (sv as f64, tv as f64);
             let residual = sv - (a * tv + b);
-            if residual > cutoff {
+            if residual.abs() > cutoff {
                 continue;
             }
             kept += 1;
             let u = (residual / sigma).abs();
-            let weight = if u <= HUBER_K { 1.0 } else { HUBER_K / u };
+            let weight = if u <= HUBER_K { 1.0 } else { HUBER_K / u } * leverage(tv);
             sw += weight;
             st += weight * tv;
             ss += weight * sv;
             stt += weight * tv * tv;
             sst += weight * sv * tv;
+            sw2 += weight * weight;
+            sw2t += weight * weight * tv;
+            sw2tt += weight * weight * tv * tv;
         }
         if kept == 0 {
             return None;
@@ -1342,16 +1411,32 @@ fn robust_fit(
         } else {
             (sst / stt, 0.0)
         };
-        let done = (new_a - a).abs() <= TOLERANCE * new_a.abs().max(1e-12)
-            && (new_b - b).abs() <= TOLERANCE * new_b.abs().max(scale).max(1e-12);
+        // Settled once a round moves `a` by a small part of its own
+        // uncertainty and `b` by a small part of the noise: a few pixels
+        // flipping in and out at the cut keep changing both a little
+        // forever, far below what could matter.
+        let c = if fit_offset { st / sw } else { 0.0 };
+        let swd2 = stt - 2.0 * c * st + c * c * sw;
+        let sw2d2 = (sw2tt - 2.0 * c * sw2t + c * c * sw2).max(0.0);
+        let a_uncertainty = if swd2 > 0.0 {
+            sigma * sw2d2.sqrt() / swd2
+        } else {
+            0.0
+        };
+        let done = (new_a - a).abs()
+            <= (TOLERANCE * new_a.abs().max(1e-12)).max(SETTLE_FRACTION * a_uncertainty)
+            && (new_b - b).abs()
+                <= (TOLERANCE * new_b.abs().max(scale).max(1e-12)).max(SETTLE_FRACTION * sigma);
         a = new_a;
         b = new_b;
         if done {
+            settled = true;
             break;
         }
     }
 
-    // R² over the pixels kept (the EVs left out as in the last step).
+    // R² over the pixels kept (those far off the line left out as in the
+    // last step).
     work.clear();
     work.extend(pairs.iter().map(|(sv, tv)| sv - (a as f32 * tv + b as f32)));
     let centre = median_in_place(work);
@@ -1362,7 +1447,7 @@ fn robust_fit(
     let in_fit: Vec<(f64, f64)> = pairs
         .iter()
         .map(|&(sv, tv)| (sv as f64, tv as f64))
-        .filter(|&(sv, tv)| sv - (a * tv + b) <= cutoff)
+        .filter(|&(sv, tv)| (sv - (a * tv + b)).abs() <= cutoff)
         .collect();
     let mean = in_fit.iter().map(|(sv, _)| sv).sum::<f64>() / in_fit.len().max(1) as f64;
     let (mut residual, mut total) = (0.0f64, 0.0f64);
@@ -1375,11 +1460,44 @@ fn robust_fit(
     } else {
         0.0
     };
+
+    // The uncertainty of `a` (weighted least squares with the leverage
+    // weights): σ · √(Σ w² d²) / Σ w d², d the reference's distance from
+    // its weighted mean (from 0 without an offset). Times the bright end of
+    // the reference and in units of the noise σ, σ cancels.
+    let centre = if fit_offset {
+        let (sw, st) = in_fit.iter().fold((0.0, 0.0), |(sw, st), &(_, tv)| {
+            let w = leverage(tv);
+            (sw + w, st + w * tv)
+        });
+        st / sw.max(f64::MIN_POSITIVE)
+    } else {
+        0.0
+    };
+    let (swd2, sw2d2) = in_fit.iter().fold((0.0, 0.0), |(swd2, sw2d2), &(_, tv)| {
+        let (w, d) = (leverage(tv), tv - centre);
+        (swd2 + w * d * d, sw2d2 + w * w * d * d)
+    });
+    work.clear();
+    work.extend(in_fit.iter().map(|&(_, tv)| tv as f32));
+    let bright = if work.is_empty() {
+        0.0
+    } else {
+        let rank = (work.len() - 1) * 99 / 100;
+        *work.select_nth_unstable_by(rank, f32::total_cmp).1 as f64
+    };
+    let uncertainty = if swd2 > 0.0 {
+        bright.abs() * sw2d2.sqrt() / swd2
+    } else {
+        f64::INFINITY
+    };
     Some(Fit {
         a,
         b,
         r2,
         kept: in_fit.len(),
+        settled,
+        uncertainty,
     })
 }
 
@@ -1421,6 +1539,22 @@ static HUBER_1964: CitationMetadata = CitationMetadata {
     pages: Some("73-101"),
 };
 
+static HAMPEL_1986: CitationMetadata = CitationMetadata {
+    cite_key: "hampel1986robust",
+    title: "Robust Statistics: The Approach Based on Influence Functions",
+    authors: &[
+        "Frank R. Hampel",
+        "Elvezio M. Ronchetti",
+        "Peter J. Rousseeuw",
+        "Werner A. Stahel",
+    ],
+    year: 1986,
+    container: Some("John Wiley & Sons"),
+    doi: Some("10.1002/9781118186435"),
+    url: None,
+    pages: None,
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1434,7 +1568,7 @@ mod tests {
                 r#"{ "type": "SUBTRACT_REFERENCE_CHANNEL", "id": "reference", "referenceChannel": 4 }"#,
             )
             .unwrap();
-        // A choice's own settings ("factor.min_r2") go with it.
+        // A choice's own settings ("factor.outlier_k") go with it.
         let mut sections: Vec<(String, Vec<String>)> = Vec::new();
         for def in command.to_parameters() {
             if def.name.contains('.') {

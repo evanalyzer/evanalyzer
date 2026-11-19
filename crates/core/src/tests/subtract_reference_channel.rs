@@ -39,6 +39,9 @@ const NETWORK: f32 = 400.0;
 /// The spots' peak (photons).
 const SPOT: f32 = 300.0;
 const SPOT_SIGMA: f32 = 1.3;
+/// The peak of the reference-only dots (photons): brighter than most of
+/// the network, as dye aggregates in a serum channel.
+const DOT: f32 = 800.0;
 /// The camera offset of both channels.
 const OFFSET: f32 = 100.0;
 /// The reference channel's index.
@@ -69,6 +72,9 @@ struct Recipe {
     /// focus against the reference, so the subtraction leaves leftovers.
     target_blur: f64,
     noise: bool,
+    /// Bright dots in the reference only (dark in the target, e.g. dye
+    /// aggregates): their number.
+    reference_dots: usize,
 }
 
 impl Default for Recipe {
@@ -79,6 +85,7 @@ impl Default for Recipe {
             target_network: true,
             target_blur: 0.0,
             noise: true,
+            reference_dots: 0,
         }
     }
 }
@@ -123,6 +130,22 @@ fn scene(recipe: Recipe) -> Scene {
         }
     }
 
+    // Drawn from their own generator: the other scenes stay as they were.
+    let mut dot_rng = Lcg(7);
+    let mut dot_image = vec![0f32; w * h];
+    for _ in 0..recipe.reference_dots {
+        let (cx, cy) = (
+            4.0 + dot_rng.next() * (w - 8) as f32,
+            4.0 + dot_rng.next() * (h - 8) as f32,
+        );
+        for y in (cy as usize).saturating_sub(6)..(cy as usize + 7).min(h) {
+            for x in (cx as usize).saturating_sub(6)..(cx as usize + 7).min(w) {
+                let d2 = (x as f32 - cx).powi(2) + (y as f32 - cy).powi(2);
+                dot_image[y * w + x] += DOT * (-d2 / (2.0 * SPOT_SIGMA * SPOT_SIGMA)).exp();
+            }
+        }
+    }
+
     let mut photons = |mean: f32| -> f32 {
         if recipe.noise {
             mean + mean.max(0.0).sqrt() * rng.normal()
@@ -149,7 +172,8 @@ fn scene(recipe: Recipe) -> Scene {
             } else {
                 0.0
             };
-            reference[i] = OFFSET + photons(reference_structure + ramp(x, y, -20.0, 30.0));
+            reference[i] =
+                OFFSET + photons(reference_structure + dot_image[i] + ramp(x, y, -20.0, 30.0));
         }
     }
     Scene {
@@ -386,6 +410,43 @@ fn smoothing_keeps_the_factor_from_being_biased_low() {
 }
 
 #[test]
+fn dots_only_in_the_reference_dont_pull_the_factor_down() {
+    // Bright in the reference, dark in the target: far below the line. Left
+    // in the fit, they tilt it down, the network's brightest pixels then lie
+    // above it and are left out as if they were EVs - until a is about 0.
+    let dotted = scene(Recipe {
+        shift: (0.0, 0.0),
+        reference_dots: 40,
+        ..Default::default()
+    });
+    let mut cmd = command();
+    cmd.alignment = Alignment::None;
+    let result = run(&cmd, &dotted);
+    let a = result.value("factor");
+    assert!((a - A as f64).abs() < 0.05 * A as f64, "a = {a}");
+    assert_eq!(result.value("fallback_used"), 0.0);
+}
+
+#[test]
+fn a_target_without_the_reference_signal_subtracts_nothing() {
+    // The reference shows the network, the target only its spots: the
+    // factor is about 0 and precise - a result, not a failed fit (R² is
+    // about 0 here and would have rejected it). A slightly negative
+    // estimate is set to 0.
+    let empty = scene(Recipe {
+        shift: (0.0, 0.0),
+        target_network: false,
+        ..Default::default()
+    });
+    let mut cmd = command();
+    cmd.alignment = Alignment::None;
+    let result = run(&cmd, &empty);
+    let a = result.value("factor");
+    assert!((0.0..0.01 * A as f64).contains(&a), "a = {a}");
+    assert_eq!(result.value("fallback_used"), 0.0);
+}
+
+#[test]
 fn a_reference_without_structure_falls_back() {
     let flat = scene(Recipe {
         structure: false,
@@ -394,7 +455,7 @@ fn a_reference_without_structure_falls_back() {
     let mut cmd = command();
     cmd.alignment = Alignment::None;
     let result = run(&cmd, &flat);
-    assert_eq!(result.value("factor"), 1.0);
+    assert_eq!(result.value("factor"), 0.0);
     assert_eq!(result.value("fallback_used"), 1.0);
 }
 
@@ -633,7 +694,7 @@ fn the_documented_module_json_loads() {
           "referenceExtraSigma": 0.0,
           "smoothingSigma": 1.0,
           "factor": { "type": "ROBUST_FIT", "noiseFactor": 4.0, "minPercentile": 50.0, "outlierK": 3.0,
-                      "fitOffset": true, "minR2": 0.5, "fallback": 1.0, "minValue": 0.0, "maxValue": 100.0 },
+                      "fitOffset": true, "maxUncertainty": 0.25, "fallback": 0.0, "minValue": 0.0, "maxValue": 100.0 },
           "factorScale": 1.0,
           "estimationScope": "IMAGE",
           "edgeTolerance": 0.0,

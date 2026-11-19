@@ -1,5 +1,5 @@
 {
-  "protocol_version": 44,
+  "protocol_version": 45,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {

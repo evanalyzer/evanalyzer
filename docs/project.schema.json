@@ -2499,11 +2499,11 @@
       "description": "How the scale factor `a` is set.",
       "oneOf": [
         {
-          "description": "Fitted per image: a robust line through the structure's pixels\n(reference above its noise), EVs (bright in the target only) left\nout.",
+          "description": "Fitted per image: a robust line through the structure's pixels\n(reference above its noise), pixels bright in only one channel left\nout - EVs in the target as well as dots in the reference only (e.g.\ndye aggregates). The fit is used when it is precise (see Max\nUncertainty). A precise factor of about 0 is a result too (the\ntarget shows nothing of the reference, e.g. a field without serum):\na negative one is set to 0.",
           "type": "object",
           "properties": {
             "fallback": {
-              "description": "The factor used when the fit fails.",
+              "description": "The factor used when the fit fails (0 = subtract nothing).",
               "type": "number",
               "format": "float",
               "maximum": 1000,
@@ -2512,6 +2512,13 @@
             "fitOffset": {
               "description": "Fit the offset `b` too; otherwise the line goes through 0.",
               "type": "boolean"
+            },
+            "maxUncertainty": {
+              "description": "The fit is used when its uncertainty moves the subtracted signal\nat the reference's bright pixels (99th percentile of the fit\npixels) by less than this many times the noise; otherwise the\nfallback. Unlike R² it accepts a precise factor of about 0\n(nothing of the reference in the target). Real images: 0.01 -\n0.05.",
+              "type": "number",
+              "format": "float",
+              "maximum": 10,
+              "minimum": 0.01
             },
             "maxValue": {
               "description": "A fitted factor above this uses the fallback.",
@@ -2525,13 +2532,6 @@
               "type": "number",
               "format": "float",
               "maximum": 100,
-              "minimum": 0
-            },
-            "minR2": {
-              "description": "Below this R² the fallback is used.",
-              "type": "number",
-              "format": "float",
-              "maximum": 1,
               "minimum": 0
             },
             "minValue": {
@@ -2549,7 +2549,7 @@
               "minimum": 0
             },
             "outlierK": {
-              "description": "Pixels this many times the noise above the line (EVs) are left\nout.",
+              "description": "Pixels this many times the noise above the line (EVs) or below\nit (dots in the reference only) are left out.",
               "type": "number",
               "format": "float",
               "maximum": 100,
@@ -2566,7 +2566,7 @@
             "minPercentile",
             "outlierK",
             "fitOffset",
-            "minR2",
+            "maxUncertainty",
             "fallback",
             "minValue",
             "maxValue"
@@ -6671,11 +6671,11 @@
           "description": "How the scale factor `a` is set.",
           "$ref": "#/$defs/MathSubtractReferenceChannelFactorSettings",
           "default": {
-            "fallback": 1.0,
+            "fallback": 0.0,
             "fitOffset": true,
+            "maxUncertainty": 0.25,
             "maxValue": 100.0,
             "minPercentile": 50.0,
-            "minR2": 0.5,
             "minValue": 0.0,
             "noiseFactor": 4.0,
             "outlierK": 3.0,

@@ -412,8 +412,12 @@ pub enum MeasureExcludeImageExcludeWhenSettings {
 #[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum MathSubtractReferenceChannelFactorSettings {
     /// Fitted per image: a robust line through the structure's pixels
-    /// (reference above its noise), EVs (bright in the target only) left
-    /// out.
+    /// (reference above its noise), pixels bright in only one channel left
+    /// out - EVs in the target as well as dots in the reference only (e.g.
+    /// dye aggregates). The fit is used when it is precise (see Max
+    /// Uncertainty). A precise factor of about 0 is a result too (the
+    /// target shows nothing of the reference, e.g. a field without serum):
+    /// a negative one is set to 0.
     #[serde(rename_all = "camelCase")]
     #[serde(alias = "robust-fit", alias = "robustFit", alias = "robust_fit")]
     RobustFit {
@@ -423,16 +427,21 @@ pub enum MathSubtractReferenceChannelFactorSettings {
         /// Fit pixels: reference also above this percentile.
         #[schemars(range(min = 0, max = 100))]
         min_percentile: f32,
-        /// Pixels this many times the noise above the line (EVs) are left
-        /// out.
+        /// Pixels this many times the noise above the line (EVs) or below
+        /// it (dots in the reference only) are left out.
         #[schemars(range(min = 0.5, max = 100))]
         outlier_k: f32,
         /// Fit the offset `b` too; otherwise the line goes through 0.
         fit_offset: bool,
-        /// Below this R² the fallback is used.
-        #[schemars(range(min = 0, max = 1))]
-        min_r2: f32,
-        /// The factor used when the fit fails.
+        /// The fit is used when its uncertainty moves the subtracted signal
+        /// at the reference's bright pixels (99th percentile of the fit
+        /// pixels) by less than this many times the noise; otherwise the
+        /// fallback. Unlike R² it accepts a precise factor of about 0
+        /// (nothing of the reference in the target). Real images: 0.01 -
+        /// 0.05.
+        #[schemars(range(min = 0.01, max = 10))]
+        max_uncertainty: f32,
+        /// The factor used when the fit fails (0 = subtract nothing).
         #[schemars(range(min = 0, max = 1000))]
         fallback: f32,
         /// A fitted factor below this uses the fallback.
@@ -478,8 +487,8 @@ impl Default for MathSubtractReferenceChannelFactorSettings {
             min_percentile: 50.0f32,
             outlier_k: 3.0f32,
             fit_offset: true,
-            min_r2: 0.5f32,
-            fallback: 1.0f32,
+            max_uncertainty: 0.25f32,
+            fallback: 0.0f32,
             min_value: 0.0f32,
             max_value: 100.0f32,
         }
