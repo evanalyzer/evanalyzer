@@ -265,6 +265,112 @@ impl ResultsGenerator {
         self.database.export_staging_dir()
     }
 
+    /// The WHERE conditions of the object list `filter` asks for that the
+    /// transposed table shares - plane, frame and `images` - and the class
+    /// ids it keeps (`None`: every class); `None` when it matches nothing.
+    /// The rest: [`push_object_list_conditions`].
+    fn object_list_base_conditions(
+        &self,
+        filter: &ListFilter,
+        images: ImageSelection<'_>,
+        classes: &[Class],
+    ) -> Result<Option<ListConditions>, InternalErrors> {
+        // `ListFilter.images` carries the rel-paths the GUI's image picker
+        // keys on - the objects' `image_rel_path` (not `image_name`, the file
+        // name only: images of the same name in two folders). `Some([])`
+        // (an active filter matching nothing) means zero rows, same
+        // convention as the class filter below; a path that names no image
+        // simply matches no object.
+        if images.matches_nothing() {
+            return Ok(None);
+        }
+
+        // `ListFilter.object_classes` already carries `ObjectClass` ids, but
+        // `classes` still doubles as validation: an id that no longer names
+        // a registered class (e.g. stale GUI state after switching
+        // databases) is dropped rather than matched against
+        // `object_class_id` blindly.
+        let class_ids = match &filter.object_classes {
+            Some(wanted) => {
+                let ids: Vec<u32> = wanted
+                    .iter()
+                    .filter_map(|id| classes.iter().find(|class| &class.global() == id))
+                    .map(|class| class.id)
+                    .collect();
+                if ids.is_empty() {
+                    return Ok(None);
+                }
+                Some(ids)
+            }
+            None => None,
+        };
+
+        let mut conditions = vec![
+            self.object_on_plane_sql("", filter.plane.z_stack)?,
+            format!("t_stack = {}", filter.plane.t_stack),
+        ];
+        if let Some(condition) = images.objects_condition() {
+            conditions.push(condition);
+        }
+        Ok(Some((conditions, class_ids)))
+    }
+
+    /// Where object `object_id` lies in the object list `filter` asks for
+    /// (one row per object, in `object_id` order, `filter.page.limit` per
+    /// page): the start of every page before its own - the `object_id`
+    /// each page comes after - so it is on page `len()` (0: the first).
+    /// `None` when the list doesn't hold it (filtered out, another plane)
+    /// or its rows aren't objects (transposed). `filter.page.after` is
+    /// ignored.
+    pub fn object_list_page_starts(
+        &self,
+        filter: &ListFilter,
+        object_id: &str,
+    ) -> Result<Option<Vec<String>>, InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        if filter.transpond_table {
+            return Ok(None);
+        }
+        let classes = self.get_object_classes()?;
+        let Some((mut conditions, class_ids)) =
+            self.object_list_base_conditions(filter, ImageSelection::of(&filter.images), &classes)?
+        else {
+            return Ok(None);
+        };
+        push_object_list_conditions(&mut conditions, class_ids.as_deref(), &filter.related_to);
+        let where_clause = conditions.join(" AND ");
+        let id = object_id.replace('\'', "''");
+        let held: i64 = self
+            .database
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM objects WHERE {where_clause} AND object_id = '{id}'::UUID"
+                ),
+                [],
+                |row| row.get(0),
+            )
+            .map_err(err)?;
+        if held == 0 {
+            return Ok(None);
+        }
+        // Every `limit`-th object before it: the last of each page before
+        // its own (the next page starts after it). Only the id is read.
+        let limit = filter.page.limit.max(1);
+        let sql = format!(
+            "SELECT object_id::VARCHAR FROM \
+             (SELECT object_id, row_number() OVER (ORDER BY object_id) AS rn FROM objects \
+              WHERE {where_clause} AND object_id < '{id}'::UUID) \
+             WHERE rn % {limit} = 0 ORDER BY rn"
+        );
+        let mut statement = self.database.prepare(&sql).map_err(err)?;
+        let starts = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)?;
+        Ok(Some(starts))
+    }
+
     pub fn get_object_list(&self, filter: &ListFilter) -> Result<DatabaseResult, InternalErrors> {
         self.get_object_list_of(filter, ImageSelection::of(&filter.images))
     }
@@ -341,43 +447,11 @@ impl ResultsGenerator {
             row_locations: vec![],
         };
 
-        // `ListFilter.images` carries the rel-paths the GUI's image picker
-        // keys on - the objects' `image_rel_path` (not `image_name`, the file
-        // name only: images of the same name in two folders). `Some([])`
-        // (an active filter matching nothing) means zero rows, same
-        // convention as the class filter below; a path that names no image
-        // simply matches no object.
-        if images.matches_nothing() {
+        let Some((mut conditions, class_ids)) =
+            self.object_list_base_conditions(filter, images, &classes)?
+        else {
             return Ok(empty_result(column_names.clone()));
-        }
-
-        // `ListFilter.object_classes` already carries `ObjectClass` ids, but
-        // `classes` (fetched above) still doubles as validation: an id that
-        // no longer names a registered class (e.g. stale GUI state after
-        // switching databases) is dropped rather than matched against
-        // `object_class_id` blindly.
-        let class_ids = match &filter.object_classes {
-            Some(wanted) => {
-                let ids: Vec<u32> = wanted
-                    .iter()
-                    .filter_map(|id| classes.iter().find(|class| &class.global() == id))
-                    .map(|class| class.id)
-                    .collect();
-                if ids.is_empty() {
-                    return Ok(empty_result(column_names.clone()));
-                }
-                Some(ids)
-            }
-            None => None,
         };
-
-        let mut conditions = vec![
-            self.object_on_plane_sql("", filter.plane.z_stack)?,
-            format!("t_stack = {}", filter.plane.t_stack),
-        ];
-        if let Some(condition) = images.objects_condition() {
-            conditions.push(condition);
-        }
         if filter.transpond_table {
             let blocks = class_blocks(class_ids.as_deref(), &classes);
             return self.get_object_list_transposed(
@@ -388,34 +462,7 @@ impl ResultsGenerator {
                 &classes,
             );
         }
-        if let Some(ids) = &class_ids {
-            conditions.push(class_filter_sql("object_class_id", ids));
-        }
-        match &filter.related_to {
-            Some(RelatedTo::ChildrenOf(parent_class, parent_id)) => conditions.push(format!(
-                "parent_ids[{}] = '{}'::UUID",
-                coloc_class_key(*parent_class),
-                parent_id.replace('\'', "''")
-            )),
-            Some(RelatedTo::PartnersOf(class, id)) => conditions.push(format!(
-                "object_id IN (SELECT UNNEST(coloc_partner_ids[{}]) FROM objects \
-                 WHERE object_id = '{}'::UUID)",
-                coloc_class_key(*class),
-                id.replace('\'', "''")
-            )),
-            Some(RelatedTo::RelatedOf(key, id)) => conditions.push(format!(
-                "object_id IN (SELECT related_object_id FROM measurements \
-                 WHERE region = 'object' AND key = '{}' AND object_id = '{}'::UUID)",
-                key.replace('\'', "''"),
-                id.replace('\'', "''")
-            )),
-            Some(RelatedTo::ParentOf(class, id)) => conditions.push(format!(
-                "object_id IN (SELECT parent_ids[{}] FROM objects WHERE object_id = '{}'::UUID)",
-                coloc_class_key(*class),
-                id.replace('\'', "''")
-            )),
-            None => {}
-        }
+        push_object_list_conditions(&mut conditions, class_ids.as_deref(), &filter.related_to);
         // Keyset pagination (see the doc comment on `Pagination::after`):
         // narrowing to `object_id > cursor` here, in the same WHERE clause
         // DuckDB already zone-map-prunes on, is what lets it skip whole row
@@ -4851,6 +4898,48 @@ fn well_fields_to_result(
     }
 }
 
+/// An object list's WHERE conditions and the class ids it keeps (`None`:
+/// every class) - see [`ResultsGenerator::object_list_base_conditions`].
+type ListConditions = (Vec<String>, Option<Vec<u32>>);
+
+/// The WHERE conditions of the object list's rows beyond
+/// [`ResultsGenerator::object_list_base_conditions`]: its classes
+/// (`class_ids`, `None`: all) and the objects it is drilled down to.
+fn push_object_list_conditions(
+    conditions: &mut Vec<String>,
+    class_ids: Option<&[u32]>,
+    related_to: &Option<RelatedTo>,
+) {
+    if let Some(ids) = class_ids {
+        conditions.push(class_filter_sql("object_class_id", ids));
+    }
+    match related_to {
+        Some(RelatedTo::ChildrenOf(parent_class, parent_id)) => conditions.push(format!(
+            "parent_ids[{}] = '{}'::UUID",
+            coloc_class_key(*parent_class),
+            parent_id.replace('\'', "''")
+        )),
+        Some(RelatedTo::PartnersOf(class, id)) => conditions.push(format!(
+            "object_id IN (SELECT UNNEST(coloc_partner_ids[{}]) FROM objects \
+             WHERE object_id = '{}'::UUID)",
+            coloc_class_key(*class),
+            id.replace('\'', "''")
+        )),
+        Some(RelatedTo::RelatedOf(key, id)) => conditions.push(format!(
+            "object_id IN (SELECT related_object_id FROM measurements \
+             WHERE region = 'object' AND key = '{}' AND object_id = '{}'::UUID)",
+            key.replace('\'', "''"),
+            id.replace('\'', "''")
+        )),
+        Some(RelatedTo::ParentOf(class, id)) => conditions.push(format!(
+            "object_id IN (SELECT parent_ids[{}] FROM objects WHERE object_id = '{}'::UUID)",
+            coloc_class_key(*class),
+            id.replace('\'', "''")
+        )),
+        None => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5751,6 +5840,147 @@ mod tests {
                 .unwrap();
             assert_eq!(count, objects, "count per image at T {t}");
         }
+    }
+
+    /// Every page of `filter`'s list as the List walks it (each page from
+    /// the last row of the one before): `(page start, row ids)` per page.
+    fn walk_pages(
+        generator: &ResultsGenerator,
+        filter: &ListFilter,
+    ) -> Vec<(Option<String>, Vec<String>)> {
+        let mut pages = Vec::new();
+        let mut after = None;
+        loop {
+            let page = generator
+                .get_object_list(&ListFilter {
+                    page: Pagination {
+                        limit: filter.page.limit,
+                        after: after.clone(),
+                    },
+                    ..filter.clone()
+                })
+                .unwrap();
+            if page.row_names.is_empty() {
+                return pages;
+            }
+            let next = page.row_names.last().cloned();
+            pages.push((after, page.row_names));
+            after = next;
+        }
+    }
+
+    /// An object's page and the starts of the pages before it are exactly
+    /// what paging through the list from the first page finds - for every
+    /// object, with and without a class or image filter; an object the
+    /// list doesn't hold has none.
+    #[test]
+    fn an_objects_page_is_where_paging_through_the_list_finds_it() {
+        let images = ["a.tif", "b.tif", "c.tif"];
+        let objects: Vec<ObjectSpec> = (0..23u64)
+            .map(|i| {
+                let (name, id) = if i % 3 == 0 {
+                    ("ClassB", 2)
+                } else {
+                    ("ClassA", 1)
+                };
+                ObjectSpec::new(images[(i % 3) as usize], name, id, i)
+            })
+            .collect();
+        let generator = open(&objects);
+        let all = ListFilter {
+            plane: plane(),
+            images: None,
+            object_classes: None,
+            columns: vec![Column::AreaSizePx],
+            with_coloc_details: false,
+            related_to: None,
+            page: Pagination {
+                limit: 5,
+                after: None,
+            },
+            transpond_table: false,
+        };
+        let filters = [
+            all.clone(),
+            ListFilter {
+                object_classes: Some(vec![ObjectClass::Global(1)]),
+                ..all.clone()
+            },
+            ListFilter {
+                images: Some(vec!["b.tif".into(), "c.tif".into()]),
+                ..all.clone()
+            },
+            ListFilter {
+                page: Pagination {
+                    limit: 1,
+                    after: None,
+                },
+                ..all.clone()
+            },
+            ListFilter {
+                with_coloc_details: true,
+                ..all.clone()
+            },
+        ];
+        let every_id = walk_pages(&generator, &all)
+            .into_iter()
+            .flat_map(|(_, ids)| ids)
+            .collect::<Vec<_>>();
+        assert_eq!(every_id.len(), 23);
+        for filter in &filters {
+            let pages = walk_pages(&generator, filter);
+            let starts: Vec<String> = pages
+                .iter()
+                .skip(1)
+                .filter_map(|(s, _)| s.clone())
+                .collect();
+            for id in &every_id {
+                let found = generator.object_list_page_starts(filter, id).unwrap();
+                match pages.iter().position(|(_, ids)| ids.contains(id)) {
+                    Some(page) => {
+                        assert_eq!(
+                            found.as_deref(),
+                            Some(&starts[..page]),
+                            "object {id}, filter {:?} {:?}",
+                            filter.object_classes,
+                            filter.images
+                        );
+                    }
+                    None => assert_eq!(found, None, "object {id} isn't listed"),
+                }
+            }
+        }
+        // A cursor left in the filter changes nothing.
+        let with_cursor = ListFilter {
+            page: Pagination {
+                limit: 5,
+                after: every_id.get(7).cloned(),
+            },
+            ..all.clone()
+        };
+        assert_eq!(
+            generator
+                .object_list_page_starts(&with_cursor, &every_id[3])
+                .unwrap(),
+            Some(vec![])
+        );
+        // An unknown object, a transposed table: none.
+        let unknown = "ffffffff-ffff-ffff-ffff-fffffffffffe";
+        assert!(!every_id.iter().any(|id| id == unknown));
+        assert_eq!(
+            generator.object_list_page_starts(&all, unknown).unwrap(),
+            None
+        );
+        let transposed = ListFilter {
+            transpond_table: true,
+            ..all.clone()
+        };
+        assert_eq!(
+            generator
+                .object_list_page_starts(&transposed, &every_id[0])
+                .unwrap(),
+            None
+        );
     }
 
     #[test]

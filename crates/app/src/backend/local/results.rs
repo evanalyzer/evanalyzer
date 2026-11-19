@@ -74,6 +74,14 @@ impl ResultsSource for LocalResults {
         self.with(|db| db.get_object_list(filter))
     }
 
+    fn object_list_page_starts(
+        &self,
+        filter: &ListFilter,
+        object_id: &str,
+    ) -> Result<Option<Vec<String>>, InternalErrors> {
+        self.with(|db| db.object_list_page_starts(filter, object_id))
+    }
+
     fn get_grouped_by_image(
         &self,
         filter: &GroupedByImageFilter,

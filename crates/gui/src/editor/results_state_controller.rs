@@ -189,6 +189,39 @@ struct ListFilter {
     pub drill: Option<Drill>,
 }
 
+/// See [`ResultsStateController::list_query`].
+struct ListQuery {
+    plane: evanalyzer_app::results::PlaneFilter,
+    images: Option<Vec<String>>,
+    object_classes: Option<Vec<ObjectClass>>,
+    columns: Vec<Column>,
+    with_coloc_details: bool,
+    transpond_table: bool,
+    group_by: ListGroupBy,
+    drill: Option<Drill>,
+    aggregations: Vec<Aggregation>,
+}
+
+impl ListQuery {
+    /// The object list's filter for the page after `after` - `None` when the
+    /// List shows images, not objects.
+    fn object_filter(&self, after: Option<String>) -> Option<evanalyzer_app::results::ListFilter> {
+        (self.group_by == ListGroupBy::Objects).then(|| evanalyzer_app::results::ListFilter {
+            plane: self.plane,
+            images: self.images.clone(),
+            object_classes: self.object_classes.clone(),
+            columns: self.columns.clone(),
+            with_coloc_details: self.with_coloc_details,
+            related_to: self.drill.as_ref().map(|d| d.related.clone()),
+            page: evanalyzer_app::results::Pagination {
+                limit: LIST_PAGE_SIZE,
+                after,
+            },
+            transpond_table: self.transpond_table,
+        })
+    }
+}
+
 /// The List shows the children or the partners of one object (design
 /// canvas "Object relations in the results", boards 3 and U7).
 #[derive(Clone, Debug, PartialEq)]
@@ -4328,17 +4361,10 @@ impl ResultsStateController {
         self.update_list_view();
     }
 
-    pub fn update_list_view(&self) {
-        // The view shown keeps what changed.
-        self.remember_view();
-        if !self.is_view_shown(ResultsRailMode::List, &self.list_stale) {
-            return;
-        }
-        let Some(db) = &*self.result_generator.lock().expect("Poisened") else {
-            warn!("No database opened!");
-            return;
-        };
-
+    /// What the List asks the results for now (its filters, columns and
+    /// grouping; the page aside) - its page and an object's page are found
+    /// with the same.
+    fn list_query(&self) -> ListQuery {
         let plane_filter = self.plane_filter.lock().expect("Poisned");
         let plane = evanalyzer_app::results::PlaneFilter {
             z_stack: plane_filter.selected_z_stack,
@@ -4374,16 +4400,69 @@ impl ResultsStateController {
             Some(_) => ListGroupBy::Objects,
             None => list_filter.group_by,
         };
+        ListQuery {
+            plane,
+            images,
+            object_classes,
+            columns,
+            with_coloc_details,
+            transpond_table,
+            group_by,
+            drill,
+            aggregations: list_filter.aggregations.clone(),
+        }
+    }
+
+    /// The List turned to the page with object `object_id` (if the List
+    /// holds it): the starts of the pages before it asked for, that page
+    /// read - the row it is on there. `None`: not in the List.
+    pub(super) fn list_page_of_object_now(&self, object_id: &str) -> Option<usize> {
+        let filter = self.list_query().object_filter(None)?;
+        let starts = {
+            let db = self.result_generator.lock().expect("Poisoned");
+            match db.as_ref()?.object_list_page_starts(&filter, object_id) {
+                Ok(starts) => starts?,
+                Err(e) => {
+                    warn!("Could not find the object's page: {e}");
+                    return None;
+                }
+            }
+        };
+        let page = starts.len();
+        *self.list_page_cursors.lock().expect("Poisned") = std::iter::once(None)
+            .chain(starts.into_iter().map(Some))
+            .collect();
+        *self.list_page.lock().expect("Poisned") = page as i32;
+        self.update_list_view();
+        self.list_row_ids
+            .lock()
+            .expect("Poisoned")
+            .iter()
+            .position(|id| id == object_id)
+    }
+
+    pub fn update_list_view(&self) {
+        // The view shown keeps what changed.
+        self.remember_view();
+        if !self.is_view_shown(ResultsRailMode::List, &self.list_stale) {
+            return;
+        }
+        let Some(db) = &*self.result_generator.lock().expect("Poisened") else {
+            warn!("No database opened!");
+            return;
+        };
+
+        let query = self.list_query();
         // A children's count can be clicked (to them) where a row is one
         // object and the columns are as sorted.
-        let mut ordered_columns = columns.clone();
+        let mut ordered_columns = query.columns.clone();
         ordered_columns.sort();
         let drillable: Vec<bool> = ordered_columns
             .iter()
             .map(|c| {
-                group_by == ListGroupBy::Objects
-                    && !with_coloc_details
-                    && !transpond_table
+                query.group_by == ListGroupBy::Objects
+                    && !query.with_coloc_details
+                    && !query.transpond_table
                     && matches!(
                         c,
                         Column::Children(ChildColumn {
@@ -4399,9 +4478,11 @@ impl ResultsStateController {
             })
             .collect();
         *self.list_columns_shown.lock().expect("Poisoned") = ordered_columns;
-        let drill_label = drill.as_ref().map(|d| d.label.clone()).unwrap_or_default();
-        let aggregations = list_filter.aggregations.clone();
-        drop(list_filter);
+        let drill_label = query
+            .drill
+            .as_ref()
+            .map(|d| d.label.clone())
+            .unwrap_or_default();
 
         let page = *self.list_page.lock().expect("Poisned") as usize;
         let cursor = self
@@ -4412,27 +4493,24 @@ impl ResultsStateController {
             .cloned()
             .flatten();
 
-        let result = match group_by {
-            ListGroupBy::Objects => db.get_object_list(&evanalyzer_app::results::ListFilter {
-                plane,
-                images,
-                object_classes,
-                columns,
-                with_coloc_details,
-                related_to: drill.map(|d| d.related),
-                page: evanalyzer_app::results::Pagination {
-                    limit: LIST_PAGE_SIZE,
-                    after: cursor,
-                },
-                transpond_table,
-            }),
+        let result = match query.object_filter(cursor.clone()) {
+            Some(filter) => db.get_object_list(&filter),
             // Non-aggregable columns (Object ID/Image/Class) don't mean
             // anything once rows are grouped by image — silently dropped
             // here, same as the export side's own grid views (see
             // `Column::is_aggregable`). `aggregations` comes
             // from the AGGREGATE dropdown (results_list.slint), one output
             // column per (selected column x selected aggregation) combo.
-            ListGroupBy::Images => {
+            None => {
+                let ListQuery {
+                    plane,
+                    images,
+                    object_classes,
+                    columns,
+                    aggregations,
+                    transpond_table,
+                    ..
+                } = query;
                 let columns = columns.into_iter().filter(Column::is_aggregable).collect();
                 db.get_grouped_by_image(&GroupedByImageFilter {
                     plane,
@@ -6747,6 +6825,155 @@ pub(crate) mod tests {
     use crate::editor::test_support::{test_ui_state, test_ui_window};
     use crate::editor::viewport_controller::ViewportController;
     use evanalyzer_app::project::ImageListExt;
+
+    mod bench_list_jump {
+        //! Benchmark (not run by default): the List's paging and the split
+        //! view's way to an object's row - 10 × "next page", a click on an
+        //! object far down the list (its page shown, its row selected) and
+        //! arrow steps across page ends. Time, the process CPU and RAM.
+        //!
+        //! EVADB=<copy of a results database> cargo test --target
+        //! x86_64-unknown-linux-gnu --release -p evanalyzer_gui --lib
+        //! bench_list_jump_to_object -- --ignored --nocapture
+
+        use super::*;
+
+        fn cpu_ms() -> f64 {
+            // SAFETY: getrusage only writes the struct it is given.
+            let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+            unsafe {
+                libc::getrusage(libc::RUSAGE_SELF, &mut usage);
+            }
+            let ms = |t: libc::timeval| t.tv_sec as f64 * 1000.0 + t.tv_usec as f64 / 1000.0;
+            ms(usage.ru_utime) + ms(usage.ru_stime)
+        }
+
+        fn rss_mb() -> (f64, f64) {
+            let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+            let kb = |key: &str| {
+                status
+                    .lines()
+                    .find(|l| l.starts_with(key))
+                    .and_then(|l| l.split_whitespace().nth(1))
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .unwrap_or(0.0)
+                    / 1024.0
+            };
+            (kb("VmRSS:"), kb("VmHWM:"))
+        }
+
+        #[test]
+        #[ignore]
+        fn bench_list_jump_to_object() {
+            use std::time::Instant;
+            let Ok(path) = std::env::var("EVADB") else {
+                eprintln!("EVADB not set - skipped");
+                return;
+            };
+            let ui = test_ui_window();
+            let ui_state = ui_state_with_window(&ui, Default::default());
+            let controller = make_controller_with_state(ui.as_weak(), ui_state);
+            controller.attach_callbacks();
+            let state = ui.global::<ResultsState>();
+            controller.open_database(PathBuf::from(&path));
+            drain_ui_queue();
+            let (rss_start, _) = rss_mb();
+            let measure = |name: &str, action: &dyn Fn()| {
+                let _ = std::fs::write("/proc/self/clear_refs", "5");
+                let cpu = cpu_ms();
+                let start = Instant::now();
+                action();
+                drain_ui_queue();
+                let took = start.elapsed().as_secs_f64() * 1000.0;
+                let cpu = cpu_ms() - cpu;
+                let (rss, peak) = rss_mb();
+                println!(
+                    "{name:<34} {took:>9.1} ms {cpu:>9.1} ms cpu  RSS {:>+6.0} MB  peak {:>+6.0} MB  \
+                     page {} row {}",
+                    rss - rss_start,
+                    peak - rss_start,
+                    state.get_list_page_number(),
+                    state.get_list_selected_row()
+                );
+            };
+
+            measure("10 x next page", &|| {
+                for _ in 0..10 {
+                    state.invoke_list_next_page();
+                }
+            });
+            measure("10 x previous page", &|| {
+                for _ in 0..10 {
+                    state.invoke_list_prev_page();
+                }
+            });
+
+            // An object far down the list: the last row of page 31 (paged
+            // there and back, not measured).
+            for _ in 0..30 {
+                state.invoke_list_next_page();
+            }
+            drain_ui_queue();
+            let (rel_path, _) = controller
+                .list_row_locations
+                .lock()
+                .unwrap()
+                .last()
+                .cloned()
+                .unwrap();
+            let id = controller
+                .list_row_ids
+                .lock()
+                .unwrap()
+                .last()
+                .cloned()
+                .unwrap();
+            for _ in 0..30 {
+                state.invoke_list_prev_page();
+            }
+            drain_ui_queue();
+            let objects = controller
+                .result_generator
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .image_objects(&evanalyzer_app::results::ImageObjectsFilter {
+                    image_rel_path: rel_path,
+                    plane: evanalyzer_app::results::PlaneFilter {
+                        z_stack: 0,
+                        t_stack: 0,
+                    },
+                    value_column: None,
+                })
+                .unwrap();
+            let target = objects.iter().position(|o| o.object_id == id).unwrap();
+            let [x0, y0, x1, y1] = objects[target].bbox_px;
+            {
+                let mut split = controller.split.lock().unwrap();
+                // No image to wait for: the overlay is pushed at once.
+                split.image = None;
+                split.objects = Arc::new(objects);
+                split.selected = None;
+            }
+            controller.split_push_overlay();
+            let (zoom, off_x, off_y, ..) = controller.viewport().view();
+            let (cx, cy) = ((x0 + x1) as f32 / 2.0, (y0 + y1) as f32 / 2.0);
+            measure("click an object far down", &|| {
+                state.invoke_split_image_clicked(off_x + cx * zoom, off_y + cy * zoom);
+            });
+            measure("5 x arrow down", &|| {
+                for _ in 0..5 {
+                    state.invoke_split_step(1);
+                }
+            });
+            measure("5 x arrow up", &|| {
+                for _ in 0..5 {
+                    state.invoke_split_step(-1);
+                }
+            });
+        }
+    }
 
     mod bench_split_overlay {
         //! # bench_split_overlay
@@ -12111,6 +12338,245 @@ pub(crate) mod tests {
 
     /// List: ↑ with no row selected goes to the last row; without rows the
     /// arrows do nothing.
+    /// The split view over a List of three pages: the seeded objects plus
+    /// 1,200 more on `A2_01.tif` (ids after the seeded ones, in order;
+    /// 3 x 3 px boxes in a grid of 25 per row, 4 px apart).
+    fn split_controller_with_pages() -> (AppWindow, Arc<ResultsStateController>, tempfile::TempDir)
+    {
+        use evanalyzer_cfg::settings::images_settings::{ImageEntry, SeriesSettings};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("results.evadb");
+        seed_test_db(&path);
+        {
+            let conn = duckdb::Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "INSERT INTO objects (
+                    image_name, image_rel_path, t_stack, z_stack, object_id, seg_class_name,
+                    seg_class_id, object_class_name, object_class_id, track_id,
+                    centroid_x_px, centroid_y_px, centroid_x_nm, centroid_y_nm,
+                    bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px,
+                    bbox_xmin_nm, bbox_ymin_nm, bbox_xmax_nm, bbox_ymax_nm,
+                    area_px, area_nm2, perimeter_px, perimeter_nm,
+                    circularity, solidity, aspect_ratio, roundness, compactness,
+                    major_axis_px, minor_axis_px, eccentricity, touches_edge,
+                    pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm,
+                    intensity_sum_gray, intensity_mean_gray, intensity_min_gray,
+                    intensity_max_gray, coloc_partner_ids)
+                 SELECT 'A2_01.tif', 'A2_01.tif', 0, 0,
+                    ('00000000-0000-0000-0001-' || lpad(i::VARCHAR, 12, '0'))::UUID,
+                    'ClassB', 2, '[\"ClassB\"]', [2], 0,
+                    (i % 25) * 4 + 1, (i // 25) * 4 + 1, 0, 0,
+                    (i % 25) * 4, (i // 25) * 4, (i % 25) * 4 + 2, (i // 25) * 4 + 2,
+                    0, 0, 0, 0,
+                    9, 9, 12, 12,
+                    1.0, 1.0, 1.0, 1.0, 1.0,
+                    3, 3, 1.0, false,
+                    1.0, 1.0, 1.0,
+                    [255.0], [127.0], [0.0], [255.0], MAP {}
+                 FROM range(1200) t(i);",
+            )
+            .unwrap();
+        }
+        let ui = test_ui_window();
+        let controller = make_controller_with_ui(ui.as_weak());
+        controller.attach_callbacks();
+        controller.open_database(path);
+        {
+            let mut project = controller._app_state.get_project_write();
+            project.images.root = Some(PathBuf::from("/data/images"));
+            for name in ["A1_01.tif", "A1_02.tif", "A2_01.tif"] {
+                project.images.list.insert(
+                    PathBuf::from(name),
+                    ImageEntry {
+                        rel_path: PathBuf::from(name),
+                        file_size: 0,
+                        selected_series: 0,
+                        series: std::collections::BTreeMap::from([(0, SeriesSettings::default())]),
+                    },
+                );
+            }
+        }
+        ui.global::<ResultsState>().set_split(true);
+        drain_ui_queue();
+        (ui, controller, dir)
+    }
+
+    /// `A2_01.tif`'s objects in the split view (no image to wait for), and
+    /// a click on the one with `object_id`.
+    fn click_split_object(
+        controller: &Arc<ResultsStateController>,
+        ui: &AppWindow,
+        object_id: &str,
+    ) {
+        let objects = controller
+            .result_generator
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .image_objects(&evanalyzer_app::results::ImageObjectsFilter {
+                image_rel_path: "A2_01.tif".into(),
+                plane: evanalyzer_app::results::PlaneFilter {
+                    z_stack: 0,
+                    t_stack: 0,
+                },
+                value_column: None,
+            })
+            .unwrap();
+        let [x0, y0, x1, y1] = objects
+            .iter()
+            .find(|o| o.object_id == object_id)
+            .expect("the object on the image")
+            .bbox_px;
+        {
+            let mut split = controller.split.lock().unwrap();
+            split.image = None;
+            split.objects = Arc::new(objects);
+            split.selected = None;
+        }
+        controller.split_push_overlay();
+        let (zoom, off_x, off_y, ..) = controller.viewport().view();
+        let (cx, cy) = ((x0 + x1) as f32 / 2.0 + 0.5, (y0 + y1) as f32 / 2.0 + 0.5);
+        ui.global::<ResultsState>()
+            .invoke_split_image_clicked(off_x + cx * zoom, off_y + cy * zoom);
+        drain_ui_queue();
+    }
+
+    fn extra_id(i: usize) -> String {
+        format!("00000000-0000-0000-0001-{i:012}")
+    }
+
+    /// The selected row's object id.
+    fn selected_row_id(controller: &Arc<ResultsStateController>, ui: &AppWindow) -> Option<String> {
+        let row = ui.global::<ResultsState>().get_list_selected_row();
+        (row >= 0)
+            .then(|| {
+                controller
+                    .list_row_ids
+                    .lock()
+                    .unwrap()
+                    .get(row as usize)
+                    .cloned()
+            })
+            .flatten()
+    }
+
+    /// A click on an object the List's page doesn't hold turns the List to
+    /// its page and selects its row - from any page, back and forth; on the
+    /// page shown it stays there.
+    #[test]
+    fn split_a_click_on_an_object_of_another_page_shows_its_page_and_row() {
+        let (ui, controller, _dir) = split_controller_with_pages();
+        let state = ui.global::<ResultsState>();
+        state.invoke_list_row_selected(0);
+        drain_ui_queue();
+        assert_eq!(state.get_list_page_number(), 1);
+        assert!(state.get_list_has_next_page());
+
+        // 1,203 objects, 500 a page: the last on page 3, the 498th extra
+        // (the list's 501st) the first of page 2.
+        for (extra, page, row) in [
+            (1199usize, 3, 202),
+            (497, 2, 0),
+            (496, 1, 499),
+            (1199, 3, 202),
+        ] {
+            click_split_object(&controller, &ui, &extra_id(extra));
+            assert_eq!(state.get_list_page_number(), page, "object {extra}");
+            assert_eq!(state.get_list_selected_row(), row, "object {extra}");
+            assert_eq!(selected_row_id(&controller, &ui), Some(extra_id(extra)));
+        }
+        // Next and previous page still go from there.
+        state.invoke_list_prev_page();
+        drain_ui_queue();
+        assert_eq!(state.get_list_page_number(), 2);
+        assert_eq!(
+            controller.list_row_ids.lock().unwrap()[0],
+            extra_id(497),
+            "page 2 as paging there gives it"
+        );
+        state.invoke_list_next_page();
+        drain_ui_queue();
+        assert_eq!(state.get_list_page_number(), 3);
+        assert_eq!(controller.list_row_ids.lock().unwrap().len(), 203);
+    }
+
+    /// An object the List doesn't hold (its class filtered out) selects no
+    /// row and leaves the page as it is.
+    #[test]
+    fn split_a_click_on_an_object_the_list_filters_out_selects_no_row() {
+        let (ui, controller, _dir) = split_controller_with_pages();
+        let state = ui.global::<ResultsState>();
+        state.invoke_list_row_selected(0);
+        drain_ui_queue();
+        controller.list_filter.lock().unwrap().object_classes = vec![ObjectClass::Global(1)];
+        controller.update_list_view();
+        drain_ui_queue();
+        assert_eq!(
+            controller.list_row_ids.lock().unwrap().len(),
+            2,
+            "ClassA only"
+        );
+
+        click_split_object(&controller, &ui, &extra_id(1199));
+        assert_eq!(state.get_list_page_number(), 1);
+        assert_eq!(state.get_list_selected_row(), -1);
+        assert_eq!(controller.list_row_ids.lock().unwrap().len(), 2);
+    }
+
+    /// ↓ on a page's last row: the next page's first row, its object on the
+    /// image; ↑ on a page's first row: the previous page's last. On the
+    /// last page's last row ↓ stays.
+    #[test]
+    fn split_arrows_cross_the_page_ends() {
+        let (ui, controller, _dir) = split_controller_with_pages();
+        let state = ui.global::<ResultsState>();
+        state.invoke_list_row_selected(0);
+        drain_ui_queue();
+
+        state.set_list_selected_row(499);
+        state.invoke_split_step(1);
+        drain_ui_queue();
+        assert_eq!(state.get_list_page_number(), 2);
+        assert_eq!(state.get_list_selected_row(), 0);
+        assert_eq!(selected_row_id(&controller, &ui), Some(extra_id(497)));
+        let shown = controller.split.lock().unwrap().image.clone();
+        assert_eq!(shown.as_deref(), Some("A2_01.tif"), "its image shown");
+
+        state.invoke_split_step(-1);
+        drain_ui_queue();
+        assert_eq!(state.get_list_page_number(), 1);
+        assert_eq!(state.get_list_selected_row(), 499);
+        assert_eq!(selected_row_id(&controller, &ui), Some(extra_id(496)));
+
+        // Within a page: one row.
+        state.invoke_split_step(-1);
+        drain_ui_queue();
+        assert_eq!(
+            (state.get_list_page_number(), state.get_list_selected_row()),
+            (1, 498)
+        );
+
+        // On the first page's first row ↑ stays.
+        state.set_list_selected_row(0);
+        state.invoke_split_step(-1);
+        drain_ui_queue();
+        assert_eq!(
+            (state.get_list_page_number(), state.get_list_selected_row()),
+            (1, 0)
+        );
+
+        // The last page's last row: ↓ stays.
+        click_split_object(&controller, &ui, &extra_id(1199));
+        assert_eq!(state.get_list_page_number(), 3);
+        state.invoke_split_step(1);
+        drain_ui_queue();
+        assert_eq!(
+            (state.get_list_page_number(), state.get_list_selected_row()),
+            (3, 202)
+        );
+    }
+
     #[test]
     fn split_list_arrows_start_at_the_end_going_up_and_need_rows() {
         let (ui, controller) = split_controller();

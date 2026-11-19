@@ -787,6 +787,9 @@ fn answer_query(
 ) -> Result<ResultsAnswer, InternalErrors> {
     Ok(match query {
         ResultsQuery::ObjectList(filter) => ResultsAnswer::Table(source.get_object_list(&filter)?),
+        ResultsQuery::ObjectListPageStarts { filter, object_id } => {
+            ResultsAnswer::PageStarts(source.object_list_page_starts(&filter, &object_id)?)
+        }
         ResultsQuery::GroupedByImage(filter) => {
             ResultsAnswer::Table(source.get_grouped_by_image(&filter)?)
         }

@@ -69,7 +69,7 @@ use std::sync::Arc;
 /// keep requests between versions working too. Something one side doesn't
 /// know (a new pipeline command, say) fails that one request with a clear
 /// error, not the connection.
-pub const PROTOCOL_VERSION: u32 = 43;
+pub const PROTOCOL_VERSION: u32 = 44;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -208,6 +208,11 @@ pub(crate) enum ResultsQuery {
     TrackSummary(crate::api::TrackSummaryFilter),
     HasLineage,
     TrackPaths(crate::api::TrackPathsFilter),
+    /// See `ResultsSource::object_list_page_starts`.
+    ObjectListPageStarts {
+        filter: ListFilter,
+        object_id: String,
+    },
 }
 
 /// The successful result of a [`ResultsQuery`] (failures travel as
@@ -238,6 +243,8 @@ pub(crate) enum ResultsAnswer {
     Tracks(crate::api::ImageTracks),
     TrackSummary(Vec<crate::api::TrackSummary>),
     TrackPaths(crate::api::TrackPaths),
+    /// See `ResultsSource::object_list_page_starts`.
+    PageStarts(Option<Vec<String>>),
 }
 
 pub(crate) fn to_postcard<T: Serialize>(value: &T) -> Result<Vec<u8>, InternalErrors> {

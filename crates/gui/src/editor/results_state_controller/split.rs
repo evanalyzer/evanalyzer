@@ -287,6 +287,10 @@ impl ResultsStateController {
         *self.rail_mode.lock().expect("Poisoned") == ResultsRailMode::Matrix
     }
 
+    fn in_list(&self) -> bool {
+        *self.rail_mode.lock().expect("Poisoned") == ResultsRailMode::List
+    }
+
     /// Plate, a well clicked: its images under the image, the first shown.
     pub(super) fn split_show_well(self: &Arc<Self>, image_names: Vec<String>) {
         let rel_paths: HashMap<String, String> = self
@@ -391,6 +395,16 @@ impl ResultsStateController {
         }
         let state = ui.global::<ResultsState>();
         let current = state.get_list_selected_row();
+        // Past the page's end: the next page's first row, the previous
+        // page's last.
+        if current >= 0 && current + delta >= rows && state.get_list_has_next_page() {
+            self.split_turn_page(1, false);
+            return;
+        }
+        if current >= 0 && current + delta < 0 && state.get_list_page_number() > 1 {
+            self.split_turn_page(-1, true);
+            return;
+        }
         let row = if current < 0 {
             if delta < 0 { rows - 1 } else { 0 }
         } else {
@@ -398,6 +412,54 @@ impl ResultsStateController {
         };
         state.set_list_selected_row(row);
         self.split_select_row(row);
+    }
+
+    /// The List's page `delta` pages on (on the database thread, after the
+    /// pages asked for before), then its first row - or its last (`last`)
+    /// - selected and shown, as an arrow step to it does.
+    fn split_turn_page(self: &Arc<Self>, delta: i32, last: bool) {
+        let asked = self.list_generation.load(Ordering::SeqCst);
+        self.run_db_job(move |manager| {
+            if manager.list_generation.load(Ordering::SeqCst) != asked {
+                return;
+            }
+            manager.change_list_page_now(delta);
+            let rows = manager.list_row_locations.lock().expect("Poisoned").len();
+            if rows == 0 {
+                return;
+            }
+            let row = if last { rows - 1 } else { 0 } as i32;
+            let manager = Arc::clone(manager);
+            crate::helper::ui_thread::invoke_from_event_loop(move || {
+                if let Some(ui) = manager.ui.upgrade() {
+                    ui.global::<ResultsState>().set_list_selected_row(row);
+                }
+                manager.split_select_row(row);
+            })
+            .ok();
+        });
+    }
+
+    /// The List turned to the page with object `object_id` and its row
+    /// selected - a click on an object the page shown doesn't hold (on the
+    /// database thread). Not in the List (filtered out; the List shows
+    /// images, or a table per class): no row selected.
+    fn split_list_show_object(self: &Arc<Self>, object_id: String) {
+        let asked = self.list_generation.load(Ordering::SeqCst);
+        self.run_db_job(move |manager| {
+            if manager.list_generation.load(Ordering::SeqCst) != asked {
+                return;
+            }
+            let row = manager.list_page_of_object_now(&object_id);
+            let ui = manager.ui.clone();
+            crate::helper::ui_thread::invoke_from_event_loop(move || {
+                if let Some(ui) = ui.upgrade() {
+                    ui.global::<ResultsState>()
+                        .set_list_selected_row(row.map_or(-1, |row| row as i32));
+                }
+            })
+            .ok();
+        });
     }
 
     /// A click on the image: the object there, and its row (if on this
@@ -439,10 +501,17 @@ impl ResultsStateController {
             .lock()
             .expect("Poisoned")
             .iter()
-            .position(|(rel, b)| *rel == rel_path && *b == Some(bbox))
-            .map_or(-1, |row| row as i32);
+            .position(|(rel, b)| *rel == rel_path && *b == Some(bbox));
         if let Some(ui) = self.ui.upgrade() {
-            ui.global::<ResultsState>().set_list_selected_row(row);
+            ui.global::<ResultsState>()
+                .set_list_selected_row(row.map_or(-1, |row| row as i32));
+        }
+        // Not on the page shown: the List turns to its page.
+        if row.is_none() && self.in_list() {
+            let object_id = self.split.lock().expect("Poisoned").objects[index]
+                .object_id
+                .clone();
+            self.split_list_show_object(object_id);
         }
         self.split_push_selection(false);
         self.split_push_overlay();

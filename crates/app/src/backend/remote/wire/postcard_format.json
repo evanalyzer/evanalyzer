@@ -1,5 +1,5 @@
 {
-  "protocol_version": 43,
+  "protocol_version": 44,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -1808,6 +1808,15 @@
               "TYPENAME": "TrackPaths"
             }
           }
+        },
+        "24": {
+          "PageStarts": {
+            "NEWTYPE": {
+              "OPTION": {
+                "SEQ": "STR"
+              }
+            }
+          }
         }
       }
     },
@@ -2009,6 +2018,20 @@
             "NEWTYPE": {
               "TYPENAME": "TrackPathsFilter"
             }
+          }
+        },
+        "31": {
+          "ObjectListPageStarts": {
+            "STRUCT": [
+              {
+                "filter": {
+                  "TYPENAME": "ListFilter"
+                }
+              },
+              {
+                "object_id": "STR"
+              }
+            ]
           }
         }
       }

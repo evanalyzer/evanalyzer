@@ -123,6 +123,20 @@ impl ResultsSource for RemoteResults {
         self.table(ResultsQuery::ObjectList(filter.clone()))
     }
 
+    fn object_list_page_starts(
+        &self,
+        filter: &ListFilter,
+        object_id: &str,
+    ) -> Result<Option<Vec<String>>, InternalErrors> {
+        match self.query(ResultsQuery::ObjectListPageStarts {
+            filter: filter.clone(),
+            object_id: object_id.to_string(),
+        })? {
+            ResultsAnswer::PageStarts(starts) => Ok(starts),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
     fn get_grouped_by_image(
         &self,
         filter: &GroupedByImageFilter,
@@ -581,6 +595,38 @@ mod tests {
             json(remote_db.image_objects(&image_objects(&image)).unwrap()),
             json(local_db.image_objects(&image_objects(&image)).unwrap())
         );
+        // An object's page in the List: the same answer over the
+        // connection (this analysis found no objects - none listed).
+        let list = ListFilter {
+            plane: plane(),
+            images: None,
+            object_classes: None,
+            columns: vec![Column::AreaSizePx],
+            with_coloc_details: false,
+            related_to: None,
+            page: Pagination {
+                limit: 2,
+                after: None,
+            },
+            transpond_table: false,
+        };
+        let id = "00000000-0000-0000-0000-000000000001";
+        assert_eq!(local_db.object_list_page_starts(&list, id).unwrap(), None);
+        assert_eq!(remote_db.object_list_page_starts(&list, id).unwrap(), None);
+        // Page starts travel as they are.
+        let starts = Some(vec![
+            "00000000-0000-0000-0000-000000000002".to_string(),
+            "00000000-0000-0000-0000-000000000009".to_string(),
+        ]);
+        let bytes = crate::backend::remote::wire::protocol::to_postcard(
+            &crate::backend::remote::wire::protocol::ResultsAnswer::PageStarts(starts.clone()),
+        )
+        .unwrap();
+        let back: crate::backend::remote::wire::protocol::ResultsAnswer =
+            crate::backend::remote::wire::protocol::from_postcard(Some(&bytes)).unwrap();
+        assert!(
+            matches!(back, crate::backend::remote::wire::protocol::ResultsAnswer::PageStarts(s) if s == starts)
+        );
         let summary = TrackSummaryFilter::default();
         assert_eq!(
             remote_db.track_summary(&summary).unwrap(),
@@ -748,6 +794,13 @@ mod tests {
     impl ResultsSource for BrokenResults {
         fn get_object_list(&self, _: &ListFilter) -> Result<DatabaseResult, InternalErrors> {
             Err(broken("object list"))
+        }
+        fn object_list_page_starts(
+            &self,
+            _: &ListFilter,
+            _: &str,
+        ) -> Result<Option<Vec<String>>, InternalErrors> {
+            Err(broken("object list page starts"))
         }
         fn get_grouped_by_image(
             &self,
@@ -989,6 +1042,25 @@ mod tests {
                 transpond_table: false,
             }),
             "object list",
+        );
+        failed_with(
+            db.object_list_page_starts(
+                &ListFilter {
+                    plane: plane(),
+                    images: None,
+                    object_classes: None,
+                    columns: vec![Column::AreaSizePx],
+                    with_coloc_details: false,
+                    related_to: None,
+                    page: Pagination {
+                        limit: 10,
+                        after: None,
+                    },
+                    transpond_table: false,
+                },
+                "00000000-0000-0000-0000-000000000001",
+            ),
+            "object list page starts",
         );
         failed_with(
             db.get_grouped_by_image(&GroupedByImageFilter {
@@ -1287,6 +1359,10 @@ mod tests {
             transpond_table: false,
         };
         unexpected(db.get_object_list(&list), "object list");
+        unexpected(
+            db.object_list_page_starts(&list, "00000000-0000-0000-0000-000000000001"),
+            "object list page starts",
+        );
         unexpected(db.get_images(), "images");
         unexpected(db.get_object_classes(), "classes");
         unexpected(db.get_available_columns(), "columns");

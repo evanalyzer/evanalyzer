@@ -2541,6 +2541,29 @@ process keeps less freed memory, so the call's 50 MB of f32 meet fresh
 pages. The object layer after an open is ~1 ms slower for the same reason
 (page faults of its new buffer).
 
+## Split view: an object's row on another List page (2026-11-18)
+
+A click on an object in the split view selects its row also when another
+List page holds it (the List turns to that page), and ↑ ↓ go on across
+page ends. New results query `object_list_page_starts` (protocol 44): the
+page starts before the object, from one `row_number()` over the object ids
+of the List's filter. `bench_list_jump_to_object` (results controller
+tests), 1.7 GB results file (`tests/20260831_Uptake1_Exp0706_PH1.evadb`,
+copy), old and new build alternated, 2 rounds, 22 / 2 threads:
+
+| Step | Old | New |
+|---|---|---|
+| 10 × next page | 276-339 ms | 280-317 ms |
+| 10 × previous page | 286-350 ms | 291-344 ms |
+| Click on an object 12,755 rows down | 1.2-1.4 ms (row not found, nothing shown) | 41-47 ms (CPU 310-370 ms, DuckDB's threads); page 26, its row selected |
+| RSS after the click (above start) | +60-67 MB | +58-64 MB |
+
+Paging is unchanged (the List's filter is now built in one place,
+`list_query`, for its pages and an object's page). The arrow steps of the
+benchmark ran on different rows in the two builds (page 1 vs page 26, other
+images to show), so their times aren't comparable; across a page end an
+arrow step costs one page read (~30 ms).
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers

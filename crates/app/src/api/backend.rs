@@ -171,6 +171,16 @@ pub trait ImageSource: Send + Sync {
 
 pub trait ResultsSource: Send + Sync {
     fn get_object_list(&self, filter: &ListFilter) -> Result<DatabaseResult, InternalErrors>;
+    /// Where object `object_id` lies in the object list `filter` asks for:
+    /// the start (the `object_id` a page comes after) of every page before
+    /// its own - it is on page `len()`, 0 the first. `None`: the list
+    /// doesn't hold it, or its rows aren't objects (transposed).
+    /// `filter.page.after` is ignored, `filter.page.limit` is the page size.
+    fn object_list_page_starts(
+        &self,
+        filter: &ListFilter,
+        object_id: &str,
+    ) -> Result<Option<Vec<String>>, InternalErrors>;
     fn get_grouped_by_image(
         &self,
         filter: &GroupedByImageFilter,
