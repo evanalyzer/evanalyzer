@@ -412,9 +412,11 @@ pub struct ViewportMemorySettings {
     pub breakpoint_tiles: u32,
 
     /// The window is drawn by Slint's own software renderer instead of the
-    /// graphics card: ~135 MB less RAM, and smoother where there is no
-    /// working graphics driver (virtual machines, remote desktop, old
-    /// computers) - slower on very large screens. Read at startup.
+    /// graphics card: ~60 MB less RAM, a much faster start and no graphics
+    /// driver involved (virtual machines, remote desktop, old computers) -
+    /// panning large images costs more CPU. On by default since 2026-11-19
+    /// (a settings file keeps its value); off: FemtoVG on wgpu, Direct3D 12
+    /// on Windows. Read at startup.
     pub software_renderer: bool,
 
     /// RAM the undo history may use - [`Self::undo_history_mb`], or with
@@ -522,7 +524,7 @@ impl Default for ViewportMemorySettings {
             preview_tiles: 4,
             breakpoint_tiles_auto: true,
             breakpoint_tiles: 1,
-            software_renderer: false,
+            software_renderer: true,
             undo_history_auto: true,
             undo_history_mb: Self::DEFAULT_UNDO_HISTORY_MB,
         }

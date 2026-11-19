@@ -639,7 +639,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                     if root.shows(3, root.kw-renderer): InkSettingRow {
                                         control-width: 168px;
                                         label: "Draw in software";
-                                        description: "Without the graphics card: about 135 MB less RAM, and smoother on computers without a working graphics driver (virtual machines, remote desktop, older computers). Slower on very large screens. Takes effect after a restart.";
+                                        description: "Without the graphics card (the default): less RAM, a fast start and no graphics driver involved - works in virtual machines and over remote desktop. Off: drawn by the graphics card, less CPU while panning large images. Takes effect after a restart.";
                                         HorizontalLayout {
                                             alignment: end;
                                             Switch {

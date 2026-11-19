@@ -59,6 +59,9 @@ pub(crate) fn choose() -> Request {
         .map(|settings| settings.viewport.software_renderer)
         .unwrap_or(false);
     if !software {
+        if cfg!(target_os = "windows") {
+            direct3d_only();
+        }
         return Request::Default;
     }
     match slint::BackendSelector::new()
@@ -70,6 +73,25 @@ pub(crate) fn choose() -> Request {
             log::warn!("Could not draw in software, using the default renderer: {e}");
             Request::Default
         }
+    }
+}
+
+/// Windows: wgpu on Direct3D 12 only, never Vulkan. Slint's default also
+/// enumerates Vulkan, which loads the Vulkan loader, every installed driver
+/// and every implicit layer (overlays of Steam, OBS, RivaTuner, ...) - a
+/// broken one crashed the app without a message (2026-11-19, a user's PC:
+/// Vulkan crashed, Direct3D 12 worked). Without Direct3D 12 (before
+/// Windows 10, a missing driver) Slint falls back to the software renderer.
+/// Compiled everywhere, called only on Windows.
+fn direct3d_only() {
+    use slint::wgpu_30::{WGPUConfiguration, WGPUSettings, wgpu};
+    let mut settings = WGPUSettings::default();
+    settings.backends = wgpu::Backends::DX12;
+    if let Err(e) = slint::BackendSelector::new()
+        .require_wgpu_30(WGPUConfiguration::Automatic(settings))
+        .select()
+    {
+        log::warn!("Could not ask for Direct3D 12, using the default renderer: {e}");
     }
 }
 

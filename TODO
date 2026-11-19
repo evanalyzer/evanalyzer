@@ -37,7 +37,7 @@
 - [x] Settings › Viewport: "Preview tiles" and "Breakpoint tiles", each Auto (from the RAM) or a number. Preview: auto = the computer running it (a server caps a number asked for at what its RAM allows); breakpoint: this computer (the images are kept here). Remote protocol 18 → 19.
 
 - [x] Startup and RAM: libtorch is loaded only when an AI step runs (the "AI plugin" below, 2026-10-19). Window on screen 358 → 164 ms warm, 1080 → 488 ms cold; idle RAM 517 → 207 MB (BENCHMARK.md).
-- [x] Older computers without a working graphics driver: Settings › Viewport › "Draw in software" (Slint's own renderer, read at startup; `SLINT_BACKEND` wins) - ~135 MB less RAM, no Mesa software OpenGL. No automatic detection (decided 2026-10-19: keep it simple; Reduce motion stops the start page's cells).
+- [x] Older computers without a working graphics driver: Settings › Viewport › "Draw in software" (Slint's own renderer, read at startup; `SLINT_BACKEND` wins) - ~135 MB less RAM, no Mesa software OpenGL. No automatic detection (decided 2026-10-19: keep it simple; Reduce motion stops the start page's cells). → 2026-11-19: on by default for new installations (existing settings files keep their value); off = FemtoVG-wgpu, on Windows Direct3D 12 only (a Vulkan layer/driver crashed a user's start, Direct3D 12 started in ~800 ms vs 40 ms software).
 - [x] Linux packages: the app needs `libxkbcommon-x11` on X11 (winit panics without it) - list it as a dependency. - done: README's Linux install line lists `libxkbcommon-x11-0` (checked 2026-10-26)
 
 ## Results
