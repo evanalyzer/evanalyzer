@@ -183,20 +183,22 @@ impl RankFilter {
                 let mut local_cache = vec![0u32; cache_width * k_height];
                 let mut window = SlidingMedian::new();
                 for c in 0..C {
-                    let channel_offset = c * width * height;
                     // The kernel's rows around `y` (clamped), padded left and
                     // right with the edge values - as `process_gathered`.
+                    // Channel `c` of the interleaved pixels (`C` values each).
                     for ky in 0..k_height {
                         let yi =
                             (y as i32 + ky as i32 - k_radius).clamp(0, height as i32 - 1) as usize;
                         let row = &mut local_cache[ky * cache_width..(ky + 1) * cache_width];
-                        let src = &src_data[channel_offset + yi * width..][..width];
+                        let src = &src_data[yi * width * C..][..width * C];
                         let level = |v: f32| levels.level(v);
-                        for (to, v) in row[kr..kr + width].iter_mut().zip(src) {
-                            *to = level(*v);
+                        for (to, pixel) in
+                            row[kr..kr + width].iter_mut().zip(src.as_chunks::<C>().0)
+                        {
+                            *to = level(pixel[c]);
                         }
-                        row[..kr].fill(level(src[0]));
-                        row[kr + width..].fill(level(src[width - 1]));
+                        row[..kr].fill(level(src[c]));
+                        row[kr + width..].fill(level(src[(width - 1) * C + c]));
                     }
                     // Kernel row `ky`'s value `dx` from the window's centre `x`.
                     let at = |ky: usize, x: usize, dx: i32| {
@@ -250,10 +252,9 @@ impl RankFilter {
 
         let cache_width = width + (2 * k_radius as usize);
 
-        // Process each channel (Marginal filtering)
+        // Process each channel (Marginal filtering) - channel `c` of the
+        // interleaved pixels (`C` values each), as the output is written.
         for c in 0..C {
-            let channel_offset = c * width * height;
-
             // For parallel loop: (0..img_height).into_par_iter().for_each(|y| {
             for y in 0..height {
                 let mut window = Vec::with_capacity(n_points);
@@ -264,15 +265,15 @@ impl RankFilter {
                 for ky in 0..k_height {
                     let yi = (y as i32 + ky as i32 - k_radius).clamp(0, height as i32 - 1) as usize;
                     let cache_row_start = ky * cache_width;
-                    let src_row_start = channel_offset + (yi * width);
+                    let src_row_start = yi * width * C + c;
 
                     // Copy and Pad
                     for x in 0..width {
                         local_cache[cache_row_start + k_radius as usize + x] =
-                            src_data[src_row_start + x];
+                            src_data[src_row_start + x * C];
                     }
                     let left_val = src_data[src_row_start];
-                    let right_val = src_data[src_row_start + width - 1];
+                    let right_val = src_data[src_row_start + (width - 1) * C];
                     for px in 0..k_radius as usize {
                         local_cache[cache_row_start + px] = left_val;
                         local_cache[cache_row_start + k_radius as usize + width + px] = right_val;
@@ -644,7 +645,7 @@ mod tests {
         // HWC Layout: (y * width + x) * channels + channel
         // Pixel (1,1) is index 4. Red (channel 0) = (4 * 3) + 0 = 12
         let mut data = vec![0.0f32; 3 * 3 * 3];
-        data[4] = 9.0;
+        data[12] = 9.0;
 
         let image = Image::<f32, 3>::new(
             ImageSize {
@@ -685,10 +686,29 @@ mod tests {
         };
         max_filter.execute(&mut ctx, &mut cache)?;
 
-        if let ImageContainer::F32Rgb(out_img) = ctx.image.as_ref() {
-            // Dilation should spread Red (9.0) to neighbors
-            assert_eq!(*out_img.get_pixel(0, 0, 0).unwrap(), 9.0);
-            assert_eq!(*out_img.get_pixel(0, 0, 1).unwrap(), 0.0);
+        let ImageContainer::F32Rgb(out_img) = ctx.image.as_ref() else {
+            panic!("an RGB image");
+        };
+        // Dilation spreads red (9.0) from the centre to every pixel of the
+        // 3 x 3 image; green and blue stay 0.
+        for y in 0..3 {
+            for x in 0..3 {
+                assert_eq!(
+                    *out_img.get_pixel(x, y, 0).unwrap(),
+                    9.0,
+                    "red at ({x}, {y})"
+                );
+                assert_eq!(
+                    *out_img.get_pixel(x, y, 1).unwrap(),
+                    0.0,
+                    "green at ({x}, {y})"
+                );
+                assert_eq!(
+                    *out_img.get_pixel(x, y, 2).unwrap(),
+                    0.0,
+                    "blue at ({x}, {y})"
+                );
+            }
         }
         Ok(())
     }
@@ -818,6 +838,100 @@ mod tests {
             })
             .collect();
         Image::<f32, C>::new(ImageSize { width, height }, data).unwrap()
+    }
+
+    /// Benchmark (not run by default): the rank filters on a 2048² gray and
+    /// RGB image - best and median of 5 runs, ms.
+    /// cargo test --target x86_64-unknown-linux-gnu --release -p
+    /// evanalyzer_core --lib bench_rank_filter_gray_and_rgb -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn bench_rank_filter_gray_and_rgb() {
+        use std::time::Instant;
+        let gray = test_image::<1>(2048, 2048, 7, false);
+        let rgb = test_image::<3>(2048, 2048, 7, false);
+        for (name, filter_type, radius) in [
+            ("median r3 (histogram)", RankFilterType::Median, 3.0),
+            ("max r3", RankFilterType::Max, 3.0),
+            ("mean r3", RankFilterType::Mean, 3.0),
+        ] {
+            let filter = RankFilter {
+                radius,
+                filter_type,
+            };
+            let time = |run: &dyn Fn()| {
+                let mut ms: Vec<f64> = (0..5)
+                    .map(|_| {
+                        let start = Instant::now();
+                        run();
+                        start.elapsed().as_secs_f64() * 1000.0
+                    })
+                    .collect();
+                ms.sort_by(f64::total_cmp);
+                (ms[0], ms[2])
+            };
+            let g = time(&|| {
+                std::hint::black_box(filter.process_image::<1>(&gray).unwrap());
+            });
+            let c = time(&|| {
+                std::hint::black_box(filter.process_image::<3>(&rgb).unwrap());
+            });
+            println!(
+                "{name:<24} gray best {:>8.1} median {:>8.1} | rgb best {:>8.1} median {:>8.1}",
+                g.0, g.1, c.0, c.1
+            );
+        }
+    }
+
+    /// The channel `c` of an interleaved (RGB) image as a gray image.
+    fn channel_of(img: &Image<f32, 3>, c: usize) -> Image<f32, 1> {
+        let data = img
+            .as_slice()
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|p| p[c])
+            .collect();
+        Image::<f32, 1>::new(img.size(), data).unwrap()
+    }
+
+    /// An RGB image is filtered channel by channel: each of red, green and
+    /// blue exactly as filtering that channel alone as a gray image - bit
+    /// for bit, for every filter (the median by the sliding histogram and
+    /// by gathering), on images wider and narrower than the kernel.
+    #[test]
+    fn each_rgb_channel_is_filtered_as_that_channel_alone() {
+        let bits = |img: &[f32]| img.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+        for (k, (width, height)) in [(23, 17), (5, 31), (2, 2)].into_iter().enumerate() {
+            // Gray values (the median's sliding histogram) and fractions
+            // (gathered).
+            for floats in [false, true] {
+                let rgb = test_image::<3>(width, height, 101 + k as u64, floats);
+                for radius in [1.0, 2.5] {
+                    for filter_type in [
+                        RankFilterType::Median,
+                        RankFilterType::Min,
+                        RankFilterType::Max,
+                        RankFilterType::Mean,
+                        RankFilterType::Outliers(400.0),
+                    ] {
+                        let filter = RankFilter {
+                            radius,
+                            filter_type,
+                        };
+                        let out = filter.process_image::<3>(&rgb).unwrap();
+                        for c in 0..3 {
+                            let alone = filter.process_image::<1>(&channel_of(&rgb, c)).unwrap();
+                            assert_eq!(
+                                bits(channel_of(&out, c).as_slice()),
+                                bits(alone.as_slice()),
+                                "{width}x{height} floats {floats} r {radius} {filter_type:?} channel {c}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// The sliding histogram gives what gathering every window gives, bit
