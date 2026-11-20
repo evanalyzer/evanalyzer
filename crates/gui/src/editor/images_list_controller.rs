@@ -591,14 +591,15 @@ impl ImagesListController {
     /// it, and keeps the open image marked.
     pub fn toggle_folder(&self, folder: PathBuf) {
         {
-            // Saved in the project, but no edit: no undo step, no unsaved
-            // change - it goes along with the next save.
+            // Saved in the project, but no edit: no undo step - an unsaved
+            // change, though, so the save button asks for it.
             let mut project = self.app_state.get_project_runtime_write();
             let collapsed = &mut project.images.collapsed_folders;
             if !collapsed.remove(&folder) {
                 collapsed.insert(folder);
             }
         }
+        self.app_state.mark_dirty();
         self.sync_image_list_to_slint();
         let image_path = self.app_state.get_project().get_current_image_path_cloned();
         if let Some(image_path) = image_path {
@@ -869,6 +870,7 @@ impl ImagesListController {
                             .remove(folder)
                 });
         if unfolded {
+            self.app_state.mark_dirty();
             self.sync_image_list_to_slint();
         }
         let ui_weak = self.ui.clone();
@@ -1439,7 +1441,7 @@ mod tests {
     }
 
     #[test]
-    fn folding_is_saved_in_the_project_but_is_no_edit() {
+    fn folding_is_an_unsaved_change_but_no_undo_step() {
         let controller = make_controller();
         let state = controller.app_state.clone();
         let undo_steps = || state.undo_stack.lock().unwrap().len();
@@ -1457,7 +1459,7 @@ mod tests {
                 .contains(std::path::Path::new("Serum"))
         };
         assert!(folded(&state));
-        assert!(!state.is_dirty(), "no unsaved change");
+        assert!(state.is_dirty(), "to be saved: the save button says so");
         assert_eq!(undo_steps(), steps_before, "no undo step");
 
         assert!(state.undo());

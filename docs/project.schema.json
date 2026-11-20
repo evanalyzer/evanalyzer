@@ -1927,7 +1927,7 @@
       "type": "object",
       "properties": {
         "collapsedFolders": {
-          "description": "Folders (relative to `root`) folded in the app's images list. Only\nhow the list shows them - no effect on an analysis; folding is no\nedit (no undo step, no unsaved change) and is saved with the next save.",
+          "description": "Folders (relative to `root`) folded in the app's images list. Only\nhow the list shows them - no effect on an analysis; folding marks the\nproject unsaved but takes no undo step.",
           "type": "array",
           "items": {
             "type": "string"

@@ -40,8 +40,8 @@ pub struct ImageSettings {
     pub skipped_folders: BTreeSet<PathBuf>,
 
     /// Folders (relative to `root`) folded in the app's images list. Only
-    /// how the list shows them - no effect on an analysis; folding is no
-    /// edit (no undo step, no unsaved change) and is saved with the next save.
+    /// how the list shows them - no effect on an analysis; folding marks the
+    /// project unsaved but takes no undo step.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub collapsed_folders: BTreeSet<PathBuf>,
 }
