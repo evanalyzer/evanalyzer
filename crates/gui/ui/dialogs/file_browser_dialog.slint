@@ -9,7 +9,7 @@
 // e.g. the AI learning dialog can open it), driven entirely by
 // `FileBrowserState` from Rust: Rust lists folders on a background thread
 // and pushes rows; this file only renders and reports clicks/keys.
-import { InkBusy, InkButton, InkButtonKind, InkIconButton, InkDialog, InkDialogFooter, InkIcons, InkProgressBar, InkTextField, InkSearchField, InkSelect } from "../ink/ink.slint";
+import { InkBusy, InkButton, InkDivider, InkButtonKind, InkIconButton, InkDialog, InkDialogFooter, InkIcons, InkProgressBar, InkTextField, InkSearchField, InkSelect } from "../ink/ink.slint";
 import { FileBrowserEntry, FileBrowserMode, FileBrowserPlace, FileBrowserState } from "../api/file_browser.slint";
 
 import { ScrollView } from "std-widgets.slint";
@@ -23,7 +23,7 @@ component PlaceRow inherits Rectangle {
 
     height: 32px;
     border-radius: Ink.radius-md;
-    background: root.current ? Ink.row-lift : ta.has-hover ? Ink.hover : transparent;
+    background: root.current ? Ink.row-lift : ta.has-hover ? Ink.row-hover : transparent;
     border-width: root.current ? 1px : 0px;
     border-color: Ink.row-lift-ring;
     animate background { duration: 80ms; }
@@ -76,13 +76,14 @@ component PlaceRow inherits Rectangle {
 component EntryRow inherits Rectangle {
     in property <FileBrowserEntry> entry;
     in property <bool> selected;
-    in property <bool> zebra;
     callback clicked;
     callback double-clicked;
 
-    background: root.selected ? Ink.row-lift
-              : ta.has-hover ? Ink.hover
-              : root.zebra ? Ink.field : transparent;
+    // No alternating rows: an opaque stripe looked like the selection.
+    // The selection is a table's grey fill (`row-select`) plus the ring:
+    // a white lift alone vanished on the near-white dialog without blur.
+    background: root.selected ? Ink.row-select
+              : ta.has-hover ? Ink.row-hover : transparent;
     border-width: root.selected ? 1px : 0px;
     border-color: Ink.row-lift-ring;
     border-radius: Ink.radius-sm;
@@ -144,6 +145,13 @@ export component FileBrowserDialog inherits InkDialog {
     card-width: 980px;
     card-height: 640px;
     content-padding: 0px;
+
+    // The places the open project brings (`PROJECT_PLACE`, `IMAGES_PLACE`,
+    // `TEMPLATES_PLACE` in file_browser.rs).
+    pure function is-project-place(kind: int) -> bool {
+        kind == 4 || kind == 5 || kind == 6
+    }
+
     close => {
         if (FileBrowserState.overwrite-name != "") {
             FileBrowserState.overwrite-answered(false);
@@ -208,11 +216,22 @@ export component FileBrowserDialog inherits InkDialog {
                             color: Ink.text-mute;
                         }
                         Rectangle { height: 6px; }
-                        for place in FileBrowserState.places: PlaceRow {
-                            place: place;
-                            current: FileBrowserState.current-path == place.path;
-                            clicked => { FileBrowserState.navigate(place.path); }
-                            removed => { FileBrowserState.remove-place(place.path); }
+                        for place[i] in FileBrowserState.places: VerticalLayout {
+                            spacing: 2px;
+                            PlaceRow {
+                                place: place;
+                                current: FileBrowserState.current-path == place.path;
+                                clicked => { FileBrowserState.navigate(place.path); }
+                                removed => { FileBrowserState.remove-place(place.path); }
+                            }
+                            // A line after the project's own places (project,
+                            // images, templates) before the computer's.
+                            if root.is-project-place(place.kind)
+                                && i + 1 < FileBrowserState.places.length
+                                && !root.is-project-place(FileBrowserState.places[i + 1].kind): Rectangle {
+                                height: 9px;
+                                InkDivider { width: parent.width - 20px; }
+                            }
                         }
                         // Drives and network places can take seconds (Windows).
                         if FileBrowserState.places-loading: HorizontalLayout {
@@ -403,7 +422,6 @@ export component FileBrowserDialog inherits InkDialog {
                                         height: row.height;
                                         entry: FileBrowserState.entries[row.index];
                                         selected: row.index == FileBrowserState.selected;
-                                        zebra: Math.mod(row.index, 2) == 1;
                                         clicked => {
                                             FileBrowserState.select(row.index);
                                             keys.focus();
