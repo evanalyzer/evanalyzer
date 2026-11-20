@@ -10,7 +10,12 @@
 use indexmap::IndexMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, ops::RangeInclusive, path::PathBuf, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::RangeInclusive,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use crate::settings::object_settings::ObjectMetricSettings;
 use crate::types::image::ZProjection;
@@ -26,6 +31,30 @@ pub struct ImageSettings {
 
     /// Project-wide render and display settings.
     pub settings: GlobalImageSettings,
+
+    /// Folders (relative to `root`) whose images an analysis leaves out:
+    /// the images right in one, not those in its subfolders. They stay in
+    /// `list` - viewable, previewable. Saved with the project so every run
+    /// of it (app, CLI, server) analyses the same images.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub skipped_folders: BTreeSet<PathBuf>,
+
+    /// Folders (relative to `root`) folded in the app's images list. Only
+    /// how the list shows them - no effect on an analysis; folding is no
+    /// edit (no undo step, no unsaved change) and is saved with the next save.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub collapsed_folders: BTreeSet<PathBuf>,
+}
+
+impl ImageSettings {
+    /// Whether an analysis leaves out the image at `rel_path` (relative to
+    /// `root`): it lies right in a skipped folder.
+    pub fn is_skipped(&self, rel_path: &Path) -> bool {
+        !self.skipped_folders.is_empty()
+            && self
+                .skipped_folders
+                .contains(rel_path.parent().unwrap_or(Path::new("")))
+    }
 }
 
 // In memory the map and every entry are shared between copies until one

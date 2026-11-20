@@ -190,7 +190,7 @@ fn entries_for(ui: &AppWindow, query: &str) -> Vec<PaletteEntry> {
         entries.extend(
             images
                 .iter()
-                .filter(|image| matches(&image.path, query))
+                .filter(|image| !image.folder && matches(&image.path, query))
                 .take(MAX_ENTRIES)
                 .map(|image| PaletteEntry {
                     id: format!("image:{}", image.path).into(),

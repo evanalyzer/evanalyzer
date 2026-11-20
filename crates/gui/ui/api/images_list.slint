@@ -28,6 +28,24 @@ export struct ImageItemData {
     // How far it is: new, previewed (this session), analysed (in the
     // analysis open in Results).
     state: WellState,
+    // A folder's head row instead of an image (when the images lie in more
+    // than one folder): `name` its last folder, `folder_parent` the folders
+    // above it below the image folder ("Negative Control › "), `path` its
+    // path relative to the image folder.
+    folder: bool,
+    folder_parent: string,
+    // The folder's images (those matching the search) and how many of them
+    // are analysed.
+    count: int,
+    analysed: int,
+    // Folded: its images are not listed (never while searching).
+    collapsed: bool,
+    // An analysis leaves it out: a skipped folder (head) or an image right
+    // in one. Shown faded, still viewable.
+    skipped: bool,
+    // The row of its folder's head (a head: its own row); -1 without heads.
+    // The list pins that head on top while the folder's images scroll by.
+    head: int,
 }
 
 export global ImagesListState {
@@ -59,7 +77,19 @@ export global ImagesListState {
     // Where the list is scrolled to: the panel is rebuilt when it is shown
     // again (Pipelines and back), and shows the same rows. UI only.
     in-out property <length> list-scroll-y: 0px;
+    // The rows: images, and a head row per folder when there are several.
     in property <[ImageItemData]> images_list: [];
+    // How many images `images_list` stands for (folded folders' too, no
+    // head rows).
+    in property <int> image-count: 0;
+    // A folder's head row clicked: fold or unfold it (by its path).
+    callback folder_toggled(string);
+    // A folder's box: analyse its images or skip them (by its path).
+    callback folder_skip_toggled(string);
+    // All the project's images, and those an analysis runs on (not in a
+    // skipped folder) - the search doesn't change these.
+    in property <int> total-images: 0;
+    in property <int> run-images: 0;
 
     // -- The plate view (not filled by Rust yet) --
     in property <int> plate-rows: 0;

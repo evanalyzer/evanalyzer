@@ -15,7 +15,7 @@ export component RunAnalysisDialog inherits InkDialog {
     anchor-x: 12px;
     anchor-y: 46px;
     title: "Run analysis";
-    subtitle: PipelinesPanelState.enabled-pipeline-count + (PipelinesPanelState.enabled-pipeline-count == 1 ? " pipeline · " : " pipelines · ") + ImagesListState.images_list.length + " images";
+    subtitle: PipelinesPanelState.enabled-pipeline-count + (PipelinesPanelState.enabled-pipeline-count == 1 ? " pipeline · " : " pipelines · ") + (ImagesListState.run-images < ImagesListState.total-images ? ImagesListState.run-images + " of " + ImagesListState.total-images : ImagesListState.total-images) + " images";
     card-width: 360px;
     close => {
         RunAnalysisState.cancel();

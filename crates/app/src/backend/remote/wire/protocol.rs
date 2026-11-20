@@ -69,7 +69,9 @@ use std::sync::Arc;
 /// keep requests between versions working too. Something one side doesn't
 /// know (a new pipeline command, say) fails that one request with a clear
 /// error, not the connection.
-pub const PROTOCOL_VERSION: u32 = 45;
+// 46: `ImageSettings::skipped_folders` - an older server would ignore it
+// and analyse the skipped folders' images too.
+pub const PROTOCOL_VERSION: u32 = 46;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 

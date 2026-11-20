@@ -2898,6 +2898,9 @@ impl PipelinesController {
                 root: project.images.root.clone(),
                 list: evanalyzer_cfg::settings::images_settings::ImageList::from_entries(list),
                 settings,
+                // A preview looks at any image.
+                skipped_folders: Default::default(),
+                collapsed_folders: Default::default(),
             },
             pipelines: project.pipelines.clone(),
             tile_merge: project.tile_merge.clone(),
@@ -7795,6 +7798,8 @@ mod tests {
                 root: Some(PathBuf::from("/root")),
                 list: evanalyzer_cfg::settings::images_settings::ImageList::from_entries(list),
                 settings: Default::default(),
+                skipped_folders: Default::default(),
+                collapsed_folders: Default::default(),
             },
             ..Default::default()
         }

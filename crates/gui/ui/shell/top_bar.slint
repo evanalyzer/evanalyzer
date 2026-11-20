@@ -821,7 +821,13 @@ export component TopBar inherits Rectangle {
                     running: root.running;
                 }
                 if !root.running: InkButton {
-                    text: "Run";
+                    // With folders skipped: how many images it runs on.
+                    text: ImagesListState.run-images < ImagesListState.total-images
+                        ? "Run " + ImagesListState.run-images + " of " + ImagesListState.total-images
+                        : "Run";
+                    tip: ImagesListState.run-images < ImagesListState.total-images
+                        ? "Analyses " + ImagesListState.run-images + " images; " + (ImagesListState.total-images - ImagesListState.run-images) + " in skipped folders stay out"
+                        : "";
                     kind: InkButtonKind.primary;
                     icon: InkIcons.run;
                     clicked => {

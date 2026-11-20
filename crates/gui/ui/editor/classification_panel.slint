@@ -92,7 +92,7 @@ export component ClassificationPanel inherits Rectangle {
             // step after opening an image.
             action-icon: InkIcons.sparkle;
             action-label: root.in-split ? "" : "Add the classes found in the images";
-            action-enabled: ImagesListState.images_list.length > 0;
+            action-enabled: ImagesListState.image-count > 0;
             action-disabled-reason: "Open images first";
             action => {
                 if ClassificationState.classes_list.length > 1 {
@@ -180,7 +180,7 @@ export component ClassificationPanel inherits Rectangle {
                                     text: "Add classes from the image";
                                     icon: InkIcons.sparkle;
                                     kind: InkButtonKind.primary;
-                                    enabled: ImagesListState.images_list.length > 0;
+                                    enabled: ImagesListState.image-count > 0;
                                     disabled-reason: "Open images first";
                                     clicked => {
                                         ClassificationState.class_auto_add_and_merge();
@@ -189,7 +189,7 @@ export component ClassificationPanel inherits Rectangle {
                             }
 
                             Text {
-                                text: ImagesListState.images_list.length > 0 ? "or + to create one yourself" : "Open images first, or + to create one yourself";
+                                text: ImagesListState.image-count > 0 ? "or + to create one yourself" : "Open images first, or + to create one yourself";
                                 font-size: Ink.fs-secondary;
                                 color: Ink.text-mute;
                                 horizontal-alignment: center;
@@ -225,7 +225,7 @@ export component ClassificationPanel inherits Rectangle {
             InkMenuItem {
                 icon: InkIcons.sparkle;
                 text: "Add classes from image";
-                enabled: ImagesListState.images_list.length > 0;
+                enabled: ImagesListState.image-count > 0;
                 clicked => {
                     // Background is always there: ask only when there are others.
                     if ClassificationState.classes_list.length > 1 {
@@ -239,7 +239,7 @@ export component ClassificationPanel inherits Rectangle {
             InkMenuItem {
                 icon: InkIcons.merge;
                 text: "Merge classes from image";
-                enabled: ImagesListState.images_list.length > 0;
+                enabled: ImagesListState.image-count > 0;
                 clicked => {
                     ClassificationState.class_auto_add_and_merge();
                 }

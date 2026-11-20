@@ -10,7 +10,7 @@ import { ImageItemData, ImagesListState, WellState } from "../api/images_list.sl
 import { LayoutState } from "../api/layout.slint";
 import { PlateView, WellColor } from "plate_view.slint";
 import { ListView } from "std-widgets.slint";
-import { Ink, InkIcons, InkSearchField, InkBusy, InkButton, InkButtonKind, InkIconButton, InkHint, InkSegmented, InkCaption, InkDivider, InkTipZone } from "../ink/ink.slint";
+import { Ink, InkIcons, InkCheckbox, InkSearchField, InkBusy, InkButton, InkButtonKind, InkIconButton, InkHint, InkSegmented, InkCaption, InkDivider, InkTipZone } from "../ink/ink.slint";
 
 // How far an image is, as a dot: analysed filled, preview an amber ring,
 // new a faint ring - the legend above the list says so.
@@ -89,6 +89,114 @@ component ImageRow inherits Rectangle {
     }
 }
 
+// A folder's head in the list: caret, the folders above it in grey and
+// its own name, ✓ for analysed images, the image count. A click folds it.
+component FolderRow inherits Rectangle {
+    in property <ImageItemData> data;
+    // Pinned on top of the list while its images scroll by: a shadow, so
+    // it floats over them.
+    in property <bool> pinned;
+    callback clicked;
+    callback skip-toggled;
+
+    accessible-role: button;
+    accessible-label: "Folder " + root.data.folder_parent + root.data.name + ", " + root.data.count + " images";
+    accessible-expandable: true;
+    accessible-expanded: !root.data.collapsed;
+    accessible-action-default => { root.clicked(); }
+
+    // A band (design F2): the tray grey, 2 px off the row's top and bottom
+    // so bands next to each other stand 4 px apart - no lines, visible on
+    // glass too. Muted text on it is `text-dim`.
+    Rectangle {
+        y: 2px;
+        height: parent.height - 4px;
+        border-radius: Ink.radius-sm;
+        background: ta.has-hover ? Ink.tray-hover : Ink.tray;
+        drop-shadow-blur: root.pinned ? 6px : 0px;
+        drop-shadow-offset-y: root.pinned ? 3px : 0px;
+        drop-shadow-color: root.pinned ? #0E0F1229 : transparent;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 10px;
+        spacing: 6px;
+        Image {
+            y: (parent.height - self.height) / 2;
+            source: root.data.collapsed ? InkIcons.caret-right : InkIcons.caret-down;
+            width: 10px;
+            height: 10px;
+            colorize: Ink.text-dim;
+            accessible-role: none;
+        }
+        // Analyse this folder's images (unticked: skipped by Run).
+        VerticalLayout {
+            alignment: center;
+            InkCheckbox {
+                checked: !root.data.skipped;
+                accessible-label: "Analyse folder " + root.data.name;
+                toggled => {
+                    root.skip-toggled();
+                }
+            }
+        }
+        // Skipped: only the name greys - box and count stay readable.
+        HorizontalLayout {
+            horizontal-stretch: 1;
+            spacing: 0px;
+            if root.data.folder_parent != "": Text {
+                // Cut first: the folder's own name stays whole.
+                horizontal-stretch: 1;
+                max-width: self.preferred-width;
+                text: root.data.folder_parent;
+                font-size: Ink.fs-body;
+                color: Ink.text-dim;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Text {
+                horizontal-stretch: 0;
+                text: root.data.name;
+                font-size: Ink.fs-body;
+                font-weight: 600;
+                color: root.data.skipped ? Ink.text-dim : Ink.text;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Rectangle { horizontal-stretch: 0.0001; }
+        }
+        if root.data.skipped: Text {
+            text: "skipped";
+            font-size: Ink.fs-caption;
+            color: Ink.text-dim;
+            vertical-alignment: center;
+        }
+        if root.data.analysed > 0: Text {
+            text: root.data.analysed == root.data.count ? "✓ all" : "✓ " + root.data.analysed;
+            font-size: Ink.fs-caption;
+            color: Ink.ok;
+            vertical-alignment: center;
+        }
+        Text {
+            min-width: 24px;
+            text: root.data.count;
+            font-size: Ink.fs-caption;
+            font-family: Ink.font-mono;
+            color: Ink.text-dim;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+        }
+    }
+}
+
 export component ImagesListPanel inherits Rectangle {
     property <length> row-h: 30px;
     property <bool> plate: LayoutState.images-as-plate;
@@ -119,7 +227,7 @@ export component ImagesListPanel inherits Rectangle {
             }
             Text {
                 horizontal-stretch: 1;
-                text: ImagesListState.images_list.length;
+                text: ImagesListState.image-count;
                 font-size: Ink.fs-caption;
                 font-family: Ink.font-mono;
                 color: Ink.text-mute;
@@ -344,15 +452,56 @@ export component ImagesListPanel inherits Rectangle {
                 changed content-y => {
                     ImagesListState.list-scroll-y = self.content-y;
                 }
-                for data[index] in ImagesListState.images_list: ImageRow {
+                for data[index] in ImagesListState.images_list: Rectangle {
                     height: root.row-h;
-                    data: data;
-                    selected: ImagesListState.selected_image_index == index;
-                    clicked => {
-                        list-box.clicked-index = index;
-                        ImagesListState.selected_image_index = index;
-                        ImagesListState.image_selected(data.path);
+                    if data.folder: FolderRow {
+                        data: data;
+                        clicked => {
+                            ImagesListState.folder_toggled(data.path);
+                        }
+                        skip-toggled => {
+                            ImagesListState.folder_skip_toggled(data.path);
+                        }
                     }
+                    if !data.folder: ImageRow {
+                        // Indented under its folder's head.
+                        x: ImagesListState.images_list[0].folder ? 16px : 0px;
+                        width: parent.width - self.x;
+                        opacity: data.skipped ? 0.5 : 1.0;
+                        data: data;
+                        selected: ImagesListState.selected_image_index == index;
+                        clicked => {
+                            list-box.clicked-index = index;
+                            ImagesListState.selected_image_index = index;
+                            ImagesListState.image_selected(data.path);
+                        }
+                    }
+                }
+            }
+
+            // The folder of the top row stays pinned on top while its images
+            // scroll by; the next folder's head pushes it out (design P1).
+            property <int> top-row: clamp(floor(-list.content-y / root.row-h), 0, max(0, ImagesListState.images_list.length - 1));
+            property <int> head-of-top: ImagesListState.images_list.length > 0 ? ImagesListState.images_list[list-box.top-row].head : -1;
+            property <int> pinned-head: list-box.head-of-top >= 0 && list-box.head-of-top < ImagesListState.images_list.length && ImagesListState.images_list[list-box.head-of-top].folder ? list-box.head-of-top : -1;
+            if list-box.pinned-head >= 0 && -list.content-y > list-box.pinned-head * root.row-h: FolderRow {
+                x: list.x;
+                // Pushed up by the next head as it reaches the top.
+                y: list-box.top-row + 1 < ImagesListState.images_list.length && ImagesListState.images_list[list-box.top-row + 1].folder
+                    ? min(0px, (list-box.top-row + 1) * root.row-h + list.content-y - root.row-h)
+                    : 0px;
+                width: list.visible-width;
+                height: root.row-h;
+                data: ImagesListState.images_list[list-box.pinned-head];
+                pinned: true;
+                clicked => {
+                    // Its head to the top first: folded, the folder stays in
+                    // view instead of the next one taking its place.
+                    list.content-y = -(list-box.pinned-head * root.row-h);
+                    ImagesListState.folder_toggled(self.data.path);
+                }
+                skip-toggled => {
+                    ImagesListState.folder_skip_toggled(self.data.path);
                 }
             }
 

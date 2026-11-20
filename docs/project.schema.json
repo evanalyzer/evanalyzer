@@ -1926,6 +1926,14 @@
     "ImageSettings": {
       "type": "object",
       "properties": {
+        "collapsedFolders": {
+          "description": "Folders (relative to `root`) folded in the app's images list. Only\nhow the list shows them - no effect on an analysis; folding is no\nedit (no undo step, no unsaved change) and is saved with the next save.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
         "list": {
           "description": "Map of images where the key is the path relative to `root`.",
           "type": "object",
@@ -1943,6 +1951,14 @@
         "settings": {
           "description": "Project-wide render and display settings.",
           "$ref": "#/$defs/GlobalImageSettings"
+        },
+        "skippedFolders": {
+          "description": "Folders (relative to `root`) whose images an analysis leaves out:\nthe images right in one, not those in its subfolders. They stay in\n`list` - viewable, previewable. Saved with the project so every run\nof it (app, CLI, server) analyses the same images.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
         }
       },
       "required": [

@@ -185,11 +185,13 @@ impl ImagesListController {
                 // mirroring how `sync_image_meta_to_slint` and the pixel
                 // read path already re-read the current path fresh rather
                 // than trusting a value captured at spawn time.
-                if let Some(current_path) = manager
+                // Bound first: no project guard held while the list may
+                // unfold the image's folder (a write).
+                let current_path = manager
                     .app_state
                     .get_project()
-                    .get_current_image_path_cloned()
-                {
+                    .get_current_image_path_cloned();
+                if let Some(current_path) = current_path {
                     manager.set_selected_image_index_in_slint_images_list(current_path, true);
                 }
             });
@@ -502,6 +504,20 @@ impl ImagesListController {
                     }
                 });
 
+            // A folder's head clicked: fold / unfold it
+            let manager = Arc::clone(self);
+            ui.global::<ImagesListState>()
+                .on_folder_toggled(move |folder| {
+                    manager.toggle_folder(PathBuf::from(folder.as_str()));
+                });
+
+            // A folder's box: analyse / skip its images
+            let manager = Arc::clone(self);
+            ui.global::<ImagesListState>()
+                .on_folder_skip_toggled(move |folder| {
+                    manager.toggle_folder_skipped(PathBuf::from(folder.as_str()));
+                });
+
             // The image chip's quick picker searched
             let manager = Arc::clone(self);
             ui.global::<ImagesListState>()
@@ -571,6 +587,45 @@ impl ImagesListController {
         }
     }
 
+    /// Folds the list's `folder` (relative to the image folder) or unfolds
+    /// it, and keeps the open image marked.
+    pub fn toggle_folder(&self, folder: PathBuf) {
+        {
+            // Saved in the project, but no edit: no undo step, no unsaved
+            // change - it goes along with the next save.
+            let mut project = self.app_state.get_project_runtime_write();
+            let collapsed = &mut project.images.collapsed_folders;
+            if !collapsed.remove(&folder) {
+                collapsed.insert(folder);
+            }
+        }
+        self.sync_image_list_to_slint();
+        let image_path = self.app_state.get_project().get_current_image_path_cloned();
+        if let Some(image_path) = image_path {
+            self.set_selected_image_index_in_slint_images_list(image_path, false);
+        }
+    }
+
+    /// Skips the images right in `folder` (relative to the image folder)
+    /// in an analysis, or analyses them again - saved in the project, one
+    /// undo step.
+    pub fn toggle_folder_skipped(&self, folder: PathBuf) {
+        self.app_state.begin_undo_step();
+        {
+            let mut project = self.app_state.get_project_write();
+            let skipped = &mut project.images.skipped_folders;
+            if !skipped.remove(&folder) {
+                skipped.insert(folder);
+            }
+        }
+        self.app_state.mark_dirty();
+        self.sync_image_list_to_slint();
+        let image_path = self.app_state.get_project().get_current_image_path_cloned();
+        if let Some(image_path) = image_path {
+            self.set_selected_image_index_in_slint_images_list(image_path, false);
+        }
+    }
+
     pub fn update_image_filter_text_in_project(&self, new_text: &str) {
         *self
             .image_controller_state
@@ -607,12 +662,24 @@ impl ImagesListController {
         let image_states = state.image_states();
         let project = state.get_project();
         let images_guard = &project.images.list;
-        let slint_items = build_image_list_items(
+        let (slint_items, image_count) = build_image_list_items(
             images_guard,
             &filter_text,
             &image_states,
             &project.images.root.clone().unwrap_or_default(),
+            &project.images.collapsed_folders,
+            &project.images.skipped_folders,
         );
+        let total_images = images_guard.0.len();
+        let run_images = if project.images.skipped_folders.is_empty() {
+            total_images
+        } else {
+            images_guard
+                .0
+                .keys()
+                .filter(|path| !project.images.is_skipped(path))
+                .count()
+        };
         let plate = build_plate(
             images_guard,
             &project.plate,
@@ -634,6 +701,9 @@ impl ImagesListController {
                     let model = slint::ModelRc::new(slint::VecModel::from(slint_items));
                     let images_state = ui_ready.global::<ImagesListState>();
                     images_state.set_images_list(model);
+                    images_state.set_image_count(image_count as i32);
+                    images_state.set_total_images(total_images as i32);
+                    images_state.set_run_images(run_images as i32);
                     images_state.set_plate_rows(plate_rows);
                     images_state.set_plate_cols(plate_cols);
                     images_state.set_plate_wells(slint::ModelRc::new(slint::VecModel::from(plate_wells)));
@@ -707,6 +777,9 @@ impl ImagesListController {
                 for model in [state.get_images_list(), state.get_well_images()] {
                     for row in 0..model.row_count() {
                         if let Some(mut item) = model.row_data(row) {
+                            if item.folder {
+                                continue;
+                            }
                             let new = row_states
                                 .get(&item.path)
                                 .copied()
@@ -715,6 +788,20 @@ impl ImagesListController {
                                 item.state = new;
                                 model.set_row_data(row, item);
                             }
+                        }
+                    }
+                }
+                // The folders' ✓ counts (folded folders' images aren't
+                // rows: counted from the states by path).
+                let list = state.get_images_list();
+                for row in 0..list.row_count() {
+                    if let Some(mut item) = list.row_data(row)
+                        && item.folder
+                    {
+                        let analysed = analysed_in_folder(&row_states, &item.path);
+                        if item.analysed != analysed {
+                            item.analysed = analysed;
+                            list.set_row_data(row, item);
                         }
                     }
                 }
@@ -755,8 +842,36 @@ impl ImagesListController {
         selected_absolute_path: PathBuf,
         scroll_to: bool,
     ) {
-        let ui_weak = self.ui.clone();
         let root = self.app_state.get_project().images.root.clone();
+        // Chosen elsewhere (results, the image chip) in a folded folder:
+        // the folder opens, so its row can be shown.
+        // (Its own statement: the write guard must be gone before the sync
+        // reads the project.)
+        let unfolded = scroll_to
+            && root
+                .as_deref()
+                .and_then(|root| selected_absolute_path.strip_prefix(root).ok())
+                .and_then(|rel| rel.parent())
+                .is_some_and(|folder| {
+                    // Written only when folded - the common case reads.
+                    let folded = self
+                        .app_state
+                        .get_project()
+                        .images
+                        .collapsed_folders
+                        .contains(folder);
+                    folded
+                        && self
+                            .app_state
+                            .get_project_runtime_write()
+                            .images
+                            .collapsed_folders
+                            .remove(folder)
+                });
+        if unfolded {
+            self.sync_image_list_to_slint();
+        }
+        let ui_weak = self.ui.clone();
 
         // The final assignment goes into the event loop
         crate::helper::ui_thread::invoke_from_event_loop(move || {
@@ -801,18 +916,23 @@ fn row_of_image(
 
 /// Builds the Slint-facing row list for `sync_image_list_to_slint`: applies
 /// the (already-lowercased) filter text against `rel_path`, then maps each
-/// surviving entry to an `ImageItemData`. Pulled out as a pure function so
-/// it can be tested directly - unlike the rest of `sync_image_list_to_slint`,
-/// this doesn't touch Slint's event loop, which the headless
-/// `init_no_event_loop()` testing platform (see `test_ui_window`) never
-/// actually drains.
+/// surviving entry to an `ImageItemData`. When the images lie in more than
+/// one folder, each folder's images follow a head row (the folders in the
+/// order they first appear); a folded folder (`collapsed`, ignored while
+/// searching) keeps only its head. Also returns how many images the rows
+/// stand for. Pure, so it can be tested directly - unlike the rest of
+/// `sync_image_list_to_slint`, this doesn't touch Slint's event loop, which
+/// the headless `init_no_event_loop()` testing platform (see
+/// `test_ui_window`) never actually drains.
 fn build_image_list_items(
     images: &evanalyzer_cfg::settings::images_settings::ImageList,
     filter_text_lowercase: &str,
     states: &ImageStates,
     image_root: &std::path::Path,
-) -> Vec<ImageItemData> {
-    images
+    collapsed: &std::collections::BTreeSet<PathBuf>,
+    skipped: &std::collections::BTreeSet<PathBuf>,
+) -> (Vec<ImageItemData>, usize) {
+    let matching: Vec<_> = images
         .values()
         .filter(|entry| {
             if filter_text_lowercase.is_empty() {
@@ -824,8 +944,117 @@ fn build_image_list_items(
                 .to_lowercase()
                 .contains(filter_text_lowercase)
         })
-        .map(|entry| image_list_item(entry, states, image_root))
-        .collect()
+        .collect();
+    let count = matching.len();
+    let folder_of = |entry: &evanalyzer_cfg::settings::images_settings::ImageEntry| {
+        entry
+            .rel_path
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_default()
+    };
+    // One folder (the common case): the plain list, nothing grouped.
+    let first_folder = matching.first().map(|entry| folder_of(entry));
+    if matching
+        .iter()
+        .all(|entry| Some(folder_of(entry)) == first_folder)
+    {
+        let folder_skipped = first_folder.is_some_and(|folder| skipped.contains(&folder));
+        let rows = matching
+            .into_iter()
+            .map(|entry| ImageItemData {
+                skipped: folder_skipped,
+                head: -1,
+                ..image_list_item(entry, states, image_root)
+            })
+            .collect();
+        return (rows, count);
+    }
+    let mut folders: indexmap::IndexMap<PathBuf, Vec<_>> = indexmap::IndexMap::new();
+    for entry in matching {
+        folders.entry(folder_of(entry)).or_default().push(entry);
+    }
+    let searching = !filter_text_lowercase.is_empty();
+    let mut rows = Vec::with_capacity(count + folders.len());
+    for (folder, entries) in folders {
+        let folded = !searching && collapsed.contains(&folder);
+        let analysed = entries
+            .iter()
+            .filter(|entry| states.analysed.contains(&entry.rel_path))
+            .count();
+        let folder_skipped = skipped.contains(&folder);
+        let head = rows.len() as i32;
+        rows.push(ImageItemData {
+            skipped: folder_skipped,
+            head,
+            ..folder_head_item(&folder, entries.len(), analysed, folded, image_root)
+        });
+        if !folded {
+            rows.extend(entries.into_iter().map(|entry| ImageItemData {
+                skipped: folder_skipped,
+                head,
+                ..image_list_item(entry, states, image_root)
+            }));
+        }
+    }
+    (rows, count)
+}
+
+/// A folder's head row: its last name, the folders above it joined by
+/// " › " (images right in the image folder: the image folder's name).
+fn folder_head_item(
+    folder: &std::path::Path,
+    count: usize,
+    analysed: usize,
+    collapsed: bool,
+    image_root: &std::path::Path,
+) -> ImageItemData {
+    let names: Vec<String> = folder
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    let (parent, name) = match names.split_last() {
+        Some((last, above)) => (
+            above
+                .iter()
+                .map(|name| format!("{name} › "))
+                .collect::<String>(),
+            last.clone(),
+        ),
+        None => (
+            String::new(),
+            image_root
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "Image folder".to_string()),
+        ),
+    };
+    ImageItemData {
+        name: name.into(),
+        path: folder.to_string_lossy().to_string().into(),
+        folder: true,
+        folder_parent: parent.into(),
+        count: count as i32,
+        analysed: analysed as i32,
+        collapsed,
+        ..Default::default()
+    }
+}
+
+/// How many of the images right in `folder` (a head row's path) are
+/// analysed, from the non-new states by image path.
+fn analysed_in_folder(
+    states: &std::collections::HashMap<slint::SharedString, WellState>,
+    folder: &str,
+) -> i32 {
+    let folder = std::path::Path::new(folder);
+    states
+        .iter()
+        .filter(|(path, state)| {
+            **state == WellState::Analysed
+                && std::path::Path::new(path.as_str()).parent() == Some(folder)
+        })
+        .count() as i32
 }
 
 fn image_list_item(
@@ -848,6 +1077,8 @@ fn image_list_item(
             .values()
             .any(|series| !series.objects.is_empty()),
         state: image_state(&entry.rel_path, states, image_root),
+        head: -1,
+        ..Default::default()
     }
 }
 
@@ -991,7 +1222,10 @@ fn build_plate(
         .map(|entry| entry.rel_path.as_path())
         .collect();
     let layout = evanalyzer_app::images::plate_layout(&paths, plate);
-    let items = build_image_list_items(images, "", states, image_root);
+    let items: Vec<ImageItemData> = images
+        .values()
+        .map(|entry| image_list_item(entry, states, image_root))
+        .collect();
     let wells = layout
         .wells
         .iter()
@@ -1202,6 +1436,36 @@ mod tests {
                 ),
             ),
         )
+    }
+
+    #[test]
+    fn folding_is_saved_in_the_project_but_is_no_edit() {
+        let controller = make_controller();
+        let state = controller.app_state.clone();
+        let undo_steps = || state.undo_stack.lock().unwrap().len();
+        // An edit first: undoing it must not unfold anything.
+        state.get_project_write().meta.name = "edited".into();
+        let steps_before = undo_steps();
+
+        controller.toggle_folder(PathBuf::from("Serum"));
+
+        let folded = |state: &UiState| {
+            state
+                .get_project()
+                .images
+                .collapsed_folders
+                .contains(std::path::Path::new("Serum"))
+        };
+        assert!(folded(&state));
+        assert!(!state.is_dirty(), "no unsaved change");
+        assert_eq!(undo_steps(), steps_before, "no undo step");
+
+        assert!(state.undo());
+        assert_eq!(state.get_project().meta.name, "", "the edit undone");
+        assert!(folded(&state), "the folding stays");
+
+        controller.toggle_folder(PathBuf::from("Serum"));
+        assert!(!folded(&state), "unfolded again");
     }
 
     #[test]
@@ -1433,6 +1697,181 @@ mod tests {
         assert_eq!(total(), 2, "counts follow the image shown");
     }
 
+    fn image_list_of(paths: &[&str]) -> evanalyzer_cfg::settings::images_settings::ImageList {
+        let mut images = evanalyzer_cfg::settings::images_settings::ImageList::default();
+        for path in paths {
+            images.insert(
+                PathBuf::from(path),
+                ImageEntry {
+                    rel_path: PathBuf::from(path),
+                    ..Default::default()
+                },
+            );
+        }
+        images
+    }
+
+    /// (head or image, name, count) of each row - heads marked "▸".
+    fn row_names(rows: &[ImageItemData]) -> Vec<String> {
+        rows.iter()
+            .map(|row| {
+                if row.folder {
+                    format!("▸ {}{} ({})", row.folder_parent, row.name, row.count)
+                } else {
+                    row.name.to_string()
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn images_in_one_folder_are_listed_without_heads() {
+        let images = image_list_of(&["day1/a.tif", "day1/b.tif"]);
+        let (rows, count) = build_image_list_items(
+            &images,
+            "",
+            &ImageStates::default(),
+            std::path::Path::new("/data/study"),
+            &Default::default(),
+            &Default::default(),
+        );
+        assert_eq!(row_names(&rows), ["a.tif", "b.tif"]);
+        assert!(rows.iter().all(|row| row.head == -1), "nothing to pin");
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn each_folder_gets_a_head_with_its_path_count_and_analysed_images() {
+        let images = image_list_of(&[
+            "top.tif",
+            "Control/B5/a.tif",
+            "Serum/C14/c.tif",
+            "Control/B5/b.tif",
+        ]);
+        let states = ImageStates {
+            analysed: [PathBuf::from("Control/B5/a.tif")].into_iter().collect(),
+            ..Default::default()
+        };
+        let (rows, count) = build_image_list_items(
+            &images,
+            "",
+            &states,
+            std::path::Path::new("/data/study"),
+            &Default::default(),
+            &Default::default(),
+        );
+        assert_eq!(
+            row_names(&rows),
+            [
+                "▸ study (1)",
+                "top.tif",
+                "▸ Control › B5 (2)",
+                "a.tif",
+                "b.tif",
+                "▸ Serum › C14 (1)",
+                "c.tif",
+            ],
+            "folders in the order they first appear, their images together"
+        );
+        assert_eq!(count, 4, "heads aren't images");
+        let heads: Vec<i32> = rows.iter().map(|row| row.head).collect();
+        assert_eq!(
+            heads,
+            [0, 0, 2, 2, 2, 5, 5],
+            "each row knows its folder's head"
+        );
+        assert_eq!(
+            rows[2].path,
+            std::path::Path::new("Control/B5")
+                .to_string_lossy()
+                .as_ref()
+        );
+        assert_eq!(rows[2].analysed, 1);
+        assert_eq!(rows[5].analysed, 0);
+    }
+
+    #[test]
+    fn a_folded_folder_keeps_its_head_but_a_search_shows_its_matches() {
+        let images = image_list_of(&["A/a1.tif", "A/a2.tif", "B/b1.tif"]);
+        let collapsed = [PathBuf::from("A")].into_iter().collect();
+        let (rows, count) = build_image_list_items(
+            &images,
+            "",
+            &ImageStates::default(),
+            std::path::Path::new("/data"),
+            &collapsed,
+            &Default::default(),
+        );
+        assert_eq!(row_names(&rows), ["▸ A (2)", "▸ B (1)", "b1.tif"]);
+        assert!(rows[0].collapsed && !rows[1].collapsed);
+        assert_eq!(count, 3, "a folded folder's images still count");
+
+        let (rows, count) = build_image_list_items(
+            &images,
+            "a2",
+            &ImageStates::default(),
+            std::path::Path::new("/data"),
+            &collapsed,
+            &Default::default(),
+        );
+        assert_eq!(row_names(&rows), ["a2.tif"], "one folder left: no head");
+        assert_eq!(count, 1);
+        let (rows, _) = build_image_list_items(
+            &images,
+            "1.tif",
+            &ImageStates::default(),
+            std::path::Path::new("/data"),
+            &collapsed,
+            &Default::default(),
+        );
+        assert_eq!(row_names(&rows), ["▸ A (1)", "a1.tif", "▸ B (1)", "b1.tif"]);
+    }
+
+    #[test]
+    fn a_skipped_folders_head_and_images_are_marked_skipped() {
+        let images = image_list_of(&["A/a.tif", "A/sub/s.tif", "B/b.tif"]);
+        let skipped = [PathBuf::from("A")].into_iter().collect();
+        let (rows, _) = build_image_list_items(
+            &images,
+            "",
+            &ImageStates::default(),
+            std::path::Path::new("/data"),
+            &Default::default(),
+            &skipped,
+        );
+        let marks: Vec<(String, bool)> = row_names(&rows)
+            .into_iter()
+            .zip(rows.iter().map(|row| row.skipped))
+            .collect();
+        assert_eq!(
+            marks,
+            [
+                ("▸ A (1)".to_string(), true),
+                ("a.tif".to_string(), true),
+                ("▸ A › sub (1)".to_string(), false),
+                ("s.tif".to_string(), false),
+                ("▸ B (1)".to_string(), false),
+                ("b.tif".to_string(), false),
+            ],
+            "not its subfolders"
+        );
+    }
+
+    #[test]
+    fn a_folders_analysed_count_comes_from_the_states_of_its_own_images() {
+        let states: std::collections::HashMap<slint::SharedString, WellState> = [
+            ("A/a.tif", WellState::Analysed),
+            ("A/b.tif", WellState::Preview),
+            ("A/sub/c.tif", WellState::Analysed),
+            ("B/d.tif", WellState::Analysed),
+        ]
+        .into_iter()
+        .map(|(path, state)| (path.into(), state))
+        .collect();
+        assert_eq!(analysed_in_folder(&states, "A"), 1);
+        assert_eq!(analysed_in_folder(&states, "A/sub"), 1);
+    }
+
     #[test]
     fn a_row_says_its_size_channels_and_state() {
         let mut series = BTreeMap::new();
@@ -1466,7 +1905,14 @@ mod tests {
             previewed: [PathBuf::from("/root/a.tif")].into_iter().collect(),
             analysed: [PathBuf::from("b.tif")].into_iter().collect(),
         };
-        let rows = build_image_list_items(&images, "", &states, std::path::Path::new("/root"));
+        let (rows, _) = build_image_list_items(
+            &images,
+            "",
+            &states,
+            std::path::Path::new("/root"),
+            &Default::default(),
+            &Default::default(),
+        );
         assert_eq!(rows[0].image_dimension, "2048 × 1024 · 2 ch");
         assert_eq!(rows[0].state, WellState::Preview);
         assert_eq!(rows[1].image_dimension, "", "not read yet");
@@ -1583,11 +2029,13 @@ mod tests {
             );
         }
 
-        let images_list = build_image_list_items(
+        let (images_list, _) = build_image_list_items(
             &controller.app_state.get_project().images.list,
             "",
             &Default::default(),
             std::path::Path::new(""),
+            &Default::default(),
+            &Default::default(),
         );
 
         let mut has_annotations_by_path = std::collections::HashMap::new();

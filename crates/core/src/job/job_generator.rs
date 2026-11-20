@@ -73,10 +73,12 @@ pub fn generate_preview_job_from_project_settings(
 /// step or a whole module works without it. The job's own `breakpoint`
 /// stays for the caller to set.
 pub fn generate_preview_job_with_breakpoint(
-    config: ProjectSettings,
+    mut config: ProjectSettings,
     project_path: PathBuf,
     breakpoint: Option<&BreakpointSettings>,
 ) -> Result<(JobExecutor, PreviewOutput), InternalErrors> {
+    // A skipped folder's images stay out of an analysis, not a preview.
+    config.images.skipped_folders.clear();
     check_series(&config)?;
     check_pipeline_channels(&config)?;
     let output = PreviewOutput::default();
@@ -609,11 +611,17 @@ fn generate_job_from_project_settings_intenal(
         .map(|c| (c.global(), c.color))
         .collect();
 
+    // The images of skipped folders stay out of the run.
+    let skipped = config.images.skipped_folders.clone();
+    let is_skipped = |path: &Path| {
+        !skipped.is_empty() && skipped.contains(path.parent().unwrap_or(Path::new("")))
+    };
     let mut job = JobExecutor::new(
         project_path,
         output_path,
         std::sync::Arc::unwrap_or_clone(config.images.list.0)
             .into_iter()
+            .filter(|(path, _)| !is_skipped(path))
             .map(|(path, entry)| (path, std::sync::Arc::unwrap_or_clone(entry)))
             .collect(),
         image_base_path,
@@ -1989,6 +1997,47 @@ mod tests {
             err.contains("Pipeline") && err.contains("step 4") && err.contains("MISSING"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn an_analysis_leaves_out_the_images_right_in_a_skipped_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut project = project_with(Some(dir.path().to_path_buf()), vec![]);
+        for path in ["top.tif", "A/a.tif", "A/sub/s.tif", "B/b.tif"] {
+            let image = evanalyzer_cfg::settings::images_settings::ImageEntry {
+                rel_path: PathBuf::from(path),
+                ..Default::default()
+            };
+            std::sync::Arc::make_mut(&mut project.images.list.0)
+                .insert(image.rel_path.clone(), std::sync::Arc::new(image));
+        }
+        project.images.skipped_folders = [PathBuf::from("A")].into_iter().collect();
+        assert!(project.images.is_skipped(Path::new("A/a.tif")));
+        assert!(!project.images.is_skipped(Path::new("A/sub/s.tif")));
+
+        let job = generate_job_from_project_settings_intenal(
+            project.clone(),
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Arc::new(MemoryExporter::default()),
+            None,
+        )
+        .unwrap();
+        let analysed: Vec<_> = job
+            .images
+            .keys()
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .collect();
+        assert_eq!(
+            analysed,
+            ["top.tif", "A/sub/s.tif", "B/b.tif"],
+            "not its subfolders"
+        );
+
+        // A preview may look at any image.
+        let (preview, _) =
+            generate_preview_job_from_project_settings(project, dir.path().to_path_buf()).unwrap();
+        assert_eq!(preview.images.len(), 4);
     }
 
     #[test]

@@ -1596,6 +1596,24 @@ impl ProjectExt for ProjectWithRuntime {
         for (path, meta) in found_images {
             self.add_image(&mut &path, &meta);
         }
+        // Folded folders that hold no image any more are forgotten.
+        if !self.images.collapsed_folders.is_empty() {
+            let folders: std::collections::HashSet<&Path> = self
+                .images
+                .list
+                .0
+                .keys()
+                .map(|path| path.parent().unwrap_or(Path::new("")))
+                .collect();
+            let kept: std::collections::BTreeSet<PathBuf> = self
+                .images
+                .collapsed_folders
+                .iter()
+                .filter(|folder| folders.contains(folder.as_path()))
+                .cloned()
+                .collect();
+            self.images.collapsed_folders = kept;
+        }
         let duration = start.elapsed();
         info!("Added images {:?}", duration);
     }
@@ -4125,6 +4143,26 @@ mod tests {
             keys,
             vec![PathBuf::from("img2.tif"), PathBuf::from("img10.tif")],
             "natural sort orders img2 before img10"
+        );
+    }
+
+    #[test]
+    fn a_rescan_forgets_folded_folders_without_images() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut project = project_with_one_image();
+        project.images.root = Some(dir.path().to_path_buf());
+        project.images.collapsed_folders = [PathBuf::from("A"), PathBuf::from("Gone")]
+            .into_iter()
+            .collect();
+        let meta = sample_image_meta("Ch0", 400.0);
+        project.apply_scanned_images(vec![
+            (dir.path().join("A").join("a.tif"), meta.clone()),
+            (dir.path().join("B").join("b.tif"), meta),
+        ]);
+        assert_eq!(
+            project.images.collapsed_folders,
+            [PathBuf::from("A")].into_iter().collect(),
+            "A still holds an image, Gone none"
         );
     }
 
