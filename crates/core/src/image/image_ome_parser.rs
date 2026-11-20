@@ -8,7 +8,8 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::image::image_meta::{
-    ChannelInfo, ImageInfo, ImageMeta, Objective, PixelSizes, PyramidInfo,
+    ChannelInfo, DeviceInfo, EnvironmentInfo, ExperimenterInfo, FilterInfo, ImageInfo, ImageMeta,
+    LightSourceInfo, Objective, PixelSizes, PyramidInfo,
 };
 use crate::image::image_reader::ReadMode;
 use evanalyzer_cfg::core_types::InternalErrors;
@@ -80,6 +81,37 @@ fn frame_interval(
 /// Builds this app's [`ImageMeta`] from an opened scopeio reader: a
 /// field-by-field mapping of each series' [`SeriesMeta`] (scopeio already
 /// reports lengths and wavelengths in nanometres, like this app).
+/// A text of the file, trimmed; "" when it has none.
+fn text(value: &Option<String>) -> String {
+    value.as_deref().unwrap_or("").trim().to_string()
+}
+
+fn device(
+    manufacturer: &Option<String>,
+    model: &Option<String>,
+    serial_number: &Option<String>,
+    kind: &Option<String>,
+) -> DeviceInfo {
+    DeviceInfo {
+        manufacturer: text(manufacturer),
+        model: text(model),
+        serial_number: text(serial_number),
+        kind: text(kind),
+    }
+}
+
+fn filter(f: &scopeio::FilterMeta) -> FilterInfo {
+    FilterInfo {
+        manufacturer: text(&f.manufacturer),
+        model: text(&f.model),
+        kind: text(&f.kind),
+        filter_wheel: text(&f.filter_wheel),
+        cut_in_nm: f.cut_in_nm.map(|v| v as f32),
+        cut_out_nm: f.cut_out_nm.map(|v| v as f32),
+        transmittance: f.transmittance.map(|v| v as f32),
+    }
+}
+
 pub(crate) fn build_image_meta(
     reader: &dyn scopeio::ImageReader,
     path: &Path,
@@ -154,9 +186,64 @@ pub(crate) fn build_image_meta(
                     detector_offset: source.and_then(|c| c.detector_offset).map(|v| v as f32),
                     binning: source.and_then(|c| c.binning),
                     pinhole_nm: source.and_then(|c| c.pinhole_size_nm).map(|v| v as f32),
+                    zoom: source.and_then(|c| c.zoom).map(|v| v as f32),
+                    detector: source
+                        .and_then(|c| c.detector.as_ref())
+                        .map(|d| device(&d.manufacturer, &d.model, &d.serial_number, &d.kind))
+                        .unwrap_or_default(),
+                    light_source: source
+                        .and_then(|c| c.light_source.as_ref())
+                        .map(|l| LightSourceInfo {
+                            device: device(&l.manufacturer, &l.model, &l.serial_number, &l.kind),
+                            subtype: text(&l.subtype),
+                            laser_medium: text(&l.laser_medium),
+                            wavelength_nm: l.wavelength_nm.map(|v| v as f32),
+                            power_mw: l.power_mw.map(|v| v as f32),
+                            attenuation: l.attenuation.map(|v| v as f32),
+                        })
+                        .unwrap_or_default(),
+                    excitation_filters: source
+                        .map(|c| c.excitation_filters.iter().map(filter).collect())
+                        .unwrap_or_default(),
+                    emission_filters: source
+                        .map(|c| c.emission_filters.iter().map(filter).collect())
+                        .unwrap_or_default(),
+                    dichroic: source
+                        .and_then(|c| c.dichroic.as_ref())
+                        .map(|d| device(&d.manufacturer, &d.model, &None, &None))
+                        .unwrap_or_default(),
                 },
             );
         }
+
+        info.microscope = series
+            .microscope
+            .as_ref()
+            .map(|m| device(&m.manufacturer, &m.model, &m.serial_number, &m.kind))
+            .unwrap_or_default();
+        info.environment = series
+            .environment
+            .as_ref()
+            .map(|e| EnvironmentInfo {
+                temperature_c: e.temperature_c.map(|v| v as f32),
+                co2_fraction: e.co2_fraction.map(|v| v as f32),
+                humidity_fraction: e.humidity_fraction.map(|v| v as f32),
+                air_pressure_mbar: e.air_pressure_mbar.map(|v| v as f32),
+            })
+            .unwrap_or_default();
+        info.experimenter = series
+            .experimenter
+            .as_ref()
+            .map(|x| ExperimenterInfo {
+                first_name: text(&x.first_name),
+                last_name: text(&x.last_name),
+                email: text(&x.email),
+                institution: text(&x.institution),
+                user_name: text(&x.user_name),
+            })
+            .unwrap_or_default();
+        info.project = text(&series.project);
+        info.dataset = text(&series.dataset);
 
         info.frame_interval = frame_interval(series.time_increment_s, info.nr_t_stacks, |t| {
             reader
@@ -172,6 +259,9 @@ pub(crate) fn build_image_meta(
                 magnification: objective.magnification.unwrap_or(0.0) as f32,
                 numerical_aperture: objective.numerical_aperture.unwrap_or(0.0) as f32,
                 immersion: objective.immersion.clone().unwrap_or_default(),
+                correction: text(&objective.correction),
+                working_distance_nm: objective.working_distance_nm.map(|v| v as f32),
+                refractive_index: objective.refractive_index.map(|v| v as f32),
             };
             objective_set = true;
         }
@@ -255,6 +345,101 @@ mod tests {
         assert_eq!(bit_depth(&s), 12);
         s.significant_bits = Some(0);
         assert_eq!(bit_depth(&s), 16, "0 means not declared");
+    }
+
+    // -- build_image_meta: instrument metadata (scopeio 0.0.0-alpha.5) -----------
+
+    /// A standalone OME-XML file with the instrument, environment and owner
+    /// metadata (the example of scopeio's own test) and 4 × 4 pixels inline.
+    const OME_XML_WITH_INSTRUMENT: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06">
+  <Project ID="Project:0" Name="Organoids"><DatasetRef ID="Dataset:0"/></Project>
+  <Dataset ID="Dataset:0" Name="Day 3"><ImageRef ID="Image:0"/></Dataset>
+  <Experimenter ID="Experimenter:0" FirstName="Ada" LastName="Lovelace" Email="ada@example.org"/>
+  <Instrument ID="Instrument:0">
+    <Microscope Manufacturer="Zeiss" Model="LSM 980" Type="Inverted"/>
+    <Laser ID="LightSource:0" Type="SolidState" LaserMedium="Other" Wavelength="488" Power="0.03" PowerUnit="W"/>
+    <Detector ID="Detector:0" Model="GaAsP" Type="PMT" Zoom="1"/>
+    <Objective ID="Objective:0" Model="Plan-Apochromat 63x/1.40 Oil" Correction="PlanApo" Immersion="Oil"
+               LensNA="1.4" NominalMagnification="63" WorkingDistance="0.19" WorkingDistanceUnit="mm"/>
+    <FilterSet ID="FilterSet:0"><ExcitationFilterRef ID="Filter:0"/><DichroicRef ID="Dichroic:0"/><EmissionFilterRef ID="Filter:1"/></FilterSet>
+    <Filter ID="Filter:0" Type="BandPass"><TransmittanceRange CutIn="470" CutOut="495"/></Filter>
+    <Filter ID="Filter:1" Type="BandPass"><TransmittanceRange CutIn="500" CutOut="550" Transmittance="0.9"/></Filter>
+    <Dichroic ID="Dichroic:0" Model="MBS 488"/>
+  </Instrument>
+  <Image ID="Image:0" Name="cells">
+    <InstrumentRef ID="Instrument:0"/>
+    <ObjectiveSettings ID="Objective:0" RefractiveIndex="1.518"/>
+    <ImagingEnvironment Temperature="310.15" TemperatureUnit="K" CO2Percent="0.05" Humidity="0.9"/>
+    <Pixels ID="Pixels:0" DimensionOrder="XYZCT" Type="uint8" SizeX="4" SizeY="4" SizeZ="1" SizeC="1" SizeT="1">
+      <Channel ID="Channel:0:0" Name="GFP">
+        <LightSourceSettings ID="LightSource:0" Wavelength="488" Attenuation="0.8"/>
+        <DetectorSettings ID="Detector:0" Gain="650" Zoom="2.5"/>
+        <FilterSetRef ID="FilterSet:0"/>
+      </Channel>
+      <BinData xmlns="http://www.openmicroscopy.org/Schemas/BinaryFile/2016-06" BigEndian="false" Length="16">AAAAAAAAAAAAAAAAAAAAAA==</BinData>
+    </Pixels>
+  </Image>
+</OME>"#;
+
+    /// The microscope, environment, owner, objective extras and each
+    /// channel's detector, light source, filters and dichroic reach the
+    /// app's metadata.
+    #[test]
+    fn the_instrument_metadata_reaches_the_image_meta() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("cells.ome.xml");
+        std::fs::write(&path, OME_XML_WITH_INSTRUMENT).unwrap();
+        let reader = scopeio::open(&path).expect("standalone OME-XML opens");
+        let meta = build_image_meta(reader.as_ref(), &path, ReadMode::Default).unwrap();
+
+        let series = &meta.series[&0];
+        assert_eq!(series.microscope.manufacturer, "Zeiss");
+        assert_eq!(series.microscope.model, "LSM 980");
+        assert_eq!(series.microscope.kind, "Inverted");
+        assert!((series.environment.temperature_c.unwrap() - 37.0).abs() < 1e-3);
+        assert_eq!(series.environment.co2_fraction, Some(0.05));
+        assert_eq!(series.environment.humidity_fraction, Some(0.9));
+        assert_eq!(series.experimenter.first_name, "Ada");
+        assert_eq!(series.experimenter.email, "ada@example.org");
+        assert_eq!(
+            (series.project.as_str(), series.dataset.as_str()),
+            ("Organoids", "Day 3")
+        );
+
+        assert_eq!(meta.objective.correction, "PlanApo");
+        assert_eq!(meta.objective.working_distance_nm, Some(190_000.0));
+        assert_eq!(meta.objective.refractive_index, Some(1.518));
+
+        let c = &series.channels[&0];
+        assert_eq!(c.zoom, Some(2.5));
+        assert_eq!(
+            (c.detector.model.as_str(), c.detector.kind.as_str()),
+            ("GaAsP", "PMT")
+        );
+        assert_eq!(c.light_source.device.kind, "Laser");
+        assert_eq!(c.light_source.subtype, "SolidState");
+        assert_eq!(c.light_source.wavelength_nm, Some(488.0));
+        assert_eq!(c.light_source.power_mw, Some(30.0));
+        assert_eq!(c.light_source.attenuation, Some(0.8));
+        assert_eq!(c.excitation_filters.len(), 1);
+        assert_eq!(c.excitation_filters[0].cut_in_nm, Some(470.0));
+        assert_eq!(c.emission_filters[0].transmittance, Some(0.9));
+        assert_eq!(c.dichroic.model, "MBS 488");
+    }
+
+    /// A file without them (the 4D fixture): everything empty, no error.
+    #[test]
+    fn a_file_without_instrument_metadata_leaves_it_empty() {
+        let path = fixture_path();
+        let reader = scopeio::open(&path).expect("real fixture must open");
+        let meta = build_image_meta(reader.as_ref(), &path, ReadMode::Default).unwrap();
+        let series = &meta.series[&0];
+        assert!(series.microscope.is_empty());
+        assert_eq!(series.environment, EnvironmentInfo::default());
+        assert_eq!(series.project, "");
+        let c = &series.channels[&0];
+        assert!(c.detector.is_empty() && c.excitation_filters.is_empty() && c.dichroic.is_empty());
     }
 
     // -- build_image_meta (real fixture) -----------------------------------------

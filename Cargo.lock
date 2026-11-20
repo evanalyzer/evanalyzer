@@ -6778,7 +6778,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "scopeio"
 version = "0.1.0"
-source = "git+https://github.com/evanalyzer/scopeio?tag=0.0.0-alpha.4#185b8114b1f71dbdcc89590c36f076005917d6c7"
+source = "git+https://github.com/evanalyzer/scopeio?tag=0.0.0-alpha.5#df48f073c12259cf4ca71c4f63a0261c1a3e2d2a"
 dependencies = [
  "bzip2-rs",
  "flate2",

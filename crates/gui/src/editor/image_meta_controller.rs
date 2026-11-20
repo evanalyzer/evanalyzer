@@ -412,7 +412,6 @@ impl ImageMetaController {
                     meta.set_storage_size("".into());
                     meta.set_magnification("".into());
                     meta.set_pixel_type("".into());
-                    meta.set_series_name("".into());
                     meta.set_description("".into());
                     meta.set_acquired("".into());
                     meta.set_levels("".into());
@@ -421,6 +420,13 @@ impl ImageMetaController {
                     meta.set_objective_magnification("".into());
                     meta.set_objective_na("".into());
                     meta.set_objective_immersion("".into());
+                    meta.set_objective_correction("".into());
+                    meta.set_objective_working_distance("".into());
+                    meta.set_objective_refractive_index("".into());
+                    meta.set_microscope_rows(Default::default());
+                    meta.set_microscope_summary("".into());
+                    meta.set_experiment_rows(Default::default());
+                    meta.set_experiment_summary("".into());
                     meta.set_channel_acq(Default::default());
                     meta.set_nr_series(0);
                     meta.set_nr_c_stacks(0);
@@ -651,7 +657,6 @@ impl ImageMetaController {
             );
 
             // --- Image info's other values (ready to show, "" = not in the file) ---
-            image_meta_ui.set_series_name(series_info.name.clone().into());
             image_meta_ui.set_description(series_info.description.trim().to_string().into());
             image_meta_ui.set_acquired(acquired_text(&series_info.acquisition_date).into());
             image_meta_ui.set_levels(levels_text(series_info).into());
@@ -683,6 +688,27 @@ impl ImageMetaController {
                 .into(),
             );
             image_meta_ui.set_objective_immersion(objective.immersion.trim().to_string().into());
+            image_meta_ui.set_objective_correction(objective.correction.trim().to_string().into());
+            image_meta_ui.set_objective_working_distance(
+                objective
+                    .working_distance_nm
+                    .map(length_text)
+                    .unwrap_or_default()
+                    .into(),
+            );
+            image_meta_ui.set_objective_refractive_index(
+                objective
+                    .refractive_index
+                    .map(|n| trim_number(n as f64, 4))
+                    .unwrap_or_default()
+                    .into(),
+            );
+            let (rows, summary) = microscope_rows(series_info);
+            image_meta_ui.set_microscope_rows(meta_pairs(rows));
+            image_meta_ui.set_microscope_summary(summary.into());
+            let (rows, summary) = experiment_rows(series_info);
+            image_meta_ui.set_experiment_rows(meta_pairs(rows));
+            image_meta_ui.set_experiment_summary(summary.into());
             let acq: Vec<crate::ChannelAcq> =
                 series_info.channels.values().map(channel_acq).collect();
             image_meta_ui.set_channel_acq(std::rc::Rc::new(slint::VecModel::from(acq)).into());
@@ -921,7 +947,176 @@ fn channel_acq(c: &evanalyzer_app::images::FileChannel) -> crate::ChannelAcq {
             .map(|nm| format!("{} µm", trim_number(nm as f64 / 1000.0, 2)))
             .unwrap_or_default()
             .into(),
+        zoom: c
+            .zoom
+            .map(|z| format!("{}×", trim_number(z as f64, 2)))
+            .unwrap_or_default()
+            .into(),
+        detector: device_text(&c.detector).into(),
+        light: light_text(&c.light_source).into(),
+        excitation_filter: filters_text(&c.excitation_filters).into(),
+        emission_filter: filters_text(&c.emission_filters).into(),
+        dichroic: device_text(&c.dichroic).into(),
     }
+}
+
+/// The non-empty parts, joined with `sep`.
+fn joined(parts: &[&str], sep: &str) -> String {
+    parts
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(sep)
+}
+
+/// "Zeiss LSM 980 · Inverted"; "" when nothing is known.
+fn device_text(d: &evanalyzer_app::images::DeviceInfo) -> String {
+    let name = joined(&[&d.manufacturer, &d.model], " ");
+    joined(&[&name, &d.kind], " · ")
+}
+
+/// "Laser (SolidState) · 488 nm · 30 mW · attenuation 80 %".
+fn light_text(l: &evanalyzer_app::images::LightSourceInfo) -> String {
+    let kind = match (l.device.kind.trim(), l.subtype.trim()) {
+        ("", sub) => sub.to_string(),
+        (kind, "") => kind.to_string(),
+        (kind, sub) => format!("{kind} ({sub})"),
+    };
+    let name = joined(&[&l.device.manufacturer, &l.device.model], " ");
+    let wavelength = l
+        .wavelength_nm
+        .map(|w| format!("{} nm", trim_number(w as f64, 1)))
+        .unwrap_or_default();
+    let power = l
+        .power_mw
+        .map(|p| format!("{} mW", trim_number(p as f64, 2)))
+        .unwrap_or_default();
+    let attenuation = l
+        .attenuation
+        .map(|a| format!("attenuation {} %", trim_number(a as f64 * 100.0, 1)))
+        .unwrap_or_default();
+    joined(&[&kind, &name, &wavelength, &power, &attenuation], " · ")
+}
+
+/// "BandPass 470–495 nm, LongPass 500 nm (90 %)" - each filter of the path.
+fn filters_text(filters: &[evanalyzer_app::images::FilterInfo]) -> String {
+    filters
+        .iter()
+        .map(|f| {
+            let band = match (f.cut_in_nm, f.cut_out_nm) {
+                (Some(a), Some(b)) => format!(
+                    "{}–{} nm",
+                    trim_number(a as f64, 1),
+                    trim_number(b as f64, 1)
+                ),
+                (Some(a), None) | (None, Some(a)) => format!("{} nm", trim_number(a as f64, 1)),
+                (None, None) => String::new(),
+            };
+            let name = joined(&[&f.kind, &f.manufacturer, &f.model], " ");
+            let transmittance = f
+                .transmittance
+                .map(|t| format!("({} %)", trim_number(t as f64 * 100.0, 1)))
+                .unwrap_or_default();
+            joined(&[&name, &band, &transmittance], " ")
+        })
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// A length in nm as µm, or mm from 1 mm ("190 µm", "2.5 mm").
+fn length_text(nm: f32) -> String {
+    let um = nm as f64 / 1000.0;
+    if um >= 1000.0 {
+        format!("{} mm", trim_number(um / 1000.0, 2))
+    } else {
+        format!("{} µm", trim_number(um, 1))
+    }
+}
+
+/// Image info › Microscope: the stand's rows and the folded summary.
+fn microscope_rows(
+    info: &evanalyzer_app::images::ImageInfo,
+) -> (Vec<(&'static str, String)>, String) {
+    let m = &info.microscope;
+    let model = joined(&[&m.manufacturer, &m.model], " ");
+    let rows: Vec<(&'static str, String)> = [
+        ("Model", model.clone()),
+        ("Type", m.kind.trim().to_string()),
+        ("Serial no.", m.serial_number.trim().to_string()),
+    ]
+    .into_iter()
+    .filter(|(_, v)| !v.is_empty())
+    .collect();
+    let summary = if model.is_empty() {
+        m.kind.trim().to_string()
+    } else {
+        model
+    };
+    (rows, summary)
+}
+
+/// Image info › Experiment: project, dataset, who, and the conditions.
+fn experiment_rows(
+    info: &evanalyzer_app::images::ImageInfo,
+) -> (Vec<(&'static str, String)>, String) {
+    let x = &info.experimenter;
+    let e = &info.environment;
+    let percent = |f: Option<f32>| {
+        f.map(|f| format!("{} %", trim_number(f as f64 * 100.0, 1)))
+            .unwrap_or_default()
+    };
+    let temperature = e
+        .temperature_c
+        .map(|t| format!("{} °C", trim_number(t as f64, 1)))
+        .unwrap_or_default();
+    let rows: Vec<(&'static str, String)> = [
+        ("Project", info.project.trim().to_string()),
+        ("Dataset", info.dataset.trim().to_string()),
+        ("Experimenter", joined(&[&x.first_name, &x.last_name], " ")),
+        ("E-mail", x.email.trim().to_string()),
+        ("Institution", x.institution.trim().to_string()),
+        ("User name", x.user_name.trim().to_string()),
+        ("Temperature", temperature.clone()),
+        ("CO₂", percent(e.co2_fraction)),
+        ("Humidity", percent(e.humidity_fraction)),
+        (
+            "Air pressure",
+            e.air_pressure_mbar
+                .map(|p| format!("{} mbar", trim_number(p as f64, 1)))
+                .unwrap_or_default(),
+        ),
+    ]
+    .into_iter()
+    .filter(|(_, v)| !v.is_empty())
+    .collect();
+    let co2 = percent(e.co2_fraction);
+    let conditions = joined(
+        &[
+            &temperature,
+            &if co2.is_empty() {
+                co2
+            } else {
+                format!("{co2} CO₂")
+            },
+        ],
+        " · ",
+    );
+    let place = joined(&[&info.project, &info.dataset], " › ");
+    let summary = if place.is_empty() { conditions } else { place };
+    (rows, summary)
+}
+
+fn meta_pairs(rows: Vec<(&'static str, String)>) -> slint::ModelRc<crate::MetaPair> {
+    let pairs: Vec<crate::MetaPair> = rows
+        .into_iter()
+        .map(|(key, value)| crate::MetaPair {
+            key: key.into(),
+            value: value.into(),
+        })
+        .collect();
+    std::rc::Rc::new(slint::VecModel::from(pairs)).into()
 }
 
 /// A number with at most `digits` decimals and no trailing zeros ("0.8", "20").
@@ -954,6 +1149,84 @@ mod tests {
     use super::*;
     use crate::editor::test_support::test_ui_state;
     use std::sync::Arc;
+
+    // -- Instrument metadata as text (scopeio 0.0.0-alpha.5) --
+
+    #[test]
+    fn devices_light_sources_and_filters_read_as_one_line() {
+        use evanalyzer_app::images::{DeviceInfo, FilterInfo, LightSourceInfo};
+        let detector = DeviceInfo {
+            model: "GaAsP".into(),
+            kind: "PMT".into(),
+            ..Default::default()
+        };
+        assert_eq!(device_text(&detector), "GaAsP · PMT");
+        assert_eq!(device_text(&DeviceInfo::default()), "");
+
+        let laser = LightSourceInfo {
+            device: DeviceInfo {
+                kind: "Laser".into(),
+                ..Default::default()
+            },
+            subtype: "SolidState".into(),
+            wavelength_nm: Some(488.0),
+            power_mw: Some(30.0),
+            attenuation: Some(0.8),
+            ..Default::default()
+        };
+        assert_eq!(
+            light_text(&laser),
+            "Laser (SolidState) · 488 nm · 30 mW · attenuation 80 %"
+        );
+
+        let filters = [
+            FilterInfo {
+                kind: "BandPass".into(),
+                cut_in_nm: Some(470.0),
+                cut_out_nm: Some(495.0),
+                ..Default::default()
+            },
+            FilterInfo {
+                kind: "LongPass".into(),
+                cut_in_nm: Some(500.0),
+                transmittance: Some(0.9),
+                ..Default::default()
+            },
+        ];
+        assert_eq!(
+            filters_text(&filters),
+            "BandPass 470–495 nm, LongPass 500 nm (90 %)"
+        );
+        assert_eq!(length_text(190_000.0), "190 µm");
+        assert_eq!(length_text(2_500_000.0), "2.5 mm");
+    }
+
+    #[test]
+    fn microscope_and_experiment_rows_leave_out_what_the_file_lacks() {
+        let mut info = evanalyzer_app::images::ImageInfo::default();
+        assert!(microscope_rows(&info).0.is_empty());
+        assert!(experiment_rows(&info).0.is_empty());
+
+        info.microscope.manufacturer = "Zeiss".into();
+        info.microscope.model = "LSM 980".into();
+        info.environment.temperature_c = Some(37.0);
+        info.environment.co2_fraction = Some(0.05);
+        let (rows, summary) = microscope_rows(&info);
+        assert_eq!(rows, vec![("Model", "Zeiss LSM 980".to_string())]);
+        assert_eq!(summary, "Zeiss LSM 980");
+        let (rows, summary) = experiment_rows(&info);
+        assert_eq!(
+            rows,
+            vec![
+                ("Temperature", "37 °C".to_string()),
+                ("CO₂", "5 %".to_string())
+            ]
+        );
+        assert_eq!(summary, "37 °C · 5 % CO₂");
+        info.project = "Organoids".into();
+        info.dataset = "Day 3".into();
+        assert_eq!(experiment_rows(&info).1, "Organoids › Day 3");
+    }
 
     fn make_controller() -> (Arc<UiState>, ImageMetaController) {
         let ui_state = test_ui_state();

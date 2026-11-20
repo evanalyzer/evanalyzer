@@ -41,6 +41,95 @@ pub struct ChannelInfo {
     pub binning: Option<(u16, u16)>,
     /// Pinhole size [nm] (confocal).
     pub pinhole_nm: Option<f32>,
+    /// Scan zoom (confocal / scanning acquisition).
+    pub zoom: Option<f32>,
+    pub detector: DeviceInfo,
+    pub light_source: LightSourceInfo,
+    /// Filters in the excitation / emission path, in light-path order.
+    pub excitation_filters: Vec<FilterInfo>,
+    pub emission_filters: Vec<FilterInfo>,
+    pub dichroic: DeviceInfo,
+}
+
+/// A device of the microscope as the file describes it (stand, detector,
+/// dichroic); "" = unknown.
+#[derive(Default, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DeviceInfo {
+    pub manufacturer: String,
+    pub model: String,
+    pub serial_number: String,
+    /// Its type, e.g. "Inverted" (stand), "PMT" / "CMOS" (detector).
+    pub kind: String,
+}
+
+impl DeviceInfo {
+    /// Nothing known about it.
+    pub fn is_empty(&self) -> bool {
+        self.manufacturer.is_empty()
+            && self.model.is_empty()
+            && self.serial_number.is_empty()
+            && self.kind.is_empty()
+    }
+}
+
+/// A channel's light source; "" / `None` = unknown.
+#[derive(Default, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LightSourceInfo {
+    /// Manufacturer, model, serial number; `kind` the class ("Laser",
+    /// "Arc", "LightEmittingDiode", ...).
+    pub device: DeviceInfo,
+    /// E.g. "SolidState" for a laser, "Hg" for an arc lamp.
+    pub subtype: String,
+    /// Laser medium, e.g. "Ar".
+    pub laser_medium: String,
+    /// The line used for the channel [nm].
+    pub wavelength_nm: Option<f32>,
+    /// Nominal power [mW].
+    pub power_mw: Option<f32>,
+    /// Fraction of the light blocked, 0 to 1.
+    pub attenuation: Option<f32>,
+}
+
+/// An excitation or emission filter; "" / `None` = unknown.
+#[derive(Default, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FilterInfo {
+    pub manufacturer: String,
+    pub model: String,
+    /// E.g. "BandPass", "LongPass".
+    pub kind: String,
+    pub filter_wheel: String,
+    /// The transmitted band [nm].
+    pub cut_in_nm: Option<f32>,
+    pub cut_out_nm: Option<f32>,
+    /// Fraction transmitted in the band, 0 to 1.
+    pub transmittance: Option<f32>,
+}
+
+/// Conditions during the acquisition; `None` = unknown.
+#[derive(Default, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EnvironmentInfo {
+    pub temperature_c: Option<f32>,
+    /// CO₂ as a fraction, 0 to 1 (0.05 = 5 %).
+    pub co2_fraction: Option<f32>,
+    /// Relative humidity as a fraction, 0 to 1.
+    pub humidity_fraction: Option<f32>,
+    pub air_pressure_mbar: Option<f32>,
+}
+
+/// Who acquired or owns the series; "" = unknown.
+#[derive(Default, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExperimenterInfo {
+    pub first_name: String,
+    pub last_name: String,
+    pub email: String,
+    pub institution: String,
+    /// Login name, e.g. in OMERO.
+    pub user_name: String,
 }
 
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
@@ -81,6 +170,13 @@ pub struct ImageInfo {
     pub channels: BTreeMap<i32, ChannelInfo>, // Contains the channel information <channelIdx | channelinfo>
     /// Time between two frames [s] per the file's metadata
     pub frame_interval: Option<f32>,
+    /// The microscope stand.
+    pub microscope: DeviceInfo,
+    pub environment: EnvironmentInfo,
+    pub experimenter: ExperimenterInfo,
+    /// Names of the project and dataset the series belongs to ("" none).
+    pub project: String,
+    pub dataset: String,
 }
 
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
@@ -93,6 +189,11 @@ pub struct Objective {
     pub numerical_aperture: f32,
     /// Immersion medium ("Oil", "Water", "Air"), "" unknown.
     pub immersion: String,
+    /// Optical correction ("PlanApo", "PlanFluor"), "" unknown.
+    pub correction: String,
+    pub working_distance_nm: Option<f32>,
+    /// Refractive index of the immersion medium.
+    pub refractive_index: Option<f32>,
 }
 
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]

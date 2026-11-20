@@ -32,6 +32,12 @@ export struct ChannelAcq {
     gain: string,
     binning: string,
     pinhole: string,
+    zoom: string,
+    detector: string,
+    light: string,
+    excitation-filter: string,
+    emission-filter: string,
+    dichroic: string,
 }
 
 // One key and value of the file's own metadata (Format metadata).
@@ -60,7 +66,6 @@ export global ImageMetaData {
 
     in property <string> pixel_type: "";
     // Image info's values, ready to show; "" = not in the file (left out).
-    in property <string> series_name: "";
     in property <string> description: "";
     in property <string> acquired: "";
     // Resolution levels of a pyramid ("4 · 1, 2, 4, 8×"), "" one level.
@@ -70,6 +75,15 @@ export global ImageMetaData {
     in property <string> objective_magnification: "";
     in property <string> objective_na: "";
     in property <string> objective_immersion: "";
+    in property <string> objective_correction: "";
+    in property <string> objective_working_distance: "";
+    in property <string> objective_refractive_index: "";
+    // Image info › Microscope and Experiment: rows ready to show (empty:
+    // the part is left out) and the folded part's summary.
+    in property <[MetaPair]> microscope_rows: [];
+    in property <string> microscope_summary: "";
+    in property <[MetaPair]> experiment_rows: [];
+    in property <string> experiment_summary: "";
     // Per channel (the order of `ChannelState.channels`).
     in property <[ChannelAcq]> channel_acq: [];
     // Format metadata (the file's own keys): asked for on opening the

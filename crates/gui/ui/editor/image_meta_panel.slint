@@ -145,6 +145,8 @@ export component ImageMetaPanel inherits Rectangle {
     property <bool> part-calib: false;
     property <bool> part-channels: true;
     property <bool> part-objective: false;
+    property <bool> part-microscope: false;
+    property <bool> part-experiment: false;
     property <bool> part-position: false;
     property <bool> part-description: false;
     property <bool> has-objective: ImageMetaData.objective_model != "" || ImageMetaData.objective_magnification != "" || ImageMetaData.objective_na != "" || ImageMetaData.objective_immersion != "";
@@ -246,10 +248,12 @@ export component ImageMetaPanel inherits Rectangle {
                         value: ImageMetaData.image_name;
                         mono: false;
                     }
-                    if ImageMetaData.nr_series > 1 || ImageMetaData.series_name != "": InfoRow {
+                    // The series shown and how many the file has. The file's own
+                    // image name (cellSens: number and channels) is in Format
+                    // metadata, not here.
+                    if ImageMetaData.nr_series > 0: InfoRow {
                         key: "Series";
-                        value: (ImageMetaData.nr_series > 1 ? "\{ChannelState.selected_series + 1} of \{ImageMetaData.nr_series}" : "")
-                            + (ImageMetaData.nr_series > 1 && ImageMetaData.series_name != "" ? " · " : "") + ImageMetaData.series_name;
+                        value: ImageMetaData.nr_series > 1 ? "\{ChannelState.selected_series + 1} of \{ImageMetaData.nr_series}" : "1";
                     }
                     InfoRow {
                         key: "Size";
@@ -382,6 +386,12 @@ export component ImageMetaPanel inherits Rectangle {
                                 { key: "Gain", value: root.acq.gain },
                                 { key: "Binning", value: root.acq.binning },
                                 { key: "Pinhole", value: root.acq.pinhole },
+                                { key: "Zoom", value: root.acq.zoom },
+                                { key: "Detector", value: root.acq.detector },
+                                { key: "Light", value: root.acq.light },
+                                { key: "Ex. filter", value: root.acq.excitation-filter },
+                                { key: "Em. filter", value: root.acq.emission-filter },
+                                { key: "Dichroic", value: root.acq.dichroic },
                             ]: HorizontalLayout {
                                 height: f.value == "" ? 0px : 20px;
                                 visible: f.value != "";
@@ -583,6 +593,48 @@ export component ImageMetaPanel inherits Rectangle {
                     if ImageMetaData.objective_immersion != "": InfoRow {
                         key: "Immersion";
                         value: ImageMetaData.objective_immersion;
+                        mono: false;
+                    }
+                    if ImageMetaData.objective_correction != "": InfoRow {
+                        key: "Correction";
+                        value: ImageMetaData.objective_correction;
+                        mono: false;
+                    }
+                    if ImageMetaData.objective_working_distance != "": InfoRow {
+                        key: "Working dist.";
+                        value: ImageMetaData.objective_working_distance;
+                    }
+                    if ImageMetaData.objective_refractive_index != "": InfoRow {
+                        key: "Refr. index";
+                        value: ImageMetaData.objective_refractive_index;
+                    }
+                }
+
+                // -- Microscope and Experiment: as far as the file says --
+                if ImageMetaData.microscope_rows.length > 0: InfoPart {
+                    title: "Microscope";
+                    summary: ImageMetaData.microscope_summary;
+                    open <=> root.part-microscope;
+                }
+                if ImageMetaData.microscope_rows.length > 0 && root.part-microscope: VerticalLayout {
+                    padding-bottom: 6px;
+                    for row in ImageMetaData.microscope_rows: InfoRow {
+                        key: row.key;
+                        value: row.value;
+                        mono: false;
+                    }
+                }
+
+                if ImageMetaData.experiment_rows.length > 0: InfoPart {
+                    title: "Experiment";
+                    summary: ImageMetaData.experiment_summary;
+                    open <=> root.part-experiment;
+                }
+                if ImageMetaData.experiment_rows.length > 0 && root.part-experiment: VerticalLayout {
+                    padding-bottom: 6px;
+                    for row in ImageMetaData.experiment_rows: InfoRow {
+                        key: row.key;
+                        value: row.value;
                         mono: false;
                     }
                 }

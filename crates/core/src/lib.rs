@@ -55,6 +55,9 @@ pub use crate::image::Point2d;
 pub use crate::image::PyramidInfo;
 pub use crate::image::ReadMode;
 pub use crate::image::supported_image_formats;
+pub use crate::image::{
+    DeviceInfo, EnvironmentInfo, ExperimenterInfo, FilterInfo, LightSourceInfo,
+};
 pub use evanalyzer_cfg::core_types::ImageDimensionality;
 pub use evanalyzer_cfg::core_types::ImagePlane;
 pub use evanalyzer_cfg::core_types::ImageTile;

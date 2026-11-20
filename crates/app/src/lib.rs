@@ -304,6 +304,9 @@ pub mod images {
     pub use crate::api::Point2d;
     pub use crate::api::PyramidInfo;
     pub use crate::api::TileRequest;
+    pub use crate::api::{
+        DeviceInfo, EnvironmentInfo, ExperimenterInfo, FilterInfo, LightSourceInfo,
+    };
     pub use crate::workspace::images::{
         Erased, annotation_from_mask, erase_mask, stroke_mask, union_mask,
     };
