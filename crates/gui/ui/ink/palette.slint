@@ -110,6 +110,12 @@ export global Ink {
     out property <color> warn: root.pick(#D97706, #FBBF24, #F2C14E);
     out property <color> warn-tint: root.pick(#FFF6E5, #3A2E14, #453A1E);
     out property <color> ok: root.pick(#16A34A, #4ADE80, #6BD69A);
+    /// An image left out of the results: its mark and reason chips.
+    out property <color> left-out: root.pick(#B4531F, #E08A5A, #E39A6E);
+    out property <color> left-out-tint: root.pick(#FBEDE4, #3A2418, #452C20);
+    /// The image markers 1 (red) to 6 (purple), at `marker - 1`. They
+    /// differ in lightness too; their names go with them (tooltips).
+    out property <[color]> markers: [#D9472B, #E8A317, #E6D04A, #2E9E5B, #2A6BDF, #7B4FC9];
     out property <color> info: root.pick(#2A6BDF, #8B8BF0, #9A9AF2);
     out property <color> info-tint: root.pick(#EEF4FF, #26264A, #34345A);
     /// "NEW" tags.

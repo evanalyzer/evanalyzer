@@ -14,9 +14,9 @@
 use super::{
     BoxplotFilter, BoxplotResult, ColumnEntry, DatabaseResult, FileSystem, GroupedByImageFilter,
     HistogramFilter, HistogramResult, ImageChannel, ImageEntry, ImageHeatmapFilter, ImageMeta,
-    JobInfo, ListFilter, PixelTrainingParams, PlateFilter, PreviewRequest, ResultExport, RunStatus,
-    RunningJob, RunningTraining, ScatterFilter, ScatterResult, StartPreviewError,
-    StartTrainingError, TimeCourseFilter, TimeCourseResult, View, WellFilter,
+    ImageReviewChange, JobInfo, ListFilter, PixelTrainingParams, PlateFilter, PreviewRequest,
+    ResultExport, RunStatus, RunningJob, RunningTraining, ScatterFilter, ScatterResult,
+    StartPreviewError, StartTrainingError, TimeCourseFilter, TimeCourseResult, View, WellFilter,
 };
 use crate::workspace::settings::AppSettings;
 use evanalyzer_cfg::core_types::{ImageTile, InternalErrors, ZProjection};
@@ -217,6 +217,13 @@ pub trait ResultsSource: Send + Sync {
     /// Marks an image as excluded from (`disable`) or included in the
     /// results - persisted in the database.
     fn enable_image(&self, image_rel_path: &str, disable: bool) -> Result<(), InternalErrors>;
+    /// Changes the note, marker or left-out reason of an image in these
+    /// results (not in the project).
+    fn change_image_review(
+        &self,
+        image_rel_path: &str,
+        change: ImageReviewChange,
+    ) -> Result<(), InternalErrors>;
     fn get_object_classes(&self) -> Result<Vec<Class>, InternalErrors>;
     fn get_available_columns(&self) -> Result<Vec<ColumnEntry>, InternalErrors>;
     fn get_nr_of_z_stacks(&self) -> u32;

@@ -6,6 +6,7 @@
 
 import { MultiSelectItem } from "../ink/ink.slint";
 import { ClassItemData } from "classification.slint";
+import { ImageReviewData } from "image_review.slint";
 
 /// A section of a column picker (Shape, Intensity, ...): its checklist,
 /// titled with how many are chosen, folded or open.
@@ -739,6 +740,17 @@ export global ResultsState {
     in-out property <bool> active-well-disabled: false;
     // Why the run left the image out ("Exclude Image"); "" not by the run.
     in-out property <string> active-well-disabled-reason;
+    // The selected image's note, marker and left out - these results' own
+    // copy (from the project at the run, changed here only).
+    in-out property <ImageReviewData> active-image-review;
+    // Who left it out: "pipeline" (Exclude Image), "project", "results"
+    // (here); "" included or not recorded.
+    in-out property <string> active-image-left-out-by;
+    callback review-marker-picked(int);
+    callback review-note-edited(string);
+    // A reason (index into `ImageReviewState.reasons`, -1 none) for the
+    // selected image, which is left out.
+    callback review-reason-picked(int);
     // Plate level: the images of the selected well (its well-level cells).
     in-out property <[MatrixCell]> active-well-images: [];
     // Leaves an image (its name) out of the results, or takes it back in -

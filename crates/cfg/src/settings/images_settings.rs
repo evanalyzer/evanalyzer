@@ -74,6 +74,132 @@ pub struct ImageEntry {
     pub file_size: u64,
     pub selected_series: i32,
     pub series: BTreeMap<i32, SeriesSettings>, // Image settings for each series
+    /// What the user noted about the image: note, marker, left out. Copied
+    /// into the results at a run - the results keep their own copy.
+    #[serde(default, skip_serializing_if = "ImageReview::is_empty")]
+    pub review: ImageReview,
+}
+
+/// The user's review of one image. One record for everything the user says
+/// about an image, so later options (checked, tags…) get a place here.
+#[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageReview {
+    /// Free text, e.g. "bubble in the lower left".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
+    /// A colour to find the image again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marker: Option<ImageMarker>,
+    /// Kept out of the results: still analysed, but not in the numbers
+    /// (the results show it disabled, with the reason).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leave_out: Option<LeaveOut>,
+}
+
+impl ImageReview {
+    pub fn is_empty(&self) -> bool {
+        self.note.is_empty() && self.marker.is_none() && self.leave_out.is_none()
+    }
+}
+
+/// The colours an image can be marked with.
+#[derive(
+    Serialize, Deserialize, Debug, JsonSchema, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash,
+)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ImageMarker {
+    Red,
+    Orange,
+    Yellow,
+    Green,
+    Blue,
+    Purple,
+}
+
+impl ImageMarker {
+    pub const ALL: [ImageMarker; 6] = [
+        Self::Red,
+        Self::Orange,
+        Self::Yellow,
+        Self::Green,
+        Self::Blue,
+        Self::Purple,
+    ];
+
+    /// The marker's number: 1 (red) to 6 (purple) - its key in the app and
+    /// its value in the results; 0 is no marker.
+    pub fn number(self) -> u8 {
+        self as u8 + 1
+    }
+
+    pub fn from_number(number: i64) -> Option<Self> {
+        usize::try_from(number - 1)
+            .ok()
+            .and_then(|i| Self::ALL.get(i).copied())
+    }
+
+    /// The colour's English name, also in exports.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Red => "red",
+            Self::Orange => "orange",
+            Self::Yellow => "yellow",
+            Self::Green => "green",
+            Self::Blue => "blue",
+            Self::Purple => "purple",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|m| m.name() == name)
+    }
+}
+
+/// Why an image is left out of the results.
+#[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LeaveOut {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<LeaveOutReason>,
+}
+
+impl LeaveOut {
+    /// The reason as the results store it (`images.disabled_reason`).
+    pub fn reason_text(&self) -> Option<&'static str> {
+        self.reason.map(LeaveOutReason::text)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, JsonSchema, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum LeaveOutReason {
+    OutOfFocus,
+    Artefact,
+    Empty,
+    Staining,
+    Other,
+}
+
+impl LeaveOutReason {
+    pub const ALL: [LeaveOutReason; 5] = [
+        Self::OutOfFocus,
+        Self::Artefact,
+        Self::Empty,
+        Self::Staining,
+        Self::Other,
+    ];
+
+    /// The reason as shown and stored in the results.
+    pub fn text(self) -> &'static str {
+        match self {
+            Self::OutOfFocus => "Out of focus",
+            Self::Artefact => "Artefact",
+            Self::Empty => "Empty",
+            Self::Staining => "Staining",
+            Self::Other => "Other",
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, JsonSchema)]

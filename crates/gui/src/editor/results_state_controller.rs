@@ -34,6 +34,7 @@ use evanalyzer_app::results::GroupedByImageFilter;
 use evanalyzer_app::results::HistogramFilter;
 use evanalyzer_app::results::ImageEntry;
 use evanalyzer_app::results::ImageHeatmapFilter;
+use evanalyzer_app::results::ImageReviewChange;
 use evanalyzer_app::results::ProfileStepFilter;
 use evanalyzer_app::results::ResultExport;
 use evanalyzer_app::results::ResultsSource;
@@ -57,6 +58,7 @@ use evanalyzer_app::results::{
 };
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use evanalyzer_cfg::settings::classification_settings::Class;
+use evanalyzer_cfg::settings::images_settings::{ImageMarker, LeaveOutReason};
 use evanalyzer_cfg::settings::plate_settings::{GroupingMode, PlateSettings, WellLayout};
 use log::{error, info, warn};
 use slint::{Color, ComponentHandle, Model, ModelRc, VecModel};
@@ -1637,8 +1639,7 @@ impl ResultsStateController {
                             .iter_mut()
                             .find(|image| image.name == image_name.as_str())
                         {
-                            image.disabled = disable;
-                            image.disabled_reason = None;
+                            left_out_by_hand(image, disable);
                         }
                         state.set_analysis_summary(analysis_summary(&images).into());
                     }
@@ -1754,6 +1755,7 @@ impl ResultsStateController {
                     state.set_active_well_disabled_reason(
                         manager.disabled_reason(key.as_str()).into(),
                     );
+                    manager.show_image_review(&state, key.as_str());
                     state.set_active_well(key);
                     // `exists` (not `has_value`): the user must be able to
                     // select/open a well or field even when it has no
@@ -1825,6 +1827,28 @@ impl ResultsStateController {
             // `invoke_from_event_loop` below re-queues behind that reset
             // (Slint runs queued UI updates in the order they were queued)
             // to restore the selection once it does drain, in a real app.
+            // The selected image's note, marker, reason: these results'.
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_review_marker_picked(move |marker| {
+                    let marker = ImageMarker::from_number(i64::from(marker));
+                    manager.change_active_image_review(ImageReviewChange::Marker(marker));
+                });
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_review_note_edited(move |note| {
+                    manager.change_active_image_review(ImageReviewChange::Note(note.into()));
+                });
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_review_reason_picked(move |reason| {
+                    let reason = usize::try_from(reason)
+                        .ok()
+                        .and_then(|i| LeaveOutReason::ALL.get(i))
+                        .map(|reason| reason.text().to_string());
+                    manager.change_active_image_review(ImageReviewChange::LeftOutReason(reason));
+                });
+
             let manager = self.clone();
             let ui_weak = self.ui.clone();
             ui.global::<ResultsState>()
@@ -1854,7 +1878,8 @@ impl ResultsStateController {
                     // database thread. The run's reason goes: the user decided.
                     state.set_active_well_disabled(disable);
                     state.set_active_well_disabled_reason("".into());
-                    manager.forget_disabled_reason(image_name.as_str());
+                    manager.left_out_by_hand(image_name.as_str(), disable);
+                    manager.show_image_review(&state, image_name.as_str());
                     let level = state.get_matrix_level();
                     manager.run_db_job(move |manager| {
                         let toggled = {
@@ -2687,8 +2712,7 @@ impl ResultsStateController {
                     .iter()
                     .any(|p| image.rel_path.to_string_lossy() == p.as_str())
                 {
-                    image.disabled = disable;
-                    image.disabled_reason = None;
+                    left_out_by_hand(image, disable);
                 }
             }
             let summary = analysis_summary(&known);
@@ -2727,9 +2751,9 @@ impl ResultsStateController {
             .unwrap_or_default()
     }
 
-    /// Image `name` was enabled or disabled by hand: no run's reason any
-    /// more (`enable_image` removes it from the file too).
-    fn forget_disabled_reason(&self, name: &str) {
+    /// Image `name` was left out or taken back in by hand (as
+    /// `enable_image` does it in the file).
+    fn left_out_by_hand(&self, name: &str, disable: bool) {
         if let Some(image) = self
             .images
             .lock()
@@ -2737,8 +2761,68 @@ impl ResultsStateController {
             .iter_mut()
             .find(|image| image.name == name)
         {
-            image.disabled_reason = None;
+            left_out_by_hand(image, disable);
         }
+    }
+
+    /// Image `name`'s note, marker and left out into the selected image's
+    /// card.
+    fn show_image_review(&self, state: &ResultsState<'_>, name: &str) {
+        let images = self.images.lock().expect("Poisoned");
+        let image = images.iter().find(|image| image.name == name);
+        let reason = image
+            .and_then(|image| image.disabled_reason.as_deref())
+            .and_then(|text| LeaveOutReason::ALL.iter().position(|r| r.text() == text));
+        state.set_active_image_review(crate::ImageReviewData {
+            note: image.map(|image| image.note.as_str()).unwrap_or("").into(),
+            marker: image
+                .and_then(|image| image.marker)
+                .map_or(0, |marker| marker.number() as i32),
+            left_out: image.is_some_and(|image| image.disabled),
+            reason: reason.map_or(-1, |i| i as i32),
+        });
+        state.set_active_image_left_out_by(
+            image
+                .and_then(|image| image.disabled_by.as_deref())
+                .unwrap_or("")
+                .into(),
+        );
+    }
+
+    /// Changes the selected image's note, marker or reason in these results
+    /// (and in the controller's copy of the images).
+    fn change_active_image_review(self: &Arc<Self>, change: ImageReviewChange) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let state = ui.global::<ResultsState>();
+        let name = state.get_active_well().to_string();
+        let rel_path = {
+            let mut images = self.images.lock().expect("Poisoned");
+            let Some(image) = images.iter_mut().find(|image| image.name == name) else {
+                return;
+            };
+            match &change {
+                ImageReviewChange::Note(note) => image.note = note.clone(),
+                ImageReviewChange::Marker(marker) => image.marker = *marker,
+                ImageReviewChange::LeftOutReason(reason) => {
+                    if !image.disabled {
+                        return;
+                    }
+                    image.disabled_reason = reason.clone();
+                }
+            }
+            image.rel_path.to_string_lossy().into_owned()
+        };
+        self.show_image_review(&state, &name);
+        self.run_db_job(move |manager| {
+            let guard = manager.result_generator.lock().expect("Poisoned");
+            if let Some(db) = guard.as_ref()
+                && let Err(err) = db.change_image_review(&rel_path, change)
+            {
+                error!("Could not change the note of {rel_path}: {err}");
+            }
+        });
     }
 
     fn peek(&self, row: i32, label: String, can_step: bool) {
@@ -6778,6 +6862,19 @@ fn list_column_widths<'a>(
 
 /// "81 images · 1 disabled" (the status bar's) - without the disabled
 /// part when none is.
+/// An image left out (`disable`) or taken back in by hand - as
+/// `ResultsGenerator::enable_image` does it in the file: left out, it is the
+/// user's ("results"), without a reason until one is picked; one already
+/// left out stays as it is.
+fn left_out_by_hand(image: &mut ImageEntry, disable: bool) {
+    if disable == image.disabled {
+        return;
+    }
+    image.disabled = disable;
+    image.disabled_reason = None;
+    image.disabled_by = disable.then(|| "results".to_string());
+}
+
 fn analysis_summary(images: &[ImageEntry]) -> String {
     let disabled = images.iter().filter(|image| image.disabled).count();
     let n = images.len();
@@ -8048,6 +8145,9 @@ pub(crate) mod tests {
             rel_path: PathBuf::from(name),
             disabled,
             disabled_reason: None,
+            disabled_by: None,
+            note: String::new(),
+            marker: None,
         };
         let images = [
             image("a.tif", false),
@@ -8097,18 +8197,27 @@ pub(crate) mod tests {
                 rel_path: PathBuf::from("A1_01.tif"),
                 disabled: false,
                 disabled_reason: None,
+                disabled_by: None,
+                note: String::new(),
+                marker: None,
             },
             ImageEntry {
                 name: "A1_02.tif".into(),
                 rel_path: PathBuf::from("A1_02.tif"),
                 disabled: false,
                 disabled_reason: None,
+                disabled_by: None,
+                note: String::new(),
+                marker: None,
             },
             ImageEntry {
                 name: "A2_01.tif".into(),
                 rel_path: PathBuf::from("A2_01.tif"),
                 disabled: false,
                 disabled_reason: None,
+                disabled_by: None,
+                note: String::new(),
+                marker: None,
             },
         ];
         let selected_paths = vec![PathBuf::from("A1_01.tif")];
@@ -8614,6 +8723,9 @@ pub(crate) mod tests {
             rel_path: name.into(),
             disabled,
             disabled_reason: None,
+            disabled_by: None,
+            note: String::new(),
+            marker: None,
         };
         assert_eq!(analysis_summary(&[image("a", false)]), "1 image");
         assert_eq!(
@@ -9157,6 +9269,9 @@ pub(crate) mod tests {
                 rel_path: PathBuf::from(format!("plate_{:03}/well_{i:06}.tif", i / 1000)),
                 disabled: false,
                 disabled_reason: None,
+                disabled_by: None,
+                note: String::new(),
+                marker: None,
             })
             .collect();
         measure("100k images: select all", &|| {
@@ -11820,6 +11935,7 @@ pub(crate) mod tests {
                 project.images.list.insert(
                     PathBuf::from(name),
                     ImageEntry {
+                        review: Default::default(),
                         rel_path: PathBuf::from(name),
                         file_size: 0,
                         selected_series: 0,
@@ -12388,6 +12504,7 @@ pub(crate) mod tests {
                 project.images.list.insert(
                     PathBuf::from(name),
                     ImageEntry {
+                        review: Default::default(),
                         rel_path: PathBuf::from(name),
                         file_size: 0,
                         selected_series: 0,
@@ -12815,6 +12932,7 @@ pub(crate) mod tests {
                 project.images.list.insert(
                     PathBuf::from(name),
                     ImageEntry {
+                        review: Default::default(),
                         rel_path: PathBuf::from(name),
                         file_size: 0,
                         selected_series: 0,

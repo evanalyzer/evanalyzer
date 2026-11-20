@@ -1,0 +1,258 @@
+// Copyright 2026 Joachim Danmayr.
+// Licensed under the PolyForm Noncommercial License 1.0.0.
+
+// editor/image_review_card.slint — an image's note & marker (design N6):
+// the marker row (○ none, six colours), the note, "Leave out of the
+// results" with its reasons. The same card in Image info (the open image)
+// and in the popover (`ImageReviewPopover`) from a list row or the image
+// chip. Every change is saved at once.
+
+import { TextEdit } from "std-widgets.slint";
+import { Ink, InkIcons, InkCheckbox, InkTipZone } from "../ink/ink.slint";
+import { ImageReviewState, ImageReviewData } from "../api/image_review.slint";
+
+// One marker to pick: a ring with the colour inside (0: an empty ring).
+component MarkerSwatch inherits Rectangle {
+    in property <int> marker;
+    in property <bool> selected;
+    callback picked;
+
+    width: 24px;
+    height: 24px;
+    border-radius: 12px;
+    border-width: root.selected ? 2px : 1px;
+    border-color: root.selected ? Ink.text : ta.has-hover ? Ink.text-mute : Ink.border;
+    background: Ink.field;
+    accessible-role: button;
+    accessible-label: ImageReviewState.marker-name(root.marker) + ", key " + root.marker;
+    accessible-checked: root.selected;
+    accessible-action-default => {
+        root.picked();
+    }
+
+    Rectangle {
+        width: 12px;
+        height: 12px;
+        border-radius: 6px;
+        background: root.marker > 0 ? Ink.markers[root.marker - 1] : transparent;
+        border-width: root.marker > 0 ? 0px : 1.5px;
+        border-color: Ink.text-faint;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.picked();
+        }
+    }
+
+    InkTipZone {
+        wanted: ta.has-hover;
+        text: ImageReviewState.marker-name(root.marker);
+        keys: [root.marker];
+    }
+}
+
+// A reason to leave the image out; the picked one tinted.
+component ReasonChip inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    callback clicked;
+
+    height: 24px;
+    width: label.preferred-width + 20px;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: root.selected ? Ink.left-out : ta.has-hover ? Ink.text-mute : Ink.border;
+    background: root.selected ? Ink.left-out-tint : Ink.field;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-checked: root.selected;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    label := Text {
+        text: root.text;
+        font-size: Ink.fs-secondary;
+        color: root.selected ? Ink.left-out : Ink.text;
+        vertical-alignment: center;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// The card: a review shown, its changes reported - where they go (the
+// project, the results) is the user's of the card.
+export component ImageReviewCard inherits VerticalLayout {
+    in property <ImageReviewData> data;
+    // The reasons to pick (not for an image the pipeline left out: it
+    // says why itself).
+    in property <bool> reasons-shown: true;
+    callback marker-picked(int);
+    callback note-edited(string);
+    callback left-out-toggled(bool);
+    // A reason (-1 none) - a click on the picked one takes it back.
+    callback reason-picked(int);
+
+    spacing: 8px;
+
+    // The fields keep what the user typed or ticked: they follow `data`
+    // only when it differs (another image, an undo).
+    function sync() {
+        if note.text != root.data.note {
+            note.text = root.data.note;
+        }
+        out-box.checked = root.data.left-out;
+    }
+    init => {
+        root.sync();
+    }
+    changed data => {
+        root.sync();
+    }
+
+    HorizontalLayout {
+        spacing: 4px;
+        for m in 7: MarkerSwatch {
+            marker: m;
+            selected: root.data.marker == m;
+            picked => {
+                root.marker-picked(m);
+            }
+        }
+        Text {
+            horizontal-stretch: 1;
+            text: ImageReviewState.marker-name(root.data.marker);
+            font-size: Ink.fs-caption;
+            color: Ink.text-dim;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+
+    note := TextEdit {
+        height: 64px;
+        wrap: word-wrap;
+        font-size: Ink.fs-body;
+        placeholder-text: "What to remember about this image…";
+        edited(text) => {
+            root.note-edited(text);
+        }
+    }
+
+    out-box := InkCheckbox {
+        text: "Leave out of the results";
+        toggled(on) => {
+            root.left-out-toggled(on);
+        }
+    }
+
+    // Why (optional): five reasons in two rows - the panel is narrow.
+    if root.data.left-out && root.reasons-shown: VerticalLayout {
+        padding-left: 22px;
+        spacing: 6px;
+        HorizontalLayout {
+            alignment: start;
+            spacing: 6px;
+            for reason[i] in [0, 1, 2]: ReasonChip {
+                text: ImageReviewState.reasons[reason];
+                selected: root.data.reason == reason;
+                clicked => {
+                    root.reason-picked(root.data.reason == reason ? -1 : reason);
+                }
+            }
+        }
+        HorizontalLayout {
+            alignment: start;
+            spacing: 6px;
+            for reason[i] in [3, 4]: ReasonChip {
+                text: ImageReviewState.reasons[reason];
+                selected: root.data.reason == reason;
+                clicked => {
+                    root.reason-picked(root.data.reason == reason ? -1 : reason);
+                }
+            }
+        }
+    }
+}
+
+// The card as a popover (in a `PopupWindow`): the image's name on top, ✕.
+export component ImageReviewPopover inherits Rectangle {
+    callback close;
+
+    min-width: 320px;
+    max-width: 320px;
+    min-height: body.preferred-height;
+    max-height: body.preferred-height;
+    background: Ink.panel;
+    border-radius: Ink.radius-lg;
+    border-width: 1px;
+    border-color: Ink.border;
+    drop-shadow-blur: 20px;
+    drop-shadow-offset-y: 6px;
+    drop-shadow-color: Ink.shadow;
+
+    // Clicks on the card stay in it (the popup closes on clicks outside).
+    TouchArea { }
+
+    body := VerticalLayout {
+        padding: 12px;
+        spacing: 10px;
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                horizontal-stretch: 1;
+                text: ImageReviewState.popup-name;
+                font-size: Ink.fs-body;
+                font-weight: 600;
+                color: Ink.text;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Rectangle {
+                width: 22px;
+                height: 22px;
+                border-radius: Ink.radius-sm;
+                background: close-ta.has-hover ? Ink.hover : transparent;
+                accessible-role: button;
+                accessible-label: "Close";
+                accessible-action-default => {
+                    root.close();
+                }
+                Image {
+                    source: InkIcons.close;
+                    width: 12px;
+                    height: 12px;
+                    colorize: Ink.text-dim;
+                }
+                close-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.close();
+                    }
+                }
+            }
+        }
+        ImageReviewCard {
+            data: ImageReviewState.popup;
+            marker-picked(m) => {
+                ImageReviewState.set-marker(ImageReviewState.popup-path, m);
+            }
+            note-edited(text) => {
+                ImageReviewState.set-note(ImageReviewState.popup-path, text);
+            }
+            left-out-toggled(on) => {
+                ImageReviewState.set-left-out(ImageReviewState.popup-path, on);
+            }
+            reason-picked(reason) => {
+                ImageReviewState.set-reason(ImageReviewState.popup-path, reason);
+            }
+        }
+    }
+}

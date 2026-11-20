@@ -13,7 +13,7 @@ use duckdb::Connection;
 use duckdb::types::Value;
 use evanalyzer_cfg::{
     core_types::{InternalErrors, ObjectClass},
-    settings::classification_settings::Class,
+    settings::{classification_settings::Class, images_settings::ImageMarker},
 };
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -71,6 +71,7 @@ impl ResultsGenerator {
     pub fn open_database(path: PathBuf) -> Result<Self, InternalErrors> {
         let database = evanalyzer_core::open_results_database(&path)?;
         evanalyzer_core::reject_newer_results(&database)?;
+        evanalyzer_core::add_review_columns(&database)?;
         Ok(Self {
             database,
             classes_cache: RefCell::new(None),
@@ -2713,8 +2714,8 @@ impl ResultsGenerator {
         let mut stmt = self
             .database
             .prepare(
-                "SELECT image_name, image_rel_path, disabled, disabled_reason FROM images \
-                 ORDER BY image_name",
+                "SELECT image_name, image_rel_path, disabled, disabled_reason, disabled_by, \
+                 coalesce(note, ''), marker FROM images ORDER BY image_name",
             )
             .map_err(err)?;
         let map = stmt
@@ -2724,6 +2725,11 @@ impl ResultsGenerator {
                     rel_path: PathBuf::from(row.get::<_, String>(1)?),
                     disabled: row.get(2)?,
                     disabled_reason: row.get(3)?,
+                    disabled_by: row.get(4)?,
+                    note: row.get(5)?,
+                    marker: row
+                        .get::<_, Option<i64>>(6)?
+                        .and_then(ImageMarker::from_number),
                 })
             })
             .map_err(err)?
@@ -2753,16 +2759,48 @@ impl ResultsGenerator {
     /// everywhere it appears, but is excluded from any aggregate combining
     /// it with other images (see `get_group_by_plate`'s `value`/
     /// `any_disabled` and `Cell::disabled`). A no-op if `image_rel_path`
-    /// doesn't match any row. The run's reason for disabling it ("Exclude
-    /// Image") goes: the user decided.
+    /// doesn't match any row. Left out here, it is the user's: `disabled_by`
+    /// 'results', without a reason until one is given
+    /// ([`Self::change_image_review`]); taken back in, the reason goes.
+    /// Leaving out an image already left out changes nothing.
     pub fn enable_image(&self, image_rel_path: &str, disable: bool) -> Result<(), InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let sql = if disable {
+            "UPDATE images SET disabled = true, disabled_reason = NULL, disabled_by = 'results' \
+             WHERE image_rel_path = ? AND NOT disabled"
+        } else {
+            "UPDATE images SET disabled = false, disabled_reason = NULL, disabled_by = NULL \
+             WHERE image_rel_path = ?"
+        };
         self.database
-            .execute(
-                "UPDATE images SET disabled = ?, disabled_reason = NULL WHERE image_rel_path = ?",
-                duckdb::params![disable, image_rel_path],
-            )
+            .execute(sql, duckdb::params![image_rel_path])
             .map_err(err)?;
+        Ok(())
+    }
+
+    /// Changes the note, marker or left-out reason of `image_rel_path` in
+    /// these results. A reason only for a left-out image.
+    pub fn change_image_review(
+        &self,
+        image_rel_path: &str,
+        change: &ImageReviewChange,
+    ) -> Result<(), InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let changed = match change {
+            ImageReviewChange::Note(note) => self.database.execute(
+                "UPDATE images SET note = ? WHERE image_rel_path = ?",
+                duckdb::params![(!note.is_empty()).then_some(note.as_str()), image_rel_path],
+            ),
+            ImageReviewChange::Marker(marker) => self.database.execute(
+                "UPDATE images SET marker = ? WHERE image_rel_path = ?",
+                duckdb::params![marker.map(ImageMarker::number), image_rel_path],
+            ),
+            ImageReviewChange::LeftOutReason(reason) => self.database.execute(
+                "UPDATE images SET disabled_reason = ? WHERE image_rel_path = ? AND disabled",
+                duckdb::params![reason.as_deref().filter(|r| !r.is_empty()), image_rel_path],
+            ),
+        };
+        changed.map_err(err)?;
         Ok(())
     }
 
@@ -6843,6 +6881,77 @@ mod tests {
 
         generator.enable_image("a.tif", false).unwrap();
         assert!(!generator.get_images().unwrap()[0].disabled);
+    }
+
+    /// Left out in the results it is the user's (`disabled_by` results),
+    /// with the reason given then; taken back in, both go. An image the run
+    /// left out keeps who and why when it is left out again.
+    #[test]
+    fn leaving_out_in_the_results_records_who_and_keeps_the_reason() {
+        let generator = open(&[ObjectSpec::new("a.tif", "ClassA", 1, 10)]);
+        generator.enable_image("a.tif", true).unwrap();
+        generator
+            .change_image_review(
+                "a.tif",
+                &ImageReviewChange::LeftOutReason(Some("Empty".into())),
+            )
+            .unwrap();
+        let image = &generator.get_images().unwrap()[0];
+        assert_eq!(image.disabled_by.as_deref(), Some("results"));
+        assert_eq!(image.disabled_reason.as_deref(), Some("Empty"));
+
+        generator.enable_image("a.tif", true).unwrap();
+        let image = &generator.get_images().unwrap()[0];
+        assert_eq!(
+            image.disabled_reason.as_deref(),
+            Some("Empty"),
+            "already out"
+        );
+
+        generator.enable_image("a.tif", false).unwrap();
+        let image = &generator.get_images().unwrap()[0];
+        assert_eq!(
+            (image.disabled_by.clone(), image.disabled_reason.clone()),
+            (None, None)
+        );
+        generator
+            .change_image_review(
+                "a.tif",
+                &ImageReviewChange::LeftOutReason(Some("Empty".into())),
+            )
+            .unwrap();
+        assert_eq!(
+            generator.get_images().unwrap()[0].disabled_reason,
+            None,
+            "included"
+        );
+    }
+
+    /// Note and marker change in the results only, and clear again.
+    #[test]
+    fn a_results_note_and_marker_can_be_changed_and_cleared() {
+        let generator = open(&[ObjectSpec::new("a.tif", "ClassA", 1, 10)]);
+        let image = &generator.get_images().unwrap()[0];
+        assert_eq!((image.note.as_str(), image.marker), ("", None));
+        generator
+            .change_image_review("a.tif", &ImageReviewChange::Note("check focus".into()))
+            .unwrap();
+        generator
+            .change_image_review("a.tif", &ImageReviewChange::Marker(Some(ImageMarker::Blue)))
+            .unwrap();
+        let image = &generator.get_images().unwrap()[0];
+        assert_eq!(
+            (image.note.as_str(), image.marker),
+            ("check focus", Some(ImageMarker::Blue))
+        );
+        generator
+            .change_image_review("a.tif", &ImageReviewChange::Note(String::new()))
+            .unwrap();
+        generator
+            .change_image_review("a.tif", &ImageReviewChange::Marker(None))
+            .unwrap();
+        let image = &generator.get_images().unwrap()[0];
+        assert_eq!((image.note.as_str(), image.marker), ("", None));
     }
 
     #[test]

@@ -39,6 +39,9 @@ pub struct ImageSummary<'a> {
     /// Why "Exclude Image" excluded the image (`None`: it isn't) - it is
     /// written disabled, with this reason.
     pub excluded: Option<&'a str>,
+    /// The user's note, marker and left out from the project, copied into
+    /// the results (`None`: none).
+    pub review: Option<&'a evanalyzer_cfg::settings::images_settings::ImageReview>,
 }
 
 pub trait PipelineResultExporter: Send + Sync {

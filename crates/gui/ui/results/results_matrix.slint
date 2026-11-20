@@ -9,6 +9,7 @@ import { InkBanner, InkButton, InkButtonKind, InkCaption, InkHint, InkIconButton
 import { ListView } from "std-widgets.slint";
 import { LineEdit } from "../ink/std_compat.slint";
 import { MatrixCell, MatrixLevel, ObjectMarker, ResultsState } from "../api/results.slint";
+import { ImageReviewCard } from "../editor/image_review_card.slint";
 
 
 import { Ink } from "../ink/palette.slint";
@@ -452,17 +453,40 @@ component SelectedCellCard inherits Rectangle {
         }
         // Only at the well level a cell is one image.
         // Left out by the run: why - to check it by hand.
-        if ResultsState.matrix-level == MatrixLevel.well && ResultsState.active-well-disabled && ResultsState.active-well-disabled-reason != "": InkBanner {
+        if ResultsState.matrix-level == MatrixLevel.well && ResultsState.active-well-disabled && ResultsState.active-well-disabled-reason != "" && ResultsState.active-image-left-out-by == "pipeline": InkBanner {
             tone: InkTone.warn;
             text: "Excluded by the pipeline: " + ResultsState.active-well-disabled-reason;
         }
-        if ResultsState.matrix-level == MatrixLevel.well: InkButton {
-            small: true;
-            text: ResultsState.active-well-disabled ? "Use this image in the results" : "Leave this image out of the results";
-            enabled: ResultsState.active-well-has-value;
-            disabled-reason: "No value in this well";
-            clicked => {
-                ResultsState.toggle-active-well-disabled();
+        // The image's note, marker and left out (design N2): these
+        // results' own - the project keeps its own.
+        if ResultsState.matrix-level == MatrixLevel.well: VerticalLayout {
+            padding-top: 6px;
+            spacing: 6px;
+            InkCaption {
+                text: "NOTE & MARKER";
+            }
+            ImageReviewCard {
+                data: {
+                    note: ResultsState.active-image-review.note,
+                    marker: ResultsState.active-image-review.marker,
+                    left-out: ResultsState.active-well-disabled,
+                    reason: ResultsState.active-image-review.reason,
+                };
+                reasons-shown: ResultsState.active-image-left-out-by != "pipeline";
+                marker-picked(m) => {
+                    ResultsState.review-marker-picked(m);
+                }
+                note-edited(text) => {
+                    ResultsState.review-note-edited(text);
+                }
+                left-out-toggled(on) => {
+                    if on != ResultsState.active-well-disabled {
+                        ResultsState.toggle-active-well-disabled();
+                    }
+                }
+                reason-picked(reason) => {
+                    ResultsState.review-reason-picked(reason);
+                }
             }
         }
         // Plate level: the well's images, each opens itself.

@@ -36,7 +36,9 @@ pub use crate::memory::analysis::{MAX_TILE_SIZE, estimate_ram_budget, recommende
 pub use crate::memory::{SystemDiagnostics, cpu_ram_diagnostics, system_diagnostics};
 pub use crate::object::shape::{StoredObjectShape, stored_object_shape};
 pub use crate::storage::duckdb::shared_connection as open_results_database;
-pub use crate::storage::duckdb::{RESULTS_SCHEMA_VERSION, ResultsConnection, reject_newer_results};
+pub use crate::storage::duckdb::{
+    RESULTS_SCHEMA_VERSION, ResultsConnection, add_review_columns, reject_newer_results,
+};
 pub use crate::storage::mask_codec::{decode_mask, encode_mask};
 pub use evanalyzer_ai::cuda_is_available;
 

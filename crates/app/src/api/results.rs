@@ -21,6 +21,7 @@ pub use column::{
     ParentValue,
 };
 use evanalyzer_cfg::core_types::ObjectClass;
+use evanalyzer_cfg::settings::images_settings::ImageMarker;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::range::Range;
@@ -477,6 +478,27 @@ pub struct ImageEntry {
     /// (or enabled again by hand).
     #[serde(default)]
     pub disabled_reason: Option<String>,
+    /// Who left it out: "pipeline" (Exclude Image), "project" (left out in
+    /// the project before the run) or "results" (here); `None`: included or
+    /// not recorded (results from before).
+    #[serde(default)]
+    pub disabled_by: Option<String>,
+    /// The note on the image - the result's own copy.
+    #[serde(default)]
+    pub note: String,
+    #[serde(default)]
+    pub marker: Option<ImageMarker>,
+}
+
+/// A change of an image's review in the results - only there, the project
+/// keeps its own.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum ImageReviewChange {
+    Note(String),
+    Marker(Option<ImageMarker>),
+    /// Why the image is left out (it must be left out: the reason of an
+    /// included image is dropped).
+    LeftOutReason(Option<String>),
 }
 
 #[derive(Serialize, Deserialize)]

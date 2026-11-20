@@ -138,6 +138,7 @@ pub(crate) fn project_with_one_image() -> ProjectWithRuntime {
     project.images.list.insert(
         rel_path.clone(),
         ImageEntry {
+            review: Default::default(),
             rel_path: rel_path.clone(),
             file_size: 16,
             selected_series: 0,

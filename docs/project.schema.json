@@ -1879,6 +1879,10 @@
         "relPath": {
           "type": "string"
         },
+        "review": {
+          "description": "What the user noted about the image: note, marker, left out. Copied\ninto the results at a run - the results keep their own copy.",
+          "$ref": "#/$defs/ImageReview"
+        },
         "selectedSeries": {
           "type": "integer",
           "format": "int32"
@@ -1898,6 +1902,18 @@
         "fileSize",
         "selectedSeries",
         "series"
+      ]
+    },
+    "ImageMarker": {
+      "description": "The colours an image can be marked with.",
+      "type": "string",
+      "enum": [
+        "RED",
+        "ORANGE",
+        "YELLOW",
+        "GREEN",
+        "BLUE",
+        "PURPLE"
       ]
     },
     "ImageMathSettings": {
@@ -1922,6 +1938,38 @@
         "secondImageAddress",
         "swapOperands"
       ]
+    },
+    "ImageReview": {
+      "description": "The user's review of one image. One record for everything the user says\nabout an image, so later options (checked, tags…) get a place here.",
+      "type": "object",
+      "properties": {
+        "leaveOut": {
+          "description": "Kept out of the results: still analysed, but not in the numbers\n(the results show it disabled, with the reason).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LeaveOut"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "marker": {
+          "description": "A colour to find the image again.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ImageMarker"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "note": {
+          "description": "Free text, e.g. \"bubble in the lower left\".",
+          "type": "string"
+        }
+      }
     },
     "ImageSettings": {
       "type": "object",
@@ -2124,6 +2172,32 @@
           "minimum": 3
         }
       }
+    },
+    "LeaveOut": {
+      "description": "Why an image is left out of the results.",
+      "type": "object",
+      "properties": {
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LeaveOutReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "LeaveOutReason": {
+      "type": "string",
+      "enum": [
+        "OUT_OF_FOCUS",
+        "ARTEFACT",
+        "EMPTY",
+        "STAINING",
+        "OTHER"
+      ]
     },
     "LibsLinkingMergeSplitAmountSettings": {
       "description": "What a merge adds up and a split divides - telling a true merge or\nsplit from objects that only pass close by.",

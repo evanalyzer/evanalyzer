@@ -7766,6 +7766,7 @@ mod tests {
 
     fn image_entry_with_objects(rel_path: &str, object_count: usize) -> ImageEntry {
         ImageEntry {
+            review: Default::default(),
             rel_path: PathBuf::from(rel_path),
             file_size: 42,
             selected_series: 0,

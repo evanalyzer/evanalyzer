@@ -20,7 +20,6 @@ use crate::api::ExportProgressFn;
 use crate::api::GroupedByImageFilter;
 use crate::api::HistogramFilter;
 use crate::api::HistogramResult;
-use crate::api::ImageEntry;
 use crate::api::ImageHeatmapFilter;
 use crate::api::ListFilter;
 use crate::api::PlateFilter;
@@ -30,6 +29,7 @@ use crate::api::ScatterFilter;
 use crate::api::ScatterResult;
 use crate::api::View;
 use crate::api::WellFilter;
+use crate::api::{ImageEntry, ImageReviewChange};
 use crate::backend::remote::wire::frame::Frame;
 use crate::backend::remote::wire::protocol::{
     ClientMsg, Reply, Request, ResultsAnswer, ResultsQuery, from_postcard, to_postcard,
@@ -179,6 +179,21 @@ impl ResultsSource for RemoteResults {
         let query = ResultsQuery::EnableImage {
             image_rel_path: image_rel_path.into(),
             disable,
+        };
+        match self.query(query)? {
+            ResultsAnswer::Done => Ok(()),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn change_image_review(
+        &self,
+        image_rel_path: &str,
+        change: ImageReviewChange,
+    ) -> Result<(), InternalErrors> {
+        let query = ResultsQuery::ChangeImageReview {
+            image_rel_path: image_rel_path.into(),
+            change,
         };
         match self.query(query)? {
             ResultsAnswer::Done => Ok(()),
@@ -834,6 +849,9 @@ mod tests {
         }
         fn enable_image(&self, _: &str, _: bool) -> Result<(), InternalErrors> {
             Err(broken("enable image"))
+        }
+        fn change_image_review(&self, _: &str, _: ImageReviewChange) -> Result<(), InternalErrors> {
+            Err(broken("change image review"))
         }
         fn get_object_classes(&self) -> Result<Vec<Class>, InternalErrors> {
             Err(broken("classes"))

@@ -202,6 +202,7 @@ fn main() {
             .finalize_image(
                 Path::new(&cache.image_rel_path),
                 &evanalyzer_core::ImageSummary {
+                    review: None,
                     width: 4096,
                     height: 4096,
                     nr_c_stacks: 3,

@@ -20,7 +20,6 @@ use crate::api::GroupedByImageFilter;
 use crate::api::HistogramFilter;
 use crate::api::HistogramResult;
 use crate::api::ImageChannel;
-use crate::api::ImageEntry;
 use crate::api::ImageHeatmapFilter;
 use crate::api::ImageMeta;
 use crate::api::JobInfo;
@@ -39,6 +38,7 @@ use crate::api::TrainingItems;
 use crate::api::TrainingRequest;
 use crate::api::View;
 use crate::api::WellFilter;
+use crate::api::{ImageEntry, ImageReviewChange};
 use crate::backend::remote::wire::pixels::RawImageInfo;
 use crate::backend::remote::wire::pixels::image_from_raw;
 use crate::backend::remote::wire::pixels::image_to_raw;
@@ -71,7 +71,10 @@ use std::sync::Arc;
 /// error, not the connection.
 // 46: `ImageSettings::skipped_folders` - an older server would ignore it
 // and analyse the skipped folders' images too.
-pub const PROTOCOL_VERSION: u32 = 46;
+// 47: image reviews - `ImageEntry::review` in the project (an older server
+// would analyse a left-out image into the numbers), the results'
+// `ImageEntry` note/marker/disabled_by and `ResultsQuery::ChangeImageReview`.
+pub const PROTOCOL_VERSION: u32 = 47;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -188,6 +191,10 @@ pub(crate) enum ResultsQuery {
     EnableImage {
         image_rel_path: String,
         disable: bool,
+    },
+    ChangeImageReview {
+        image_rel_path: String,
+        change: ImageReviewChange,
     },
     ObjectClasses,
     AvailableColumns,
@@ -836,6 +843,12 @@ mod tests {
             .unwrap();
         tracer
             .trace_simple_type::<evanalyzer_cfg::core_types::ZProjection>()
+            .unwrap();
+        tracer
+            .trace_simple_type::<evanalyzer_cfg::settings::images_settings::ImageMarker>()
+            .unwrap();
+        tracer
+            .trace_simple_type::<crate::api::ImageReviewChange>()
             .unwrap();
         tracer.trace_type::<ResultsQuery>(&samples).unwrap();
         tracer.trace_type::<ResultsAnswer>(&samples).unwrap();

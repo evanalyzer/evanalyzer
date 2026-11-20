@@ -455,6 +455,7 @@ mod tests {
         project.images.list.insert(
             path.clone(),
             ImageEntry {
+                review: Default::default(),
                 rel_path: path.clone(),
                 file_size: 0,
                 selected_series: 0,

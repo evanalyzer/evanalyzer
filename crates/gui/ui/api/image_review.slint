@@ -1,0 +1,44 @@
+// Copyright 2026 Joachim Danmayr.
+// Licensed under the PolyForm Noncommercial License 1.0.0.
+
+// api/image_review.slint — the Rust interface of an image's review (note,
+// marker, left out) in the editor: Image info's "Note & marker", the
+// popover from a list row or the image chip, keys 1-6 / 0 and N.
+
+// What the user noted about an image. `marker` 0 none, 1 red .. 6 purple;
+// `reason` an index into `ImageReviewState.reasons`, -1 none.
+export struct ImageReviewData {
+    note: string,
+    marker: int,
+    left-out: bool,
+    reason: int,
+}
+
+export global ImageReviewState {
+    // An image is open (of the project's images), and its review.
+    in property <bool> has-image;
+    in property <ImageReviewData> current;
+    // The popover's image: its path (relative to the image folder), name
+    // and review. Filled by `open-popup`, kept up to date while it's open.
+    in property <string> popup-path;
+    in property <string> popup-name;
+    in property <ImageReviewData> popup;
+    // The reasons to leave an image out, and the markers' names (at
+    // `marker - 1`).
+    out property <[string]> reasons: ["Out of focus", "Artefact", "Empty", "Staining", "Other"];
+    out property <[string]> marker-names: ["Red", "Orange", "Yellow", "Green", "Blue", "Purple"];
+
+    // Fill the popover for the image at `path` ("" the open image).
+    callback open-popup(string);
+    // Counted up by N: the image chip opens the popover of the open image.
+    in-out property <int> chip-popup-requested: 0;
+    // A change of the image at `path` ("" the open image).
+    callback set-marker(string, int);
+    callback set-note(string, string);
+    callback set-left-out(string, bool);
+    callback set-reason(string, int);
+
+    public pure function marker-name(marker: int) -> string {
+        marker >= 1 && marker <= 6 ? root.marker-names[marker - 1] : "No marker"
+    }
+}

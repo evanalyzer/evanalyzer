@@ -46,6 +46,11 @@ export struct ImageItemData {
     // The row of its folder's head (a head: its own row); -1 without heads.
     // The list pins that head on top while the folder's images scroll by.
     head: int,
+    // The user's review (an image): marker 0 none / 1-6, a note, left out
+    // of the results.
+    marker: int,
+    has_note: bool,
+    left_out: bool,
 }
 
 export global ImagesListState {

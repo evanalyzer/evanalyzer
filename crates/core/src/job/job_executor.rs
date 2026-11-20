@@ -1335,6 +1335,7 @@ impl<'a> JobExecutor {
                 z_stacks_analyzed: &z_stacks,
                 frame_interval_s,
                 excluded: exclusion_reason(&exclusions, t_stacks.len() * z_stacks.len()).as_deref(),
+                review: Some(&image_entry.review).filter(|review| !review.is_empty()),
             },
             combined_error.as_deref(),
         );
@@ -2163,6 +2164,7 @@ mod z_t_stack_precedence_tests {
         let mut series = BTreeMap::new();
         series.insert(0, SeriesSettings::default());
         ImageEntry {
+            review: Default::default(),
             rel_path: std::path::PathBuf::new(),
             file_size: 0,
             selected_series: 0,
@@ -2320,6 +2322,7 @@ mod z_t_stack_precedence_tests {
             None,
         );
         let entry = ImageEntry {
+            review: Default::default(),
             rel_path: std::path::PathBuf::new(),
             file_size: 0,
             selected_series: 0,
@@ -2343,6 +2346,7 @@ mod z_t_stack_precedence_tests {
             }),
         );
         let entry = ImageEntry {
+            review: Default::default(),
             rel_path: std::path::PathBuf::new(),
             file_size: 0,
             selected_series: 0,
@@ -2746,6 +2750,7 @@ mod z_stack_iterator_tests {
         let mut series = BTreeMap::new();
         series.insert(0, SeriesSettings::default());
         ImageEntry {
+            review: Default::default(),
             rel_path: std::path::PathBuf::new(),
             file_size: 0,
             selected_series: 0,
@@ -3225,6 +3230,7 @@ mod full_run_integration_tests {
         images.insert(
             rel_path.clone(),
             ImageEntry {
+                review: Default::default(),
                 rel_path,
                 file_size: 0,
                 selected_series: 0,
@@ -4206,6 +4212,7 @@ mod full_run_integration_tests {
         images.insert(
             rel_path.clone(),
             ImageEntry {
+                review: Default::default(),
                 rel_path,
                 file_size: 0,
                 selected_series: 0,
@@ -4452,6 +4459,7 @@ mod full_run_integration_tests {
             images.insert(
                 rel_path.clone(),
                 ImageEntry {
+                    review: Default::default(),
                     rel_path,
                     file_size: 0,
                     selected_series: 0,
@@ -4987,6 +4995,7 @@ mod full_run_integration_tests {
         images.insert(
             rel_path.clone(),
             ImageEntry {
+                review: Default::default(),
                 rel_path,
                 file_size: 0,
                 selected_series: 0,

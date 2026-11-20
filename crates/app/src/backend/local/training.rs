@@ -356,6 +356,7 @@ mod tests {
         project.images.list.insert(
             path.clone(),
             ImageEntry {
+                review: Default::default(),
                 rel_path: path.clone(),
                 file_size: 0,
                 selected_series: 0,
@@ -372,6 +373,7 @@ mod tests {
         project.images.list.insert(
             unlabeled_path.clone(),
             ImageEntry {
+                review: Default::default(),
                 rel_path: unlabeled_path,
                 file_size: 0,
                 selected_series: 0,
@@ -403,6 +405,7 @@ mod tests {
         project.images.list.insert(
             path.clone(),
             ImageEntry {
+                review: Default::default(),
                 rel_path: path,
                 file_size: 0,
                 selected_series: 0,
@@ -434,6 +437,7 @@ mod tests {
         project.images.list.insert(
             path.clone(),
             ImageEntry {
+                review: Default::default(),
                 rel_path: path,
                 file_size: 0,
                 selected_series: 0,
@@ -468,6 +472,7 @@ mod tests {
         project.images.list.insert(
             path.clone(),
             ImageEntry {
+                review: Default::default(),
                 rel_path: path,
                 file_size: 0,
                 selected_series: 0,
@@ -502,6 +507,7 @@ mod tests {
         project.images.list.insert(
             path.clone(),
             ImageEntry {
+                review: Default::default(),
                 rel_path: path,
                 file_size: 0,
                 selected_series: 0,

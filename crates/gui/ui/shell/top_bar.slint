@@ -20,6 +20,7 @@ import {
     InkMenuCaption,
     InkMenuSeparator,
     InkSearchField,
+    InkTipZone,
 } from "../ink/ink.slint";
 import { Appearance } from "../api/appearance.slint";
 import { LayoutState, WorkspaceMode } from "../api/layout.slint";
@@ -33,6 +34,8 @@ import {
 import { PipelinesPanelState } from "../api/pipelines.slint";
 import { ImageMetaData } from "../api/image_meta.slint";
 import { ImagesListState, ImageItemData } from "../api/images_list.slint";
+import { ImageReviewState } from "../api/image_review.slint";
+import { ImageReviewPopover } from "../editor/image_review_card.slint";
 import { AiLearningState } from "../api/ai_learning.slint";
 import { ResultsBarNav, ResultsBarActions } from "../results/results_bar.slint";
 import { StartState } from "../api/start.slint";
@@ -141,6 +144,16 @@ component QuickImageRow inherits Rectangle {
             width: 13px;
             height: 13px;
             colorize: root.current ? Ink.text : Ink.text-mute;
+        }
+        // Its marker, to find marked images in the picker.
+        Rectangle {
+            width: 10px;
+            if root.item.marker > 0: Rectangle {
+                width: 10px;
+                height: 10px;
+                border-radius: 5px;
+                background: Ink.markers[root.item.marker - 1];
+            }
         }
 
         Text {
@@ -349,12 +362,22 @@ component ImageChip inherits Rectangle {
                     padding-left: 10px;
                     padding-right: 10px;
                     spacing: 6px;
-                    Image {
+                    // The marker's dot in place of the icon.
+                    if ImageReviewState.current.marker == 0: Image {
                         y: (parent.height - self.height) / 2;
                         source: InkIcons.images;
                         width: 13px;
                         height: 13px;
                         colorize: Ink.text-mute;
+                    }
+                    if ImageReviewState.current.marker > 0: Rectangle {
+                        width: 13px;
+                        Rectangle {
+                            width: 10px;
+                            height: 10px;
+                            border-radius: 5px;
+                            background: Ink.markers[ImageReviewState.current.marker - 1];
+                        }
                     }
 
                     Text {
@@ -411,6 +434,71 @@ component ImageChip inherits Rectangle {
                         series-menu.show();
                     }
                 }
+            }
+
+            // Note (N): the note & marker popover of the open image -
+            // shaded while the image has a note.
+            if ImageReviewState.has-image: Rectangle {
+                width: 1px;
+                background: Ink.border;
+            }
+            if ImageReviewState.has-image: Rectangle {
+                width: note-row.preferred-width;
+                background: note-ta.has-hover ? Ink.hover : ImageReviewState.current.note != "" || ImageReviewState.current.left-out ? Ink.selection : transparent;
+                accessible-role: button;
+                accessible-label: "Note and marker of this image";
+                accessible-action-default => {
+                    root.open-review();
+                }
+                note-row := HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    spacing: 5px;
+                    Image {
+                        y: (parent.height - self.height) / 2;
+                        source: InkIcons.note;
+                        width: 13px;
+                        height: 13px;
+                        colorize: Ink.text-dim;
+                    }
+                    Text {
+                        text: "Note";
+                        font-size: Ink.fs-body;
+                        color: Ink.text;
+                        vertical-alignment: center;
+                    }
+                }
+                note-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.open-review();
+                    }
+                }
+                InkTipZone {
+                    wanted: note-ta.has-hover;
+                    text: "Note and marker of this image";
+                    keys: ["N"];
+                }
+            }
+        }
+    }
+
+    function open-review() {
+        ImageReviewState.open-popup("");
+        review-popup.show();
+    }
+    property <int> review-requested: ImageReviewState.chip-popup-requested;
+    changed review-requested => {
+        root.open-review();
+    }
+
+    review-popup := PopupWindow {
+        x: root.width - 320px;
+        y: root.height + 4px;
+        close-policy: close-on-click-outside;
+        ImageReviewPopover {
+            close => {
+                review-popup.close();
             }
         }
     }

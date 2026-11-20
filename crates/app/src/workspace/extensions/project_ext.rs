@@ -26,8 +26,8 @@ use evanalyzer_cfg::core_types::{InternalErrors, ObjectId, PipelineId, ZProjecti
 use evanalyzer_cfg::settings::classification_settings::ClassificationSettings;
 use evanalyzer_cfg::settings::images_settings::SeriesSettings;
 use evanalyzer_cfg::settings::images_settings::{
-    ChannelSettings, GlobalImageSettings, HistogramSettings, PixelSizeSettings, TStackSettings,
-    ZStackHandling, ZStackSettings,
+    ChannelSettings, GlobalImageSettings, HistogramSettings, ImageReview, PixelSizeSettings,
+    TStackSettings, ZStackHandling, ZStackSettings,
 };
 use evanalyzer_cfg::settings::meta_data::MetaData;
 use evanalyzer_cfg::settings::modules::ModuleDefinition;
@@ -1534,6 +1534,7 @@ impl ProjectExt for ProjectWithRuntime {
             .collect();
 
         let img = ImageEntry {
+            review: Default::default(),
             rel_path: rel_path.to_path_buf(),
             file_size: file_size_approx_bytes,
             selected_series: 0,
@@ -1583,6 +1584,16 @@ impl ProjectExt for ProjectWithRuntime {
     /// callers that already scanned off-lock only need to hold the project
     /// write guard for this call, not for the scan that produced its input.
     fn apply_scanned_images(&mut self, mut found_images: Vec<(PathBuf, ImageMeta)>) {
+        // The user's notes, markers and left-outs stay with the images
+        // found again.
+        let reviews: Vec<(PathBuf, ImageReview)> = self
+            .images
+            .list
+            .0
+            .iter()
+            .filter(|(_, image)| !image.review.is_empty())
+            .map(|(path, image)| (path.clone(), image.review.clone()))
+            .collect();
         self.images.list.clear();
 
         // Natural sort
@@ -1595,6 +1606,11 @@ impl ProjectExt for ProjectWithRuntime {
         let start = Instant::now();
         for (path, meta) in found_images {
             self.add_image(&mut &path, &meta);
+        }
+        for (path, review) in reviews {
+            if let Some(image) = self.images.list.get_mut(&path) {
+                image.review = review;
+            }
         }
         // Folded folders that hold no image any more are forgotten.
         if !self.images.collapsed_folders.is_empty() {
@@ -2314,6 +2330,7 @@ mod tests {
         project.images.list.insert(
             rel_path.clone(),
             ImageEntry {
+                review: Default::default(),
                 rel_path: rel_path.clone(),
                 file_size: 16,
                 selected_series: 0,
@@ -4163,6 +4180,48 @@ mod tests {
             project.images.collapsed_folders,
             [PathBuf::from("A")].into_iter().collect(),
             "A still holds an image, Gone none"
+        );
+    }
+
+    #[test]
+    fn a_rescan_keeps_the_notes_of_the_images_found_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut project = project_with_one_image();
+        project.images.root = Some(dir.path().to_path_buf());
+        let meta = sample_image_meta("Ch0", 400.0);
+        let found = vec![
+            (dir.path().join("A").join("a.tif"), meta.clone()),
+            (dir.path().join("A").join("b.tif"), meta),
+        ];
+        project.apply_scanned_images(found.clone());
+        let review = ImageReview {
+            note: "bubble".into(),
+            ..Default::default()
+        };
+        project
+            .images
+            .list
+            .get_mut(Path::new("A/a.tif"))
+            .unwrap()
+            .review = review.clone();
+        project.apply_scanned_images(found);
+        assert_eq!(
+            project
+                .images
+                .list
+                .get(Path::new("A/a.tif"))
+                .unwrap()
+                .review,
+            review
+        );
+        assert!(
+            project
+                .images
+                .list
+                .get(Path::new("A/b.tif"))
+                .unwrap()
+                .review
+                .is_empty()
         );
     }
 

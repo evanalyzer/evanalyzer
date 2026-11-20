@@ -25,6 +25,7 @@ use crate::api::{
 use crate::api::{ProfileExportContent, ProfileFilter, ProfileLines, ProfilePoint};
 use crate::workspace::settings::SpeedUnit;
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
+use evanalyzer_cfg::settings::images_settings::ImageMarker;
 use rust_xlsxwriter::{Color, Format, FormatAlign, Workbook, Worksheet, XlsxError};
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -762,6 +763,56 @@ impl FieldSink for FieldsSheet<'_> {
 }
 
 /// A cell holding just `value`, no formatting.
+/// The images' marker and note (only those with one), for the image-level
+/// tables of an export - the results' own copy.
+struct ImageReviews(HashMap<String, (Option<ImageMarker>, String)>);
+
+impl ImageReviews {
+    fn of(database: &ResultsGenerator) -> Result<Self, InternalErrors> {
+        Ok(Self(
+            database
+                .get_images()?
+                .into_iter()
+                .filter(|image| image.marker.is_some() || !image.note.is_empty())
+                .map(|image| {
+                    (
+                        image.rel_path.to_string_lossy().into_owned(),
+                        (image.marker, image.note),
+                    )
+                })
+                .collect(),
+        ))
+    }
+
+    /// The columns: none when no image has a marker or a note - such an
+    /// export stays as it was.
+    fn header(&self) -> Vec<String> {
+        if self.0.is_empty() {
+            return Vec::new();
+        }
+        vec!["image_marker".to_string(), "image_note".to_string()]
+    }
+
+    /// The marker's colour name and the note of the image at `rel_path`
+    /// (empty without).
+    fn cells(&self, rel_path: &str) -> Vec<Cell> {
+        if self.0.is_empty() {
+            return Vec::new();
+        }
+        let text = |text: &str| {
+            plain_cell(if text.is_empty() {
+                CellValue::Empty
+            } else {
+                CellValue::String(text.to_string())
+            })
+        };
+        match self.0.get(rel_path) {
+            Some((marker, note)) => vec![text(marker.map_or("", ImageMarker::name)), text(note)],
+            None => vec![text(""), text("")],
+        }
+    }
+}
+
 fn plain_cell(value: CellValue) -> Cell {
     Cell {
         value,
@@ -1081,6 +1132,9 @@ impl ResultExport {
             .collect();
         // Each plane's rows, time point by time point, behind its "T"/"Z".
         let planes = ExportPlanes::of(database, self)?;
+        // Each row ends with its image's marker and note - when an image
+        // has one.
+        let reviews = ImageReviews::of(database)?;
         let filter_of = |plane: PlaneFilter| GroupedByImageFilter {
             plane,
             images: None,
@@ -1117,7 +1171,8 @@ impl ResultExport {
                                 let header = planes
                                     .header()
                                     .into_iter()
-                                    .chain(page.column_names.iter().cloned());
+                                    .chain(page.column_names.iter().cloned())
+                                    .chain(reviews.header());
                                 for (col_idx, name) in header.enumerate() {
                                     sheet
                                         .write_with_format(
@@ -1130,7 +1185,7 @@ impl ResultExport {
                                 }
                                 next_row = 1;
                             }
-                            for row in &page.rows {
+                            for (row, (rel_path, _)) in page.rows.iter().zip(&page.row_locations) {
                                 if next_row as usize >= XLSX_MAX_ROWS {
                                     return Err(InternalErrors::InvalidArgument(format!(
                                         "Grouped by image has more than {} rows - more than \
@@ -1138,7 +1193,10 @@ impl ResultExport {
                                         XLSX_MAX_ROWS - 1
                                     )));
                                 }
-                                for (col_idx, cell) in plane_cells.iter().chain(row).enumerate() {
+                                let review = reviews.cells(rel_path);
+                                for (col_idx, cell) in
+                                    plane_cells.iter().chain(row).chain(&review).enumerate()
+                                {
                                     write_cell(sheet, next_row, col_idx as u16, cell, None)?;
                                 }
                                 next_row += 1;
@@ -1171,13 +1229,19 @@ impl ResultExport {
                                     .header()
                                     .into_iter()
                                     .chain(page.column_names.iter().cloned())
+                                    .chain(reviews.header())
                                     .collect();
                                 write_csv_row(&mut out, &header).map_err(write_err)?;
                                 header_written = true;
                             }
-                            for row in &page.rows {
-                                let cells: Vec<String> =
-                                    plane_cells.iter().chain(row).map(cell_text).collect();
+                            for (row, (rel_path, _)) in page.rows.iter().zip(&page.row_locations) {
+                                let review = reviews.cells(rel_path);
+                                let cells: Vec<String> = plane_cells
+                                    .iter()
+                                    .chain(row)
+                                    .chain(&review)
+                                    .map(cell_text)
+                                    .collect();
                                 write_csv_row(&mut out, &cells).map_err(write_err)?;
                             }
                             Ok(())
@@ -3662,6 +3726,54 @@ mod tests {
             lines.any(|line| line.starts_with("img2.tif,300") && line.ends_with(',')),
             "{grouped}"
         );
+    }
+
+    /// With a marker or a note on an image, the grouped table ends with
+    /// them (the results' own copy); the other images' fields stay empty.
+    #[test]
+    fn the_grouped_export_ends_with_the_images_marker_and_note() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 100),
+            ObjectSpec::new("img2.tif", "ClassA", 2, 200),
+        ]);
+        database
+            .change_image_review(
+                "img1.tif",
+                &crate::api::ImageReviewChange::Note("bubble, left".into()),
+            )
+            .unwrap();
+        database
+            .change_image_review(
+                "img1.tif",
+                &crate::api::ImageReviewChange::Marker(Some(ImageMarker::Red)),
+            )
+            .unwrap();
+        let (z_stacks, t_stacks) = full_range();
+        ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            z_stacks,
+            t_stacks,
+            columns: vec![Column::AreaSizePx],
+            aggregations: vec![Aggregation::Avg],
+            with_grouped_by_image_list: true,
+            ..Default::default()
+        }
+        .start_export(&database, &no_cancel(), &mut no_progress())
+        .expect("export");
+        let grouped = std::fs::read_to_string(out_dir.join("grouped_by_image.csv")).unwrap();
+        let lines: Vec<&str> = grouped.lines().collect();
+        assert!(lines[0].ends_with(",image_marker,image_note"), "{grouped}");
+        for line in &lines[1..] {
+            if line.starts_with("img1.tif") {
+                assert!(line.ends_with(",red,\"bubble, left\""), "{grouped}");
+            } else {
+                assert!(
+                    line.starts_with("img2.tif") && line.ends_with(",,"),
+                    "{grouped}"
+                );
+            }
+        }
     }
 
     #[test]

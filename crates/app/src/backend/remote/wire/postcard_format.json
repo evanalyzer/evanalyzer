@@ -1,5 +1,5 @@
 {
-  "protocol_version": 46,
+  "protocol_version": 47,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -823,6 +823,21 @@
           "disabled_reason": {
             "OPTION": "STR"
           }
+        },
+        {
+          "disabled_by": {
+            "OPTION": "STR"
+          }
+        },
+        {
+          "note": "STR"
+        },
+        {
+          "marker": {
+            "OPTION": {
+              "TYPENAME": "ImageMarker"
+            }
+          }
         }
       ]
     },
@@ -868,6 +883,28 @@
         }
       ]
     },
+    "ImageMarker": {
+      "ENUM": {
+        "0": {
+          "RED": "UNIT"
+        },
+        "1": {
+          "ORANGE": "UNIT"
+        },
+        "2": {
+          "YELLOW": "UNIT"
+        },
+        "3": {
+          "GREEN": "UNIT"
+        },
+        "4": {
+          "BLUE": "UNIT"
+        },
+        "5": {
+          "PURPLE": "UNIT"
+        }
+      }
+    },
     "ImageObjectsFilter": {
       "STRUCT": [
         {
@@ -886,6 +923,31 @@
           }
         }
       ]
+    },
+    "ImageReviewChange": {
+      "ENUM": {
+        "0": {
+          "Note": {
+            "NEWTYPE": "STR"
+          }
+        },
+        "1": {
+          "Marker": {
+            "NEWTYPE": {
+              "OPTION": {
+                "TYPENAME": "ImageMarker"
+              }
+            }
+          }
+        },
+        "2": {
+          "LeftOutReason": {
+            "NEWTYPE": {
+              "OPTION": "STR"
+            }
+          }
+        }
+      }
     },
     "ImageTracks": {
       "STRUCT": [
@@ -1888,62 +1950,76 @@
           }
         },
         "7": {
-          "ObjectClasses": "UNIT"
+          "ChangeImageReview": {
+            "STRUCT": [
+              {
+                "image_rel_path": "STR"
+              },
+              {
+                "change": {
+                  "TYPENAME": "ImageReviewChange"
+                }
+              }
+            ]
+          }
         },
         "8": {
-          "AvailableColumns": "UNIT"
+          "ObjectClasses": "UNIT"
         },
         "9": {
-          "ZStacks": "UNIT"
+          "AvailableColumns": "UNIT"
         },
         "10": {
-          "TStacks": "UNIT"
+          "ZStacks": "UNIT"
         },
         "11": {
-          "Planes": "UNIT"
+          "TStacks": "UNIT"
         },
         "12": {
-          "RunStatus": "UNIT"
+          "Planes": "UNIT"
         },
         "13": {
+          "RunStatus": "UNIT"
+        },
+        "14": {
           "Boxplot": {
             "NEWTYPE": {
               "TYPENAME": "BoxplotFilter"
             }
           }
         },
-        "14": {
+        "15": {
           "Histogram": {
             "NEWTYPE": {
               "TYPENAME": "HistogramFilter"
             }
           }
         },
-        "15": {
+        "16": {
           "Scatter": {
             "NEWTYPE": {
               "TYPENAME": "ScatterFilter"
             }
           }
         },
-        "16": {
+        "17": {
           "TimeCourse": {
             "NEWTYPE": {
               "TYPENAME": "TimeCourseFilter"
             }
           }
         },
-        "17": {
+        "18": {
           "ProfileColumns": "UNIT"
         },
-        "18": {
+        "19": {
           "Profile": {
             "NEWTYPE": {
               "TYPENAME": "ProfileFilter"
             }
           }
         },
-        "19": {
+        "20": {
           "ObjectProfile": {
             "STRUCT": [
               {
@@ -1955,17 +2031,17 @@
             ]
           }
         },
-        "20": {
+        "21": {
           "ProfileStep": {
             "NEWTYPE": {
               "TYPENAME": "ProfileStepFilter"
             }
           }
         },
-        "21": {
+        "22": {
           "HasTrees": "UNIT"
         },
-        "22": {
+        "23": {
           "TreeNeurons": {
             "NEWTYPE": {
               "OPTION": {
@@ -1974,53 +2050,53 @@
             }
           }
         },
-        "23": {
+        "24": {
           "TreeSegments": {
             "NEWTYPE": "STR"
           }
         },
-        "24": {
+        "25": {
           "GroupingRegex": {
             "NEWTYPE": {
               "TYPENAME": "Grouping"
             }
           }
         },
-        "25": {
+        "26": {
           "ImageObjects": {
             "NEWTYPE": {
               "TYPENAME": "ImageObjectsFilter"
             }
           }
         },
-        "26": {
+        "27": {
           "ImageTracks": {
             "NEWTYPE": {
               "TYPENAME": "ImageTracksFilter"
             }
           }
         },
-        "27": {
+        "28": {
           "HasTracks": "UNIT"
         },
-        "28": {
+        "29": {
           "TrackSummary": {
             "NEWTYPE": {
               "TYPENAME": "TrackSummaryFilter"
             }
           }
         },
-        "29": {
+        "30": {
           "HasLineage": "UNIT"
         },
-        "30": {
+        "31": {
           "TrackPaths": {
             "NEWTYPE": {
               "TYPENAME": "TrackPathsFilter"
             }
           }
         },
-        "31": {
+        "32": {
           "ObjectListPageStarts": {
             "STRUCT": [
               {

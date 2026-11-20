@@ -7,6 +7,8 @@
 // list: only the rows in view exist). Selecting one opens it.
 
 import { ImageItemData, ImagesListState, WellState } from "../api/images_list.slint";
+import { ImageReviewState } from "../api/image_review.slint";
+import { ImageReviewPopover } from "image_review_card.slint";
 import { LayoutState } from "../api/layout.slint";
 import { PlateView, WellColor } from "plate_view.slint";
 import { ListView } from "std-widgets.slint";
@@ -30,9 +32,13 @@ component ImageRow inherits Rectangle {
     in property <ImageItemData> data;
     in property <bool> selected;
     callback clicked;
+    // The note popover asked for (⋯ or the note mark), under this row.
+    callback review-clicked;
 
     accessible-role: list-item;
-    accessible-label: root.data.name + (root.data.state == WellState.analysed ? ", analysed" : root.data.state == WellState.preview ? ", preview" : "");
+    accessible-label: root.data.name + (root.data.state == WellState.analysed ? ", analysed" : root.data.state == WellState.preview ? ", preview" : "")
+        + (root.data.marker > 0 ? ", marker " + ImageReviewState.marker-name(root.data.marker) : "")
+        + (root.data.has_note ? ", has a note" : "") + (root.data.left_out ? ", left out of the results" : "");
     accessible-item-selected: root.selected;
 
     // Every list's rule (ink/row.slint): hovered `row-hover`, selected the
@@ -60,16 +66,57 @@ component ImageRow inherits Rectangle {
                 height: 22px;
                 border-radius: 4px;
                 background: Ink.viewport;
+                // The marker: a dot on the thumbnail's corner.
+                if root.data.marker > 0: Rectangle {
+                    x: parent.width - 8px;
+                    y: -3px;
+                    width: 11px;
+                    height: 11px;
+                    border-radius: 5.5px;
+                    border-width: 2px;
+                    border-color: Ink.panel;
+                    background: Ink.markers[root.data.marker - 1];
+                }
             }
         }
+        // Left out of the results: the name greys.
         Text {
             horizontal-stretch: 1;
             text: root.data.name;
             font-size: Ink.fs-body;
             font-weight: root.selected ? 600 : 400;
-            color: Ink.text;
+            color: root.data.left_out ? Ink.text-mute : Ink.text;
             vertical-alignment: center;
             overflow: elide;
+        }
+        if root.data.has_note: Rectangle {
+            width: 20px;
+            accessible-role: button;
+            accessible-label: "Note";
+            accessible-action-default => {
+                root.review-clicked();
+            }
+            Image {
+                source: InkIcons.note;
+                width: 13px;
+                height: 13px;
+                colorize: note-ta.has-hover ? Ink.text : Ink.text-dim;
+            }
+            note-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.review-clicked();
+                }
+            }
+        }
+        if root.data.left_out: Image {
+            y: (parent.height - self.height) / 2;
+            source: InkIcons.left-out;
+            width: 13px;
+            height: 13px;
+            colorize: Ink.left-out;
+            accessible-role: text;
+            accessible-label: "Left out of the results";
         }
         if root.data.has_annotations: Image {
             y: (parent.height - self.height) / 2;
@@ -84,6 +131,35 @@ component ImageRow inherits Rectangle {
             alignment: center;
             StateDot {
                 state: root.data.state;
+            }
+        }
+        // ⋯: the note & marker popover - shown on the hovered and the
+        // selected row, its place kept so the row doesn't shift.
+        Rectangle {
+            width: 20px;
+            accessible-role: button;
+            accessible-label: "Note and marker of " + root.data.name;
+            accessible-action-default => {
+                root.review-clicked();
+            }
+            Rectangle {
+                width: 20px;
+                height: 20px;
+                border-radius: Ink.radius-sm;
+                background: more-ta.has-hover ? Ink.row-button-hover : transparent;
+                visible: ta.has-hover || more-ta.has-hover || root.selected;
+                Image {
+                    source: InkIcons.more;
+                    width: 14px;
+                    height: 14px;
+                    colorize: Ink.text-dim;
+                }
+            }
+            more-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.review-clicked();
+                }
             }
         }
     }
@@ -326,7 +402,7 @@ export component ImagesListPanel inherits Rectangle {
             padding-top: 6px;
             padding-bottom: 4px;
             search := InkSearchField {
-                placeholder: "Search files… (Ctrl F)";
+                placeholder: "Search files and notes… (Ctrl F)";
                 text: ImagesListState.filter_text;
                 edited(text) => {
                     ImagesListState.filter_text = text;
@@ -404,6 +480,20 @@ export component ImagesListPanel inherits Rectangle {
             // Chosen elsewhere (the image chip's picker, results, a scan),
             // the row is centred - only when it is not fully in view.
             property <int> clicked-index: -1;
+            // Where the note popover opens: beside the row it is for, right
+            // of the panel - the list stays in view (Slint keeps it in the
+            // window).
+            property <length> review-y;
+            review-popup := PopupWindow {
+                x: list-box.width + 10px;
+                y: list-box.review-y;
+                close-policy: close-on-click-outside;
+                ImageReviewPopover {
+                    close => {
+                        review-popup.close();
+                    }
+                }
+            }
             property <int> scroll-index: ImagesListState.scroll_to_image_index;
             changed scroll-index => {
                 self.reveal-requested();
@@ -474,6 +564,11 @@ export component ImagesListPanel inherits Rectangle {
                             list-box.clicked-index = index;
                             ImagesListState.selected_image_index = index;
                             ImagesListState.image_selected(data.path);
+                        }
+                        review-clicked => {
+                            ImageReviewState.open-popup(data.path);
+                            list-box.review-y = self.absolute-position.y - list-box.absolute-position.y - 8px;
+                            review-popup.show();
                         }
                     }
                 }

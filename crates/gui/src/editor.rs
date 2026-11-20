@@ -34,6 +34,7 @@ pub mod connection_controller;
 pub mod focus_controller;
 pub mod histogram_controller;
 pub mod image_meta_controller;
+pub(crate) mod image_review_controller;
 pub mod images_list_controller;
 pub(crate) mod measurements_panel;
 pub(crate) mod object_card;

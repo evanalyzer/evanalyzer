@@ -317,6 +317,30 @@ pub fn reject_newer_results(conn: &Connection) -> Result<(), InternalErrors> {
     Ok(())
 }
 
+/// Adds the review columns of `images` (note, marker, disabled_by) to a
+/// results file written before them - a no-op on a newer one. They came
+/// without a format bump: an older build reading a newer file just doesn't
+/// see them. A file without images (not written by an analysis) stays as it
+/// is.
+pub fn add_review_columns(conn: &Connection) -> Result<(), InternalErrors> {
+    let has_images: bool = conn
+        .query_row(
+            "SELECT count(*) > 0 FROM information_schema.tables WHERE table_name = 'images'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| InternalErrors::Io(e.to_string()))?;
+    if !has_images {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "ALTER TABLE images ADD COLUMN IF NOT EXISTS note VARCHAR;
+         ALTER TABLE images ADD COLUMN IF NOT EXISTS marker UTINYINT;
+         ALTER TABLE images ADD COLUMN IF NOT EXISTS disabled_by VARCHAR;",
+    )
+    .map_err(|e| InternalErrors::Io(e.to_string()))
+}
+
 /// Derives the display `image_name` (bare filename) from an image's relative
 /// path, falling back to the full relative path when it has no filename
 /// component. Shared by [`DuckDbExporter::export`] (writes `objects` rows)
@@ -528,6 +552,7 @@ impl DuckDbExporter {
              ALTER TABLE measurements ADD COLUMN IF NOT EXISTS track_id UBIGINT;",
         )
         .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        add_review_columns(&conn)?;
         let object_indices = existing_object_indices(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -1641,7 +1666,16 @@ CREATE TABLE IF NOT EXISTS images (
     t_stacks        UINTEGER NOT NULL,
     t_stacks_analyzed INTEGER[],
     z_stacks_analyzed INTEGER[],
-    frame_interval_s  DOUBLE
+    frame_interval_s  DOUBLE,
+    -- The user's review, copied from the project at the run and then the
+    -- results' own (changed in the results only): a note, a marker (1 red
+    -- .. 6 purple, NULL none) and who left the image out ('pipeline':
+    -- Exclude Image, 'project': left out in the project, 'results': in the
+    -- results; NULL: included). Last, as files written before them get them
+    -- added at the end (`add_review_columns`).
+    note              VARCHAR,
+    marker            UTINYINT,
+    disabled_by       VARCHAR
 );
 
 CREATE TABLE IF NOT EXISTS classes (
@@ -2079,9 +2113,22 @@ impl PipelineResultExporter for DuckDbExporter {
         let successful = error.is_none();
         // "[0, 1, 2]", cast to INTEGER[] by DuckDB.
         let list = |values: &[i32]| format!("{values:?}");
+        // Exclude Image's reason first: the pipeline decided it for the
+        // numbers already; a left out in the project only adds its own.
+        let review = summary.review;
+        let leave_out = review.and_then(|review| review.leave_out.as_ref());
+        let (disabled_by, disabled_reason) = match (summary.excluded, leave_out) {
+            (Some(reason), _) => (Some("pipeline"), Some(reason)),
+            (None, Some(leave_out)) => (Some("project"), leave_out.reason_text()),
+            (None, None) => (None, None),
+        };
+        let note = review
+            .map(|review| review.note.as_str())
+            .filter(|note| !note.is_empty());
+        let marker = review.and_then(|review| review.marker).map(|m| m.number());
 
         conn.execute(
-            "INSERT INTO images (image_name, image_rel_path, successful, error_message, width, height, c_stacks, z_stacks, t_stacks, t_stacks_analyzed, z_stacks_analyzed, frame_interval_s, disabled, disabled_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS INTEGER[]), CAST(? AS INTEGER[]), ?, ?, ?)",
+            "INSERT INTO images (image_name, image_rel_path, successful, error_message, width, height, c_stacks, z_stacks, t_stacks, t_stacks_analyzed, z_stacks_analyzed, frame_interval_s, disabled, disabled_reason, disabled_by, note, marker) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS INTEGER[]), CAST(? AS INTEGER[]), ?, ?, ?, ?, ?, ?)",
             params![
                 image_name,
                 image_rel,
@@ -2095,8 +2142,11 @@ impl PipelineResultExporter for DuckDbExporter {
                 list(summary.t_stacks_analyzed),
                 list(summary.z_stacks_analyzed),
                 summary.frame_interval_s,
-                summary.excluded.is_some(),
-                summary.excluded
+                disabled_by.is_some(),
+                disabled_reason,
+                disabled_by,
+                note,
+                marker
             ],
         )
         .map_err(|e| InternalErrors::Io(e.to_string()))?;
@@ -2784,6 +2834,7 @@ mod tests {
     /// An image analysed on `t_stacks` x `z_stacks`.
     fn summary<'a>(t_stacks: &'a [i32], z_stacks: &'a [i32]) -> ImageSummary<'a> {
         ImageSummary {
+            review: None,
             width: 1,
             height: 1,
             nr_c_stacks: 1,
@@ -2834,6 +2885,110 @@ mod tests {
             [
                 ("blurry.tif".into(), true, Some(reason.into())),
                 ("sharp.tif".into(), false, None),
+            ]
+        );
+    }
+
+    /// The project's review of an image goes into the results with it: note,
+    /// marker, and a left out as disabled by the project with its reason -
+    /// Exclude Image's reason wins, the pipeline left it out already.
+    #[test]
+    fn an_images_review_is_copied_into_the_results() {
+        use evanalyzer_cfg::settings::images_settings::{
+            ImageMarker, ImageReview, LeaveOut, LeaveOutReason,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let exporter = DuckDbExporter::new(
+            dir.path().join("r.evadb"),
+            HashMap::new(),
+            &MetaData::default(),
+        )
+        .unwrap();
+        let left_out = ImageReview {
+            note: "bubble lower left".into(),
+            marker: Some(ImageMarker::Orange),
+            leave_out: Some(LeaveOut {
+                reason: Some(LeaveOutReason::Artefact),
+            }),
+        };
+        let noted = ImageReview {
+            note: "nice one".into(),
+            ..Default::default()
+        };
+        let finalize = |name: &str, review: Option<&ImageReview>, excluded: Option<&str>| {
+            exporter
+                .finalize_image(
+                    Path::new(name),
+                    &ImageSummary {
+                        review,
+                        excluded,
+                        ..summary(&[0], &[0])
+                    },
+                    None,
+                )
+                .unwrap();
+        };
+        finalize("a.tif", Some(&left_out), None);
+        finalize("b.tif", Some(&left_out), Some("Exclude Image: dark"));
+        finalize("c.tif", Some(&noted), None);
+        finalize("d.tif", None, None);
+        let conn = exporter.lock_conn();
+        type Row = (
+            String,
+            bool,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<u8>,
+        );
+        let rows: Vec<Row> = conn
+            .prepare(
+                "SELECT image_rel_path, disabled, disabled_reason, disabled_by, note, marker \
+                 FROM images ORDER BY 1",
+            )
+            .unwrap()
+            .query_map([], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let note = Some("bubble lower left".to_string());
+        assert_eq!(
+            rows,
+            [
+                (
+                    "a.tif".into(),
+                    true,
+                    Some("Artefact".into()),
+                    Some("project".into()),
+                    note.clone(),
+                    Some(2)
+                ),
+                (
+                    "b.tif".into(),
+                    true,
+                    Some("Exclude Image: dark".into()),
+                    Some("pipeline".into()),
+                    note,
+                    Some(2)
+                ),
+                (
+                    "c.tif".into(),
+                    false,
+                    None,
+                    None,
+                    Some("nice one".into()),
+                    None
+                ),
+                ("d.tif".into(), false, None, None, None, None),
             ]
         );
     }
@@ -3356,6 +3511,7 @@ mod tests {
             .finalize_image(
                 Path::new("b.tif"),
                 &ImageSummary {
+                    review: None,
                     frame_interval_s: Some(30.0),
                     ..summary(&[2], &[4, 5])
                 },

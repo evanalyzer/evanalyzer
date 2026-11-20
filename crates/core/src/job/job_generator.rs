@@ -1051,6 +1051,7 @@ mod tests {
             ..Default::default()
         };
         ImageEntry {
+            review: Default::default(),
             rel_path: PathBuf::from(name),
             file_size: 0,
             selected_series: 0,

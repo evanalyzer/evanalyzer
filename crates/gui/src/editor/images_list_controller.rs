@@ -504,6 +504,8 @@ impl ImagesListController {
                     }
                 });
 
+            self.init_review_callbacks();
+
             // A folder's head clicked: fold / unfold it
             let manager = Arc::clone(self);
             ui.global::<ImagesListState>()
@@ -647,6 +649,10 @@ impl ImagesListController {
     /// Data processing happens on the caller's thread, while the final
     /// UI update is dispatched via `slint::invoke_from_event_loop`.
     pub fn sync_image_list_to_slint(&self) {
+        crate::editor::image_review_controller::sync_current_review_to_slint(
+            &self.ui,
+            &self.app_state,
+        );
         let ui_weak = self.ui.clone();
         let state = self.app_state.clone();
 
@@ -917,7 +923,7 @@ fn row_of_image(
 }
 
 /// Builds the Slint-facing row list for `sync_image_list_to_slint`: applies
-/// the (already-lowercased) filter text against `rel_path`, then maps each
+/// the (already-lowercased) filter text against `rel_path` and the note, then maps each
 /// surviving entry to an `ImageItemData`. When the images lie in more than
 /// one folder, each folder's images follow a head row (the folders in the
 /// order they first appear); a folded folder (`collapsed`, ignored while
@@ -945,6 +951,12 @@ fn build_image_list_items(
                 .to_string_lossy()
                 .to_lowercase()
                 .contains(filter_text_lowercase)
+                || (!entry.review.note.is_empty()
+                    && entry
+                        .review
+                        .note
+                        .to_lowercase()
+                        .contains(filter_text_lowercase))
         })
         .collect();
     let count = matching.len();
@@ -1080,6 +1092,12 @@ fn image_list_item(
             .any(|series| !series.objects.is_empty()),
         state: image_state(&entry.rel_path, states, image_root),
         head: -1,
+        marker: entry
+            .review
+            .marker
+            .map_or(0, |marker| marker.number() as i32),
+        has_note: !entry.review.note.is_empty(),
+        left_out: entry.review.leave_out.is_some(),
         ..Default::default()
     }
 }
@@ -1470,6 +1488,82 @@ mod tests {
         assert!(!folded(&state), "unfolded again");
     }
 
+    /// A marker or a left out is an undo step and marks the project
+    /// unsaved; the same marker again changes nothing.
+    #[test]
+    fn marking_an_image_is_an_undo_step_and_an_unsaved_change() {
+        use crate::editor::image_review_controller::ReviewChange;
+        use evanalyzer_cfg::settings::images_settings::ImageMarker;
+        let controller = make_controller();
+        let state = controller.app_state.clone();
+        let rel = PathBuf::from("A/a.tif");
+        state.get_project_runtime_write().images.list.insert(
+            rel.clone(),
+            ImageEntry {
+                rel_path: rel.clone(),
+                ..Default::default()
+            },
+        );
+        let marker = |state: &UiState| {
+            state
+                .get_project()
+                .images
+                .list
+                .get(&rel)
+                .unwrap()
+                .review
+                .marker
+        };
+        let undo_steps = || state.undo_stack.lock().unwrap().len();
+
+        controller.change_review("A/a.tif", ReviewChange::Marker(Some(ImageMarker::Red)));
+        assert_eq!(marker(&state), Some(ImageMarker::Red));
+        assert!(state.is_dirty());
+        let steps = undo_steps();
+        assert_eq!(steps, 1);
+        controller.change_review("A/a.tif", ReviewChange::Marker(Some(ImageMarker::Red)));
+        assert_eq!(undo_steps(), steps, "nothing changed");
+
+        assert!(state.undo());
+        assert_eq!(marker(&state), None);
+    }
+
+    /// The rows carry the review's marks, and the search finds notes too.
+    #[test]
+    fn rows_show_the_review_and_the_search_finds_notes() {
+        use evanalyzer_cfg::settings::images_settings::{ImageMarker, ImageReview, LeaveOut};
+        let mut images = image_list_of(&["a.tif", "b.tif"]);
+        images
+            .get_mut(std::path::Path::new("a.tif"))
+            .unwrap()
+            .review = ImageReview {
+            note: "Bubble lower left".into(),
+            marker: Some(ImageMarker::Blue),
+            leave_out: Some(LeaveOut::default()),
+        };
+        let build = |filter: &str| {
+            build_image_list_items(
+                &images,
+                filter,
+                &ImageStates::default(),
+                std::path::Path::new("/data"),
+                &Default::default(),
+                &Default::default(),
+            )
+            .0
+        };
+        let rows = build("");
+        assert_eq!(
+            (rows[0].marker, rows[0].has_note, rows[0].left_out),
+            (5, true, true)
+        );
+        assert_eq!(
+            (rows[1].marker, rows[1].has_note, rows[1].left_out),
+            (0, false, false)
+        );
+        assert_eq!(row_names(&build("bubble")), ["a.tif"]);
+    }
+
     #[test]
     fn update_image_filter_text_in_project_stores_the_given_text() {
         let controller = make_controller();
@@ -1677,6 +1771,7 @@ mod tests {
                 project.images.list.insert(
                     PathBuf::from(name),
                     ImageEntry {
+                        review: Default::default(),
                         rel_path: PathBuf::from(name),
                         file_size: 0,
                         selected_series: 0,
@@ -2013,6 +2108,7 @@ mod tests {
             project.images.list.insert(
                 PathBuf::from("with_objects.tif"),
                 ImageEntry {
+                    review: Default::default(),
                     rel_path: PathBuf::from("with_objects.tif"),
                     file_size: 0,
                     selected_series: 0,
@@ -2023,6 +2119,7 @@ mod tests {
             project.images.list.insert(
                 PathBuf::from("empty.tif"),
                 ImageEntry {
+                    review: Default::default(),
                     rel_path: PathBuf::from("empty.tif"),
                     file_size: 0,
                     selected_series: 0,
@@ -2055,6 +2152,7 @@ mod tests {
                 (
                     PathBuf::from(path),
                     ImageEntry {
+                        review: Default::default(),
                         rel_path: PathBuf::from(path),
                         file_size: 0,
                         selected_series: 0,

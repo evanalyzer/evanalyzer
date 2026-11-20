@@ -820,6 +820,13 @@ fn answer_query(
             source.enable_image(&image_rel_path, disable)?;
             ResultsAnswer::Done
         }
+        ResultsQuery::ChangeImageReview {
+            image_rel_path,
+            change,
+        } => {
+            source.change_image_review(&image_rel_path, change)?;
+            ResultsAnswer::Done
+        }
         ResultsQuery::ObjectClasses => ResultsAnswer::Classes(source.get_object_classes()?),
         ResultsQuery::AvailableColumns => ResultsAnswer::Columns(source.get_available_columns()?),
         ResultsQuery::ZStacks => ResultsAnswer::Count(source.get_nr_of_z_stacks()),

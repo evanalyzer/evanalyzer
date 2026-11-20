@@ -34,8 +34,8 @@ pub(crate) use results_generator::{
 use crate::api::{
     BoxplotFilter, BoxplotResult, ColumnEntry, DatabaseResult, ExportProgressFn,
     GroupedByImageFilter, HistogramFilter, HistogramResult, ImageEntry, ImageHeatmapFilter,
-    ListFilter, PlateFilter, ResultExport, ResultsSource, ScatterFilter, ScatterResult,
-    TimeCourseFilter, TimeCourseResult, View, WellFilter,
+    ImageReviewChange, ListFilter, PlateFilter, ResultExport, ResultsSource, ScatterFilter,
+    ScatterResult, TimeCourseFilter, TimeCourseResult, View, WellFilter,
 };
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::classification_settings::Class;
@@ -119,6 +119,14 @@ impl ResultsSource for LocalResults {
 
     fn enable_image(&self, image_rel_path: &str, disable: bool) -> Result<(), InternalErrors> {
         self.with(|db| db.enable_image(image_rel_path, disable))
+    }
+
+    fn change_image_review(
+        &self,
+        image_rel_path: &str,
+        change: ImageReviewChange,
+    ) -> Result<(), InternalErrors> {
+        self.with(|db| db.change_image_review(image_rel_path, &change))
     }
 
     fn get_object_classes(&self) -> Result<Vec<Class>, InternalErrors> {

@@ -32,6 +32,7 @@ import { AnalysisRunningCloseState, ConnectState, DialogType, GlobalAppState, Un
 import { ToolbarState } from "api/toolbar.slint";
 import { ToolState, ViewportObjectState } from "api/viewport.slint";
 import { ImagesListState } from "api/images_list.slint";
+import { ImageReviewState } from "api/image_review.slint";
 import { ObjectListState } from "api/object_list.slint";
 import { PipelineCommand, PipelinesPanelState } from "api/pipelines.slint";
 import { PipelineFocusState } from "api/pipeline_focus.slint";
@@ -338,6 +339,20 @@ export component GlobalShortcuts inherits FocusScope {
         if (!e.modifiers.control && (e.text == "o" || e.text == "#")) {
             ViewportObjectState.show_objects = !ViewportObjectState.show_objects;
             return accept;
+        }
+
+        // -- The open image's review -- 1-6 a marker, 0 none (Ctrl+0 is
+        // the interface size, above); N its note & marker popover. Not in
+        // Results: there the notes are the results' own.
+        if !e.modifiers.control && !e.modifiers.alt && LayoutState.mode != WorkspaceMode.results && ImageReviewState.has-image {
+            if e.text == "0" || e.text == "1" || e.text == "2" || e.text == "3" || e.text == "4" || e.text == "5" || e.text == "6" {
+                ImageReviewState.set-marker("", e.text.to-float());
+                return accept;
+            }
+            if e.text == "n" || e.text == "N" {
+                ImageReviewState.chip-popup-requested += 1;
+                return accept;
+            }
         }
 
         // -- Modes -- Ctrl+1..3, the same convention browsers use for

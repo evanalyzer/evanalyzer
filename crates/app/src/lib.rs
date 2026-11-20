@@ -126,6 +126,7 @@ pub mod results {
     pub use crate::api::HistogramResult;
     pub use crate::api::ImageEntry;
     pub use crate::api::ImageHeatmapFilter;
+    pub use crate::api::ImageReviewChange;
     pub use crate::api::ListFilter;
     pub use crate::api::MeasurementColumn;
     pub use crate::api::MotionKind;

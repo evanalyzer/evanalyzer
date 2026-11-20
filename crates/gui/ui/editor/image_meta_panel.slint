@@ -13,6 +13,8 @@ import { ChannelState } from "../api/state.slint";
 import { LayoutState } from "../api/layout.slint";
 import { ScrollView, ListView } from "std-widgets.slint";
 import { ImageMetaData, WavelengthOption, ChannelAcq } from "../api/image_meta.slint";
+import { ImageReviewState } from "../api/image_review.slint";
+import { ImageReviewCard } from "image_review_card.slint";
 import { Ink, InkIcons, InkTextField, InkButton, InkButtonKind, InkCaption, InkHint, InkTipZone, InkDialog, InkSearchField, InkBusy } from "../ink/ink.slint";
 
 // A color tile of a channel's color chooser.
@@ -142,6 +144,7 @@ export component ImageMetaPanel inherits Rectangle {
     property <int> picked: -1;
     // Which parts are open (for the session).
     property <bool> part-image: true;
+    property <bool> part-review: true;
     property <bool> part-calib: false;
     property <bool> part-channels: true;
     property <bool> part-objective: false;
@@ -278,6 +281,37 @@ export component ImageMetaPanel inherits Rectangle {
                     if ImageMetaData.storage_size != "": InfoRow {
                         key: "Data size";
                         value: ImageMetaData.storage_size;
+                    }
+                }
+
+                // -- Note & marker: what the user noted about the image
+                // (design N6) - the same card as the popover --
+                if ImageReviewState.has-image: InfoPart {
+                    title: "Note & marker";
+                    summary: (ImageReviewState.current.marker > 0 ? ImageReviewState.marker-name(ImageReviewState.current.marker) : "")
+                        + (ImageReviewState.current.note != "" ? (ImageReviewState.current.marker > 0 ? " · " : "") + "note" : "")
+                        + (ImageReviewState.current.left-out ? (ImageReviewState.current.marker > 0 || ImageReviewState.current.note != "" ? " · " : "") + "left out" : "");
+                    open <=> root.part-review;
+                }
+                if root.part-review && ImageReviewState.has-image: VerticalLayout {
+                    padding-left: 28px;
+                    padding-right: Ink.pad-panel;
+                    padding-top: 2px;
+                    padding-bottom: 10px;
+                    ImageReviewCard {
+                        data: ImageReviewState.current;
+                        marker-picked(m) => {
+                            ImageReviewState.set-marker("", m);
+                        }
+                        note-edited(text) => {
+                            ImageReviewState.set-note("", text);
+                        }
+                        left-out-toggled(on) => {
+                            ImageReviewState.set-left-out("", on);
+                        }
+                        reason-picked(reason) => {
+                            ImageReviewState.set-reason("", reason);
+                        }
                     }
                 }
 

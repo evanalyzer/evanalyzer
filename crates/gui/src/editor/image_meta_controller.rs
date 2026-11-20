@@ -356,6 +356,10 @@ impl ImageMetaController {
     }
 
     pub(crate) fn sync_image_meta_to_slint(&self) -> Result<(), InternalErrors> {
+        crate::editor::image_review_controller::sync_current_review_to_slint(
+            &self.ui,
+            &self.app_state,
+        );
         // --- Extract everything from project first, then drop the lock ---
         let (
             image_path,
