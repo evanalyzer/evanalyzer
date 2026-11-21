@@ -214,6 +214,15 @@ export global HistogramState {
         callback log-scale-changed(bool);
         // The open image's scaling for every image of the project.
         callback apply-to-all-images();
+        // "Fit data": the selected channel's axis from its lowest to its
+        // highest value (black and white stay).
+        callback fit-axis-clicked();
+        // Zoomed or panned with the mouse since the axis was last set
+        // (Auto, Fit data, another image or channel): the axis before
+        // that, which the zoom chip goes back to. Not saved.
+        in-out property <bool> zoomed: false;
+        in-out property <float> zoom-base-min: 0.0;
+        in-out property <float> zoom-base-max: 1.0;
 
         // What one unit of the values below is in the image's own values
         // (2^bits, like the pixel values in the footer); 1 for float images.

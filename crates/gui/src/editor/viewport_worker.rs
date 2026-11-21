@@ -256,16 +256,18 @@ impl ViewportWorker {
                 // STEP 5: Auto-adjust - write lock acquired AFTER read lock
                 // dropped. Safe because we dropped the project read lock in
                 // STEP 1.
-                if task.auto_adjust_if_not_set || task.auto_adjust_selected || task.auto_adjust_all
-                {
+                let auto = task.auto_adjust_if_not_set
+                    || task.auto_adjust_selected
+                    || task.auto_adjust_all;
+                if auto || task.fit_axis_selected {
                     // Auto-scale clicked: a colour image's red, green and
                     // blue are stretched too (a new one opens in true
                     // colour, the full range) - linked, all three to one
                     // window, so the colours stay true.
                     let clicked = task.auto_adjust_selected || task.auto_adjust_all;
                     let linked = !rgb_unlinked && render_src.iter().any(|c| c.is_rgb);
-                    let common = (clicked && linked).then(|| linked_rgb_range(&render_src));
-                    for channel in render_src.iter() {
+                    let common = (auto && clicked && linked).then(|| linked_rgb_range(&render_src));
+                    for channel in render_src.iter().filter(|_| auto) {
                         let idx = channel.c_stack;
                         if let Some(ch) = hist_settings.get(&idx) {
                             if (!ch.is_some() && task.auto_adjust_if_not_set)
@@ -297,6 +299,9 @@ impl ViewportWorker {
                                     );
                             }
                         }
+                    }
+                    if task.fit_axis_selected {
+                        self.fit_axis(&render_src, selected_channel, linked);
                     }
                     self.histogram_controller.sync_histogram_settings_to_slint();
                 } else if task.is_new_image || task.is_new_series {
@@ -622,6 +627,34 @@ impl ViewportWorker {
     /// `ViewportController::compare_epoch`) - after a pan or zoom Slint just
     /// moves them; on Windows, which shows screen-sized frames, the kept
     /// renders are only composited again.
+    /// "Fit data": the selected channel's histogram axis from its lowest to
+    /// its highest value shown - a linked colour image's red, green and
+    /// blue together. Black and white stay (the image looks the same).
+    fn fit_axis(&self, channels: &[ViewChannel], selected_channel: i32, linked: bool) {
+        let fitted = |c: &&ViewChannel| c.c_stack == selected_channel || (linked && c.is_rgb);
+        let Some((lo, hi)) = channels
+            .iter()
+            .filter(fitted)
+            .filter_map(|c| data_range(c.slice()))
+            .reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)))
+        else {
+            return;
+        };
+        let mut project = self.app_state.get_project_write();
+        let windows = project.get_image_channel_histograms().clone();
+        for channel in channels.iter().filter(fitted) {
+            if let Some(Some(window)) = windows.get(&channel.c_stack) {
+                project.set_image_histogram_settings_for_channel(
+                    channel.c_stack,
+                    window.min,
+                    window.max,
+                    lo,
+                    hi,
+                );
+            }
+        }
+    }
+
     fn render_compare(&self, viewport_state: &ViewportState, slot: &mut Option<CompareRender>) {
         let epoch = self.viewport_controller.compare_epoch();
         let fresh = slot.as_ref().is_some_and(|c| c.epoch == epoch);
@@ -1217,6 +1250,31 @@ where
                 a
             },
         )
+}
+
+/// The lowest and highest of `samples` ("Fit data": the histogram's axis
+/// from end to end of the values) - `None` without values. A flat image
+/// gets a little room, so the axis never has zero width.
+pub(crate) fn data_range(samples: Option<SampleSlice<'_>>) -> Option<(f32, f32)> {
+    let pixels = samples?;
+    if pixels.len() == 0 {
+        return None;
+    }
+    let (lo, hi) = (0..pixels.len())
+        .map(|i| pixels.get(i))
+        .filter(|v| v.is_finite())
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), v| {
+            (lo.min(v), hi.max(v))
+        });
+    if lo > hi {
+        return None;
+    }
+    let (lo, hi) = if hi - lo < 0.001 {
+        (lo - 0.0005, hi + 0.0005)
+    } else {
+        (lo, hi)
+    };
+    Some((lo.max(0.0), hi.min(1.0)))
 }
 
 /// Applies auto-adjustment to an image using partial sorting (O(N) average).
@@ -2332,6 +2390,67 @@ mod tests {
             (window.min, window.max, window.min_limit, window.max_limit),
             (0.0, 1.0, 0.0, 1.0)
         );
+    }
+
+    /// "Fit data": only the selected channel's axis goes to its values'
+    /// ends; black and white stay, other channels are untouched.
+    #[test]
+    fn fit_axis_sets_only_the_selected_channels_axis_to_its_values() {
+        let mut r = render_fixture(project_with_fixture_image());
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        let channels: Vec<i32> = r
+            .app_state
+            .get_project()
+            .get_image_channel_histograms()
+            .keys()
+            .copied()
+            .collect();
+        for c in &channels {
+            r.app_state
+                .get_project_write()
+                .set_image_histogram_settings_for_channel(*c, 0.2, 0.3, 0.1, 0.4);
+        }
+        let selected = r.app_state.get_project().get_selected_image_channel_idx();
+        r.draw(
+            TaskDispatch::HighRes,
+            DrawingTask {
+                fit_axis_selected: true,
+                ..Default::default()
+            },
+        );
+        let histograms = r.app_state.get_project().get_image_channel_histograms();
+        for (c, window) in histograms.iter() {
+            let w = window.as_ref().expect("a window was kept");
+            assert_eq!((w.min, w.max), (0.2, 0.3), "black and white stay");
+            if *c == selected {
+                assert_ne!(
+                    (w.min_limit, w.max_limit),
+                    (0.1, 0.4),
+                    "the axis was fitted"
+                );
+                assert!(w.min_limit >= 0.0 && w.max_limit <= 1.0 && w.min_limit < w.max_limit);
+            } else {
+                assert_eq!(
+                    (w.min_limit, w.max_limit),
+                    (0.1, 0.4),
+                    "channel {c} untouched"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn data_range_is_the_lowest_and_highest_value() {
+        let data = [0.3f32, 0.1, 0.7, f32::NAN, 0.5];
+        assert_eq!(data_range(Some(SampleSlice::F32(&data))), Some((0.1, 0.7)));
+        assert_eq!(data_range(Some(SampleSlice::F32(&[]))), None);
+        assert_eq!(data_range(None), None);
+        // A flat image still gets an axis with width.
+        let (lo, hi) = data_range(Some(SampleSlice::F32(&[0.5, 0.5]))).unwrap();
+        assert!(lo < 0.5 && hi > 0.5);
+        // Never outside 0..1.
+        let (lo, hi) = data_range(Some(SampleSlice::F32(&[0.0, 0.0]))).unwrap();
+        assert!(lo == 0.0 && hi > 0.0);
     }
 
     /// "Auto-scale all": every channel's window is auto-adjusted again -

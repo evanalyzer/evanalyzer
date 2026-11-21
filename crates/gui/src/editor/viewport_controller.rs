@@ -955,6 +955,17 @@ impl ViewportController {
         self.dispatch_worker_task(task, TaskDispatch::HighResAndLowRes);
     }
 
+    /// "Fit data": the selected channel's histogram axis set to the lowest
+    /// and highest value shown, then redrawn (black and white stay).
+    pub fn trigger_image_redraw_with_fit_axis(&self) {
+        self.bump_content_generation();
+        let task = DrawingTask {
+            fit_axis_selected: true,
+            ..DrawingTask::default()
+        };
+        self.dispatch_worker_task(task, TaskDispatch::HighResAndLowRes);
+    }
+
     /// "Auto-scale all": every channel auto-adjusted, then redrawn.
     pub fn trigger_image_redraw_with_auto_adjust_all(&self) {
         self.bump_content_generation();
@@ -2098,6 +2109,7 @@ mod dispatch_slot_tests {
             auto_adjust_selected: false,
             auto_adjust_if_not_set: true,
             auto_adjust_all: false,
+            fit_axis_selected: false,
             is_new_image: true,
             fit_to_screen: true,
             is_new_series: true,

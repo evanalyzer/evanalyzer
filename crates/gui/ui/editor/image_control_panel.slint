@@ -116,95 +116,228 @@ global HistogramText {
     pure public function shown(v: float) -> string {
         HistogramState.value-scale > 1.5 ? round(v * HistogramState.value-scale) : round(v * 1000) / 1000
     }
+    // A grid number, already in the image's units: "12.5k" from 10000 on.
+    pure public function tick(v: float) -> string {
+        HistogramState.value-scale > 1.5
+            ? (v >= 10000 ? (round(v / 100) / 10) + "k" : "\{round(v)}")
+            : "\{round(v * 1000) / 1000}"
+    }
 }
 
-// A value at its line, inside the box.
+// The histogram's axis (0..1, like black and white). Black and white
+// never move with it: zooming changes what the histogram shows, never
+// the image.
+global HistogramAxis {
+    // The narrowest axis: 16 of the image's values (or 0.001 for float).
+    pure public function min-span() -> float {
+        HistogramState.value-scale > 1.5 ? min(1.0, 16 / HistogramState.value-scale) : 0.001
+    }
+
+    public function set(new-min: float, new-max: float) {
+        if new-max - new-min > 0.0000001 {
+            let range = new-max - new-min;
+            HistogramState.histogram_min_lim = new-min;
+            HistogramState.histogram_max_lim = new-max;
+            HistogramState.histogram_min_val = (HistogramState.histogram_min_val_abs - new-min) / range;
+            HistogramState.histogram_max_val = (HistogramState.histogram_max_val_abs - new-min) / range;
+            HistogramState.histogram_adjusted(HistogramState.histogram_min_val_abs, HistogramState.histogram_max_val_abs, new-min, new-max);
+        }
+    }
+
+    // Set by hand (a button or a field): no mouse zoom to go back from.
+    public function set-fixed(new-min: float, new-max: float) {
+        HistogramState.zoomed = false;
+        self.set(new-min, new-max);
+    }
+
+    // The mouse: `span` wide from `start`, inside 0..1. The axis before
+    // the first zoom is kept for the zoom chip.
+    public function view(start: float, span: float) {
+        if !HistogramState.zoomed {
+            HistogramState.zoom-base-min = HistogramState.histogram_min_lim;
+            HistogramState.zoom-base-max = HistogramState.histogram_max_lim;
+            HistogramState.zoomed = true;
+        }
+        let s = clamp(span, self.min-span(), 1.0);
+        let lo = clamp(start, 0.0, 1.0 - s);
+        self.set(lo, lo + s);
+    }
+}
+
+// A value at its line or grid line, inside the box.
 component LineValue inherits Text {
     font-size: Ink.fs-caption;
     font-family: Ink.font-mono;
     color: Ink.text-dim;
 }
 
+// Over the histogram: a button on a solid ground, so the curve never
+// shows through it.
+component HistogramIconButton inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    callback clicked;
+    width: 24px;
+    height: 24px;
+    Rectangle {
+        background: Ink.panel;
+        border-radius: Ink.radius-md;
+        InkIconButton {
+            size: 24px;
+            icon: root.icon;
+            label: root.label;
+            clicked => {
+                root.clicked();
+            }
+        }
+    }
+}
+
+// The curves of the histogram, stretched to the box: their fills, or
+// (`line`) their lines. The fill is opaque (the curve's colour mixed into
+// the box): a see-through one was painted twice where the software
+// renderer's repaint rectangles overlap - a darker block after ▾.
+component HistogramCurves inherits Rectangle {
+    in property <bool> line: false;
+    for hist in HistogramState.histogram_svg_path: Path {
+        width: 100%;
+        height: 100%;
+        commands: hist.path;
+        stroke: root.line ? hist.color : transparent;
+        stroke-width: root.line ? 1.25px : 0px;
+        fill: root.line ? transparent : hist.color.mix(Ink.field, 0.18);
+        viewbox-width: 100;
+        viewbox-height: 100;
+        // Stretched to the box (the default `contain` squeezed the curve
+        // into a square in the middle - off the black / white lines, which
+        // use the full width).
+        fit: fill;
+    }
+}
+
 // The histogram of the selected channel (or, comparing, the breakpoint
-// image): drag the two lines to set the black and white point, their
-// values at them; the axis' ends below. A double click auto-scales.
+// image): drag the two lines to set the black and white point; a grid at
+// round values with their numbers below, black and white in bold. Auto,
+// ⋯ and the expand chevron sit in its top right. The wheel zooms around
+// the mouse, dragging elsewhere pans (black and white stay); a chip top
+// left goes back. A double click auto-scales (design C2, 2026-11-21).
 component Histogram inherits VerticalLayout {
+    in property <bool> expanded: false;
+    callback menu-requested();
+    callback expand-toggled();
+    // Where the ⋯ menu opens (its bottom, in the window).
+    out property <length> menu-y: more.absolute-position.y + more.height;
+
     property <bool> dragging-min: false;
     property <bool> dragging-max: false;
+    property <bool> panning: false;
+    property <length> pan-x;
+    property <float> pan-min;
+
+    // The grid: round steps (1, 2, 2.5, 5 x 10^n) in the image's units,
+    // about 4 in the small box and 7 in the large one.
+    property <float> vs: HistogramState.value-scale > 1.5 ? HistogramState.value-scale : 1.0;
+    property <float> a0: HistogramState.histogram_min_lim * root.vs;
+    property <float> a1: HistogramState.histogram_max_lim * root.vs;
+    property <float> span: max(root.a1 - root.a0, 0.000001);
+    property <float> raw-step: root.span / (root.expanded ? 7 : 4);
+    property <float> p10: Math.pow(10, Math.floor(Math.log(root.raw-step, 10)));
+    property <float> f: root.raw-step / root.p10;
+    property <float> step: (root.f <= 1 ? 1 : root.f <= 2 ? 2 : root.f <= 2.5 ? 2.5 : root.f <= 5 ? 5 : 10) * root.p10;
+    property <float> first: Math.ceil(root.a0 / root.step - 0.0001) * root.step;
+    property <int> ticks: max(0, min(12, Math.floor((root.a1 - root.first) / root.step + 0.0001) + 1));
+
+    property <float> black-rel: HistogramState.histogram_min_val;
+    property <float> white-rel: HistogramState.histogram_max_val;
+    property <float> zoom: (HistogramState.zoom-base-max - HistogramState.zoom-base-min)
+        / max(HistogramState.histogram_max_lim - HistogramState.histogram_min_lim, 0.0000001);
 
     spacing: 2px;
     accessible-role: slider;
     accessible-label: "Histogram";
 
     face := Rectangle {
-        height: 72px;
+        height: root.expanded ? 120px : 48px;
         background: Ink.field;
         border-radius: Ink.radius-sm;
         border-width: 1px;
         border-color: Ink.border;
         clip: true;
 
-        for hist in HistogramState.histogram_svg_path: Path {
-            width: 100%;
-            height: 100%;
-            commands: hist.path;
-            stroke: hist.color;
-            stroke-width: 1.25px;
-            fill: hist.color.with-alpha(0.18);
-            viewbox-width: 100;
-            viewbox-height: 100;
-            // Stretched to the box (the default `contain` squeezed the
-            // curve into a square in the middle - off the black / white
-            // lines, which use the full width).
-            fit: fill;
+        // The fill, the grid over it, the line on top.
+        HistogramCurves { }
+        for i in root.ticks: Rectangle {
+            x: parent.width * (root.first + i * root.step - root.a0) / root.span;
+            width: 1px;
+            background: Ink.border;
+        }
+        HistogramCurves {
+            line: true;
         }
 
-        // Clipped to black / white.
+        // Clipped to black / white (black or white may lie off the axis).
         Rectangle {
             x: 0;
-            width: parent.width * HistogramState.histogram_min_val;
+            width: parent.width * clamp(root.black-rel, 0.0, 1.0);
             background: Ink.panel.with-alpha(0.6);
         }
         Rectangle {
-            x: parent.width * HistogramState.histogram_max_val;
-            width: parent.width * (1 - HistogramState.histogram_max_val);
+            x: parent.width * clamp(root.white-rel, 0.0, 1.0);
+            width: parent.width * (1 - clamp(root.white-rel, 0.0, 1.0));
             background: Ink.panel.with-alpha(0.6);
         }
 
         Rectangle {
-            x: parent.width * HistogramState.histogram_min_val - 1px;
+            visible: root.black-rel >= 0 && root.black-rel <= 1;
+            x: parent.width * root.black-rel - 1px;
             width: 2px;
             background: root.dragging-min ? Ink.focus : Ink.text;
         }
         Rectangle {
-            x: parent.width * HistogramState.histogram_max_val - 1px;
+            visible: root.white-rel >= 0 && root.white-rel <= 1;
+            x: parent.width * root.white-rel - 1px;
             width: 2px;
             background: root.dragging-max ? Ink.focus : Ink.text;
         }
 
-        TouchArea {
-            mouse-cursor: root.dragging-min || root.dragging-max ? col-resize : pointer;
+        ta := TouchArea {
+            property <bool> near-line: abs(self.mouse-x - parent.width * root.black-rel) < 20px
+                || abs(self.mouse-x - parent.width * root.white-rel) < 20px;
+            mouse-cursor: root.dragging-min || root.dragging-max ? col-resize
+                : root.panning ? grabbing
+                : self.near-line ? col-resize : grab;
             double-clicked => {
                 HistogramState.auto_adjust_clicked();
             }
             pointer-event(event) => {
                 if event.button == PointerEventButton.left {
                     if event.kind == PointerEventKind.down {
-                        let d-min = abs(self.mouse-x - parent.width * HistogramState.histogram_min_val);
-                        let d-max = abs(self.mouse-x - parent.width * HistogramState.histogram_max_val);
+                        let d-min = abs(self.mouse-x - parent.width * root.black-rel);
+                        let d-max = abs(self.mouse-x - parent.width * root.white-rel);
                         if d-min < d-max && d-min < 20px {
                             root.dragging-min = true;
                         } else if d-max < 20px {
                             root.dragging-max = true;
+                        } else {
+                            root.panning = true;
+                            root.pan-x = self.mouse-x;
+                            root.pan-min = HistogramState.histogram_min_lim;
                         }
                     } else if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel {
                         root.dragging-min = false;
                         root.dragging-max = false;
+                        root.panning = false;
                     }
                 }
             }
             moved => {
-                if root.dragging-min || root.dragging-max {
+                if root.panning {
+                    // Only once it really moved: a click alone changes nothing.
+                    if HistogramState.zoomed || abs(self.mouse-x - root.pan-x) > 2px {
+                        let s = HistogramState.histogram_max_lim - HistogramState.histogram_min_lim;
+                        HistogramAxis.view(root.pan-min - (self.mouse-x - root.pan-x) / self.width * s, s);
+                    }
+                } else if root.dragging-min || root.dragging-max {
                     let rel = clamp(self.mouse-x / self.width, 0.0, 1.0);
                     let range = HistogramState.histogram_max_lim - HistogramState.histogram_min_lim;
                     if root.dragging-min {
@@ -223,34 +356,102 @@ component Histogram inherits VerticalLayout {
                         HistogramState.histogram_max_lim);
                 }
             }
+            // The wheel zooms around the value under the mouse; sideways
+            // (a touchpad) pans.
+            scroll-event(e) => {
+                let s = HistogramState.histogram_max_lim - HistogramState.histogram_min_lim;
+                if abs(e.delta-x) > abs(e.delta-y) {
+                    HistogramAxis.view(HistogramState.histogram_min_lim - e.delta-x / self.width * s, s);
+                } else {
+                    let rel = clamp(self.mouse-x / self.width, 0.0, 1.0);
+                    let at = HistogramState.histogram_min_lim + rel * s;
+                    let ns = clamp(s * Math.pow(1.0015, -e.delta-y / 1px), HistogramAxis.min-span(), 1.0);
+                    HistogramAxis.view(at - rel * ns, ns);
+                }
+                accept
+            }
+        }
+
+        // Zoomed or panned: how far, a click goes back.
+        if HistogramState.zoomed: Rectangle {
+            x: 4px;
+            y: 4px;
+            width: chip.preferred-width;
+            height: chip.height;
+            background: Ink.panel;
+            border-radius: Ink.radius-md;
+            chip := InkButton {
+                small: true;
+                kind: InkButtonKind.quiet;
+                icon: InkIcons.refresh;
+                text: root.zoom >= 1.05 ? "×" + (root.zoom < 10 ? round(root.zoom * 10) / 10 : round(root.zoom))
+                    : root.zoom <= 0.95 ? "×" + round(root.zoom * 100) / 100 : "Moved";
+                tip: "Back to the axis before zooming";
+                clicked => {
+                    HistogramAxis.set-fixed(HistogramState.zoom-base-min, HistogramState.zoom-base-max);
+                }
+            }
+        }
+
+        HorizontalLayout {
+            x: parent.width - self.width - 4px;
+            y: 4px;
+            width: self.preferred-width;
+            height: 24px;
+            spacing: 2px;
+            Rectangle {
+                width: auto.preferred-width;
+                background: Ink.panel;
+                border-radius: Ink.radius-md;
+                auto := InkButton {
+                    small: true;
+                    text: "Auto";
+                    tip: "Auto-scale this channel (double click)";
+                    clicked => {
+                        HistogramState.auto_adjust_clicked();
+                    }
+                }
+            }
+            more := HistogramIconButton {
+                icon: InkIcons.more;
+                label: "Histogram actions";
+                clicked => {
+                    root.menu-requested();
+                }
+            }
+            HistogramIconButton {
+                icon: root.expanded ? InkIcons.caret-up : InkIcons.caret-down;
+                label: root.expanded ? "Smaller histogram" : "Larger histogram, scale and values";
+                clicked => {
+                    root.expand-toggled();
+                }
+            }
         }
     }
 
-    // Below the box: black and white under their lines, the axis' ends
-    // at the corners while they don't collide with them.
+    // Below the box: the grid's numbers, black and white (bold) at their
+    // lines - "‹ 185" at the edge while off the axis. A grid number under
+    // black or white gives way.
     Rectangle {
         height: 14px;
         black := LineValue {
-            x: clamp(parent.width * HistogramState.histogram_min_val - self.width / 2, 0px, parent.width - self.width);
-            text: HistogramText.shown(HistogramState.histogram_min_val_abs);
+            x: clamp(parent.width * root.black-rel - self.width / 2, 0px, parent.width - self.width);
+            text: (root.black-rel < 0 ? "‹ " : "") + HistogramText.shown(HistogramState.histogram_min_val_abs);
             color: Ink.text;
+            font-weight: 600;
         }
         white := LineValue {
-            x: clamp(parent.width * HistogramState.histogram_max_val - self.width / 2, max(0px, black.x + black.width + 6px), parent.width - self.width);
-            text: HistogramText.shown(HistogramState.histogram_max_val_abs);
+            x: clamp(parent.width * root.white-rel - self.width / 2, max(0px, black.x + black.width + 6px), parent.width - self.width);
+            text: HistogramText.shown(HistogramState.histogram_max_val_abs) + (root.white-rel > 1 ? " ›" : "");
             color: Ink.text;
+            font-weight: 600;
         }
-        LineValue {
-            x: 0px;
-            visible: black.x > self.width + 6px;
-            text: HistogramText.shown(HistogramState.histogram_min_lim);
+        for i in root.ticks: LineValue {
+            x: clamp(parent.width * (root.first + i * root.step - root.a0) / root.span - self.width / 2, 0px, parent.width - self.width);
+            text: HistogramText.tick(root.first + i * root.step);
             color: Ink.text-faint;
-        }
-        LineValue {
-            x: parent.width - self.width;
-            visible: white.x + white.width + 6px < self.x;
-            text: HistogramText.shown(HistogramState.histogram_max_lim);
-            color: Ink.text-faint;
+            visible: (self.x + self.width + 4px < black.x || self.x > black.x + black.width + 4px)
+                && (self.x + self.width + 4px < white.x || self.x > white.x + white.width + 4px);
         }
     }
 }
@@ -273,16 +474,17 @@ export component ImageControlPanel inherits Rectangle {
         }
     }
 
-    // The four values typed in (behind "Values ›").
-    property <bool> show-values: false;
+    // The histogram large, with the values and the axis typed in (▾).
+    // Not kept: always starts small.
+    property <bool> hist-expanded: false;
     // Typed in the image's units, back to 0..1.
     pure function typed(t: string) -> float {
         t.to-float() / max(HistogramState.value-scale, 1.0)
     }
 
-    // Black / white typed in: within the axis, the handles follow.
+    // Black / white typed in: anywhere in 0..1 (also off the axis shown).
     function set-black(v: float) {
-        let abs-v = clamp(v, HistogramState.histogram_min_lim, HistogramState.histogram_max_val_abs);
+        let abs-v = clamp(v, 0.0, HistogramState.histogram_max_val_abs);
         HistogramState.histogram_min_val_abs = abs-v;
         if root.hist-range > 0.00001 {
             HistogramState.histogram_min_val = (abs-v - HistogramState.histogram_min_lim) / root.hist-range;
@@ -291,28 +493,12 @@ export component ImageControlPanel inherits Rectangle {
     }
 
     function set-white(v: float) {
-        let abs-v = clamp(v, HistogramState.histogram_min_val_abs, HistogramState.histogram_max_lim);
+        let abs-v = clamp(v, HistogramState.histogram_min_val_abs, 1.0);
         HistogramState.histogram_max_val_abs = abs-v;
         if root.hist-range > 0.00001 {
             HistogramState.histogram_max_val = (abs-v - HistogramState.histogram_min_lim) / root.hist-range;
         }
         HistogramState.histogram_adjusted(HistogramState.histogram_min_val_abs, abs-v, HistogramState.histogram_min_lim, HistogramState.histogram_max_lim);
-    }
-
-    // The axis changed: black and white stay where they are (inside it).
-    function set-axis(new-min: float, new-max: float) {
-        let range = new-max - new-min;
-        let lo = clamp(HistogramState.histogram_min_val_abs, new-min, new-max);
-        let hi = clamp(HistogramState.histogram_max_val_abs, new-min, new-max);
-        HistogramState.histogram_min_lim = new-min;
-        HistogramState.histogram_max_lim = new-max;
-        if range > 0.00001 {
-            HistogramState.histogram_min_val = (lo - new-min) / range;
-            HistogramState.histogram_max_val = (hi - new-min) / range;
-        }
-        HistogramState.histogram_min_val_abs = lo;
-        HistogramState.histogram_max_val_abs = hi;
-        HistogramState.histogram_adjusted(lo, hi, new-min, new-max);
     }
 
     VerticalLayout {
@@ -419,33 +605,31 @@ export component ImageControlPanel inherits Rectangle {
                 }
             }
 
-            // The selected channel's histogram (the row lifted above) and
-            // its numbers; everything else in its ⋯ (design H3). A double
-            // click auto-scales. (Show objects and their opacity: in the bar
-            // at the bottom of the image, with Z and T.)
+            // The selected channel's histogram (the row lifted above):
+            // Auto, ⋯ and ▾ over it; ▾ makes it larger with the values and
+            // the axis to type (design C2). A double click auto-scales.
+            // (Show objects and their opacity: in the bar at the bottom of
+            // the image, with Z and T.)
             Rectangle {
                 min-height: hist.min-height;
                 preferred-height: hist.preferred-height;
                 hist := Histogram {
                     width: parent.width;
                     height: parent.height;
-                }
-                hist-more := InkIconButton {
-                    x: parent.width - self.width - 4px;
-                    y: 4px;
-                    size: 22px;
-                    icon: InkIcons.more;
-                    label: "Histogram actions";
-                    clicked => {
+                    expanded: root.hist-expanded;
+                    menu-requested => {
                         hist-menu.show();
+                    }
+                    expand-toggled => {
+                        root.hist-expanded = !root.hist-expanded;
                     }
                 }
                 hist-menu := PopupWindow {
-                    x: parent.width - 230px;
+                    x: parent.width - 256px;
                     y: 28px;
                     InkMenuFrame {
-                        open-y: hist-more.absolute-position.y + hist-more.height;
-                        menu-width: 230px;
+                        open-y: hist.menu-y;
+                        menu-width: 256px;
                         InkMenuItem {
                             text: "Auto-scale this channel";
                             clicked => {
@@ -460,13 +644,6 @@ export component ImageControlPanel inherits Rectangle {
                             }
                         }
                         InkMenuSeparator { }
-                        InkMenuItem {
-                            text: "Black / white and axis values";
-                            checked: root.show-values;
-                            clicked => {
-                                root.show-values = !root.show-values;
-                            }
-                        }
                         InkMenuItem {
                             text: "Log counts";
                             checked: HistogramState.log-scale;
@@ -487,17 +664,17 @@ export component ImageControlPanel inherits Rectangle {
                 }
             }
 
-            if root.show-values: GridLayout {
+            if root.hist-expanded: GridLayout {
                 spacing-horizontal: 6px;
                 spacing-vertical: 4px;
                 Row {
                     Text {
-                        text: "Black / white";
+                        text: "Black point";
                         font-size: Ink.fs-caption;
                         color: Ink.text-mute;
                     }
                     Text {
-                        text: "Axis min / max";
+                        text: "White point";
                         font-size: Ink.fs-caption;
                         color: Ink.text-mute;
                     }
@@ -513,20 +690,80 @@ export component ImageControlPanel inherits Rectangle {
                     }
                     InkTextField {
                         mono: true;
-                        label: "Axis min";
-                        value: HistogramText.shown(HistogramState.histogram_min_lim);
+                        label: "White point";
+                        value: HistogramText.shown(HistogramState.histogram_max_val_abs);
                         accepted(t) => {
-                            root.set-axis(root.typed(t), HistogramState.histogram_max_lim);
+                            root.set-white(root.typed(t));
                         }
+                    }
+                }
+                // The histogram's scale: the data's ends, black..white with
+                // room, everything - or typed.
+                Row {
+                    HorizontalLayout {
+                        colspan: 2;
+                        spacing: 2px;
+                        padding-top: 4px;
+                        Text {
+                            text: "Histogram scale";
+                            font-size: Ink.fs-caption;
+                            font-weight: 600;
+                            color: Ink.text-dim;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                        InkButton {
+                            small: true;
+                            kind: InkButtonKind.quiet;
+                            text: "Fit data";
+                            tip: "Axis from the lowest to the highest value";
+                            enabled: HistogramState.side == 0;
+                            clicked => {
+                                HistogramState.fit-axis-clicked();
+                            }
+                        }
+                        InkButton {
+                            small: true;
+                            kind: InkButtonKind.quiet;
+                            text: "Range";
+                            tip: "Axis from black to white, a quarter more on each side";
+                            clicked => {
+                                let m = (HistogramState.histogram_max_val_abs - HistogramState.histogram_min_val_abs) * 0.25;
+                                HistogramAxis.set-fixed(
+                                    max(0.0, HistogramState.histogram_min_val_abs - m),
+                                    min(1.0, HistogramState.histogram_max_val_abs + m));
+                            }
+                        }
+                        InkButton {
+                            small: true;
+                            kind: InkButtonKind.quiet;
+                            text: "Full";
+                            tip: "Axis over every possible value";
+                            clicked => {
+                                HistogramAxis.set-fixed(0.0, 1.0);
+                            }
+                        }
+                    }
+                }
+                Row {
+                    Text {
+                        text: "Axis min";
+                        font-size: Ink.fs-caption;
+                        color: Ink.text-mute;
+                    }
+                    Text {
+                        text: "Axis max";
+                        font-size: Ink.fs-caption;
+                        color: Ink.text-mute;
                     }
                 }
                 Row {
                     InkTextField {
                         mono: true;
-                        label: "White point";
-                        value: HistogramText.shown(HistogramState.histogram_max_val_abs);
+                        label: "Axis min";
+                        value: HistogramText.shown(HistogramState.histogram_min_lim);
                         accepted(t) => {
-                            root.set-white(root.typed(t));
+                            HistogramAxis.set-fixed(clamp(root.typed(t), 0.0, 1.0), HistogramState.histogram_max_lim);
                         }
                     }
                     InkTextField {
@@ -534,7 +771,7 @@ export component ImageControlPanel inherits Rectangle {
                         label: "Axis max";
                         value: HistogramText.shown(HistogramState.histogram_max_lim);
                         accepted(t) => {
-                            root.set-axis(HistogramState.histogram_min_lim, root.typed(t));
+                            HistogramAxis.set-fixed(HistogramState.histogram_min_lim, clamp(root.typed(t), 0.0, 1.0));
                         }
                     }
                 }

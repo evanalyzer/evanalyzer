@@ -112,6 +112,14 @@ impl HistogramController {
                     manager.viewport_controller.trigger_image_redraw();
                 });
 
+            // "Fit data": the axis from the lowest to the highest value.
+            let manager = Arc::clone(self);
+            ui.global::<HistogramState>().on_fit_axis_clicked(move || {
+                manager
+                    .viewport_controller
+                    .trigger_image_redraw_with_fit_axis();
+            });
+
             // Histogram auto adjust clicked^
             let manager = Arc::clone(self);
             ui.global::<HistogramState>()
@@ -220,6 +228,8 @@ impl HistogramController {
                 let range = (task.max_limit - task.min_limit).max(0.001);
 
                 let hist_state = ui_ready.global::<HistogramState>();
+                // Set from outside the panel: no mouse zoom to go back from.
+                hist_state.set_zoomed(false);
                 // Set the outer limits of the slider track
                 hist_state.set_histogram_min_lim(task.min_limit);
                 hist_state.set_histogram_max_lim(task.max_limit);
@@ -444,6 +454,16 @@ mod tests {
         assert!(task.auto_adjust_all);
     }
 
+    /// "Fit data" redraws fitting the selected channel's axis.
+    #[test]
+    fn fit_data_redraws_fitting_the_axis() {
+        let (ui, _, controller) = attached();
+        ui.global::<HistogramState>().invoke_fit_axis_clicked();
+        let task = take_redraw(&controller).expect("redrawn");
+        assert!(task.fit_axis_selected);
+        assert!(!task.auto_adjust_selected && !task.auto_adjust_all);
+    }
+
     /// The open image's window becomes the project's: the image's own is
     /// removed, the project marked changed, the image redrawn.
     #[test]
@@ -547,6 +567,8 @@ mod tests {
     #[test]
     fn sync_sets_the_track_handles_and_labels() {
         let (ui, _, controller) = attached();
+        // A mouse zoom ends when the axis is set from outside the panel.
+        ui.global::<HistogramState>().set_zoomed(true);
         controller.update_histogram_settings_in_project(30.0, 70.0, 10.0, 110.0);
         controller.sync_histogram_settings_to_slint();
         drain_ui_queue();
@@ -557,6 +579,7 @@ mod tests {
         assert!((state.get_histogram_max_val() - 0.6).abs() < 1e-6);
         assert_eq!(state.get_histogram_min_val_abs(), 30.0);
         assert_eq!(state.get_histogram_max_val_abs(), 70.0);
+        assert!(!state.get_zoomed());
     }
 
     /// Limits that are one value: no division by zero - the handles are

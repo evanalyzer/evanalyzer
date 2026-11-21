@@ -25,6 +25,9 @@ pub struct DrawingTask {
     pub(crate) auto_adjust_if_not_set: bool, // Apply auto adjustment only not yet set
     /// Every channel auto-adjusted ("Auto-scale all").
     pub(crate) auto_adjust_all: bool,
+    /// The selected channel's histogram axis set to its values' lowest
+    /// and highest ("Fit data") - black and white stay.
+    pub(crate) fit_axis_selected: bool,
     pub(crate) is_new_image: bool,
     pub(crate) fit_to_screen: bool,
     pub(crate) is_new_series: bool,
@@ -36,6 +39,7 @@ impl Default for DrawingTask {
             auto_adjust_selected: false,
             auto_adjust_if_not_set: false,
             auto_adjust_all: false,
+            fit_axis_selected: false,
             is_new_image: false,
             fit_to_screen: false,
             is_new_series: false,
@@ -48,6 +52,7 @@ impl DrawingTask {
         self.auto_adjust_selected = false;
         self.auto_adjust_if_not_set = false;
         self.auto_adjust_all = false;
+        self.fit_axis_selected = false;
         self.is_new_image = false;
         self.fit_to_screen = false;
         self.is_new_series = false;
@@ -66,6 +71,7 @@ impl DrawingTask {
             auto_adjust_selected: self.auto_adjust_selected || other.auto_adjust_selected,
             auto_adjust_if_not_set: self.auto_adjust_if_not_set || other.auto_adjust_if_not_set,
             auto_adjust_all: self.auto_adjust_all || other.auto_adjust_all,
+            fit_axis_selected: self.fit_axis_selected || other.fit_axis_selected,
             is_new_image: self.is_new_image || other.is_new_image,
             fit_to_screen: self.fit_to_screen || other.fit_to_screen,
             is_new_series: self.is_new_series || other.is_new_series,
@@ -83,6 +89,7 @@ mod tests {
             auto_adjust_selected: false,
             auto_adjust_if_not_set: true,
             auto_adjust_all: true,
+            fit_axis_selected: true,
             is_new_image: true,
             fit_to_screen: true,
             is_new_series: true,
@@ -100,6 +107,7 @@ mod tests {
             assert!(merged.auto_adjust_if_not_set);
             assert!(merged.fit_to_screen);
             assert!(merged.is_new_series);
+            assert!(merged.fit_axis_selected);
             assert!(!merged.auto_adjust_selected);
         }
     }
@@ -109,6 +117,7 @@ mod tests {
         let merged = DrawingTask::default().merge(DrawingTask::default());
         assert!(!merged.auto_adjust_selected);
         assert!(!merged.auto_adjust_if_not_set);
+        assert!(!merged.fit_axis_selected);
         assert!(!merged.is_new_image);
         assert!(!merged.fit_to_screen);
         assert!(!merged.is_new_series);
