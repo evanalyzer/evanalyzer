@@ -174,7 +174,7 @@ component FolderRow inherits Rectangle {
     callback skip-toggled;
 
     accessible-role: button;
-    accessible-label: (root.data.group_head ? "Group " : "Folder ") + root.data.folder_parent + root.data.name + ", " + root.data.count + " images";
+    accessible-label: (root.data.group_head ? "Group " : "Folder ") + root.data.folder_parent + root.data.name + ", " + root.data.count + " images" + (root.data.folders > 1 ? ", from " + root.data.folders + " folders" : "");
     accessible-expandable: true;
     accessible-expanded: !root.data.collapsed;
     accessible-action-default => { root.clicked(); }
@@ -247,6 +247,14 @@ component FolderRow inherits Rectangle {
                 overflow: elide;
             }
             Rectangle { horizontal-stretch: 0.0001; }
+        }
+        // A group of images from several folders: one name, different
+        // experiments maybe.
+        if root.data.folders > 1: Text {
+            text: root.data.folders + " folders";
+            font-size: Ink.fs-caption;
+            color: Ink.text-dim;
+            vertical-alignment: center;
         }
         if root.data.skipped: Text {
             text: "skipped";

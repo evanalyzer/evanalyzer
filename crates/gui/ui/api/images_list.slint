@@ -44,6 +44,9 @@ export struct ImageItemData {
     // A group's head (listed by groups: the project's "Grouping"), not a
     // folder's: no analyse box.
     group_head: bool,
+    // A group's head: how many folders its images lie in ("2 folders"
+    // when more than one).
+    folders: int,
 }
 
 export global ImagesListState {

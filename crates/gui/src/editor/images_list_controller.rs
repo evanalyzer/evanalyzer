@@ -670,16 +670,22 @@ impl ImagesListController {
             .load(std::sync::atomic::Ordering::Relaxed);
         if by_groups {
             let names: std::collections::BTreeSet<String> = {
+                // The heads the list shows, folded or not.
                 let project = self.app_state.get_project();
-                let paths: Vec<&std::path::Path> =
-                    project.images.list.0.keys().map(PathBuf::as_path).collect();
-                let layout = evanalyzer_app::images::plate_layout(&paths, &project.plate);
-                let mut names: std::collections::BTreeSet<String> =
-                    layout.wells.into_iter().map(|w| w.name).collect();
-                if layout.unplaced > 0 {
-                    names.insert("No group".to_string());
-                }
-                names
+                let (rows, _) = build_group_rows(
+                    &project.images.list,
+                    &project.plate,
+                    "",
+                    0,
+                    &ImageStates::default(),
+                    std::path::Path::new(""),
+                    &Default::default(),
+                    &Default::default(),
+                );
+                rows.into_iter()
+                    .filter(|row| row.group_head)
+                    .map(|row| row.name.to_string())
+                    .collect()
             };
             let mut collapsed = self
                 .image_controller_state
@@ -1099,16 +1105,40 @@ fn build_group_rows(
         .filter(|entry| is_listed(entry, filter_text_lowercase, marker_filter))
         .collect();
     let paths: Vec<&std::path::Path> = matching.iter().map(|e| e.rel_path.as_path()).collect();
-    let layout = evanalyzer_app::images::plate_layout(&paths, plate);
+    let folder_of = |i: usize| paths[i].parent().unwrap_or(std::path::Path::new(""));
+    // Auto finds the name pattern per folder: folders named differently
+    // each get theirs. The same well from several folders is one group.
+    let parts: Vec<Vec<usize>> =
+        if plate.grouping_mode == evanalyzer_cfg::settings::plate_settings::GroupingMode::Auto {
+            let mut by_folder: Vec<(&std::path::Path, Vec<usize>)> = Vec::new();
+            for i in 0..paths.len() {
+                match by_folder.iter_mut().find(|(f, _)| *f == folder_of(i)) {
+                    Some((_, members)) => members.push(i),
+                    None => by_folder.push((folder_of(i), vec![i])),
+                }
+            }
+            by_folder.into_iter().map(|(_, members)| members).collect()
+        } else {
+            vec![(0..paths.len()).collect()]
+        };
+    // (row, col) -> (name, images)
+    let mut wells: std::collections::BTreeMap<(usize, usize), (String, Vec<usize>)> =
+        Default::default();
     let mut placed = vec![false; matching.len()];
-    let mut groups: Vec<(String, Vec<usize>)> = layout
-        .wells
-        .iter()
-        .map(|well| {
-            well.images.iter().for_each(|&i| placed[i] = true);
-            (well.name.clone(), well.images.clone())
-        })
-        .collect();
+    for part in parts {
+        let part_paths: Vec<&std::path::Path> = part.iter().map(|&i| paths[i]).collect();
+        let layout = evanalyzer_app::images::plate_layout(&part_paths, plate);
+        for well in layout.wells {
+            let entry = wells
+                .entry((well.row, well.col))
+                .or_insert_with(|| (well.name.clone(), Vec::new()));
+            for k in well.images {
+                placed[part[k]] = true;
+                entry.1.push(part[k]);
+            }
+        }
+    }
+    let mut groups: Vec<(String, Vec<usize>)> = wells.into_values().collect();
     let unplaced: Vec<usize> = (0..matching.len()).filter(|&i| !placed[i]).collect();
     if !unplaced.is_empty() {
         groups.push(("No group".to_string(), unplaced));
@@ -1122,11 +1152,15 @@ fn build_group_rows(
             .filter(|&&i| states.analysed.contains(&matching[i].rel_path))
             .count();
         let head = rows.len() as i32;
+        let mut folders: Vec<&std::path::Path> = indices.iter().map(|&i| folder_of(i)).collect();
+        folders.sort();
+        folders.dedup();
         rows.push(ImageItemData {
             name: name.as_str().into(),
             path: format!("{GROUP_HEAD_PREFIX}{name}").into(),
             folder: true,
             group_head: true,
+            folders: folders.len() as i32,
             count: indices.len() as i32,
             analysed: analysed as i32,
             collapsed: folded,
@@ -2149,6 +2183,50 @@ mod tests {
             (row_names(&rows), count),
             (vec!["▸ A1 (1)".to_string(), "A01_02.tif".into()], 1)
         );
+    }
+
+    /// Auto finds the name pattern per folder: a folder named "C02.tif"
+    /// isn't left without groups because another names "A01_01.tif" - and a
+    /// group from both folders says so.
+    #[test]
+    fn listed_by_groups_each_folder_gets_its_own_name_pattern() {
+        let images = image_list_of(&[
+            "Exp1/A01_01.tif",
+            "Exp1/A01_02.tif",
+            "Exp1/B03_01.tif",
+            "Exp2/A01.tif",
+            "Exp2/C02.tif",
+        ]);
+        let (rows, count) = build_group_rows(
+            &images,
+            &Default::default(),
+            "",
+            0,
+            &ImageStates::default(),
+            std::path::Path::new("/data"),
+            &Default::default(),
+            &Default::default(),
+        );
+        assert_eq!(count, 5);
+        assert_eq!(
+            row_names(&rows),
+            [
+                "▸ A1 (3)",
+                "A01_01.tif",
+                "A01_02.tif",
+                "A01.tif",
+                "▸ B3 (1)",
+                "B03_01.tif",
+                "▸ C2 (1)",
+                "C02.tif"
+            ]
+        );
+        let folders: Vec<i32> = rows
+            .iter()
+            .filter(|r| r.group_head)
+            .map(|r| r.folders)
+            .collect();
+        assert_eq!(folders, [2, 1, 1], "A1 from both folders");
     }
 
     /// (head or image, name, count) of each row - heads marked "▸".
