@@ -561,11 +561,11 @@ export global ResultsState {
     // those left out (disabled) - e.g. to check what "Exclude Image" left
     // out.
     in-out property <[MultiSelectItem]> list-image-state-items: [
-        { key: "all", value: "All images", group: "", selected: true },
-        { key: "enabled", value: "Only enabled", group: "", selected: false },
-        { key: "disabled", value: "Only disabled", group: "", selected: false },
+        { key: "all", value: "All", group: "", selected: true },
+        { key: "enabled", value: "Included", group: "", selected: false },
+        { key: "disabled", value: "Left out", group: "", selected: false },
     ];
-    in-out property <string> list-image-state-summary: "All images";
+    in-out property <string> list-image-state-summary: "All";
     callback list-image-state-selected(string);
 
     // Images mode's per-column aggregation(s) — `get_grouped_by_image`
@@ -627,6 +627,9 @@ export global ResultsState {
     // — so it stays cheap to diff/render no matter how large the underlying
     // database is.
     in-out property <[string]> list-column-headers: [];
+    // Each header's second, grey line: its unit and how it is aggregated
+    // ("px · mean"), empty for none.
+    in-out property <[string]> list-column-subs: [];
     // One entry per `list-column-headers`/per-row `cells` position, in
     // pixels (plain `float`, not `length`, so Rust can hand back a bare
     // number) - `results_list.slint` multiplies each back out by `1px` at

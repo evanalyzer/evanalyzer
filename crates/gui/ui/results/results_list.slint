@@ -2,7 +2,7 @@
 // Licensed under the PolyForm Noncommercial License 1.0.0.
 
 // results_list.slint — the results as a table (a row per object or per
-// image), with what to show and how in the settings column on the right.
+// image), what to show and how in the bar above it (`ListBar`).
 import { InkButton, InkButtonKind, InkCheckbox, InkIconButton, InkIcons, InkHint } from "../ink/ink.slint";
 import { ColocCountRow, SettingsGroup } from "results_common.slint";
 import { ColumnSection, ResultRow, ResultsState } from "../api/results.slint";
@@ -10,7 +10,8 @@ import { ColumnSection, ResultRow, ResultsState } from "../api/results.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Ink } from "../ink/palette.slint";
 
-import { InkCheckList, InkMultiSelect, InkSearchField, InkSwitch, InkTipSide, InkTipZone } from "../ink/ink.slint";
+import { InkCheckList, InkMultiSelect, InkSearchField, InkSegmented, InkSwitch, InkTipSide, InkTipZone, InkMenuItem } from "../ink/ink.slint";
+import { ViewBar, BarChip, BarLabel, BarSpacer, BarCount, BarMore } from "results_view_bar.slint";
 
 /// A section of the column picker: its columns' checklist, foldable.
 component ColumnSectionList inherits InkCheckList {
@@ -107,193 +108,232 @@ component ColocColumns inherits Rectangle {
     }
 }
 
+/// The List's bar (design canvas "Results rework", ListMock): a row per
+/// first, then what is shown - Images, Classes, Columns, Values (grouped
+/// rows only) - as chips with a popover each; how many rows and the pages
+/// on the right, rarely used settings in ⋯.
+component ListBar inherits ViewBar {
+    property <bool> has-pairs: ResultsState.list-group-by-items.length > 2;
+    property <bool> grouped: ResultsState.list-group-by-summary == "Images";
+    property <length> popover-field-w: 316px;
+
+    BarLabel {
+        text: "A row per";
+    }
+    VerticalLayout {
+        alignment: center;
+        InkSegmented {
+            label: "A row per";
+            model: root.has-pairs ? ["Objects", "Images", "Coloc pairs"] : ["Objects", "Images"];
+            selected: ResultsState.list-group-by-summary == "Images" ? 1 : ResultsState.list-group-by-summary == "Coloc pairs" ? 2 : 0;
+            picked(i) => {
+                ResultsState.list-group-by-summary = i == 1 ? "Images" : i == 2 ? "Coloc pairs" : "Objects";
+                ResultsState.list-group-by-selected(i == 1 ? "images" : i == 2 ? "pairs" : "objects");
+            }
+        }
+    }
+
+    // Which images: all / included / left out, and which of them.
+    VerticalLayout {
+        alignment: center;
+        BarChip {
+            label: "Images";
+            value: (ResultsState.list-image-state-summary != "All" ? ResultsState.list-image-state-summary + " · " : "")
+                + (ResultsState.list-image-summary == "All Images" ? "All" : ResultsState.list-image-summary);
+            active: ResultsState.list-image-state-summary != "All" || ResultsState.list-image-summary != "All Images";
+            popover-width: 340px;
+            InkSegmented {
+                label: "Images";
+                model: ["All", "Included", "Left out"];
+                selected: ResultsState.list-image-state-summary == "Included" ? 1 : ResultsState.list-image-state-summary == "Left out" ? 2 : 0;
+                picked(i) => {
+                    ResultsState.list-image-state-summary = i == 1 ? "Included" : i == 2 ? "Left out" : "All";
+                    ResultsState.list-image-state-selected(i == 1 ? "enabled" : i == 2 ? "disabled" : "all");
+                }
+            }
+            InkCheckList {
+                title: "IMAGES · " + ResultsState.list-image-summary;
+                items <=> ResultsState.list-image-items;
+                searchable: true;
+                list-height: 240px;
+                item-selected(key, value, selected) => {
+                    ResultsState.list-image-selected(key, selected);
+                }
+                select-all => {
+                    ResultsState.list-image-select-all();
+                }
+                select-none => {
+                    ResultsState.list-image-select-none();
+                }
+                filter-changed(text) => {
+                    ResultsState.list-image-filter-changed(text);
+                }
+            }
+        }
+    }
+
+    VerticalLayout {
+        alignment: center;
+        BarChip {
+            label: "Classes";
+            value: ResultsState.list-class-summary;
+            popover-width: 300px;
+            InkCheckList {
+                title: "CLASSES · " + ResultsState.list-class-summary;
+                items <=> ResultsState.list-class-items;
+                list-height: 280px;
+                item-selected(key, value, selected) => {
+                    ResultsState.list-class-selected(key, selected);
+                }
+                select-all => {
+                    ResultsState.list-class-select-all();
+                }
+                select-none => {
+                    ResultsState.list-class-select-none();
+                }
+            }
+        }
+    }
+
+    // The columns in sections, the coloc ones with their settings (design
+    // canvas "Coloc Combinations", A), Relate Objects' links.
+    VerticalLayout {
+        alignment: center;
+        BarChip {
+            label: "Columns";
+            value: ResultsState.list-columns-summary;
+            popover-width: 340px;
+            popover-max-height: 560px;
+            InkSearchField {
+                text: ResultsState.list-columns-filter;
+                placeholder: "Find a column";
+                edited(text) => {
+                    ResultsState.list-columns-filter = text;
+                    ResultsState.list-columns-filter-changed(text);
+                }
+            }
+            for section in ResultsState.list-column-sections: ColumnSectionList {
+                section: section;
+            }
+            if ResultsState.list-coloc-partner-items.length > 0: ColocColumns {
+                field-w: root.popover-field-w;
+            }
+            if ResultsState.list-children-items.length > 0: InkCheckList {
+                title: "CHILDREN · " + ResultsState.list-children-summary;
+                items <=> ResultsState.list-children-items;
+                list-height: 72px;
+                collapsible: true;
+                item-selected(key, value, selected) => {
+                    ResultsState.list-children-selected(key, selected);
+                }
+                select-all => {
+                    ResultsState.list-children-select-all(true);
+                }
+                select-none => {
+                    ResultsState.list-children-select-all(false);
+                }
+            }
+            if ResultsState.list-children-items.length > 0: InkMultiSelect {
+                label: "Of the columns";
+                summary-text: ResultsState.list-child-aggregate;
+                items <=> ResultsState.list-child-aggregation-items;
+                multi-select: true;
+                pill-width: root.popover-field-w;
+                item-selected(key, value, selected) => {
+                    ResultsState.list-child-aggregation-selected(key, selected);
+                }
+            }
+            if ResultsState.list-parent-items.length > 0: InkCheckList {
+                title: "LINKED OBJECTS · " + ResultsState.list-parent-summary;
+                items <=> ResultsState.list-parent-items;
+                list-height: 72px;
+                collapsible: true;
+                item-selected(key, value, selected) => {
+                    ResultsState.list-parent-selected(key, selected);
+                }
+                select-all => {
+                    ResultsState.list-parent-select-all(true);
+                }
+                select-none => {
+                    ResultsState.list-parent-select-all(false);
+                }
+            }
+        }
+    }
+
+    // Grouped rows: how the objects of a row are summed up.
+    if root.grouped: VerticalLayout {
+        alignment: center;
+        BarChip {
+            label: "Values";
+            value: ResultsState.list-aggregate;
+            popover-width: 260px;
+            InkCheckList {
+                title: "OF THE OBJECTS IN EACH ROW";
+                items <=> ResultsState.list-aggregation-items;
+                list-height: 200px;
+                item-selected(key, value, selected) => {
+                    ResultsState.list-aggregation-item-selected(key, selected);
+                }
+                select-all => {
+                    ResultsState.list-aggregation-select-all();
+                }
+                select-none => {
+                    ResultsState.list-aggregation-select-none();
+                }
+            }
+        }
+    }
+
+    BarSpacer { }
+
+    BarCount {
+        text: ResultsState.list-row-count + (ResultsState.list-row-count == 1 ? " row" : " rows");
+        pages: true;
+        page: ResultsState.list-page-number;
+        has-previous: ResultsState.list-page-number > 1;
+        has-next: ResultsState.list-has-next-page;
+        previous => {
+            ResultsState.list-prev-page();
+        }
+        next => {
+            ResultsState.list-next-page();
+        }
+    }
+
+    BarMore {
+        InkMenuItem {
+            text: "Transpose";
+            checked: ResultsState.list-transpond;
+            clicked => {
+                ResultsState.list-transpond = !ResultsState.list-transpond;
+                ResultsState.list-transpond-changed(ResultsState.list-transpond);
+            }
+        }
+    }
+}
+
 export component ResultsListView inherits Rectangle {
-    property <length> side-w: 280px;
     // The row clicked (opened in its image) - until other rows come.
     property <[ResultRow]> rows: ResultsState.list-rows;
     changed rows => {
         ResultsState.list-selected-row = -1;
     }
-    property <length> field-w: root.side-w - 2 * Ink.pad-panel;
 
     background: Ink.ground;
 
-    // Panels on the ground (board L): the settings left, the table beside
-    // them.
-    HorizontalLayout {
+    // Panels on the ground: the bar on top (split with the image: in the
+    // table's head instead), the table below it.
+    VerticalLayout {
         padding: 12px;
         spacing: 12px;
 
-        // -- The settings: what to show, how the rows are (split with the
-        // image: in the table's head instead) --
-        if !ResultsState.split: Rectangle {
-            width: root.side-w;
-            background: Ink.panel;
-            border-radius: Ink.radius-lg;
-            border-width: 1px;
-            border-color: Ink.border;
-            clip: true;
-
-
-            // Scrolls with a scrollbar once the settings are taller.
-            ScrollView {
-                side := VerticalLayout {
-                    padding: Ink.pad-panel;
-                    spacing: 16px;
-                    alignment: start;
-
-                    SettingsGroup {
-                        title: "SHOW";
-                        InkMultiSelect {
-                            label: "Images";
-                            summary-text: ResultsState.list-image-state-summary;
-                            items <=> ResultsState.list-image-state-items;
-                            multi-select: false;
-                            pill-width: root.field-w;
-                            item-selected(key, value, selected) => {
-                                ResultsState.list-image-state-summary = value;
-                                ResultsState.list-image-state-selected(key);
-                            }
-                        }
-                        // In place, as on the board (L): ticked = shown.
-                        InkCheckList {
-                            title: "IMAGES · " + ResultsState.list-image-summary;
-                            items <=> ResultsState.list-image-items;
-                            searchable: true;
-                            collapsible: true;
-                            item-selected(key, value, selected) => {
-                                ResultsState.list-image-selected(key, selected);
-                            }
-                            select-all => {
-                                ResultsState.list-image-select-all();
-                            }
-                            select-none => {
-                                ResultsState.list-image-select-none();
-                            }
-                            filter-changed(text) => {
-                                ResultsState.list-image-filter-changed(text);
-                            }
-                        }
-                        InkCheckList {
-                            title: "CLASSES · " + ResultsState.list-class-summary;
-                            items <=> ResultsState.list-class-items;
-                            list-height: 108px;
-                            collapsible: true;
-                            item-selected(key, value, selected) => {
-                                ResultsState.list-class-selected(key, selected);
-                            }
-                            select-all => {
-                                ResultsState.list-class-select-all();
-                            }
-                            select-none => {
-                                ResultsState.list-class-select-none();
-                            }
-                        }
-                    }
-
-                    // The columns in sections, the coloc ones with their
-                    // settings (design canvas "Coloc Combinations", A).
-                    SettingsGroup {
-                        title: "COLUMNS · " + ResultsState.list-columns-summary;
-                        InkSearchField {
-                            text: ResultsState.list-columns-filter;
-                            placeholder: "Find a column";
-                            edited(text) => {
-                                ResultsState.list-columns-filter = text;
-                                ResultsState.list-columns-filter-changed(text);
-                            }
-                        }
-                        for section in ResultsState.list-column-sections: ColumnSectionList {
-                            section: section;
-                        }
-                        if ResultsState.list-coloc-partner-items.length > 0: ColocColumns {
-                            field-w: root.field-w;
-                        }
-                        // Relate Objects' links (design canvas "Object relations
-                        // in the results", board 1 and U1): the children's count
-                        // and aggregates, the parent's values.
-                        if ResultsState.list-children-items.length > 0: InkCheckList {
-                            title: "CHILDREN · " + ResultsState.list-children-summary;
-                            items <=> ResultsState.list-children-items;
-                            list-height: 72px;
-                            collapsible: true;
-                            item-selected(key, value, selected) => {
-                                ResultsState.list-children-selected(key, selected);
-                            }
-                            select-all => {
-                                ResultsState.list-children-select-all(true);
-                            }
-                            select-none => {
-                                ResultsState.list-children-select-all(false);
-                            }
-                        }
-                        if ResultsState.list-children-items.length > 0: InkMultiSelect {
-                            label: "Of the columns";
-                            summary-text: ResultsState.list-child-aggregate;
-                            items <=> ResultsState.list-child-aggregation-items;
-                            multi-select: true;
-                            pill-width: root.field-w;
-                            item-selected(key, value, selected) => {
-                                ResultsState.list-child-aggregation-selected(key, selected);
-                            }
-                        }
-                        if ResultsState.list-parent-items.length > 0: InkCheckList {
-                            title: "LINKED OBJECTS · " + ResultsState.list-parent-summary;
-                            items <=> ResultsState.list-parent-items;
-                            list-height: 72px;
-                            collapsible: true;
-                            item-selected(key, value, selected) => {
-                                ResultsState.list-parent-selected(key, selected);
-                            }
-                            select-all => {
-                                ResultsState.list-parent-select-all(true);
-                            }
-                            select-none => {
-                                ResultsState.list-parent-select-all(false);
-                            }
-                        }
-                    }
-
-                    SettingsGroup {
-                        title: "ROWS";
-                        InkMultiSelect {
-                            label: "A row per";
-                            summary-text: ResultsState.list-group-by-summary;
-                            items <=> ResultsState.list-group-by-items;
-                            multi-select: false;
-                            pill-width: root.field-w;
-                            item-selected(key, value, selected) => {
-                                ResultsState.list-group-by-summary = value;
-                                ResultsState.list-group-by-selected(key);
-                            }
-                        }
-                        if ResultsState.list-group-by-summary == "Images": InkMultiSelect {
-                            label: "Aggregate";
-                            summary-text: ResultsState.list-aggregate;
-                            items <=> ResultsState.list-aggregation-items;
-                            multi-select: true;
-                            show-select-all: true;
-                            pill-width: root.field-w;
-                            item-selected(key, value, selected) => { ResultsState.list-aggregation-item-selected(key, selected); }
-                            select-all => { ResultsState.list-aggregation-select-all(); }
-                            select-none => { ResultsState.list-aggregation-select-none(); }
-                        }
-                        InkSwitch {
-                            text: "Transpose";
-                            checked: ResultsState.list-transpond;
-                            toggled(on) => {
-                                ResultsState.list-transpond = on;
-                                ResultsState.list-transpond-changed(on);
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        if !ResultsState.split: ListBar { }
 
         // -- The table --
         Rectangle {
             horizontal-stretch: 1;
+            vertical-stretch: 1;
             background: Ink.panel;
             border-radius: Ink.radius-lg;
             border-width: 1px;
@@ -336,8 +376,8 @@ export component ResultsListView inherits Rectangle {
                     }
                 }
 
-                // -- What is shown, the pages --
-                Rectangle {
+                // -- Split with the image: what is shown, the pages --
+                if ResultsState.split: Rectangle {
                     height: Ink.head-h;
                     HorizontalLayout {
                         padding-left: 16px;
@@ -376,16 +416,8 @@ export component ResultsListView inherits Rectangle {
                             select-all => { ResultsState.list-columns-select-all(); }
                             select-none => { ResultsState.list-columns-select-none(); }
                         }
-                        Text {
+                        Rectangle {
                             horizontal-stretch: 1;
-                            text: ResultsState.split ? "" : ResultsState.list-group-by-summary
-                                + (ResultsState.list-class-summary != "" ? " · " + ResultsState.list-class-summary : "")
-                                + (ResultsState.list-image-summary != "" ? " · " + ResultsState.list-image-summary : "");
-                            font-size: Ink.fs-body;
-                            font-weight: 600;
-                            color: Ink.text;
-                            vertical-alignment: center;
-                            overflow: elide;
                         }
                         // Next/previous rather than infinite scroll: each page is a
                         // fresh, bounded query (see LIST_PAGE_SIZE in
@@ -495,7 +527,7 @@ export component ResultsListView inherits Rectangle {
                         }
 
                         header-rect := Rectangle {
-                            height: 30px;
+                            height: 40px;
                             background: Ink.field;
                             // Columns have a fixed pixel width, so the row content
                             // can be wider than the window; clip the header to its
@@ -526,19 +558,32 @@ export component ResultsListView inherits Rectangle {
                                     }
                                 }
 
+                                // Two lines: the name, then its unit and how it
+                                // is aggregated, small and grey ("px · mean").
                                 for header[idx] in ResultsState.list-column-headers: Rectangle {
                                     horizontal-stretch: 1;
                                     clip: true;
                                     width: ResultsState.list-column-widths[idx] * 1px;
-                                    Text {
-                                        text: header;
-                                        width: ResultsState.list-column-widths[idx] * 1px;
-                                        font-size: Ink.fs-secondary;
-                                        font-weight: 600;
-                                        color: Ink.text-dim;
-                                        overflow: elide;
-                                        vertical-alignment: center;
-                                        horizontal-alignment: start;
+                                    VerticalLayout {
+                                        alignment: center;
+                                        spacing: 0px;
+                                        Text {
+                                            text: header;
+                                            width: ResultsState.list-column-widths[idx] * 1px;
+                                            font-size: Ink.fs-secondary;
+                                            font-weight: 600;
+                                            color: Ink.text-dim;
+                                            overflow: elide;
+                                            horizontal-alignment: start;
+                                        }
+                                        if idx < ResultsState.list-column-subs.length && ResultsState.list-column-subs[idx] != "": Text {
+                                            text: ResultsState.list-column-subs[idx];
+                                            width: ResultsState.list-column-widths[idx] * 1px;
+                                            font-size: Ink.fs-caption;
+                                            color: Ink.text-mute;
+                                            overflow: elide;
+                                            horizontal-alignment: start;
+                                        }
                                     }
                                 }
                                 Rectangle { }

@@ -3256,7 +3256,7 @@ impl ResultsStateController {
                         state.set_list_with_coloc_details(false);
                         state.set_list_transpond(false);
                         state.set_list_group_by_summary("Objects".into());
-                        state.set_list_image_state_summary("All images".into());
+                        state.set_list_image_state_summary("All".into());
                         state.set_list_image_state_items(ModelRc::from(Rc::new(VecModel::from(
                             image_state_items(),
                         ))));
@@ -4651,11 +4651,14 @@ impl ResultsStateController {
     // filter change stays cheap no matter how large the underlying database is.
     pub fn set_objects_list_in_slint(&self, result: &DatabaseResult) {
         let ui_weak = self.ui.clone();
-        let headers: Vec<slint::SharedString> = result
+        let (headers, header_subs): (Vec<slint::SharedString>, Vec<slint::SharedString>) = result
             .column_names
             .iter()
-            .map(|name| name.as_str().into())
-            .collect();
+            .map(|name| {
+                let (name, sub) = split_header(name);
+                (name.into(), sub.into())
+            })
+            .unzip();
         let row_count = result.rows.len() as i32;
         let page_number = *self.list_page.lock().expect("Poisned") + 1;
         // A full page doesn't prove another page exists, but it's the only
@@ -4761,6 +4764,7 @@ impl ResultsStateController {
                     )
                     .collect();
                 state.set_list_column_headers(ModelRc::from(Rc::new(VecModel::from(headers))));
+                state.set_list_column_subs(ModelRc::from(Rc::new(VecModel::from(header_subs))));
                 state.set_list_column_widths(ModelRc::from(Rc::new(VecModel::from(column_widths))));
                 state.set_list_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
                 state.set_list_checked_images(0);
@@ -6218,6 +6222,53 @@ fn image_summary_text(selected: usize, total: usize) -> slint::SharedString {
     }
 }
 
+/// A list column's name as the head shows it, in two lines: the name
+/// ("Area"), then its unit and how it is aggregated ("px · mean") -
+/// `Area [px] (AVG)` as the results name it.
+fn split_header(name: &str) -> (String, String) {
+    let mut name = name.trim().to_string();
+    let mut aggregate = String::new();
+    if let Some(open) = name.rfind(" (")
+        && name.ends_with(')')
+    {
+        let inner = name[open + 2..name.len() - 1].to_string();
+        let known = match inner.to_ascii_uppercase().as_str() {
+            "AVG" | "MEAN" => Some("mean"),
+            "MEDIAN" => Some("median"),
+            "SUM" => Some("sum"),
+            "STDDEV" | "STD" | "SD" => Some("SD"),
+            "MIN" => Some("min"),
+            "MAX" => Some("max"),
+            "COUNT" | "CNT" => Some(""),
+            _ => None,
+        };
+        if let Some(known) = known {
+            aggregate = known.to_string();
+            name.truncate(open);
+        }
+    }
+    let mut unit = String::new();
+    if let Some(open) = name.rfind(" [")
+        && name.ends_with(']')
+    {
+        unit = name[open + 2..name.len() - 1].to_string();
+        name.truncate(open);
+    }
+    // "image", "class": as every other head.
+    let mut chars = name.chars();
+    let name = match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => name,
+    };
+    let sub = match (unit.is_empty(), aggregate.is_empty()) {
+        (false, false) => format!("{unit} · {aggregate}"),
+        (false, true) => unit,
+        (true, false) => aggregate,
+        (true, true) => String::new(),
+    };
+    (name, sub)
+}
+
 // Chart labels: the results' one number format.
 fn format_chart_value(value: f64) -> String {
     format_number(value)
@@ -6366,9 +6417,9 @@ fn list_images(
 /// The Images selector: all, only enabled, only disabled.
 fn image_state_items() -> Vec<MultiSelectItem> {
     [
-        ("all", "All images"),
-        ("enabled", "Only enabled"),
-        ("disabled", "Only disabled"),
+        ("all", "All"),
+        ("enabled", "Included"),
+        ("disabled", "Left out"),
     ]
     .into_iter()
     .enumerate()
@@ -6911,6 +6962,31 @@ fn nearest_point(
         .filter(|(d2, _, _)| *d2 <= radius * radius)
         .min_by(|a, b| a.0.total_cmp(&b.0))
         .map(|(_, path, bbox)| (path.clone(), *bbox))
+}
+
+#[cfg(test)]
+mod split_header_tests {
+    use super::split_header;
+
+    #[test]
+    fn a_header_is_its_name_then_unit_and_aggregate() {
+        let split = |h: &str| split_header(h);
+        assert_eq!(
+            split("Area [px] (AVG)"),
+            ("Area".into(), "px · mean".into())
+        );
+        assert_eq!(split("Count (COUNT)"), ("Count".into(), String::new()));
+        assert_eq!(split("Area [nm²]"), ("Area".into(), "nm²".into()));
+        assert_eq!(split("image"), ("Image".into(), String::new()));
+        assert_eq!(
+            split("Circularity (MEDIAN)"),
+            ("Circularity".into(), "median".into())
+        );
+        assert_eq!(
+            split("Coloc with ch2 (spot)"),
+            ("Coloc with ch2 (spot)".into(), String::new())
+        );
+    }
 }
 
 #[cfg(test)]
@@ -8317,10 +8393,20 @@ pub(crate) mod tests {
         );
         assert_eq!(filter.parents, [ObjectClass::Global(1)]);
         drop(filter);
+        // The head's two lines together: "Area" and "px" as "Area [px]".
+        let subs: Vec<String> = state
+            .get_list_column_subs()
+            .iter()
+            .map(|h| h.to_string())
+            .collect();
         let headers: Vec<String> = state
             .get_list_column_headers()
             .iter()
-            .map(|h| h.to_string())
+            .zip(subs)
+            .map(|(h, sub)| match sub.is_empty() {
+                true => h.to_string(),
+                false => format!("{h} [{sub}]"),
+            })
             .collect();
         for wanted in [
             "Area [px]",

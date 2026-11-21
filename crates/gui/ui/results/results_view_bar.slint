@@ -48,8 +48,10 @@ export component BarChip inherits Rectangle {
     in property <int> badge;
     in property <bool> active;
     in property <bool> enabled: true;
-    // The popover's width; its height is its content's.
+    // The popover's width; its height is its content's, up to
+    // `popover-max-height` (then it scrolls).
     in property <length> popover-width: 300px;
+    in property <length> popover-max-height: 520px;
     callback opened;
 
     height: Ink.control-h;
@@ -128,7 +130,7 @@ export component BarChip inherits Rectangle {
         y: root.height + 4px;
         width: root.popover-width;
         // Explicit (an inferred height misplaces a popup): its content's.
-        height: body.preferred-height;
+        height: min(body.preferred-height, root.popover-max-height);
         close-policy: close-on-click-outside;
 
         Rectangle {
@@ -145,11 +147,15 @@ export component BarChip inherits Rectangle {
         // Clicks on the popover stay in it.
         TouchArea { }
 
-        body := VerticalLayout {
-            padding: 12px;
-            spacing: 10px;
-            alignment: start;
-            @children
+        Flickable {
+            content-height: body.preferred-height;
+            body := VerticalLayout {
+                width: parent.width;
+                padding: 12px;
+                spacing: 10px;
+                alignment: start;
+                @children
+            }
         }
     }
 }
@@ -214,12 +220,13 @@ export component BarCount inherits HorizontalLayout {
 }
 
 // ⋯: the view's rarely used settings and actions (its children:
-// `InkMenuItem`s).
-export component BarMore inherits VerticalLayout {
+// `InkMenuItem`s). The popup isn't a layout item - a layout would size it.
+export component BarMore inherits Rectangle {
     in property <length> menu-width: 240px;
-    alignment: center;
+    width: 26px;
 
     more := InkIconButton {
+        y: (root.height - self.height) / 2;
         size: 26px;
         icon: InkIcons.more;
         label: "More";
@@ -229,12 +236,16 @@ export component BarMore inherits VerticalLayout {
     }
 
     menu := PopupWindow {
-        x: more.x + more.width - root.menu-width;
+        x: root.width - root.menu-width;
         y: more.y + more.height + 4px;
         InkMenuFrame {
             open-y: root.absolute-position.y + more.y + more.height + 4px;
             menu-width: root.menu-width;
-            @children
+            // Forwarded children only reach the frame's item list inside
+            // an element of their own.
+            VerticalLayout {
+                @children
+            }
         }
     }
 }
