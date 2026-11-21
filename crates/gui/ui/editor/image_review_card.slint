@@ -10,6 +10,7 @@
 import { TextEdit } from "std-widgets.slint";
 import { Ink, InkIcons, InkCheckbox, InkTipZone } from "../ink/ink.slint";
 import { ImageReviewState, ImageReviewData } from "../api/image_review.slint";
+import { ImagesListState } from "../api/images_list.slint";
 
 // One marker to pick: a ring with the colour inside (0: an empty ring).
 component MarkerSwatch inherits Rectangle {
@@ -190,7 +191,8 @@ export component ImageReviewPopover inherits Rectangle {
     max-width: 320px;
     min-height: body.preferred-height;
     max-height: body.preferred-height;
-    background: Ink.panel;
+    background: Ink.panel-blur ? Ink.glass : Ink.panel;
+    backdrop-blur: Ink.backdrop;
     border-radius: Ink.radius-lg;
     border-width: 1px;
     border-color: Ink.border;
@@ -252,6 +254,86 @@ export component ImageReviewPopover inherits Rectangle {
             }
             reason-picked(reason) => {
                 ImageReviewState.set-reason(ImageReviewState.popup-path, reason);
+            }
+        }
+    }
+}
+
+// One colour of the marker filter: a small ring, dark when on.
+component MarkerFilterDot inherits Rectangle {
+    in property <int> marker;
+    in property <bool> on;
+    callback toggled;
+
+    width: 22px;
+    height: 22px;
+    border-radius: 11px;
+    border-width: root.on ? 2px : 1px;
+    border-color: root.on ? Ink.text : ta.has-hover ? Ink.text-mute : Ink.border;
+    background: Ink.field;
+    accessible-role: checkbox;
+    accessible-label: "Only " + ImageReviewState.marker-name(root.marker);
+    accessible-checked: root.on;
+    accessible-action-default => {
+        root.toggled();
+    }
+
+    Rectangle {
+        width: 12px;
+        height: 12px;
+        border-radius: 6px;
+        background: Ink.markers[root.marker - 1];
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.toggled();
+        }
+    }
+
+    InkTipZone {
+        wanted: ta.has-hover;
+        text: root.on ? "Images marked " + ImageReviewState.marker-name(root.marker) + " are listed - click to leave them out" : "List images marked " + ImageReviewState.marker-name(root.marker);
+    }
+}
+
+// "Marked:" and the six colours (design N5): narrows the images list and
+// the chip's picker to the images with one of the colours turned on.
+export component MarkerFilterRow inherits HorizontalLayout {
+    spacing: 6px;
+    alignment: start;
+
+    Text {
+        text: "Marked:";
+        font-size: Ink.fs-caption;
+        color: Ink.text-dim;
+        vertical-alignment: center;
+    }
+    for marker in [1, 2, 3, 4, 5, 6]: VerticalLayout {
+        alignment: center;
+        MarkerFilterDot {
+            marker: marker;
+            on: mod(floor(ImagesListState.marker-filter / Math.pow(2, marker)), 2) == 1;
+            toggled => {
+                ImagesListState.marker-filter-toggled(marker);
+            }
+        }
+    }
+    if ImagesListState.marker-filter != 0: Text {
+        text: "Show all";
+        font-size: Ink.fs-caption;
+        color: clear-ta.has-hover ? Ink.text : Ink.text-mute;
+        vertical-alignment: center;
+        accessible-role: button;
+        accessible-label: "Show all images, not only marked ones";
+        accessible-action-default => {
+            ImagesListState.marker-filter-toggled(0);
+        }
+        clear-ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                ImagesListState.marker-filter-toggled(0);
             }
         }
     }

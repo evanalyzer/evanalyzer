@@ -40,6 +40,12 @@ pub struct ImageStates {
 
 pub struct ImagesListControllerState {
     pub image_filter_text: RwLock<String>,
+    /// The markers the list and the chip's picker are narrowed to (bit `n`
+    /// for marker `n`, see [`marker_bit`]); 0: no marker filter.
+    pub marker_filter: std::sync::atomic::AtomicU8,
+    /// The chip picker's last search, to list it again when the marker
+    /// filter changes.
+    pub quick_query: RwLock<String>,
     /// The images of each well of the plate view, as `plate-wells` lists them.
     pub well_items: RwLock<Vec<Vec<ImageItemData>>>,
 }
@@ -72,6 +78,8 @@ impl ImagesListController {
             image_meta_controller,
             image_controller_state: Arc::new(ImagesListControllerState {
                 image_filter_text: RwLock::new(String::new()),
+                marker_filter: std::sync::atomic::AtomicU8::new(0),
+                quick_query: RwLock::new(String::new()),
                 well_items: RwLock::new(Vec::new()),
             }),
             object_list_controller,
@@ -506,6 +514,13 @@ impl ImagesListController {
 
             self.init_review_callbacks();
 
+            // A colour of the marker filter clicked: narrow to it / not
+            let manager = Arc::clone(self);
+            ui.global::<ImagesListState>()
+                .on_marker_filter_toggled(move |marker| {
+                    manager.toggle_marker_filter(marker);
+                });
+
             // A folder's head clicked: fold / unfold it
             let manager = Arc::clone(self);
             ui.global::<ImagesListState>()
@@ -629,6 +644,44 @@ impl ImagesListController {
         }
     }
 
+    /// The markers the list is narrowed to, see
+    /// [`ImagesListControllerState::marker_filter`].
+    pub(crate) fn marker_filter(&self) -> u8 {
+        self.image_controller_state
+            .marker_filter
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Adds marker `marker` (1-6) to the filter or takes it out (0: no
+    /// marker filter), then lists the images again.
+    pub fn toggle_marker_filter(&self, marker: i32) {
+        let filter = &self.image_controller_state.marker_filter;
+        let bit = u8::try_from(marker).ok().map_or(0, marker_bit);
+        if bit == 0 {
+            filter.store(0, std::sync::atomic::Ordering::Relaxed);
+        } else {
+            filter.fetch_xor(bit, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.refilter();
+    }
+
+    /// Lists the images again after the filter changed: the list (the open
+    /// image selected in it) and the chip's picker.
+    pub(crate) fn refilter(&self) {
+        self.sync_image_list_to_slint();
+        let query = self
+            .image_controller_state
+            .quick_query
+            .read()
+            .expect("Poisoned")
+            .clone();
+        self.sync_quick_pick_to_slint(&query);
+        let image_path = self.app_state.get_project().get_current_image_path_cloned();
+        if let Some(image_path) = image_path {
+            self.set_selected_image_index_in_slint_images_list(image_path, false);
+        }
+    }
+
     pub fn update_image_filter_text_in_project(&self, new_text: &str) {
         *self
             .image_controller_state
@@ -665,6 +718,7 @@ impl ImagesListController {
             .expect("Poisned")
             .clone()
             .to_lowercase();
+        let marker_filter = self.marker_filter();
 
         let image_states = state.image_states();
         let project = state.get_project();
@@ -676,7 +730,12 @@ impl ImagesListController {
             &project.images.root.clone().unwrap_or_default(),
             &project.images.collapsed_folders,
             &project.images.skipped_folders,
+            marker_filter,
         );
+        let any_marker = marker_filter != 0
+            || images_guard
+                .values()
+                .any(|entry| entry.review.marker.is_some());
         let total_images = images_guard.0.len();
         let run_images = if project.images.skipped_folders.is_empty() {
             total_images
@@ -709,6 +768,8 @@ impl ImagesListController {
                     let images_state = ui_ready.global::<ImagesListState>();
                     images_state.set_images_list(model);
                     images_state.set_image_count(image_count as i32);
+                    images_state.set_any_marker(any_marker);
+                    images_state.set_marker_filter(i32::from(marker_filter));
                     images_state.set_total_images(total_images as i32);
                     images_state.set_run_images(run_images as i32);
                     images_state.set_plate_rows(plate_rows);
@@ -726,6 +787,14 @@ impl ImagesListController {
 
     /// The image chip's quick picker: the images matching `query`.
     pub fn sync_quick_pick_to_slint(&self, query: &str) {
+        query.clone_into(
+            &mut self
+                .image_controller_state
+                .quick_query
+                .write()
+                .expect("Poisoned"),
+        );
+        let marker_filter = self.marker_filter();
         let image_states = self.app_state.image_states();
         let project = self.app_state.get_project();
         let image_root = project.images.root.clone().unwrap_or_default();
@@ -738,6 +807,7 @@ impl ImagesListController {
             current.as_deref(),
             &image_states,
             &image_root,
+            marker_filter,
         );
         drop(project);
         let ui_weak = self.ui.clone();
@@ -923,7 +993,8 @@ fn row_of_image(
 }
 
 /// Builds the Slint-facing row list for `sync_image_list_to_slint`: applies
-/// the (already-lowercased) filter text against `rel_path` and the note, then maps each
+/// the (already-lowercased) filter text against `rel_path` and the note and
+/// the marker filter (see [`has_filtered_marker`]), then maps each
 /// surviving entry to an `ImageItemData`. When the images lie in more than
 /// one folder, each folder's images follow a head row (the folders in the
 /// order they first appear); a folded folder (`collapsed`, ignored while
@@ -939,10 +1010,14 @@ fn build_image_list_items(
     image_root: &std::path::Path,
     collapsed: &std::collections::BTreeSet<PathBuf>,
     skipped: &std::collections::BTreeSet<PathBuf>,
+    marker_filter: u8,
 ) -> (Vec<ImageItemData>, usize) {
     let matching: Vec<_> = images
         .values()
         .filter(|entry| {
+            if !has_filtered_marker(entry, marker_filter) {
+                return false;
+            }
             if filter_text_lowercase.is_empty() {
                 return true;
             }
@@ -988,7 +1063,7 @@ fn build_image_list_items(
     for entry in matching {
         folders.entry(folder_of(entry)).or_default().push(entry);
     }
-    let searching = !filter_text_lowercase.is_empty();
+    let searching = !filter_text_lowercase.is_empty() || marker_filter != 0;
     let mut rows = Vec::with_capacity(count + folders.len());
     for (folder, entries) in folders {
         let folded = !searching && collapsed.contains(&folder);
@@ -1117,22 +1192,30 @@ fn quick_pick_items(
     current: Option<&std::path::Path>,
     states: &ImageStates,
     image_root: &std::path::Path,
+    marker_filter: u8,
 ) -> (Vec<ImageItemData>, usize, Option<usize>) {
     let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
     let is_match = |entry: &evanalyzer_cfg::settings::images_settings::ImageEntry| {
+        if !has_filtered_marker(entry, marker_filter) {
+            return false;
+        }
         let path = entry.rel_path.to_string_lossy().to_lowercase();
         words.iter().all(|word| path.contains(word.as_str()))
     };
     // Without a query every image matches: the open image's position in the
     // whole list decides which window of images is shown.
     let start = match current {
-        Some(current) if words.is_empty() && images.len() > QUICK_PICK_LIMIT => images
-            .values()
-            .position(|entry| entry.rel_path.as_path() == current)
-            .map_or(0, |pos| {
-                pos.saturating_sub(QUICK_PICK_LIMIT / 2)
-                    .min(images.len() - QUICK_PICK_LIMIT)
-            }),
+        Some(current)
+            if words.is_empty() && marker_filter == 0 && images.len() > QUICK_PICK_LIMIT =>
+        {
+            images
+                .values()
+                .position(|entry| entry.rel_path.as_path() == current)
+                .map_or(0, |pos| {
+                    pos.saturating_sub(QUICK_PICK_LIMIT / 2)
+                        .min(images.len() - QUICK_PICK_LIMIT)
+                })
+        }
         _ => 0,
     };
     let mut items = Vec::new();
@@ -1151,6 +1234,28 @@ fn quick_pick_items(
         }
     }
     (items, matches, current_index)
+}
+
+/// Marker `marker`'s bit in a marker filter (0 for no marker).
+pub(crate) fn marker_bit(marker: u8) -> u8 {
+    if (1..=6).contains(&marker) {
+        1 << marker
+    } else {
+        0
+    }
+}
+
+/// Whether `entry` passes the marker filter: any image without one, else
+/// an image with one of its markers.
+fn has_filtered_marker(
+    entry: &evanalyzer_cfg::settings::images_settings::ImageEntry,
+    marker_filter: u8,
+) -> bool {
+    marker_filter == 0
+        || entry
+            .review
+            .marker
+            .is_some_and(|marker| marker_filter & marker_bit(marker.number()) != 0)
 }
 
 /// "2048 × 2048 · 3 ch" of the image's selected series ("" before it was
@@ -1549,6 +1654,7 @@ mod tests {
                 std::path::Path::new("/data"),
                 &Default::default(),
                 &Default::default(),
+                0,
             )
             .0
         };
@@ -1562,6 +1668,84 @@ mod tests {
             (0, false, false)
         );
         assert_eq!(row_names(&build("bubble")), ["a.tif"]);
+    }
+
+    /// The marker filter keeps the images with one of its colours, in the
+    /// list (folders without one hide, folded ones open) and the picker.
+    #[test]
+    fn the_marker_filter_keeps_images_with_one_of_its_colours() {
+        use evanalyzer_cfg::settings::images_settings::ImageMarker;
+        let mut images = image_list_of(&["A/1.tif", "A/2.tif", "B/3.tif", "C/4.tif"]);
+        for (path, marker) in [
+            ("A/2.tif", ImageMarker::Red),
+            ("C/4.tif", ImageMarker::Green),
+        ] {
+            images
+                .get_mut(std::path::Path::new(path))
+                .unwrap()
+                .review
+                .marker = Some(marker);
+        }
+        let collapsed: std::collections::BTreeSet<PathBuf> = [PathBuf::from("A")].into();
+        let build = |filter: &str, markers: u8| {
+            build_image_list_items(
+                &images,
+                filter,
+                &ImageStates::default(),
+                std::path::Path::new("/data"),
+                &collapsed,
+                &Default::default(),
+                markers,
+            )
+        };
+        let red = marker_bit(ImageMarker::Red.number());
+        let green = marker_bit(ImageMarker::Green.number());
+        let (rows, count) = build("", red);
+        assert_eq!(count, 1);
+        assert_eq!(row_names(&rows), ["2.tif"], "one folder left: no heads");
+        let (rows, count) = build("", red | green);
+        assert_eq!(count, 2);
+        assert_eq!(
+            rows.iter().filter(|row| !row.folder).count(),
+            2,
+            "folded A opens, B hides"
+        );
+        assert_eq!(rows.len(), 4, "the heads of A and C");
+        assert_eq!(
+            build("4", red).1,
+            0,
+            "the search and the markers both count"
+        );
+        assert_eq!(build("", 0).1, 4);
+
+        let names = |markers: u8| -> Vec<String> {
+            quick_pick_items(
+                &images,
+                "",
+                None,
+                &ImageStates::default(),
+                std::path::Path::new(""),
+                markers,
+            )
+            .0
+            .iter()
+            .map(|item| item.path.to_string())
+            .collect()
+        };
+        assert_eq!(names(green), ["C/4.tif"]);
+        assert_eq!(names(0).len(), 4);
+    }
+
+    #[test]
+    fn toggling_a_marker_twice_turns_it_off_and_zero_clears_all() {
+        let controller = make_controller();
+        controller.toggle_marker_filter(1);
+        controller.toggle_marker_filter(4);
+        assert_eq!(controller.marker_filter(), 0b10010);
+        controller.toggle_marker_filter(1);
+        assert_eq!(controller.marker_filter(), 0b10000);
+        controller.toggle_marker_filter(7);
+        assert_eq!(controller.marker_filter(), 0, "anything else clears");
     }
 
     #[test]
@@ -1831,6 +2015,7 @@ mod tests {
             std::path::Path::new("/data/study"),
             &Default::default(),
             &Default::default(),
+            0,
         );
         assert_eq!(row_names(&rows), ["a.tif", "b.tif"]);
         assert!(rows.iter().all(|row| row.head == -1), "nothing to pin");
@@ -1856,6 +2041,7 @@ mod tests {
             std::path::Path::new("/data/study"),
             &Default::default(),
             &Default::default(),
+            0,
         );
         assert_eq!(
             row_names(&rows),
@@ -1898,6 +2084,7 @@ mod tests {
             std::path::Path::new("/data"),
             &collapsed,
             &Default::default(),
+            0,
         );
         assert_eq!(row_names(&rows), ["▸ A (2)", "▸ B (1)", "b1.tif"]);
         assert!(rows[0].collapsed && !rows[1].collapsed);
@@ -1910,6 +2097,7 @@ mod tests {
             std::path::Path::new("/data"),
             &collapsed,
             &Default::default(),
+            0,
         );
         assert_eq!(row_names(&rows), ["a2.tif"], "one folder left: no head");
         assert_eq!(count, 1);
@@ -1920,6 +2108,7 @@ mod tests {
             std::path::Path::new("/data"),
             &collapsed,
             &Default::default(),
+            0,
         );
         assert_eq!(row_names(&rows), ["▸ A (1)", "a1.tif", "▸ B (1)", "b1.tif"]);
     }
@@ -1935,6 +2124,7 @@ mod tests {
             std::path::Path::new("/data"),
             &Default::default(),
             &skipped,
+            0,
         );
         let marks: Vec<(String, bool)> = row_names(&rows)
             .into_iter()
@@ -2009,6 +2199,7 @@ mod tests {
             std::path::Path::new("/root"),
             &Default::default(),
             &Default::default(),
+            0,
         );
         assert_eq!(rows[0].image_dimension, "2048 × 1024 · 2 ch");
         assert_eq!(rows[0].state, WellState::Preview);
@@ -2135,6 +2326,7 @@ mod tests {
             std::path::Path::new(""),
             &Default::default(),
             &Default::default(),
+            0,
         );
 
         let mut has_annotations_by_path = std::collections::HashMap::new();
@@ -2177,6 +2369,7 @@ mod tests {
             None,
             &Default::default(),
             std::path::Path::new(""),
+            0,
         );
 
         let paths: Vec<String> = items.iter().map(|item| item.path.to_string()).collect();
@@ -2197,6 +2390,7 @@ mod tests {
             None,
             &Default::default(),
             std::path::Path::new(""),
+            0,
         );
 
         assert_eq!(items.len(), QUICK_PICK_LIMIT);
@@ -2217,6 +2411,7 @@ mod tests {
                 Some(std::path::Path::new(&names[i])),
                 &Default::default(),
                 std::path::Path::new(""),
+                0,
             )
         };
 
@@ -2244,6 +2439,7 @@ mod tests {
             Some(std::path::Path::new(&names[100])),
             &Default::default(),
             std::path::Path::new(""),
+            0,
         );
         assert_eq!(items[0].path.as_str(), names[0]);
     }
@@ -2258,6 +2454,7 @@ mod tests {
             Some(std::path::Path::new("b.tif")),
             &Default::default(),
             std::path::Path::new(""),
+            0,
         );
         assert_eq!(current, Some(1));
 
@@ -2267,6 +2464,7 @@ mod tests {
             Some(std::path::Path::new("b.tif")),
             &Default::default(),
             std::path::Path::new(""),
+            0,
         );
         assert_eq!(current, None);
     }

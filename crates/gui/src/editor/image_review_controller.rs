@@ -193,6 +193,7 @@ impl ImagesListController {
         if !changes {
             return;
         }
+        let marker_changed = matches!(change, ReviewChange::Marker(_));
         if change.own_undo_step() {
             self.app_state.begin_undo_step();
         }
@@ -205,7 +206,32 @@ impl ImagesListController {
             image.review.clone()
         };
         self.app_state.mark_dirty();
+        // Narrowed to markers: a new marker may take the image out of the
+        // list or bring it in.
+        if marker_changed {
+            if self.marker_filter() != 0 {
+                self.refilter();
+            } else {
+                self.show_marker_filter_row(review.marker.is_some());
+            }
+        }
         self.show_review(&rel, &review);
+    }
+
+    /// Shows the marker filter row while some image has a marker: at once
+    /// when one was just set, else (one removed) only if another is left.
+    fn show_marker_filter_row(&self, marker_set: bool) {
+        let any_marker = marker_set
+            || self
+                .app_state
+                .get_project()
+                .images
+                .list
+                .values()
+                .any(|image| image.review.marker.is_some());
+        if let Some(ui) = self.ui.upgrade() {
+            ui.global::<ImagesListState>().set_any_marker(any_marker);
+        }
     }
 
     /// Shows `review` of the image at `rel`: Image info and the chip (the
@@ -232,15 +258,14 @@ impl ImagesListController {
         }
         let list = ui.global::<ImagesListState>();
         for model in [list.get_images_list(), list.get_quick_images()] {
-            if let Some(index) = (0..model.row_count()).find(|&i| {
+            let found = (0..model.row_count()).find_map(|i| {
                 model
                     .row_data(i)
-                    .is_some_and(|row| !row.folder && row.path.as_str() == rel_text)
-            }) {
-                if let Some(row) = model.row_data(index) {
-                    let updated = with_review(row, &data);
-                    model.set_row_data(index, updated);
-                }
+                    .filter(|row| !row.folder && row.path.as_str() == rel_text)
+                    .map(|row| (i, row))
+            });
+            if let Some((index, row)) = found {
+                model.set_row_data(index, with_review(row, &data));
             }
         }
     }

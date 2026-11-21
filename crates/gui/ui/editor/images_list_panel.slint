@@ -8,7 +8,7 @@
 
 import { ImageItemData, ImagesListState, WellState } from "../api/images_list.slint";
 import { ImageReviewState } from "../api/image_review.slint";
-import { ImageReviewPopover } from "image_review_card.slint";
+import { ImageReviewPopover, MarkerFilterRow } from "image_review_card.slint";
 import { LayoutState } from "../api/layout.slint";
 import { PlateView, WellColor } from "plate_view.slint";
 import { ListView } from "std-widgets.slint";
@@ -409,6 +409,13 @@ export component ImagesListPanel inherits Rectangle {
                     ImagesListState.image_filter_text_changed(text);
                 }
             }
+        }
+
+        // The marker filter (design N5) - once an image has a marker.
+        if ImagesListState.any-marker: MarkerFilterRow {
+            padding-left: Ink.pad-panel + 2px;
+            padding-right: Ink.pad-panel;
+            padding-bottom: 4px;
         }
 
         // What the dots in the rows mean.

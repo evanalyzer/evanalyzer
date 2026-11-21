@@ -74,6 +74,13 @@ export global ImagesListState {
     // it's pure UI focus, nothing to persist.
     in-out property <int> focus_search_requested: 0;
     callback image_filter_text_changed(string);
+    // The markers the list and the chip's picker are narrowed to: bit n
+    // for marker n (1-6), 0 none. Rust sets it, see `marker-filter-toggled`.
+    in property <int> marker-filter: 0;
+    // Some image has a marker (or a marker filter is on): the filter row shows.
+    in property <bool> any-marker: false;
+    // A colour of the filter clicked (1-6) - 0 clears the filter.
+    callback marker-filter-toggled(int);
 
     in-out property <int> selected_image_index: -1;
     // Index to scroll into view (e.g. when an image is opened from the results

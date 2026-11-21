@@ -35,7 +35,7 @@ import { PipelinesPanelState } from "../api/pipelines.slint";
 import { ImageMetaData } from "../api/image_meta.slint";
 import { ImagesListState, ImageItemData } from "../api/images_list.slint";
 import { ImageReviewState } from "../api/image_review.slint";
-import { ImageReviewPopover } from "../editor/image_review_card.slint";
+import { ImageReviewPopover, MarkerFilterRow } from "../editor/image_review_card.slint";
 import { AiLearningState } from "../api/ai_learning.slint";
 import { ResultsBarNav, ResultsBarActions } from "../results/results_bar.slint";
 import { StartState } from "../api/start.slint";
@@ -231,7 +231,8 @@ component QuickImagePicker inherits Rectangle {
     }
 
     width: 460px;
-    background: Ink.panel;
+    background: Ink.panel-blur ? Ink.glass : Ink.panel;
+    backdrop-blur: Ink.backdrop;
     border-radius: Ink.radius-lg;
     border-width: 1px;
     border-color: Ink.border;
@@ -284,6 +285,11 @@ component QuickImagePicker inherits Rectangle {
                     list.content-y = 0;
                 }
             }
+        }
+
+        if ImagesListState.any-marker: MarkerFilterRow {
+            padding-left: 4px;
+            height: 26px;
         }
 
         if ImagesListState.quick-images.length == 0: Text {
