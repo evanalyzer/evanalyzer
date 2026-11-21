@@ -472,7 +472,11 @@ impl ResultsGenerator {
         // narrowing to `object_id > cursor` here, in the same WHERE clause
         // DuckDB already zone-map-prunes on, is what lets it skip whole row
         // groups below the cursor instead of sorting/reading the full table.
-        if let Some(cursor) = &filter.page.after {
+        // Sorted by a column: over all the matching objects, paged by offset.
+        let sort_expr = filter.sort.as_ref().and_then(object_sort_expr);
+        if sort_expr.is_none()
+            && let Some(cursor) = &filter.page.after
+        {
             conditions.push(format!(
                 "object_id > '{}'::UUID",
                 cursor.replace('\'', "''")
@@ -499,19 +503,49 @@ impl ResultsGenerator {
         // ids as an `IN (...)` list: DuckDB parsed and planned a 20,000-id
         // list for every export page - 39 s of a 6.6M-object List export.
         let limit = filter.page.limit.max(0);
-        let key_sql = format!(
-            "SELECT MIN(object_id)::VARCHAR, MAX(object_id)::VARCHAR FROM \
-             (SELECT object_id FROM objects {where_clause} ORDER BY object_id LIMIT {limit})"
-        );
-        let (first, last): (Option<String>, Option<String>) = self
-            .database
-            .query_row(&key_sql, [], |row| Ok((row.get(0)?, row.get(1)?)))
-            .map_err(err)?;
-        let (Some(first), Some(last)) = (first, last) else {
-            return Ok(empty_result(column_names));
+        // Sorted: the page's ids in their order (a short list - a GUI page),
+        // the rows put in that order below.
+        let mut sorted_ids: Option<Vec<String>> = None;
+        let where_clause = if let (Some(expr), Some(sort)) = (&sort_expr, &filter.sort) {
+            let offset = sort_offset(&filter.page);
+            let direction = if sort.descending { "DESC" } else { "ASC" };
+            let mut stmt = self
+                .database
+                .prepare(&format!(
+                    "SELECT object_id::VARCHAR FROM objects {where_clause} \
+                     ORDER BY ({expr}) {direction} NULLS LAST, object_id \
+                     LIMIT {limit} OFFSET {offset}"
+                ))
+                .map_err(err)?;
+            let ids: Vec<String> = stmt
+                .query_map([], |row| row.get(0))
+                .map_err(err)?
+                .collect::<Result<_, _>>()
+                .map_err(err)?;
+            if ids.is_empty() {
+                return Ok(empty_result(column_names));
+            }
+            let list = ids
+                .iter()
+                .map(|id| format!("'{}'::UUID", id.replace('\'', "''")))
+                .collect::<Vec<_>>()
+                .join(", ");
+            sorted_ids = Some(ids);
+            format!("WHERE object_id IN ({list})")
+        } else {
+            let key_sql = format!(
+                "SELECT MIN(object_id)::VARCHAR, MAX(object_id)::VARCHAR FROM \
+                 (SELECT object_id FROM objects {where_clause} ORDER BY object_id LIMIT {limit})"
+            );
+            let (first, last): (Option<String>, Option<String>) = self
+                .database
+                .query_row(&key_sql, [], |row| Ok((row.get(0)?, row.get(1)?)))
+                .map_err(err)?;
+            let (Some(first), Some(last)) = (first, last) else {
+                return Ok(empty_result(column_names));
+            };
+            format!("{where_clause} AND object_id BETWEEN '{first}'::UUID AND '{last}'::UUID")
         };
-        let where_clause =
-            format!("{where_clause} AND object_id BETWEEN '{first}'::UUID AND '{last}'::UUID");
 
         // Only pull the source columns `ordered_columns` actually needs.
         // DuckDB is columnar: a column replaced by a constant here is never
@@ -536,6 +570,19 @@ impl ResultsGenerator {
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
+        if let Some(ids) = &sorted_ids {
+            let place: HashMap<&str, usize> = ids
+                .iter()
+                .enumerate()
+                .map(|(i, id)| (id.as_str(), i))
+                .collect();
+            objects.sort_by_key(|o| {
+                place
+                    .get(o.object_id.as_str())
+                    .copied()
+                    .unwrap_or(usize::MAX)
+            });
+        }
         self.add_measurement_values(objects.iter_mut(), &ordered_columns)?;
         self.add_measurement_objects(objects.iter_mut(), &ordered_columns)?;
         self.add_related_values(objects.iter_mut(), &ordered_columns)?;
@@ -918,7 +965,10 @@ impl ResultsGenerator {
         // final group can never split a group across pages. Applied to the
         // objects too, so later pages don't re-aggregate earlier ones.
         let mut key_conditions = vec!["true".to_string()];
-        if let Some(cursor) = &filter.page.after {
+        let sort = stat_sort(filter, &stats);
+        if sort.is_none()
+            && let Some(cursor) = &filter.page.after
+        {
             let (cursor_path, cursor_class) = cursor
                 .split_once('\u{1}')
                 .unwrap_or((cursor.as_str(), "-1"));
@@ -940,15 +990,16 @@ impl ResultsGenerator {
             .enumerate()
             .map(|(i, (column, aggregation))| {
                 if is_image_measurement(column) {
-                    return format!("imm.m_{i}");
+                    return format!("imm.m_{i} AS v_{i}");
                 }
-                fill_zero_sql(
+                let value = fill_zero_sql(
                     &format!("agg.value_{i}"),
                     column,
                     aggregation,
                     "agg.n_objects IS NULL",
                     "img.measured",
-                )
+                );
+                format!("{value} AS v_{i}")
             })
             .collect::<Vec<_>>()
             .join(",\n                ");
@@ -999,8 +1050,16 @@ impl ResultsGenerator {
                  AND agg.class_id = keys.class_id\n\
              {imm_join}\
              WHERE {key_where}\n\
-             ORDER BY keys.image_rel_path, keys.class_id\n\
-             LIMIT {limit}"
+             ORDER BY {order}keys.image_rel_path, keys.class_id\n\
+             LIMIT {limit}{offset}",
+            order = sort.as_ref().map_or(String::new(), |(i, desc)| format!(
+                "v_{i} {} NULLS LAST, ",
+                if *desc { "DESC" } else { "ASC" }
+            )),
+            offset = match sort {
+                Some(_) => format!(" OFFSET {}", sort_offset(&filter.page)),
+                None => String::new(),
+            },
         );
 
         let mut stmt = self.database.prepare(&sql).map_err(err)?;
@@ -1252,7 +1311,10 @@ impl ResultsGenerator {
         let sort_key = "length(groups.sort_row), groups.sort_row, groups.sort_col, keys.grp, \
                         keys.class_id";
         let mut key_where = "true".to_string();
-        if let Some(cursor) = &filter.page.after {
+        let sort = stat_sort(filter, stats);
+        if sort.is_none()
+            && let Some(cursor) = &filter.page.after
+        {
             let parts: Vec<&str> = cursor.split('\u{1}').collect();
             let text = |i: usize| parts.get(i).copied().unwrap_or("").replace('\'', "''");
             let number = |i: usize| {
@@ -1308,13 +1370,22 @@ impl ResultsGenerator {
              LEFT JOIN flags ON flags.grp = keys.grp\n\
              {counts_join}{imm_join}\
              WHERE {key_where}\n\
-             ORDER BY {sort_key}\n\
-             LIMIT {limit}",
+             ORDER BY {order}{sort_key}\n\
+             LIMIT {limit}{offset}",
+            order = sort.as_ref().map_or(String::new(), |(i, desc)| format!(
+                "v_{i} {} NULLS LAST, ",
+                if *desc { "DESC" } else { "ASC" }
+            )),
+            offset = match sort {
+                Some(_) => format!(" OFFSET {}", sort_offset(&filter.page)),
+                None => String::new(),
+            },
             image_where = image_conditions.join(" AND "),
             per_class = objects_per_class_sql(&pre.join(" AND ")),
             select = select_values
                 .iter()
-                .map(|v| format!(",\n                 {v}"))
+                .enumerate()
+                .map(|(i, v)| format!(",\n                 {v} AS v_{i}"))
                 .collect::<String>(),
         );
         let mut stmt = self.database.prepare(&sql).map_err(err)?;
@@ -4580,6 +4651,41 @@ fn intensity_stat(object: &ObjectRow, stat: IntensityStat, channel: u32) -> f32 
 /// `coloc_partners`/`intensity_stat` read per row for the list view).
 /// Unqualified column names: none of them exists in `images` as well, so
 /// they stay unambiguous in queries joining it.
+/// The SQL to sort a list's objects by (`sort`'s column): its value per
+/// object, the image's path for Image. `None`: not sortable this way.
+fn object_sort_expr(sort: &SortBy) -> Option<String> {
+    match &sort.column {
+        Column::ImageName => Some("image_rel_path".to_string()),
+        Column::Count | Column::ObjectId | Column::ObjectClass => None,
+        Column::Measurement(_) | Column::Children(_) | Column::Parent(_) => None,
+        column => column_aggregate_expr(column).ok(),
+    }
+}
+
+/// A grouped list's sort: the statistic it sorts by (its index in
+/// `stats`) and whether descending - `None` without a sort or for one the
+/// rows don't have.
+fn stat_sort(
+    filter: &GroupedByImageFilter,
+    stats: &[(&Column, &Aggregation)],
+) -> Option<(usize, bool)> {
+    let sort = filter.sort.as_ref()?;
+    stats
+        .iter()
+        .position(|(column, aggregation)| {
+            **column == sort.column && sort.aggregation.as_ref().is_none_or(|a| a == *aggregation)
+        })
+        .map(|i| (i, sort.descending))
+}
+
+/// With a sort, the rows before the page (`Pagination::after`).
+fn sort_offset(page: &Pagination) -> u64 {
+    page.after
+        .as_deref()
+        .and_then(|after| after.parse().ok())
+        .unwrap_or(0)
+}
+
 pub(super) fn column_aggregate_expr(column: &Column) -> Result<String, InternalErrors> {
     Ok(match column {
         Column::AreaSizePx => "area_px".to_string(),
@@ -5417,6 +5523,7 @@ mod tests {
                         related_to: None,
                         page: Pagination { limit: PAGE, after },
                         transpond_table,
+                        sort: None,
                     })
                     .unwrap()
             }
@@ -5434,6 +5541,7 @@ mod tests {
                         transpond_table,
                         grouping: None,
                         empty_classes: true,
+                        sort: None,
                     })
                     .unwrap()
             }
@@ -5766,6 +5874,7 @@ mod tests {
                 related_to: None,
                 page: no_page(),
                 transpond_table: false,
+                sort: None,
             })
             .unwrap()
     }
@@ -5878,6 +5987,7 @@ mod tests {
                 transpond_table: false,
                 grouping: None,
                 empty_classes: true,
+                sort: None,
             })
             .unwrap();
         let values: Vec<Option<f64>> = result.rows[0][2..].iter().map(number).collect();
@@ -5918,6 +6028,7 @@ mod tests {
                 related_to: None,
                 page: no_page(),
                 transpond_table: false,
+                sort: None,
             })
             .unwrap();
 
@@ -5947,6 +6058,7 @@ mod tests {
                 related_to: None,
                 page: no_page(),
                 transpond_table: false,
+                sort: None,
             })
             .unwrap();
 
@@ -5996,6 +6108,7 @@ mod tests {
                 related_to: None,
                 page: no_page(),
                 transpond_table: false,
+                sort: None,
             })
             .unwrap();
 
@@ -6036,6 +6149,7 @@ mod tests {
                 related_to: None,
                 page: no_page(),
                 transpond_table: false,
+                sort: None,
             })
             .unwrap();
         assert_eq!(result.source_object_count, 1);
@@ -6069,6 +6183,7 @@ mod tests {
                     related_to: None,
                     page: no_page(),
                     transpond_table: false,
+                    sort: None,
                 })
                 .unwrap()
                 .source_object_count
@@ -6099,6 +6214,7 @@ mod tests {
                 related_to: None,
                 page: no_page(),
                 transpond_table: false,
+                sort: None,
             })
             .unwrap();
         assert_eq!(result.source_object_count, 1);
@@ -6117,6 +6233,7 @@ mod tests {
                 related_to: None,
                 page: no_page(),
                 transpond_table: false,
+                sort: None,
             })
             .unwrap();
         assert_eq!(result.source_object_count, 0);
@@ -6142,6 +6259,7 @@ mod tests {
                 related_to: None,
                 page: no_page(),
                 transpond_table: false,
+                sort: None,
             })
             .unwrap();
         assert_eq!(result.source_object_count, 1);
@@ -6169,6 +6287,7 @@ mod tests {
                     related_to: None,
                     page: no_page(),
                     transpond_table: false,
+                    sort: None,
                 })
                 .unwrap();
             assert_eq!(result.source_object_count, objects, "objects at Z {z}");
@@ -6200,6 +6319,7 @@ mod tests {
                     related_to: None,
                     page: no_page(),
                     transpond_table: false,
+                    sort: None,
                 })
                 .unwrap();
             assert_eq!(result.rows.len(), objects, "objects at T {t}");
@@ -6214,6 +6334,7 @@ mod tests {
                     transpond_table: false,
                     grouping: None,
                     empty_classes: true,
+                    sort: None,
                 })
                 .unwrap();
             let count = grouped.rows[0]
@@ -6285,6 +6406,7 @@ mod tests {
                 after: None,
             },
             transpond_table: false,
+            sort: None,
         };
         let filters = [
             all.clone(),
@@ -6389,6 +6511,7 @@ mod tests {
                     after: None,
                 },
                 transpond_table: false,
+                sort: None,
             })
             .unwrap();
         assert_eq!(first_page.rows.len(), 2);
@@ -6407,6 +6530,7 @@ mod tests {
                     after: cursor.clone(),
                 },
                 transpond_table: false,
+                sort: None,
             })
             .unwrap();
         assert_eq!(second_page.rows.len(), 2);
@@ -6436,6 +6560,7 @@ mod tests {
                 related_to: None,
                 page: no_page(),
                 transpond_table: false,
+                sort: None,
             })
             .unwrap();
         assert_eq!(result.rows.len(), 1);
@@ -6465,6 +6590,7 @@ mod tests {
                 transpond_table: false,
                 grouping: None,
                 empty_classes: true,
+                sort: None,
             })
             .unwrap();
 
@@ -6495,6 +6621,7 @@ mod tests {
                     transpond_table,
                     grouping: None,
                     empty_classes: true,
+                    sort: None,
                 })
                 .unwrap();
             let flags: Vec<(String, bool)> = result
@@ -6541,6 +6668,7 @@ mod tests {
                 transpond_table: false,
                 grouping: None,
                 empty_classes: true,
+                sort: None,
             })
             .unwrap();
 
@@ -6612,6 +6740,7 @@ mod tests {
                 transpond_table: true,
                 grouping: None,
                 empty_classes: true,
+                sort: None,
             })
             .unwrap()
     }
@@ -6675,6 +6804,7 @@ mod tests {
                 transpond_table: false,
                 grouping: None,
                 empty_classes: true,
+                sort: None,
             })
             .unwrap();
         let transposed = grouped_transposed(&generator, None, no_page());
@@ -6750,6 +6880,7 @@ mod tests {
                 related_to: None,
                 page,
                 transpond_table: true,
+                sort: None,
             })
             .unwrap()
     }
@@ -6859,6 +6990,7 @@ mod tests {
                 transpond_table: false,
                 grouping: None,
                 empty_classes: true,
+                sort: None,
             })
             .unwrap();
         assert!(result.rows.is_empty());
@@ -6878,6 +7010,7 @@ mod tests {
                 transpond_table: false,
                 grouping: None,
                 empty_classes: true,
+                sort: None,
             })
             .unwrap();
         assert!(result.rows.is_empty());
@@ -7569,6 +7702,7 @@ mod tests {
                     related_to: None,
                     page: no_page(),
                     transpond_table: false,
+                    sort: None,
                 })
                 .unwrap();
             let mut values: Vec<(i32, i32)> = result
@@ -7601,6 +7735,7 @@ mod tests {
                     transpond_table: false,
                     grouping: None,
                     empty_classes: true,
+                    sort: None,
                 })
                 .unwrap();
             assert_eq!(number(&result.rows[0][2]), Some(sum), "{column:?}");
@@ -7661,6 +7796,7 @@ mod tests {
                 related_to: None,
                 page: no_page(),
                 transpond_table: false,
+                sort: None,
             })
             .unwrap();
 
@@ -8562,6 +8698,7 @@ mod tests {
                 related_to: None,
                 page: no_page(),
                 transpond_table: false,
+                sort: None,
             })
             .unwrap();
         assert_eq!(result.source_object_count, 0);
@@ -8584,6 +8721,7 @@ mod tests {
                 related_to: None,
                 page: no_page(),
                 transpond_table: false,
+                sort: None,
             })
             .unwrap();
         assert_eq!(result.source_object_count, 0);
@@ -8607,6 +8745,7 @@ mod tests {
                 transpond_table: false,
                 grouping: None,
                 empty_classes: true,
+                sort: None,
             })
             .unwrap();
         assert_eq!(
@@ -8630,6 +8769,7 @@ mod tests {
                 transpond_table: false,
                 grouping: None,
                 empty_classes: true,
+                sort: None,
             })
             .unwrap();
         assert!(result.rows.is_empty());
@@ -8652,6 +8792,7 @@ mod tests {
                 transpond_table: false,
                 grouping: None,
                 empty_classes: true,
+                sort: None,
             })
             .unwrap();
         assert!(result.rows.is_empty());
@@ -8679,6 +8820,7 @@ mod tests {
             transpond_table: false,
             grouping: None,
             empty_classes: true,
+            sort: None,
         };
         let first = generator.get_grouped_by_image(&base).unwrap();
         assert_eq!(first.rows.len(), 1);
@@ -8721,6 +8863,7 @@ mod tests {
                 related_to: None,
                 page: no_page(),
                 transpond_table: false,
+                sort: None,
             })
             .unwrap();
         assert_eq!(
@@ -8758,6 +8901,7 @@ mod tests {
                 related_to: None,
                 page: no_page(),
                 transpond_table: false,
+                sort: None,
             })
             .unwrap();
 
@@ -9111,6 +9255,7 @@ mod tests {
                 transpond_table: false,
                 grouping: None,
                 empty_classes: true,
+                sort: None,
             })
             .unwrap()
     }
@@ -9153,6 +9298,7 @@ mod tests {
                     transpond_table: false,
                     grouping: Some(grouping),
                     empty_classes,
+                    sort: None,
                 })
                 .unwrap(),
         )
@@ -9223,6 +9369,7 @@ mod tests {
                     transpond_table: false,
                     grouping: Some(Grouping::Auto),
                     empty_classes: false,
+                    sort: None,
                 })
                 .unwrap()
         };
@@ -9237,6 +9384,90 @@ mod tests {
             after = Some(last);
         }
         assert_eq!(wells, ["A1", "A2", "A10", "B1"]);
+    }
+
+    /// Sorted by a column: over all the objects, page by page by offset.
+    #[test]
+    fn the_object_list_sorts_by_a_column_across_pages() {
+        let generator = open(&[
+            ObjectSpec::new("a.tif", "ClassA", 1, 30),
+            ObjectSpec::new("a.tif", "ClassA", 1, 10),
+            ObjectSpec::new("b.tif", "ClassA", 1, 50),
+            ObjectSpec::new("b.tif", "ClassA", 1, 20),
+            ObjectSpec::new("c.tif", "ClassA", 1, 40),
+        ]);
+        let page = |after: Option<String>, descending: bool| {
+            let result = generator
+                .get_object_list(&ListFilter {
+                    plane: plane(),
+                    images: None,
+                    object_classes: None,
+                    columns: vec![Column::AreaSizePx],
+                    with_coloc_details: false,
+                    related_to: None,
+                    page: Pagination { limit: 2, after },
+                    transpond_table: false,
+                    sort: Some(SortBy {
+                        column: Column::AreaSizePx,
+                        aggregation: None,
+                        descending,
+                    }),
+                })
+                .unwrap();
+            result
+                .rows
+                .iter()
+                .map(|row| match &row[0].value {
+                    CellValue::Integer(v) => f64::from(*v),
+                    other => as_float(other).unwrap(),
+                })
+                .collect::<Vec<_>>()
+        };
+        let all = |descending| {
+            [None, Some("2".to_string()), Some("4".to_string())]
+                .into_iter()
+                .flat_map(|after| page(after, descending))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(all(false), [10.0, 20.0, 30.0, 40.0, 50.0]);
+        assert_eq!(all(true), [50.0, 40.0, 30.0, 20.0, 10.0]);
+    }
+
+    /// Grouped rows sorted by a statistic - per image and per well.
+    #[test]
+    fn grouped_rows_sort_by_a_statistic() {
+        let generator = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A2_01.tif", "ClassA", 1, 30),
+            ObjectSpec::new("A2_01.tif", "ClassA", 1, 30),
+            ObjectSpec::new("A3_01.tif", "ClassA", 1, 20),
+        ]);
+        let order = |grouping: Option<Grouping>| {
+            let result = generator
+                .get_grouped_by_image(&GroupedByImageFilter {
+                    plane: plane(),
+                    images: None,
+                    object_classes: None,
+                    columns: vec![Column::Count, Column::AreaSizePx],
+                    aggregation: vec![Aggregation::Avg],
+                    page: no_page(),
+                    transpond_table: false,
+                    grouping,
+                    empty_classes: false,
+                    sort: Some(SortBy {
+                        column: Column::AreaSizePx,
+                        aggregation: Some(Aggregation::Avg),
+                        descending: true,
+                    }),
+                })
+                .unwrap();
+            grouped_rows(&result)
+                .into_iter()
+                .map(|(name, ..)| name)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(order(None), ["A2_01.tif", "A3_01.tif", "A1_01.tif"]);
+        assert_eq!(order(Some(Grouping::Auto)), ["A2", "A3", "A1"]);
     }
 
     #[test]
@@ -9273,6 +9504,7 @@ mod tests {
                 transpond_table: false,
                 grouping: None,
                 empty_classes: false,
+                sort: None,
             })
             .unwrap();
         let rows: Vec<(String, String)> = grouped_rows(&result)
@@ -9349,6 +9581,7 @@ mod tests {
                     transpond_table: false,
                     grouping: None,
                     empty_classes: true,
+                    sort: None,
                 })
                 .unwrap()
         };
@@ -9392,6 +9625,7 @@ mod tests {
                 transpond_table: false,
                 grouping: None,
                 empty_classes: true,
+                sort: None,
             })
             .unwrap();
 
@@ -9423,6 +9657,7 @@ mod tests {
                     transpond_table: false,
                     grouping: None,
                     empty_classes: true,
+                    sort: None,
                 })
                 .unwrap(),
         );
@@ -9769,6 +10004,7 @@ mod tests {
                 related_to: None,
                 page: no_page(),
                 transpond_table: false,
+                sort: None,
             })
             .unwrap();
 
@@ -9903,6 +10139,7 @@ mod tests {
                 related_to: None,
                 page: no_page(),
                 transpond_table: false,
+                sort: None,
             })
             .unwrap();
         let mut rows: Vec<(i32, Option<f64>, Option<f64>)> = result
@@ -9947,6 +10184,7 @@ mod tests {
                 transpond_table: false,
                 grouping: None,
                 empty_classes: true,
+                sort: None,
             })
             .unwrap();
         let rows: Vec<(String, Option<f64>, Option<f64>)> = result
@@ -10114,6 +10352,7 @@ mod tests {
                 related_to: None,
                 page: no_page(),
                 transpond_table: false,
+                sort: None,
             })
             .unwrap();
         let mut rows: Vec<(i32, Option<f64>)> = list
@@ -10140,6 +10379,7 @@ mod tests {
                 transpond_table: false,
                 grouping: None,
                 empty_classes: true,
+                sort: None,
             })
             .unwrap();
         let averages: Vec<Option<f64>> = per_image
@@ -10198,6 +10438,7 @@ mod tests {
                 related_to: None,
                 page: no_page(),
                 transpond_table: false,
+                sort: None,
             })
             .unwrap();
         let mut rows: Vec<(i32, Option<f64>, Option<f64>)> = list
@@ -10233,6 +10474,7 @@ mod tests {
                 transpond_table: false,
                 grouping: None,
                 empty_classes: true,
+                sort: None,
             })
             .unwrap();
         assert_eq!(
@@ -10304,6 +10546,7 @@ mod tests {
                     related_to,
                     page: no_page(),
                     transpond_table: false,
+                    sort: None,
                 })
                 .unwrap()
         };
@@ -10396,6 +10639,7 @@ mod tests {
                 related_to: None,
                 page: no_page(),
                 transpond_table: false,
+                sort: None,
             })
             .unwrap();
         assert!(result.rows.is_empty());
@@ -10417,6 +10661,7 @@ mod tests {
                 transpond_table: false,
                 grouping: None,
                 empty_classes: true,
+                sort: None,
             })
             .unwrap();
         assert!(result.rows.is_empty());
@@ -10440,6 +10685,7 @@ mod tests {
                 transpond_table: true,
                 grouping: None,
                 empty_classes: true,
+                sort: None,
             })
             .unwrap();
         assert_eq!(

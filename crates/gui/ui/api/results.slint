@@ -630,6 +630,12 @@ export global ResultsState {
     // — so it stays cheap to diff/render no matter how large the underlying
     // database is.
     in-out property <[string]> list-column-headers: [];
+    // Per column head: a click sorts by it; the sorted one (-1 none) and
+    // its direction (▲ ascending, ▼ descending).
+    in-out property <[bool]> list-column-sortable: [];
+    in-out property <int> list-sort-index: -1;
+    in-out property <bool> list-sort-descending: false;
+    callback list-sort-clicked(int);
     // Each header's second, grey line: its unit and how it is aggregated
     // ("px · mean"), empty for none.
     in-out property <[string]> list-column-subs: [];

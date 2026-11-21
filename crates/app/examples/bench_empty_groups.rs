@@ -289,6 +289,7 @@ fn main() {
             transpond_table: false,
             grouping,
             empty_classes,
+            sort: None,
         };
         report(
             label,
@@ -309,6 +310,7 @@ fn main() {
             transpond_table: transposed,
             grouping: None,
             empty_classes: true,
+            sort: None,
         };
         let label = if transposed { "transposed" } else { "normal" };
         if wanted(&format!("per-image {label}, GUI first page (500)")) {
@@ -426,6 +428,7 @@ fn main() {
                             after: None,
                         },
                         transpond_table: true,
+                        sort: None,
                     })
                     .unwrap()
                     .rows
@@ -497,6 +500,7 @@ fn main() {
             after: None,
         },
         transpond_table: false,
+        sort: None,
     };
     if wanted("object list intensities + coloc count") {
         let mut columns = intensity_columns.clone();

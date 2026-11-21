@@ -689,6 +689,7 @@ fn remote_results_queries_match_local_ones() {
             after: None,
         },
         transpond_table: false,
+        sort: None,
     };
     let (remote_list, local_list) = (
         remote_db.get_object_list(&filter).unwrap(),
@@ -860,6 +861,7 @@ fn remote_grouped_matrix_and_chart_queries_match_local_ones() {
         transpond_table: false,
         grouping: None,
         empty_classes: true,
+        sort: None,
     };
     same(
         "grouped by image",

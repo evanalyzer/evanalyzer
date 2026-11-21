@@ -485,6 +485,7 @@ mod tests {
                             after: None,
                         },
                         transpond_table: false,
+                        sort: None,
                     })
                     .expect("ground-truth object list");
                 for (id, row) in page.row_names.iter().zip(page.rows) {

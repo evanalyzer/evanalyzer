@@ -196,6 +196,9 @@ struct ListFilter {
     pub group_by: ListGroupBy,
     /// Grouped rows: classes without objects get a row too.
     pub empty_classes: bool,
+    /// Sorted by a column (a click on its head) - for the session, not
+    /// part of the view.
+    pub sort: Option<evanalyzer_app::results::SortBy>,
     /// Unused in Objects mode.
     pub aggregations: Vec<Aggregation>,
     /// The Children group: (parent class, child class) links shown.
@@ -219,6 +222,7 @@ struct ListQuery {
     transpond_table: bool,
     group_by: ListGroupBy,
     empty_classes: bool,
+    sort: Option<evanalyzer_app::results::SortBy>,
     drill: Option<Drill>,
     aggregations: Vec<Aggregation>,
 }
@@ -239,6 +243,7 @@ impl ListQuery {
                 after,
             },
             transpond_table: self.transpond_table,
+            sort: self.sort.clone(),
         })
     }
 }
@@ -642,6 +647,9 @@ pub struct ResultsStateController {
     list_row_ids: Mutex<Vec<String>>,
     /// The list's columns as shown (sorted, the related ones included).
     list_columns_shown: Mutex<Vec<Column>>,
+    /// Per column head of the List: what a click sorts by (column, its
+    /// statistic for grouped rows) - `None`: not sortable.
+    list_head_sorts: Mutex<Vec<Option<(Column, Option<Aggregation>)>>>,
     /// The list's ticked rows (this page), and the last one ticked - a
     /// Shift-click ticks every row from it.
     list_checked: Mutex<(BTreeSet<usize>, Option<usize>)>,
@@ -741,6 +749,7 @@ impl ResultsStateController {
             list_row_locations: Mutex::new(Vec::new()),
             list_row_ids: Mutex::new(Vec::new()),
             list_columns_shown: Mutex::new(Vec::new()),
+            list_head_sorts: Mutex::new(Vec::new()),
             list_checked: Mutex::new((BTreeSet::new(), None)),
             view_unavailable: Mutex::new(None),
             scatter_points: Mutex::new(Vec::new()),
@@ -1101,6 +1110,42 @@ impl ResultsStateController {
                     *manager.list_checked.lock().expect("Poisoned") = (BTreeSet::new(), None);
                     manager.push_list_checks();
                     manager.set_images_disabled(images, disable);
+                });
+
+            // A click on a column's head: ascending, descending, unsorted.
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_list_sort_clicked(move |index| {
+                    let head = manager
+                        .list_head_sorts
+                        .lock()
+                        .expect("Poisoned")
+                        .get(index.max(0) as usize)
+                        .cloned()
+                        .flatten();
+                    let Some((column, aggregation)) = head else {
+                        return;
+                    };
+                    {
+                        let mut filter = manager.list_filter.lock().expect("Poisened");
+                        filter.sort = match &filter.sort {
+                            Some(sort)
+                                if sort.column == column && sort.aggregation == aggregation =>
+                            {
+                                (!sort.descending).then(|| evanalyzer_app::results::SortBy {
+                                    column,
+                                    aggregation,
+                                    descending: true,
+                                })
+                            }
+                            _ => Some(evanalyzer_app::results::SortBy {
+                                column,
+                                aggregation,
+                                descending: false,
+                            }),
+                        };
+                    }
+                    manager.refresh_list();
                 });
 
             let manager = self.clone();
@@ -3203,6 +3248,7 @@ impl ResultsStateController {
                     transpond: false,
                     group_by: ListGroupBy::Objects,
                     empty_classes: false,
+                    sort: None,
                     aggregations: vec![Aggregation::Avg],
                     children: Vec::new(),
                     child_aggregations: vec![Aggregation::Avg],
@@ -4523,6 +4569,13 @@ impl ResultsStateController {
         if group_by == ListGroupBy::Objects {
             columns.retain(|c| *c != Column::Count);
         }
+        // ... and by a column still shown.
+        let sort = list_filter.sort.clone().filter(|sort| {
+            !with_coloc_details
+                && !transpond_table
+                && drill.is_none()
+                && columns.contains(&sort.column)
+        });
         ListQuery {
             plane,
             images,
@@ -4532,6 +4585,9 @@ impl ResultsStateController {
             transpond_table,
             group_by,
             empty_classes: list_filter.empty_classes,
+            // Pairs, classes side by side, one object's children: as they
+            // come.
+            sort,
             drill,
             aggregations: list_filter.aggregations.clone(),
         }
@@ -4581,6 +4637,48 @@ impl ResultsStateController {
         // object and the columns are as sorted.
         let mut ordered_columns = query.columns.clone();
         ordered_columns.sort();
+        // What a click on each head sorts by - the heads in the order the
+        // results name them.
+        let sortable = !query.with_coloc_details && !query.transpond_table && query.drill.is_none();
+        let head_sorts: Vec<Option<(Column, Option<Aggregation>)>> = if !sortable {
+            Vec::new()
+        } else if query.group_by == ListGroupBy::Objects {
+            ordered_columns
+                .iter()
+                .map(|c| object_sortable(c).then(|| (c.clone(), None)))
+                .collect()
+        } else {
+            let mut columns: Vec<Column> = query
+                .columns
+                .iter()
+                .filter(|c| c.is_aggregable())
+                .cloned()
+                .collect();
+            columns.sort();
+            // The image (well, folder) and the class, then a head per
+            // (column x statistic).
+            [None, None]
+                .into_iter()
+                .chain(columns.iter().flat_map(|c| {
+                    query
+                        .aggregations
+                        .iter()
+                        .map(move |a| Some((c.clone(), Some(a.clone()))))
+                }))
+                .collect()
+        };
+        let sort_head = query.sort.as_ref().and_then(|sort| {
+            head_sorts
+                .iter()
+                .position(|h| {
+                    h.as_ref().is_some_and(|(c, a)| {
+                        *c == sort.column && (sort.aggregation.is_none() || *a == sort.aggregation)
+                    })
+                })
+                .map(|i| (i as i32, sort.descending))
+        });
+        let head_sortable: Vec<bool> = head_sorts.iter().map(Option::is_some).collect();
+        *self.list_head_sorts.lock().expect("Poisoned") = head_sorts;
         let drillable: Vec<bool> = ordered_columns
             .iter()
             .map(|c| {
@@ -4617,6 +4715,7 @@ impl ResultsStateController {
             .cloned()
             .flatten();
 
+        let sorted = query.sort.is_some();
         let result = match query.object_filter(cursor.clone()) {
             Some(filter) => db.get_object_list(&filter),
             // Non-aggregable columns (Object ID/Image/Class) don't mean
@@ -4635,6 +4734,7 @@ impl ResultsStateController {
                     transpond_table,
                     group_by,
                     empty_classes,
+                    sort,
                     ..
                 } = query;
                 let columns = columns.into_iter().filter(Column::is_aggregable).collect();
@@ -4652,6 +4752,7 @@ impl ResultsStateController {
                     transpond_table: transpond_table && group_by.grouping().is_none(),
                     grouping: group_by.grouping(),
                     empty_classes,
+                    sort,
                 })
             }
         };
@@ -4668,7 +4769,11 @@ impl ResultsStateController {
         if let Some(last_id) = result.row_names.last() {
             let mut cursors = self.list_page_cursors.lock().expect("Poisned");
             if cursors.len() == page + 1 {
-                cursors.push(Some(last_id.clone()));
+                // Sorted: the next page starts after this many rows.
+                cursors.push(Some(match sorted {
+                    true => ((page + 1) * LIST_PAGE_SIZE as usize).to_string(),
+                    false => last_id.clone(),
+                }));
             }
         }
 
@@ -4679,6 +4784,12 @@ impl ResultsStateController {
                 let state = ui.global::<ResultsState>();
                 state.set_list_column_drill(ModelRc::from(Rc::new(VecModel::from(drillable))));
                 state.set_list_drill_label(drill_label.into());
+                state.set_list_column_sortable(ModelRc::from(Rc::new(VecModel::from(
+                    head_sortable,
+                ))));
+                let (index, descending) = sort_head.unwrap_or((-1, false));
+                state.set_list_sort_index(index);
+                state.set_list_sort_descending(descending);
             }
         })
         .ok();
@@ -4689,11 +4800,15 @@ impl ResultsStateController {
     // filter change stays cheap no matter how large the underlying database is.
     pub fn set_objects_list_in_slint(&self, result: &DatabaseResult) {
         let ui_weak = self.ui.clone();
+        // Lengths and areas in nm shown in µm (the stored values stay nm).
+        let mut scales: Vec<f64> = Vec::with_capacity(result.column_names.len());
         let (headers, header_subs): (Vec<slint::SharedString>, Vec<slint::SharedString>) = result
             .column_names
             .iter()
             .map(|name| {
                 let (name, sub) = split_header(name);
+                let (sub, scale) = in_micrometers(&sub);
+                scales.push(scale);
                 (name.into(), sub.into())
             })
             .unzip();
@@ -4757,7 +4872,15 @@ impl ResultsStateController {
                     false => String::new(),
                 };
                 (
-                    row.iter().map(cell_to_string).collect(),
+                    row.iter()
+                        .enumerate()
+                        .map(|(i, cell)| match (&cell.value, scales.get(i)) {
+                            (CellValue::Float(v), Some(scale)) if *scale != 1.0 => {
+                                format_number(f64::from(*v) * scale).into()
+                            }
+                            _ => cell_to_string(cell),
+                        })
+                        .collect(),
                     alternating,
                     disabled,
                     failed,
@@ -6236,6 +6359,22 @@ impl ResultsStateController {
 
 // Shared "N of M <noun>" text for the images/classes/columns dropdown pills
 // (e.g. "3 of 12 Columns").
+/// Whether a row per object can be sorted by `column` (the results sort
+/// by its value per object).
+fn object_sortable(column: &Column) -> bool {
+    !matches!(
+        column,
+        Column::Count
+            | Column::ObjectId
+            | Column::ObjectClass
+            | Column::TrackId
+            | Column::Measurement(_)
+            | Column::MeasurementObject(_)
+            | Column::Children(_)
+            | Column::Parent(_)
+    )
+}
+
 /// A List chip's value: "All", "None" or "3 of 22" - the chip names what.
 fn chip_summary(selected: usize, total: usize) -> slint::SharedString {
     match selected {
@@ -6262,6 +6401,25 @@ fn image_summary_text(selected: usize, total: usize) -> slint::SharedString {
     } else {
         list_summary(selected, total, "Images")
     }
+}
+
+/// A head's unit line (`split_header`'s) with nm, nm² and nm³ as µm, µm²
+/// and µm³ - and the factor turning the values into that unit.
+fn in_micrometers(sub: &str) -> (String, f64) {
+    let (unit, rest) = sub
+        .split_once(" · ")
+        .map_or((sub, None), |(u, r)| (u, Some(r)));
+    let (unit, scale) = match unit {
+        "nm" => ("µm", 1e-3),
+        "nm²" => ("µm²", 1e-6),
+        "nm³" => ("µm³", 1e-9),
+        other => (other, 1.0),
+    };
+    let sub = match rest {
+        Some(rest) => format!("{unit} · {rest}"),
+        None => unit.to_string(),
+    };
+    (sub, scale)
 }
 
 /// A list column's name as the head shows it, in two lines: the name
@@ -7013,7 +7171,15 @@ fn nearest_point(
 
 #[cfg(test)]
 mod split_header_tests {
-    use super::split_header;
+    use super::{in_micrometers, split_header};
+
+    #[test]
+    fn nanometres_are_shown_in_micrometres() {
+        assert_eq!(in_micrometers("nm² · mean"), ("µm² · mean".into(), 1e-6));
+        assert_eq!(in_micrometers("nm"), ("µm".into(), 1e-3));
+        assert_eq!(in_micrometers("px · sum"), ("px · sum".into(), 1.0));
+        assert_eq!(in_micrometers(""), (String::new(), 1.0));
+    }
 
     #[test]
     fn a_header_is_its_name_then_unit_and_aggregate() {
@@ -10512,6 +10678,7 @@ pub(crate) mod tests {
                         after: None,
                     },
                     transpond_table: false,
+                    sort: None,
                 })
                 .unwrap();
             all.rows.len()

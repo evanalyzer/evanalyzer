@@ -285,7 +285,18 @@ pub struct TrackFromStart {
 pub struct Pagination {
     pub limit: i32,
     /// Keyset cursor: `None` fetches the first page; `Some(id)` fetches the page starting right after that `object_id`.
+    /// With a [`SortBy`]: the number of rows before the page ("500").
     pub after: Option<String>,
+}
+
+/// A list sorted by one of its columns (a click on its head) - over all
+/// the rows, not only the page shown. Rows without a value come last.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SortBy {
+    pub column: Column,
+    /// Grouped rows: which of the column's statistics (`None`: objects).
+    pub aggregation: Option<Aggregation>,
+    pub descending: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -400,6 +411,8 @@ pub struct ListFilter {
     pub page: Pagination,
     /// If true each object class is shown in a separate table instead of in rows
     pub transpond_table: bool,
+    /// Sorted by a column; paged by row offset then (see `Pagination`).
+    pub sort: Option<SortBy>,
 }
 
 /// The objects of a list related to one object (by its id).
@@ -433,6 +446,8 @@ pub struct GroupedByImageFilter {
     /// Classes without objects get a row too (a real 0 count); else only
     /// the classes with objects in a row's images.
     pub empty_classes: bool,
+    /// Sorted by a statistic; paged by row offset then (see `Pagination`).
+    pub sort: Option<SortBy>,
 }
 
 #[derive(Serialize, Deserialize)]

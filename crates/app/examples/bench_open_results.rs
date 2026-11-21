@@ -113,6 +113,7 @@ fn open_sequence(backend: &LocalBackend, path: &PathBuf) -> (Arc<dyn ResultsSour
                 after: None,
             },
             transpond_table: false,
+            sort: None,
         })
         .unwrap()
     });

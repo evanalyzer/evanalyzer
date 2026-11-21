@@ -122,9 +122,12 @@ component ListBar inherits ViewBar {
     BarLabel {
         text: "A row per";
     }
+    // Its own width - the bar's free space stays on the right.
     VerticalLayout {
         alignment: center;
+        horizontal-stretch: 0;
         InkSegmented {
+            horizontal-stretch: 0;
             label: "A row per";
             model: root.has-pairs ? ["Objects", "Images", "Wells", "Folders", "Coloc pairs"] : ["Objects", "Images", "Wells", "Folders"];
             selected: root.rows == "Images" ? 1 : root.rows == "Wells" ? 2 : root.rows == "Folders" ? 3 : root.rows == "Coloc pairs" ? 4 : 0;
@@ -577,19 +580,35 @@ export component ResultsListView inherits Rectangle {
 
                                 // Two lines: the name, then its unit and how it
                                 // is aggregated, small and grey ("px · mean").
-                                for header[idx] in ResultsState.list-column-headers: Rectangle {
+                                // A click sorts by the column: ▲, ▼, then as it was.
+                                for header[idx] in ResultsState.list-column-headers: head-cell := Rectangle {
+                                    property <bool> sortable: idx < ResultsState.list-column-sortable.length && ResultsState.list-column-sortable[idx];
+                                    property <bool> sorted: ResultsState.list-sort-index == idx;
                                     horizontal-stretch: 1;
                                     clip: true;
                                     width: ResultsState.list-column-widths[idx] * 1px;
+                                    accessible-role: button;
+                                    accessible-enabled: self.sortable;
+                                    accessible-label: "Sort by " + header;
+                                    accessible-action-default => {
+                                        ResultsState.list-sort-clicked(idx);
+                                    }
+                                    sort-ta := TouchArea {
+                                        enabled: head-cell.sortable;
+                                        mouse-cursor: self.enabled ? pointer : default;
+                                        clicked => {
+                                            ResultsState.list-sort-clicked(idx);
+                                        }
+                                    }
                                     VerticalLayout {
                                         alignment: center;
                                         spacing: 0px;
                                         Text {
-                                            text: header;
+                                            text: header + (head-cell.sorted ? (ResultsState.list-sort-descending ? " ▼" : " ▲") : "");
+                                            color: head-cell.sorted || sort-ta.has-hover ? Ink.text : Ink.text-dim;
                                             width: ResultsState.list-column-widths[idx] * 1px;
                                             font-size: Ink.fs-secondary;
                                             font-weight: 600;
-                                            color: Ink.text-dim;
                                             overflow: elide;
                                             horizontal-alignment: start;
                                         }

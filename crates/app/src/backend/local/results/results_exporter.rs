@@ -1148,6 +1148,7 @@ impl ResultExport {
             transpond_table: self.transpond_table,
             grouping: None,
             empty_classes: true,
+            sort: None,
         };
 
         // Written page by page as the rows come (100,000 images × 5
@@ -2614,6 +2615,7 @@ fn stream_list_pages(
                     after: cursor.take(),
                 },
                 transpond_table: export.transpond_table,
+                sort: None,
             };
             let page = database.get_object_list_of(&filter, images)?;
             let is_last_page = page.source_object_count < PAGE_SIZE as usize;
@@ -5539,6 +5541,7 @@ mod tests {
             transpond_table: false,
             grouping: None,
             empty_classes: true,
+            sort: None,
         };
         let rows = |rows_per_page, transpond_table| {
             let filter = GroupedByImageFilter {

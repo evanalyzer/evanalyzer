@@ -215,7 +215,15 @@ export component InkSegmented inherits Rectangle {
             spacing: 2px;
             for entry[i] in root.model: Rectangle {
                 horizontal-stretch: 1;
-                min-width: seg-text.preferred-width + 14px;
+                // As wide as the entry in bold (the picked one's look): a
+                // pick doesn't move the others.
+                min-width: seg-bold.preferred-width + 14px;
+                seg-bold := Text {
+                    visible: false;
+                    text: entry;
+                    font-size: Ink.fs-secondary;
+                    font-weight: 600;
+                }
                 border-radius: Ink.radius-sm;
                 background: i == root.selected ? Ink.panel : seg-ta.has-hover ? Ink.hover : transparent;
                 drop-shadow-blur: i == root.selected ? 2px : 0px;

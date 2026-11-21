@@ -624,6 +624,7 @@ mod tests {
                 after: None,
             },
             transpond_table: false,
+            sort: None,
         };
         let id = "00000000-0000-0000-0000-000000000001";
         assert_eq!(local_db.object_list_page_starts(&list, id).unwrap(), None);
@@ -1058,6 +1059,7 @@ mod tests {
                     after: None,
                 },
                 transpond_table: false,
+                sort: None,
             }),
             "object list",
         );
@@ -1075,6 +1077,7 @@ mod tests {
                         after: None,
                     },
                     transpond_table: false,
+                    sort: None,
                 },
                 "00000000-0000-0000-0000-000000000001",
             ),
@@ -1094,6 +1097,7 @@ mod tests {
                 transpond_table: false,
                 grouping: None,
                 empty_classes: true,
+                sort: None,
             }),
             "grouped by image",
         );
@@ -1377,6 +1381,7 @@ mod tests {
                 after: None,
             },
             transpond_table: false,
+            sort: None,
         };
         unexpected(db.get_object_list(&list), "object list");
         unexpected(

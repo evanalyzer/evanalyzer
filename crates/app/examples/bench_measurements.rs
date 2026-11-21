@@ -204,6 +204,7 @@ fn main() {
                 transpond_table: false,
                 grouping: None,
                 empty_classes: true,
+                sort: None,
             };
             report(
                 &name,
@@ -226,6 +227,7 @@ fn main() {
                     after: None,
                 },
                 transpond_table: false,
+                sort: None,
             };
             report(
                 &name,

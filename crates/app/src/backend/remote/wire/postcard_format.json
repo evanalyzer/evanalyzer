@@ -1,5 +1,5 @@
 {
-  "protocol_version": 48,
+  "protocol_version": 49,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -728,6 +728,13 @@
         },
         {
           "empty_classes": "BOOL"
+        },
+        {
+          "sort": {
+            "OPTION": {
+              "TYPENAME": "SortBy"
+            }
+          }
         }
       ]
     },
@@ -1054,6 +1061,13 @@
         },
         {
           "transpond_table": "BOOL"
+        },
+        {
+          "sort": {
+            "OPTION": {
+              "TYPENAME": "SortBy"
+            }
+          }
         }
       ]
     },
@@ -2232,6 +2246,25 @@
         },
         {
           "total_object_count": "U64"
+        }
+      ]
+    },
+    "SortBy": {
+      "STRUCT": [
+        {
+          "column": {
+            "TYPENAME": "Column"
+          }
+        },
+        {
+          "aggregation": {
+            "OPTION": {
+              "TYPENAME": "Aggregation"
+            }
+          }
+        },
+        {
+          "descending": "BOOL"
         }
       ]
     },

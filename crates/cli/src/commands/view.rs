@@ -296,6 +296,7 @@ pub fn run(args: ViewArgs, backend: &dyn Backend) -> Result<(), InternalErrors> 
             after: None,
         },
         transpond_table: args.filter.transpond.unwrap_or_else(|| false),
+        sort: None,
     };
 
     let result = rows_page(db, &base_filter, &args)?;
@@ -481,6 +482,7 @@ mod tests {
                 after: None,
             },
             transpond_table: false,
+            sort: None,
         };
         let result = rows_page(source.as_ref(), &base, args).unwrap();
         let rows = result

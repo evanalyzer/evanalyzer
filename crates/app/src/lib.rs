@@ -145,6 +145,7 @@ pub mod results {
     pub use crate::api::RunStatus;
     pub use crate::api::ScatterFilter;
     pub use crate::api::ScatterResult;
+    pub use crate::api::SortBy;
     pub use crate::api::View;
     pub use crate::api::WellFilter;
     pub use crate::api::WellSize;

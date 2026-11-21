@@ -736,6 +736,7 @@ impl ResultsStateController {
             transpond: false,
             group_by: ListGroupBy::Objects,
             empty_classes: false,
+            sort: None,
             aggregations: vec![Aggregation::Avg],
             children: Vec::new(),
             child_aggregations: vec![Aggregation::Avg],
