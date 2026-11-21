@@ -858,6 +858,8 @@ fn remote_grouped_matrix_and_chart_queries_match_local_ones() {
             after: None,
         },
         transpond_table: false,
+        grouping: None,
+        empty_classes: true,
     };
     same(
         "grouped by image",

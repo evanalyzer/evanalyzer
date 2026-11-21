@@ -52,6 +52,8 @@ pub struct ResultsGenerator {
     database: evanalyzer_core::ResultsConnection,
     classes_cache: RefCell<Option<Vec<Class>>>,
     coloc_classes_cache: RefCell<Option<Vec<Vec<ObjectClass>>>>,
+    /// See `classes_with_objects`.
+    classes_with_objects_cache: RefCell<Option<Vec<u32>>>,
     /// The pattern `Grouping::Auto` picked for this database's images.
     auto_grouping_cache: RefCell<Option<String>>,
     /// The `objects` table's columns - fixed when the results are written.
@@ -76,6 +78,7 @@ impl ResultsGenerator {
             database,
             classes_cache: RefCell::new(None),
             coloc_classes_cache: RefCell::new(None),
+            classes_with_objects_cache: RefCell::new(None),
             auto_grouping_cache: RefCell::new(None),
             object_columns_cache: RefCell::new(None),
             volumes_cache: RefCell::new(None),
@@ -245,6 +248,7 @@ impl ResultsGenerator {
             database: self.database.try_clone()?,
             classes_cache: RefCell::new(None),
             coloc_classes_cache: RefCell::new(None),
+            classes_with_objects_cache: RefCell::new(None),
             auto_grouping_cache: RefCell::new(None),
             object_columns_cache: RefCell::new(None),
             volumes_cache: RefCell::new(None),
@@ -878,7 +882,24 @@ impl ResultsGenerator {
         if selected_ids.is_none() {
             row_classes.retain(|id| ObjectClass::Global(*id) != ObjectClass::BACKGROUND);
         }
+        // Only the classes with objects: no row of zeros per empty class.
+        if !filter.empty_classes {
+            let with_objects = self.classes_with_objects()?;
+            row_classes.retain(|id| with_objects.contains(id));
+        }
         let measured = self.measured_on_plane_sql("images", &filter.plane)?;
+        if let Some(grouping) = &filter.grouping {
+            return self.get_grouped_by_group(
+                filter,
+                grouping,
+                &stats,
+                &pre,
+                &post,
+                &image_conditions,
+                &row_classes,
+                &classes,
+            );
+        }
         if filter.transpond_table {
             return self.get_grouped_by_image_transposed(
                 filter,
@@ -942,7 +963,7 @@ impl ResultsGenerator {
         // class) pairs actually have objects - the latter also covers an
         // image missing from `images` (a run that crashed before
         // finalizing it) or a class missing from `classes`.
-        let measured_keys = if row_classes.is_empty() {
+        let measured_keys = if row_classes.is_empty() || !filter.empty_classes {
             String::new()
         } else {
             format!(
@@ -1050,6 +1071,326 @@ impl ResultsGenerator {
 
         let mut rows = rows;
         self.flag_disabled_image_rows(&mut rows, &row_locations)?;
+        Ok(DatabaseResult {
+            column_names,
+            row_names,
+            rows,
+            min,
+            max,
+            source_object_count,
+            row_locations,
+        })
+    }
+
+    /// The classes that any object has (cached: the objects of a results
+    /// database don't change).
+    fn classes_with_objects(&self) -> Result<Vec<u32>, InternalErrors> {
+        if let Some(cached) = self.classes_with_objects_cache.borrow().as_ref() {
+            return Ok(cached.clone());
+        }
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let mut stmt = self
+            .database
+            .prepare(
+                "SELECT DISTINCT class_id FROM \
+                 (SELECT UNNEST(object_class_id) AS class_id FROM objects) \
+                 WHERE class_id IS NOT NULL ORDER BY class_id",
+            )
+            .map_err(err)?;
+        let ids: Vec<u32> = stmt
+            .query_map([], |row| row.get::<_, u32>(0))
+            .map_err(err)?
+            .collect::<Result<_, _>>()
+            .map_err(err)?;
+        *self.classes_with_objects_cache.borrow_mut() = Some(ids.clone());
+        Ok(ids)
+    }
+
+    /// `get_grouped_by_image` with a `grouping`: a row per (group, class) -
+    /// the group a well (the grouping's pattern on the image names) or a
+    /// folder. The values over the objects of the group's images; Count over
+    /// the images' object counts (each analysed image, also one without
+    /// objects - as the plate view counts: "mean" is the objects per image,
+    /// "sum" all of them). Left-out and failed images add nothing, their
+    /// group is marked. Images the pattern doesn't fit form the group "No
+    /// group" (for folders: "Top folder", the images right in the image
+    /// folder).
+    #[allow(clippy::too_many_arguments)]
+    fn get_grouped_by_group(
+        &self,
+        filter: &GroupedByImageFilter,
+        grouping: &Grouping,
+        stats: &[(&Column, &Aggregation)],
+        pre: &[String],
+        post: &[String],
+        image_conditions: &[String],
+        row_classes: &[u32],
+        classes: &[Class],
+    ) -> Result<DatabaseResult, InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let group_sql = self.grouping_sql(grouping)?;
+        let (group_col, regex) = (group_sql.column, group_sql.regex.as_str());
+        let group_name = match grouping {
+            Grouping::Folder => "folder",
+            _ => "well",
+        };
+        let mut column_names = vec![group_name.to_string(), "class".to_string()];
+        for (column, aggregation) in stats {
+            // Count: over the images' counts - per image.
+            if matches!(column, Column::Count) {
+                column_names.push(format!(
+                    "Count per image ({})",
+                    aggregation_sql_fn(aggregation)
+                ));
+                continue;
+            }
+            let (agg_fn, _) = aggregate_sql(column, aggregation)?;
+            column_names.push(format!("{} ({agg_fn})", column.display_label(classes)));
+        }
+        let measured = self.measured_on_plane_sql("images", &filter.plane)?;
+        let post_where = if post.is_empty() {
+            "true".to_string()
+        } else {
+            post.join(" AND ")
+        };
+        // Per statistic: over the objects (`agg`), the per-image counts
+        // (`counts`) or the images' own values (`imm`).
+        let mut object_values = Vec::new();
+        let mut count_values = Vec::new();
+        let mut image_values = Vec::new();
+        let mut select_values = Vec::new();
+        for (i, (column, aggregation)) in stats.iter().enumerate() {
+            let agg_fn = aggregation_sql_fn(aggregation);
+            if matches!(column, Column::Count) {
+                count_values.push(format!(
+                    "{agg_fn}(CAST(COALESCE(p.n, 0) AS DOUBLE)) AS c_{i}"
+                ));
+                select_values.push(format!("counts.c_{i}"));
+            } else if let Column::Measurement(m) = column
+                && !m.per_object
+            {
+                image_values.push(format!(
+                    "{agg_fn}(m.value) FILTER (WHERE m.key = '{}') AS m_{i}",
+                    m.key.replace('\'', "''")
+                ));
+                select_values.push(format!("imm.m_{i}"));
+            } else {
+                let (agg_fn, value_expr) = aggregate_sql(column, aggregation)?;
+                object_values.push(format!("{agg_fn}({value_expr}) AS value_{i}"));
+                select_values.push(fill_zero_sql(
+                    &format!("agg.value_{i}"),
+                    column,
+                    aggregation,
+                    "agg.n_objects IS NULL",
+                    "flags.any_measured",
+                ));
+            }
+        }
+        let object_values = object_values
+            .iter()
+            .map(|v| format!(", {v}"))
+            .collect::<String>();
+        let counts_cte = if count_values.is_empty() {
+            String::new()
+        } else {
+            format!(
+                ", per_img AS (\n\
+                     SELECT image_rel_path, class_id, COUNT(*) AS n FROM u\n\
+                     WHERE {post_where} GROUP BY image_rel_path, class_id\n\
+                 ), counts AS (\n\
+                     SELECT k.grp, k.class_id, {}\n\
+                     FROM keys k\n\
+                     JOIN img ON img.grp = k.grp AND img.counted\n\
+                     LEFT JOIN per_img p ON p.image_rel_path = img.image_rel_path\n\
+                         AND p.class_id = k.class_id\n\
+                     GROUP BY k.grp, k.class_id\n\
+                 )",
+                count_values.join(", ")
+            )
+        };
+        let counts_join = if count_values.is_empty() {
+            ""
+        } else {
+            "LEFT JOIN counts ON counts.grp = keys.grp AND counts.class_id = keys.class_id\n"
+        };
+        let imm_cte = if image_values.is_empty() {
+            String::new()
+        } else {
+            format!(
+                ", imm AS (\n\
+                     SELECT img.grp, {}\n\
+                     FROM measurements m JOIN img ON img.image_rel_path = m.image_rel_path\n\
+                     WHERE m.region = 'image' AND (m.z_stack = {z} OR m.z_stack IS NULL)\n\
+                         AND m.t_stack = {t} AND img.counted\n\
+                     GROUP BY img.grp\n\
+                 )",
+                image_values.join(", "),
+                z = filter.plane.z_stack,
+                t = filter.plane.t_stack,
+            )
+        };
+        let imm_join = if image_values.is_empty() {
+            ""
+        } else {
+            "LEFT JOIN imm ON imm.grp = keys.grp\n"
+        };
+        // Every group x every row class (classes without objects too, when
+        // asked), plus the (group, class) pairs with objects.
+        let all_keys = if row_classes.is_empty() || !filter.empty_classes {
+            String::new()
+        } else {
+            format!(
+                "SELECT DISTINCT grp, class_id\n\
+                 FROM img, (SELECT UNNEST({}) AS class_id)\n\
+                 WHERE img.counted\n\
+                 UNION\n",
+                sql_int_array_literal(row_classes)
+            )
+        };
+        // In plate order: by row (A before AA), column number, then name -
+        // the cursor carries the last row's place in it.
+        let sort_key = "length(groups.sort_row), groups.sort_row, groups.sort_col, keys.grp, \
+                        keys.class_id";
+        let mut key_where = "true".to_string();
+        if let Some(cursor) = &filter.page.after {
+            let parts: Vec<&str> = cursor.split('\u{1}').collect();
+            let text = |i: usize| parts.get(i).copied().unwrap_or("").replace('\'', "''");
+            let number = |i: usize| {
+                parts
+                    .get(i)
+                    .and_then(|p| p.parse::<i64>().ok())
+                    .unwrap_or(-1)
+            };
+            key_where = format!(
+                "({sort_key}) > ({}, '{}', {}, '{}', {})",
+                text(2).chars().count(),
+                text(2),
+                number(3),
+                text(0),
+                number(1)
+            );
+        }
+        let limit = filter.page.limit.max(0);
+        let sql = format!(
+            "WITH img AS (\n\
+                 SELECT image_rel_path,\n\
+                     COALESCE(regexp_extract({group_col}, '{regex}', 1), '') AS grp,\n\
+                     COALESCE(regexp_extract({group_col}, '{regex}', 2), '') AS sort_row,\n\
+                     COALESCE(TRY_CAST(regexp_extract({group_col}, '{regex}', 3) AS BIGINT), -1)\n\
+                         AS sort_col,\n\
+                     disabled, NOT successful AS failed,\n\
+                     NOT disabled AND successful AND {measured} AS counted\n\
+                 FROM images\n\
+                 WHERE {image_where}\n\
+             ), u AS (\n\
+                 {per_class}\n\
+             ), agg AS (\n\
+                 SELECT img.grp, u.class_id, COUNT(*) AS n_objects{object_values}\n\
+                 FROM u JOIN img ON img.image_rel_path = u.image_rel_path\n\
+                 WHERE {post_where} AND NOT img.disabled AND NOT img.failed\n\
+                 GROUP BY img.grp, u.class_id\n\
+             ), keys AS (\n\
+                 {all_keys}\
+                 SELECT grp, class_id FROM agg\n\
+             ), groups AS (\n\
+                 SELECT grp, MIN(sort_row) AS sort_row, MIN(sort_col) AS sort_col\n\
+                 FROM img GROUP BY grp\n\
+             ), flags AS (\n\
+                 SELECT grp, bool_or(disabled) AS any_disabled, bool_or(failed) AS any_failed,\n\
+                     bool_or(counted) AS any_measured\n\
+                 FROM img GROUP BY grp\n\
+             ){counts_cte}{imm_cte}\n\
+             SELECT keys.grp, keys.class_id, COALESCE(flags.any_disabled, false),\n\
+                 COALESCE(flags.any_failed, false), groups.sort_row, groups.sort_col{select}\n\
+             FROM keys\n\
+             JOIN groups ON groups.grp = keys.grp\n\
+             LEFT JOIN agg ON agg.grp = keys.grp AND agg.class_id = keys.class_id\n\
+             LEFT JOIN flags ON flags.grp = keys.grp\n\
+             {counts_join}{imm_join}\
+             WHERE {key_where}\n\
+             ORDER BY {sort_key}\n\
+             LIMIT {limit}",
+            image_where = image_conditions.join(" AND "),
+            per_class = objects_per_class_sql(&pre.join(" AND ")),
+            select = select_values
+                .iter()
+                .map(|v| format!(",\n                 {v}"))
+                .collect::<String>(),
+        );
+        let mut stmt = self.database.prepare(&sql).map_err(err)?;
+        let n = stats.len();
+        type GroupRow = (String, u32, bool, bool, (String, i64), Vec<Option<f64>>);
+        let groups: Vec<GroupRow> = stmt
+            .query_map([], |row| {
+                let mut values = Vec::with_capacity(n);
+                for i in 0..n {
+                    values.push(row.get::<_, Option<f64>>(6 + i)?);
+                }
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    (row.get(4)?, row.get(5)?),
+                    values,
+                ))
+            })
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)?;
+
+        let (min, max) = value_range(groups.iter().flat_map(|(.., values)| values.iter()));
+        // The next page's cursor: the row's group, class and plate place.
+        let row_names = groups
+            .iter()
+            .map(|(group, class_id, _, _, (sort_row, sort_col), _)| {
+                format!("{group}\u{1}{class_id}\u{1}{sort_row}\u{1}{sort_col}")
+            })
+            .collect();
+        // A row is several images: no one image to show.
+        let row_locations = groups.iter().map(|_| (String::new(), None)).collect();
+        let source_object_count = groups.len();
+        let rows = groups
+            .into_iter()
+            .map(|(group, class_id, any_disabled, failed, _, values)| {
+                let object_class = ObjectClass::Global(class_id);
+                let label = class_display_label(object_class, classes);
+                let color = classes
+                    .iter()
+                    .find(|class| class.global() == object_class)
+                    .map(|class| class.color)
+                    .unwrap_or(0);
+                // Images the pattern doesn't fit; for folders: those right in
+                // the image folder.
+                let name = match (group.is_empty(), grouping) {
+                    (false, _) => group,
+                    (true, Grouping::Folder) => "Top folder".to_string(),
+                    (true, _) => "No group".to_string(),
+                };
+                let mut cells = vec![
+                    Cell {
+                        value: CellValue::String(name),
+                        any_disabled,
+                        failed,
+                        ..plain_cell()
+                    },
+                    Cell {
+                        value: CellValue::Class((label, color)),
+                        bg_color: color,
+                        any_disabled,
+                        failed,
+                        ..plain_cell()
+                    },
+                ];
+                cells.extend(values.into_iter().map(|value| Cell {
+                    value: value.map_or(CellValue::Empty, |v| CellValue::Float(v as f32)),
+                    any_disabled,
+                    failed,
+                    ..plain_cell()
+                }));
+                cells
+            })
+            .collect();
         Ok(DatabaseResult {
             column_names,
             row_names,
@@ -5091,6 +5432,8 @@ mod tests {
                         aggregation: vec![Aggregation::Avg, Aggregation::Max],
                         page: Pagination { limit: PAGE, after },
                         transpond_table,
+                        grouping: None,
+                        empty_classes: true,
                     })
                     .unwrap()
             }
@@ -5249,6 +5592,7 @@ mod tests {
             database,
             classes_cache: RefCell::new(None),
             coloc_classes_cache: RefCell::new(None),
+            classes_with_objects_cache: RefCell::new(None),
             auto_grouping_cache: RefCell::new(None),
             object_columns_cache: RefCell::new(None),
             volumes_cache: RefCell::new(None),
@@ -5532,6 +5876,8 @@ mod tests {
                 aggregation: vec![Aggregation::Avg, Aggregation::Sum],
                 page: no_page(),
                 transpond_table: false,
+                grouping: None,
+                empty_classes: true,
             })
             .unwrap();
         let values: Vec<Option<f64>> = result.rows[0][2..].iter().map(number).collect();
@@ -5866,6 +6212,8 @@ mod tests {
                     aggregation: vec![Aggregation::Sum],
                     page: no_page(),
                     transpond_table: false,
+                    grouping: None,
+                    empty_classes: true,
                 })
                 .unwrap();
             let count = grouped.rows[0]
@@ -6115,6 +6463,8 @@ mod tests {
                 aggregation: vec![Aggregation::Avg],
                 page: no_page(),
                 transpond_table: false,
+                grouping: None,
+                empty_classes: true,
             })
             .unwrap();
 
@@ -6143,6 +6493,8 @@ mod tests {
                     aggregation: vec![Aggregation::Avg],
                     page: no_page(),
                     transpond_table,
+                    grouping: None,
+                    empty_classes: true,
                 })
                 .unwrap();
             let flags: Vec<(String, bool)> = result
@@ -6187,6 +6539,8 @@ mod tests {
                 aggregation: vec![Aggregation::Avg, Aggregation::Sum],
                 page: no_page(),
                 transpond_table: false,
+                grouping: None,
+                empty_classes: true,
             })
             .unwrap();
 
@@ -6256,6 +6610,8 @@ mod tests {
                 aggregation: vec![Aggregation::Avg],
                 page,
                 transpond_table: true,
+                grouping: None,
+                empty_classes: true,
             })
             .unwrap()
     }
@@ -6317,6 +6673,8 @@ mod tests {
                 aggregation: vec![Aggregation::Avg],
                 page: no_page(),
                 transpond_table: false,
+                grouping: None,
+                empty_classes: true,
             })
             .unwrap();
         let transposed = grouped_transposed(&generator, None, no_page());
@@ -6499,6 +6857,8 @@ mod tests {
                 aggregation: vec![Aggregation::Avg],
                 page: no_page(),
                 transpond_table: false,
+                grouping: None,
+                empty_classes: true,
             })
             .unwrap();
         assert!(result.rows.is_empty());
@@ -6516,6 +6876,8 @@ mod tests {
                 aggregation: vec![Aggregation::Avg],
                 page: no_page(),
                 transpond_table: false,
+                grouping: None,
+                empty_classes: true,
             })
             .unwrap();
         assert!(result.rows.is_empty());
@@ -7237,6 +7599,8 @@ mod tests {
                     aggregation: vec![Aggregation::Sum],
                     page: no_page(),
                     transpond_table: false,
+                    grouping: None,
+                    empty_classes: true,
                 })
                 .unwrap();
             assert_eq!(number(&result.rows[0][2]), Some(sum), "{column:?}");
@@ -8241,6 +8605,8 @@ mod tests {
                 aggregation: vec![Aggregation::Avg],
                 page: no_page(),
                 transpond_table: false,
+                grouping: None,
+                empty_classes: true,
             })
             .unwrap();
         assert_eq!(
@@ -8262,6 +8628,8 @@ mod tests {
                 aggregation: vec![Aggregation::Avg],
                 page: no_page(),
                 transpond_table: false,
+                grouping: None,
+                empty_classes: true,
             })
             .unwrap();
         assert!(result.rows.is_empty());
@@ -8282,6 +8650,8 @@ mod tests {
                 aggregation: vec![Aggregation::Avg],
                 page: no_page(),
                 transpond_table: false,
+                grouping: None,
+                empty_classes: true,
             })
             .unwrap();
         assert!(result.rows.is_empty());
@@ -8307,6 +8677,8 @@ mod tests {
                 after: None,
             },
             transpond_table: false,
+            grouping: None,
+            empty_classes: true,
         };
         let first = generator.get_grouped_by_image(&base).unwrap();
         assert_eq!(first.rows.len(), 1);
@@ -8737,6 +9109,8 @@ mod tests {
                 aggregation: vec![aggregation],
                 page: no_page(),
                 transpond_table: false,
+                grouping: None,
+                empty_classes: true,
             })
             .unwrap()
     }
@@ -8759,6 +9133,159 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    fn grouped_by(
+        generator: &ResultsGenerator,
+        grouping: Grouping,
+        aggregation: Aggregation,
+        empty_classes: bool,
+    ) -> Vec<(String, String, Vec<Option<f64>>)> {
+        grouped_rows(
+            &generator
+                .get_grouped_by_image(&GroupedByImageFilter {
+                    plane: plane(),
+                    images: None,
+                    object_classes: None,
+                    columns: vec![Column::Count, Column::AreaSizePx],
+                    aggregation: vec![aggregation],
+                    page: no_page(),
+                    transpond_table: false,
+                    grouping: Some(grouping),
+                    empty_classes,
+                })
+                .unwrap(),
+        )
+    }
+
+    /// A row per well and class: the area over the well's objects, Count
+    /// over its images' counts (the mean: objects per image); images the
+    /// pattern doesn't fit in "No group".
+    #[test]
+    fn grouped_by_well_aggregates_the_objects_and_counts_of_its_images() {
+        let generator = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 30),
+            ObjectSpec::new("A1_02.tif", "ClassA", 1, 20),
+            ObjectSpec::new("B2_01.tif", "ClassB", 2, 40),
+            ObjectSpec::new("notes.tif", "ClassA", 1, 50),
+        ]);
+        let row = |group: &str, class: &str, count: f64, area: f64| {
+            (
+                group.to_string(),
+                class.to_string(),
+                vec![Some(count), Some(area)],
+            )
+        };
+        assert_eq!(
+            grouped_by(&generator, Grouping::Auto, Aggregation::Avg, false),
+            [
+                row("No group", "ClassA", 1.0, 50.0),
+                row("A1", "ClassA", 1.5, 20.0),
+                row("B2", "ClassB", 1.0, 40.0),
+            ]
+        );
+        assert_eq!(
+            grouped_by(&generator, Grouping::Auto, Aggregation::Sum, false)[1],
+            row("A1", "ClassA", 3.0, 60.0)
+        );
+        // Classes without objects too: B2 has no ClassA - a real 0 count.
+        let all = grouped_by(&generator, Grouping::Auto, Aggregation::Sum, true);
+        assert!(
+            all.contains(&(
+                "B2".to_string(),
+                "ClassA".to_string(),
+                vec![Some(0.0), Some(0.0)]
+            )),
+            "{all:?}"
+        );
+    }
+
+    /// Wells in plate order (A2 before A10, B1 after them), page by page
+    /// without a gap.
+    #[test]
+    fn grouped_by_well_is_in_plate_order_across_pages() {
+        let generator = open(&[
+            ObjectSpec::new("A10_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("B1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A2_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+        ]);
+        let page = |after: Option<String>| {
+            generator
+                .get_grouped_by_image(&GroupedByImageFilter {
+                    plane: plane(),
+                    images: None,
+                    object_classes: None,
+                    columns: vec![Column::Count],
+                    aggregation: vec![Aggregation::Sum],
+                    page: Pagination { limit: 1, after },
+                    transpond_table: false,
+                    grouping: Some(Grouping::Auto),
+                    empty_classes: false,
+                })
+                .unwrap()
+        };
+        let mut wells = Vec::new();
+        let mut after = None;
+        for _ in 0..10 {
+            let result = page(after.clone());
+            let Some(last) = result.row_names.last().cloned() else {
+                break;
+            };
+            wells.extend(grouped_rows(&result).into_iter().map(|(well, ..)| well));
+            after = Some(last);
+        }
+        assert_eq!(wells, ["A1", "A2", "A10", "B1"]);
+    }
+
+    #[test]
+    fn grouped_by_folder_a_row_per_folder() {
+        let generator = open(&[
+            ObjectSpec::new("x/a.tif", "ClassA", 1, 10),
+            ObjectSpec::new("x/b.tif", "ClassA", 1, 30),
+            ObjectSpec::new("y/c.tif", "ClassA", 1, 20),
+        ]);
+        let rows = grouped_by(&generator, Grouping::Folder, Aggregation::Sum, false);
+        let groups: Vec<(&str, Option<f64>)> = rows
+            .iter()
+            .map(|(group, _, values)| (group.as_str(), values[0]))
+            .collect();
+        assert_eq!(groups, [("x", Some(2.0)), ("y", Some(1.0))]);
+    }
+
+    /// A row per image without the empty classes: only the classes with
+    /// objects in the image.
+    #[test]
+    fn grouped_by_image_can_leave_out_classes_without_objects() {
+        let generator = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10),
+            ObjectSpec::new("img2.tif", "ClassB", 2, 20),
+        ]);
+        let result = generator
+            .get_grouped_by_image(&GroupedByImageFilter {
+                plane: plane(),
+                images: None,
+                object_classes: None,
+                columns: vec![Column::Count],
+                aggregation: vec![Aggregation::Sum],
+                page: no_page(),
+                transpond_table: false,
+                grouping: None,
+                empty_classes: false,
+            })
+            .unwrap();
+        let rows: Vec<(String, String)> = grouped_rows(&result)
+            .into_iter()
+            .map(|(image, class, _)| (image, class))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("img1.tif".to_string(), "ClassA".to_string()),
+                ("img2.tif".to_string(), "ClassB".to_string())
+            ]
+        );
     }
 
     #[test]
@@ -8820,6 +9347,8 @@ mod tests {
                     aggregation: vec![Aggregation::Avg],
                     page: Pagination { limit: 2, after },
                     transpond_table: false,
+                    grouping: None,
+                    empty_classes: true,
                 })
                 .unwrap()
         };
@@ -8861,6 +9390,8 @@ mod tests {
                 aggregation: vec![Aggregation::Avg],
                 page: no_page(),
                 transpond_table: false,
+                grouping: None,
+                empty_classes: true,
             })
             .unwrap();
 
@@ -8890,6 +9421,8 @@ mod tests {
                     aggregation: vec![Aggregation::Avg],
                     page: no_page(),
                     transpond_table: false,
+                    grouping: None,
+                    empty_classes: true,
                 })
                 .unwrap(),
         );
@@ -9412,6 +9945,8 @@ mod tests {
                 aggregation: vec![Aggregation::Avg],
                 page: no_page(),
                 transpond_table: false,
+                grouping: None,
+                empty_classes: true,
             })
             .unwrap();
         let rows: Vec<(String, Option<f64>, Option<f64>)> = result
@@ -9603,6 +10138,8 @@ mod tests {
                 aggregation: vec![Aggregation::Avg],
                 page: no_page(),
                 transpond_table: false,
+                grouping: None,
+                empty_classes: true,
             })
             .unwrap();
         let averages: Vec<Option<f64>> = per_image
@@ -9694,6 +10231,8 @@ mod tests {
                 aggregation: vec![Aggregation::Avg],
                 page: no_page(),
                 transpond_table: false,
+                grouping: None,
+                empty_classes: true,
             })
             .unwrap();
         assert_eq!(
@@ -9876,6 +10415,8 @@ mod tests {
                 aggregation: vec![Aggregation::Avg],
                 page: no_page(),
                 transpond_table: false,
+                grouping: None,
+                empty_classes: true,
             })
             .unwrap();
         assert!(result.rows.is_empty());
@@ -9897,6 +10438,8 @@ mod tests {
                 aggregation: vec![Aggregation::Avg],
                 page: no_page(),
                 transpond_table: true,
+                grouping: None,
+                empty_classes: true,
             })
             .unwrap();
         assert_eq!(

@@ -256,6 +256,48 @@ fn main() {
         );
     }
 
+    // The List's rows (results rework 3b): per image without the classes
+    // that have no objects (its default), per well, per folder - the GUI's
+    // first page.
+    for (label, grouping, empty_classes) in [
+        ("list per image, empty classes (old default)", None, true),
+        ("list per image, without empty classes", None, false),
+        (
+            "list per well",
+            Some(evanalyzer_app::results::Grouping::Auto),
+            false,
+        ),
+        (
+            "list per folder",
+            Some(evanalyzer_app::results::Grouping::Folder),
+            false,
+        ),
+    ] {
+        if !wanted(label) {
+            continue;
+        }
+        let filter = GroupedByImageFilter {
+            plane: plane.clone(),
+            images: None,
+            object_classes: None,
+            columns: vec![Column::Count, Column::AreaSizePx],
+            aggregation: vec![Aggregation::Avg],
+            page: Pagination {
+                limit: 500,
+                after: None,
+            },
+            transpond_table: false,
+            grouping,
+            empty_classes,
+        };
+        report(
+            label,
+            time(iters, || {
+                generator.get_grouped_by_image(&filter).unwrap().rows.len()
+            }),
+        );
+    }
+
     for transposed in [false, true] {
         let by_image = |after: Option<String>, limit: i32| GroupedByImageFilter {
             plane: plane.clone(),
@@ -265,6 +307,8 @@ fn main() {
             aggregation: vec![Aggregation::Avg, Aggregation::Sum],
             page: Pagination { limit, after },
             transpond_table: transposed,
+            grouping: None,
+            empty_classes: true,
         };
         let label = if transposed { "transposed" } else { "normal" };
         if wanted(&format!("per-image {label}, GUI first page (500)")) {

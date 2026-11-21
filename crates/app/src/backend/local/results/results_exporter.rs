@@ -1146,6 +1146,8 @@ impl ResultExport {
                 after: None,
             },
             transpond_table: self.transpond_table,
+            grouping: None,
+            empty_classes: true,
         };
 
         // Written page by page as the rows come (100,000 images × 5
@@ -5535,6 +5537,8 @@ mod tests {
                 after: None,
             },
             transpond_table: false,
+            grouping: None,
+            empty_classes: true,
         };
         let rows = |rows_per_page, transpond_table| {
             let filter = GroupedByImageFilter {

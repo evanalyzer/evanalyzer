@@ -1,5 +1,5 @@
 {
-  "protocol_version": 47,
+  "protocol_version": 48,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -718,6 +718,16 @@
         },
         {
           "transpond_table": "BOOL"
+        },
+        {
+          "grouping": {
+            "OPTION": {
+              "TYPENAME": "Grouping"
+            }
+          }
+        },
+        {
+          "empty_classes": "BOOL"
         }
       ]
     },

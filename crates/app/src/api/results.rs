@@ -426,6 +426,13 @@ pub struct GroupedByImageFilter {
     pub page: Pagination,
     /// If true each object class is shown in a separate table instead of in rows
     pub transpond_table: bool,
+    /// A row per group of images instead of per image: per well (the
+    /// grouping's pattern on the image names) or per folder
+    /// (`Grouping::Folder`). `None`: a row per image.
+    pub grouping: Option<Grouping>,
+    /// Classes without objects get a row too (a real 0 count); else only
+    /// the classes with objects in a row's images.
+    pub empty_classes: bool,
 }
 
 #[derive(Serialize, Deserialize)]

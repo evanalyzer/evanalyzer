@@ -621,6 +621,9 @@ export global ResultsState {
     // `ListFilter`/`GroupedByImageFilter` in results_generator.rs).
     in-out property <bool> list-transpond: false;
     callback list-transpond-changed(bool);
+    // Grouped rows: classes without objects get a row too.
+    in-out property <bool> list-empty-classes: false;
+    callback list-empty-classes-changed(bool);
 
     // Table body. Rust only ever fills this with the current page (see
     // ResultsStateController::update_list_view) — never the full result set

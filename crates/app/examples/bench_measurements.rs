@@ -202,6 +202,8 @@ fn main() {
                     after: None,
                 },
                 transpond_table: false,
+                grouping: None,
+                empty_classes: true,
             };
             report(
                 &name,

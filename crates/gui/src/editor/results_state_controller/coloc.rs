@@ -334,7 +334,7 @@ impl ResultsStateController {
         let filter = self.column_filter.lock().expect("Poisoned").to_lowercase();
 
         let items = column_items(&available, &classes, |key| selected.contains(key));
-        let summary = list_summary(selected.len(), items.len(), "Columns");
+        let summary = chip_summary(selected.len(), items.len());
         let groups = column_groups(&available);
 
         // The sections, in the columns' order - the children's and the

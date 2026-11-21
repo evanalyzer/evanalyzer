@@ -113,8 +113,10 @@ component ColocColumns inherits Rectangle {
 /// rows only) - as chips with a popover each; how many rows and the pages
 /// on the right, rarely used settings in ⋯.
 component ListBar inherits ViewBar {
-    property <bool> has-pairs: ResultsState.list-group-by-items.length > 2;
-    property <bool> grouped: ResultsState.list-group-by-summary == "Images";
+    property <bool> has-pairs: ResultsState.list-group-by-items.length > 4;
+    property <string> rows: ResultsState.list-group-by-summary;
+    // Rows of several objects: aggregated.
+    property <bool> grouped: root.rows == "Images" || root.rows == "Wells" || root.rows == "Folders";
     property <length> popover-field-w: 316px;
 
     BarLabel {
@@ -124,11 +126,12 @@ component ListBar inherits ViewBar {
         alignment: center;
         InkSegmented {
             label: "A row per";
-            model: root.has-pairs ? ["Objects", "Images", "Coloc pairs"] : ["Objects", "Images"];
-            selected: ResultsState.list-group-by-summary == "Images" ? 1 : ResultsState.list-group-by-summary == "Coloc pairs" ? 2 : 0;
+            model: root.has-pairs ? ["Objects", "Images", "Wells", "Folders", "Coloc pairs"] : ["Objects", "Images", "Wells", "Folders"];
+            selected: root.rows == "Images" ? 1 : root.rows == "Wells" ? 2 : root.rows == "Folders" ? 3 : root.rows == "Coloc pairs" ? 4 : 0;
+            tips: ["A row per object", "A row per image and class", "A row per well and class - the wells from the image names (the project's plate grouping)", "A row per folder of images and class", "A row per pair of overlapping objects"];
             picked(i) => {
-                ResultsState.list-group-by-summary = i == 1 ? "Images" : i == 2 ? "Coloc pairs" : "Objects";
-                ResultsState.list-group-by-selected(i == 1 ? "images" : i == 2 ? "pairs" : "objects");
+                ResultsState.list-group-by-summary = i == 1 ? "Images" : i == 2 ? "Wells" : i == 3 ? "Folders" : i == 4 ? "Coloc pairs" : "Objects";
+                ResultsState.list-group-by-selected(i == 1 ? "images" : i == 2 ? "wells" : i == 3 ? "folders" : i == 4 ? "pairs" : "objects");
             }
         }
     }
@@ -302,12 +305,23 @@ component ListBar inherits ViewBar {
     }
 
     BarMore {
+        menu-width: 300px;
+        // Per image, per object: each class's values side by side.
         InkMenuItem {
-            text: "Transpose";
+            text: "Classes as columns";
             checked: ResultsState.list-transpond;
+            enabled: root.rows != "Wells" && root.rows != "Folders";
             clicked => {
                 ResultsState.list-transpond = !ResultsState.list-transpond;
                 ResultsState.list-transpond-changed(ResultsState.list-transpond);
+            }
+        }
+        if root.grouped: InkMenuItem {
+            text: "Show classes without objects";
+            checked: ResultsState.list-empty-classes;
+            clicked => {
+                ResultsState.list-empty-classes = !ResultsState.list-empty-classes;
+                ResultsState.list-empty-classes-changed(ResultsState.list-empty-classes);
             }
         }
     }
@@ -548,6 +562,9 @@ export component ResultsListView inherits Rectangle {
                                 Rectangle {
                                     width: 16px;
                                     InkCheckbox {
+                                        // A well or folder has no one image to leave out.
+
+                                        visible: ResultsState.list-group-by-summary != "Wells" && ResultsState.list-group-by-summary != "Folders";
                                         y: (parent.height - self.height) / 2;
                                         checked: ResultsState.list-page-checked;
                                         text: "";
@@ -674,6 +691,9 @@ export component ResultsListView inherits Rectangle {
                                         width: 16px;
                                         height: 16.5px;
                                         InkCheckbox {
+                                            // A well or folder has no one image to leave out.
+
+                                            visible: ResultsState.list-group-by-summary != "Wells" && ResultsState.list-group-by-summary != "Folders";
                                             y: (parent.height - self.height) / 2;
                                             checked: row.checked;
                                             text: "";

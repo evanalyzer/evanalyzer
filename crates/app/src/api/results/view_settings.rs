@@ -225,6 +225,11 @@ pub struct ListView {
     pub columns: Option<Vec<String>>,
     pub aggregations: Vec<Aggregation>,
     pub rows_per_image: bool,
+    /// A row per group of images: "wells" or "folders" ("": as
+    /// `rows_per_image` says).
+    pub rows_per_group: String,
+    /// Grouped rows: classes without objects get a row too.
+    pub empty_classes: bool,
     pub transposed: bool,
     /// A row per pair of overlapping objects (Colocalize Objects' partners).
     pub coloc_details: bool,
@@ -245,6 +250,8 @@ impl Default for ListView {
             columns: None,
             aggregations: vec![Aggregation::Avg],
             rows_per_image: false,
+            rows_per_group: String::new(),
+            empty_classes: false,
             transposed: false,
             coloc_details: false,
             images: "all".into(),

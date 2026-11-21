@@ -156,6 +156,21 @@ enum ListGroupBy {
     #[default]
     Objects,
     Images,
+    /// A row per well (the project's plate grouping on the image names).
+    Wells,
+    /// A row per folder of images.
+    Folders,
+}
+
+impl ListGroupBy {
+    /// The grouping of the images into rows of several images, if any.
+    fn grouping(self) -> Option<evanalyzer_app::results::Grouping> {
+        match self {
+            ListGroupBy::Wells => Some(evanalyzer_app::results::Grouping::Auto),
+            ListGroupBy::Folders => Some(evanalyzer_app::results::Grouping::Folder),
+            ListGroupBy::Objects | ListGroupBy::Images => None,
+        }
+    }
 }
 
 /// Which images the list shows, by whether they're in the results.
@@ -179,6 +194,8 @@ struct ListFilter {
     /// Classes side by side instead of one row per object/(image, class).
     pub transpond: bool,
     pub group_by: ListGroupBy,
+    /// Grouped rows: classes without objects get a row too.
+    pub empty_classes: bool,
     /// Unused in Objects mode.
     pub aggregations: Vec<Aggregation>,
     /// The Children group: (parent class, child class) links shown.
@@ -201,6 +218,7 @@ struct ListQuery {
     with_coloc_details: bool,
     transpond_table: bool,
     group_by: ListGroupBy,
+    empty_classes: bool,
     drill: Option<Drill>,
     aggregations: Vec<Aggregation>,
 }
@@ -1087,9 +1105,18 @@ impl ResultsStateController {
 
             let manager = self.clone();
             ui.global::<ResultsState>()
+                .on_list_empty_classes_changed(move |on| {
+                    manager.list_filter.lock().expect("Poisened").empty_classes = on;
+                    manager.refresh_list();
+                });
+
+            let manager = self.clone();
+            ui.global::<ResultsState>()
                 .on_list_group_by_selected(move |key| {
                     let group_by = match key.as_str() {
                         "images" => ListGroupBy::Images,
+                        "wells" => ListGroupBy::Wells,
+                        "folders" => ListGroupBy::Folders,
                         _ => ListGroupBy::Objects,
                     };
                     let mut filter = manager.list_filter.lock().expect("Poisened");
@@ -1283,6 +1310,10 @@ impl ResultsStateController {
                         warn!("No location cached for clicked list row {index}");
                         return;
                     };
+                    // A well's or folder's row: several images, none to open.
+                    if rel_path.is_empty() {
+                        return;
+                    }
                     // An object row: marked on its image; an image row: the
                     // image.
                     let rel_path = PathBuf::from(rel_path);
@@ -3171,6 +3202,7 @@ impl ResultsStateController {
                     with_coloc_details: false,
                     transpond: false,
                     group_by: ListGroupBy::Objects,
+                    empty_classes: false,
                     aggregations: vec![Aggregation::Avg],
                     children: Vec::new(),
                     child_aggregations: vec![Aggregation::Avg],
@@ -3263,7 +3295,7 @@ impl ResultsStateController {
                         state.set_list_group_by_items(ModelRc::from(Rc::new(VecModel::from(
                             group_by_items("objects", false),
                         ))));
-                        state.set_list_aggregate(list_summary(1, AGGREGATIONS.len(), "Aggregations"));
+                        state.set_list_aggregate(chip_summary(1, AGGREGATIONS.len()));
                         state.set_list_aggregation_items(ModelRc::from(Rc::new(VecModel::from(
                             aggregation_items(&[Aggregation::Avg]),
                         ))));
@@ -4212,7 +4244,7 @@ impl ResultsStateController {
                 item.selected = item.key.as_str() == label;
             }
             let _ = class;
-            self.push_class_items(items, list_summary(1, classes.len(), "Classes"));
+            self.push_class_items(items, chip_summary(1, classes.len()));
         } else {
             let items =
                 filtered_image_items(&images, |path| picked_images.iter().any(|p| p == path), "");
@@ -4499,6 +4531,7 @@ impl ResultsStateController {
             with_coloc_details,
             transpond_table,
             group_by,
+            empty_classes: list_filter.empty_classes,
             drill,
             aggregations: list_filter.aggregations.clone(),
         }
@@ -4600,6 +4633,8 @@ impl ResultsStateController {
                     columns,
                     aggregations,
                     transpond_table,
+                    group_by,
+                    empty_classes,
                     ..
                 } = query;
                 let columns = columns.into_iter().filter(Column::is_aggregable).collect();
@@ -4613,7 +4648,10 @@ impl ResultsStateController {
                         limit: LIST_PAGE_SIZE,
                         after: cursor,
                     },
-                    transpond_table,
+                    // Classes as columns: per image only.
+                    transpond_table: transpond_table && group_by.grouping().is_none(),
+                    grouping: group_by.grouping(),
+                    empty_classes,
                 })
             }
         };
@@ -5200,10 +5238,9 @@ impl ResultsStateController {
         let ui_weak = self.ui.clone();
         let items = class_filter_items(object_classes, true);
         let matrix_items = class_filter_items(object_classes, false);
-        let summary = list_summary(
+        let summary = chip_summary(
             items.iter().filter(|item| item.selected).count(),
             items.len(),
-            "Classes",
         );
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
@@ -5233,10 +5270,9 @@ impl ResultsStateController {
         let items = column_items(columns, &classes, |key| DEFAULT_LIST_COLUMNS.contains(key));
         drop(classes);
         let groups = column_groups(columns);
-        let summary = list_summary(
+        let summary = chip_summary(
             items.iter().filter(|item| item.selected).count(),
             items.len(),
-            "Columns",
         );
         // Matrix view aggregates one column's value across every matched
         // object into a single well/field/tile cell — an object's own
@@ -5374,7 +5410,7 @@ impl ResultsStateController {
     }
 
     fn push_aggregation_summary(&self, selected: usize) {
-        let text = list_summary(selected, AGGREGATIONS.len(), "Aggregations");
+        let text = chip_summary(selected, AGGREGATIONS.len());
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
@@ -5389,17 +5425,14 @@ impl ResultsStateController {
     fn select_all_aggregations(self: &Arc<Self>) {
         let items = aggregation_items(&AGGREGATIONS);
         self.list_filter.lock().expect("Poisened").aggregations = AGGREGATIONS.to_vec();
-        self.push_aggregation_items(
-            items,
-            list_summary(AGGREGATIONS.len(), AGGREGATIONS.len(), "Aggregations"),
-        );
+        self.push_aggregation_items(items, chip_summary(AGGREGATIONS.len(), AGGREGATIONS.len()));
         self.refresh_list();
     }
 
     fn select_none_aggregations(self: &Arc<Self>) {
         let items = aggregation_items(&[]);
         self.list_filter.lock().expect("Poisened").aggregations = Vec::new();
-        self.push_aggregation_items(items, list_summary(0, AGGREGATIONS.len(), "Aggregations"));
+        self.push_aggregation_items(items, chip_summary(0, AGGREGATIONS.len()));
         self.refresh_list();
     }
 
@@ -5419,7 +5452,7 @@ impl ResultsStateController {
 
     fn push_class_summary(&self, selected: usize) {
         let total = self.classes.lock().expect("Poisened").len();
-        let text = list_summary(selected, total, "Classes");
+        let text = chip_summary(selected, total);
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
@@ -5512,7 +5545,7 @@ impl ResultsStateController {
         let ids = classes.iter().map(|class| class.global()).collect();
         drop(classes);
         self.list_filter.lock().expect("Poisened").object_classes = ids;
-        self.push_class_items(items, list_summary(total, total, "Classes"));
+        self.push_class_items(items, chip_summary(total, total));
         self.refresh_list();
     }
 
@@ -5526,7 +5559,7 @@ impl ResultsStateController {
         // — needed because an empty `object_classes` list means "no filter"
         // (all classes) in `update_list_view`, not "match nothing".
         self.list_filter.lock().expect("Poisened").object_classes = vec![ObjectClass::Unset];
-        self.push_class_items(items, list_summary(0, total, "Classes"));
+        self.push_class_items(items, chip_summary(0, total));
         self.refresh_list();
     }
 
@@ -6203,6 +6236,15 @@ impl ResultsStateController {
 
 // Shared "N of M <noun>" text for the images/classes/columns dropdown pills
 // (e.g. "3 of 12 Columns").
+/// A List chip's value: "All", "None" or "3 of 22" - the chip names what.
+fn chip_summary(selected: usize, total: usize) -> slint::SharedString {
+    match selected {
+        0 => "None".into(),
+        n if n == total => "All".into(),
+        n => format!("{n} of {total}").into(),
+    }
+}
+
 fn list_summary(selected: usize, total: usize, noun: &str) -> slint::SharedString {
     format!("{selected} of {total} {noun}").into()
 }
@@ -6444,7 +6486,12 @@ fn group_by_items(selected: &str, pairs: bool) -> Vec<MultiSelectItem> {
         group: "".into(),
         selected: key == selected,
     };
-    let mut items = vec![item("objects", "Objects"), item("images", "Images")];
+    let mut items = vec![
+        item("objects", "Objects"),
+        item("images", "Images"),
+        item("wells", "Wells"),
+        item("folders", "Folders"),
+    ];
     if pairs {
         items.push(item("pairs", "Coloc pairs"));
     }
@@ -11516,18 +11563,12 @@ pub(crate) mod tests {
                 .map(|i| (i.value.clone(), i.selected))
                 .collect::<Vec<_>>()
         );
-        assert_eq!(
-            s.get_list_class_summary(),
-            list_summary(0, total, "Classes")
-        );
+        assert_eq!(s.get_list_class_summary(), chip_summary(0, total));
         assert_eq!(s.get_list_rows().row_count(), 0);
 
         s.invoke_list_class_selected("ClassA".into(), true);
         drain_ui_queue();
-        assert_eq!(
-            s.get_list_class_summary(),
-            list_summary(1, total, "Classes")
-        );
+        assert_eq!(s.get_list_class_summary(), chip_summary(1, total));
         assert_eq!(
             o.controller.list_filter.lock().unwrap().object_classes,
             vec![ObjectClass::Global(1)]
@@ -11536,10 +11577,7 @@ pub(crate) mod tests {
 
         s.invoke_list_class_selected("ClassA".into(), false);
         drain_ui_queue();
-        assert_eq!(
-            s.get_list_class_summary(),
-            list_summary(0, total, "Classes")
-        );
+        assert_eq!(s.get_list_class_summary(), chip_summary(0, total));
         assert_eq!(s.get_list_rows().row_count(), 0, "none, not all");
     }
 

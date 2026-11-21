@@ -329,10 +329,13 @@ impl ResultsStateController {
             if !view.aggregations.is_empty() {
                 list.aggregations = view.aggregations.clone();
             }
-            list.group_by = match view.rows_per_image {
-                true => ListGroupBy::Images,
-                false => ListGroupBy::Objects,
+            list.group_by = match (view.rows_per_group.as_str(), view.rows_per_image) {
+                ("wells", _) => ListGroupBy::Wells,
+                ("folders", _) => ListGroupBy::Folders,
+                (_, true) => ListGroupBy::Images,
+                (_, false) => ListGroupBy::Objects,
             };
+            list.empty_classes = view.empty_classes;
             list.transpond = view.transposed;
             list.with_coloc_details = view.coloc_details;
             list.image_state = image_state_of_key(&view.images);
@@ -478,6 +481,12 @@ impl ResultsStateController {
                 columns: (!default_columns).then_some(columns),
                 aggregations: filter.aggregations.clone(),
                 rows_per_image: filter.group_by == ListGroupBy::Images,
+                rows_per_group: match filter.group_by {
+                    ListGroupBy::Wells => "wells".into(),
+                    ListGroupBy::Folders => "folders".into(),
+                    ListGroupBy::Objects | ListGroupBy::Images => String::new(),
+                },
+                empty_classes: filter.empty_classes,
                 transposed: filter.transpond,
                 coloc_details: filter.with_coloc_details,
                 images: image_state_key(filter.image_state).into(),
@@ -726,6 +735,7 @@ impl ResultsStateController {
             with_coloc_details: false,
             transpond: false,
             group_by: ListGroupBy::Objects,
+            empty_classes: false,
             aggregations: vec![Aggregation::Avg],
             children: Vec::new(),
             child_aggregations: vec![Aggregation::Avg],
@@ -759,7 +769,7 @@ impl ResultsStateController {
                 filter.columns.clone(),
                 filter.aggregations.clone(),
                 filter.group_by,
-                filter.transpond,
+                (filter.transpond, filter.empty_classes),
                 filter.with_coloc_details,
                 filter.image_state,
                 (
@@ -774,7 +784,7 @@ impl ResultsStateController {
             list_columns,
             aggregations,
             group_by,
-            transpond,
+            (transpond, empty_classes),
             coloc,
             image_state,
             (children, child_aggregations, parents),
@@ -787,10 +797,9 @@ impl ResultsStateController {
                 item
             })
             .collect();
-        let class_summary = list_summary(
+        let class_summary = chip_summary(
             class_items.iter().filter(|item| item.selected).count(),
             class_items.len(),
-            "Classes",
         );
         // The children's and the parents' columns come from their own groups.
         let plain_columns: Vec<ColumnEntry> = available
@@ -850,17 +859,15 @@ impl ResultsStateController {
         let has_partners = available
             .iter()
             .any(|entry| super::coloc::is_coloc_column(&entry.key));
-        let columns_summary = list_summary(
+        let columns_summary = chip_summary(
             column_items_list
                 .iter()
                 .filter(|item| item.selected)
                 .count(),
             column_items_list.len(),
-            "Columns",
         );
         let aggregation_items_list = aggregation_items(&aggregations);
-        let aggregate_summary =
-            list_summary(aggregations.len(), AGGREGATIONS.len(), "Aggregations");
+        let aggregate_summary = chip_summary(aggregations.len(), AGGREGATIONS.len());
 
         let plate = self
             .matrix_filter
@@ -966,12 +973,15 @@ impl ResultsStateController {
             state.set_list_aggregate(aggregate_summary);
             let rows = match (group_by, coloc) {
                 (ListGroupBy::Images, _) => ("images", "Images"),
+                (ListGroupBy::Wells, _) => ("wells", "Wells"),
+                (ListGroupBy::Folders, _) => ("folders", "Folders"),
                 (ListGroupBy::Objects, true) => ("pairs", "Coloc pairs"),
                 (ListGroupBy::Objects, false) => ("objects", "Objects"),
             };
             state.set_list_group_by_items(model(group_by_items(rows.0, has_partners)));
             state.set_list_group_by_summary(rows.1.into());
             state.set_list_transpond(transpond);
+            state.set_list_empty_classes(empty_classes);
             state.set_list_with_coloc_details(coloc);
             state.set_list_children_items(model(children_items));
             state.set_list_children_summary(children_summary.into());
