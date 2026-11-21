@@ -216,11 +216,11 @@ export component PipelineRow inherits Rectangle {
                     vertical-alignment: center;
                 }
 
-                // Steps on/total - on hover or selected ⋯ takes its place
-                // (the column keeps its width, nothing moves).
+                // Steps on/total - on hover ⋯ takes its place (the column
+                // keeps its width, nothing moves); the selected row keeps it.
                 Rectangle {
                     width: 36px;
-                    if !((root.hovered || root.active) && !root.dragging): Text {
+                    if !(root.hovered && !root.dragging): Text {
                         width: 100%;
                         text: "\{root.pipeline.enabled-step-count}/\{root.pipeline.total-step-count}";
                         font-size: Ink.fs-caption;
@@ -230,7 +230,7 @@ export component PipelineRow inherits Rectangle {
                         horizontal-alignment: right;
                         vertical-alignment: center;
                     }
-                    if (root.hovered || root.active) && !root.dragging: InkIconButton {
+                    if root.hovered && !root.dragging: InkIconButton {
                         x: parent.width - self.width;
                         y: (parent.height - self.height) / 2;
                         size: 22px;

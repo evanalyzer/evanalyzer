@@ -10,7 +10,7 @@ import {
     Ink, InkScheme, InkIcons,
     InkButton, InkButtonKind, InkIconButton, InkToolButton,
     InkTextField, InkSearchField, InkNumberField, InkSelect,
-    InkCheckbox, InkSwitch, InkSegmented, InkModeTab,
+    InkCheckbox, InkSwitch, InkSegmented, InkModeTab, InkOptionCard,
     InkTone, InkChip, InkBadge, InkNewTag, InkSwatch, InkKbd, InkDot,
     InkPanel, InkPanelHead, InkDialog, InkDialogFooter, InkLabel, InkCaption, InkHint,
     InkSectionHead, InkDivider, InkBarSeparator,
@@ -89,6 +89,8 @@ export component InkGallery inherits Window {
                 InkSearchField { }
                 InkCheckbox { text: "Fill holes"; checked: true; }
                 InkSwitch { text: "Show overlay"; checked: true; }
+                InkOptionCard { title: "Objects"; description: "Every object with its measurements."; checked: true; }
+                InkOptionCard { title: "Intermediate"; description: "Only for later steps."; }
                 InkSectionHead {
                     text: "ADVANCED";
                     count: "4";

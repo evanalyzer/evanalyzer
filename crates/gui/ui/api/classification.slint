@@ -19,6 +19,9 @@ export global ClassificationState {
     in property <[ClassItemData]> classes_list: [];
     in-out property <int> selected_class_id: -1;
     in-out property <string> selected_class_name;
+    // The selected class's object count (Rust keeps it, see
+    // `ClassificationController`); -1 none.
+    in property <int> selected_class_count: -1;
     // Sum of `count` across visible classes - compute in Rust whenever
     // classes_list changes, then push into the global.
     in property <int> total_visible_objects: 0;

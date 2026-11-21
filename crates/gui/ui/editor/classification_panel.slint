@@ -84,6 +84,8 @@ export component ClassificationPanel inherits Rectangle {
             // The selected class, folded or not (as Image shows its channel).
             summary: ClassificationState.selected_class_id >= 0 ? ClassificationState.selected_class_name : "";
             summary-always: true;
+            // Its count - the selected row's ⋯ may stand in its place.
+            summary-tail: ClassificationState.selected_class_id >= 0 && ClassificationState.selected_class_count >= 0 && !root.in-split ? " · " + ClassificationState.selected_class_count : "";
             fold-toggled => {
                 LayoutState.classes-folded = !LayoutState.classes-folded;
                 LayoutState.panels-changed();

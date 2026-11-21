@@ -377,3 +377,82 @@ export component InkTab inherits Rectangle {
         }
     }
 }
+
+/// One choice of several, as a card: a radio, its name and a line on what
+/// it does - the whole card picks it. The chosen one gets the focus ring
+/// of a field. Every "pick one of these" in a dialog uses it.
+export component InkOptionCard inherits Rectangle {
+    in property <string> title;
+    in property <string> description;
+    in property <bool> checked;
+    callback picked;
+
+    accessible-role: radio-button;
+    accessible-checked: root.checked;
+    accessible-label: root.title;
+    accessible-description: root.description;
+    accessible-action-default => {
+        root.picked();
+    }
+    border-radius: Ink.radius-md;
+    border-width: 1px;
+    border-color: root.checked ? Ink.focus : ta.has-hover ? Ink.row-lift-ring : Ink.border;
+    background: ta.has-hover && !root.checked ? Ink.hover : Ink.panel;
+
+    // The chosen one's ring, as the focus ring of a field.
+    if root.checked: Rectangle {
+        x: -3px;
+        y: -3px;
+        width: root.width + 6px;
+        height: root.height + 6px;
+        border-radius: Ink.radius-md + 3px;
+        border-width: 3px;
+        border-color: Ink.focus-ring;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.picked();
+        }
+    }
+
+    HorizontalLayout {
+        padding-top: 9px;
+        padding-bottom: 9px;
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 10px;
+        VerticalLayout {
+            alignment: start;
+            padding-top: 2px;
+            Rectangle {
+                width: 14px;
+                height: 14px;
+                border-radius: 7px;
+                border-width: root.checked ? 4px : 1px;
+                border-color: root.checked ? Ink.focus : Ink.text-faint;
+                background: Ink.panel;
+            }
+        }
+
+        VerticalLayout {
+            spacing: 2px;
+            Text {
+                text: root.title;
+                font-size: Ink.fs-body;
+                font-weight: root.checked ? 600 : 400;
+                color: Ink.text;
+                accessible-role: none;
+            }
+
+            if root.description != "": Text {
+                text: root.description;
+                font-size: Ink.fs-secondary;
+                color: Ink.text-dim;
+                wrap: word-wrap;
+                accessible-role: none;
+            }
+        }
+    }
+}

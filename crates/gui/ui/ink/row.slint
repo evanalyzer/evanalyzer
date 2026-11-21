@@ -13,7 +13,8 @@ import { InkIconButton } from "button.slint";
 /// rule: hovered `Ink.row-hover`, selected a lifted row with a ring
 /// (`Ink.row-lift`); the eye always at the far right - faint while shown,
 /// full on hover or selected, a crossed eye in full while hidden; ⋯ on
-/// hover or selected, in the count's place (the row keeps its width). The
+/// hover, in the count's place (the row keeps its width) - the selected
+/// row keeps its count; its menu also opens with a right-click / menu key. The
 /// buttons are inside the row's touch area: over them the row stays hovered.
 export component InkListRow inherits Rectangle {
     in property <string> title;
@@ -38,7 +39,7 @@ export component InkListRow inherits Rectangle {
     in property <string> tag;
     /// An id at the very left, before the color ("1").
     in property <string> lead;
-    /// A ⋯ at the right, shown on hover and when selected.
+    /// A ⋯ at the right, shown on hover.
     in property <bool> has-more: false;
     out property <bool> has-hover: ta.has-hover;
     /// Keeps the ⋯ slot's width without a ⋯ (a row that has none among
@@ -47,8 +48,9 @@ export component InkListRow inherits Rectangle {
     // Hidden: every list's rule - the row's content at 50 %, the buttons
     // (the crossed eye) in full.
     property <float> dim: root.shown ? 1.0 : 0.5;
-    // ⋯ shows in the count's place.
-    property <bool> menu-on: root.has-more && (ta.has-hover || root.selected);
+    // ⋯ shows in the count's place while the pointer is on the row (the
+    // selected row keeps its count).
+    property <bool> menu-on: root.has-more && ta.has-hover;
     callback clicked;
     callback double-clicked;
     callback eye-toggled;

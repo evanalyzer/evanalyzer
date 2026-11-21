@@ -55,7 +55,7 @@ reads (14 MB more generated code, and the work at runtime).
 | `icons.slint` | every icon by meaning (`InkIcons.save`) |
 | `button.slint` | `InkButton`, `InkIconButton`, `InkToolButton` |
 | `field.slint` | `InkTextField`, `InkSearchField`, `InkNumberField`, `InkSelect` |
-| `toggle.slint` | `InkCheckbox`, `InkSwitch`, `InkSegmented`, `InkModeTab` |
+| `toggle.slint` | `InkCheckbox`, `InkSwitch`, `InkSegmented`, `InkModeTab`, `InkOptionCard` (pick one of several, as cards - every dialog uses it) |
 | `marker.slint` | `InkChip`, `InkBadge`, `InkNewTag`, `InkSwatch`, `InkKbd`, `InkDot` |
 | `panel.slint` | `InkPanel`, `InkPanelHead`, `InkDialog`, `InkDialogFooter`, labels, captions, hints, dividers |
 | `menu.slint` | `InkMenuFrame` (scrolls when the window is too short - give it `open-y`), items, captions, separators |

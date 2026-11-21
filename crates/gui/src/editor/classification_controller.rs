@@ -173,6 +173,18 @@ impl ClassificationController {
                     } else {
                         AssignObjectClass!(class_id)
                     };
+                    let count = if class_id < 0 {
+                        -1
+                    } else {
+                        manager
+                            .app_state
+                            .get_project()
+                            .count_objects_for_class(&obj_class) as i32
+                    };
+                    if let Some(ui) = manager.ui.upgrade() {
+                        ui.global::<ClassificationState>()
+                            .set_selected_class_count(count);
+                    }
                     let mut project = manager.app_state.get_project_write();
                     project.set_selected_object_class(obj_class);
                     // Redraw the objects because class selection changes the z-order visibility
@@ -341,6 +353,13 @@ impl ClassificationController {
                     .map(|c| project.count_objects_for_class(&c.global()) as i32)
                     .sum();
                 let hide_unclassified = project.hide_unclassified_objects();
+                // The selected class's count for the panel's head.
+                let selected_id = ui.global::<ClassificationState>().get_selected_class_id();
+                let selected_count = if selected_id < 0 {
+                    -1
+                } else {
+                    project.count_objects_for_class(&AssignObjectClass!(selected_id)) as i32
+                };
                 // A new class's id: automatic, or one of the free ones.
                 let new_id_options: Vec<SharedString> =
                     std::iter::once(format!("Auto ({})", next_class_id(&project.classification)))
@@ -363,6 +382,7 @@ impl ClassificationController {
                 let class_state = ui.global::<ClassificationState>();
                 class_state.set_classes_list(model_rc);
                 class_state.set_total_visible_objects(total_visible);
+                class_state.set_selected_class_count(selected_count);
                 class_state.set_hide_unclassified_objects(hide_unclassified);
                 // Objects or classes changed: an open AI training dialog
                 // follows (its training objects and class counts).

@@ -2,7 +2,7 @@
 // Licensed under the PolyForm Noncommercial License 1.0.0.
 
 import { Places } from "../api/layout.slint";
-import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
+import { InkButton, InkButtonKind, InkDialog, InkDialogFooter, InkOptionCard } from "../ink/ink.slint";
 import { DialogType, GlobalAppState } from "../api/state.slint";
 import { ImageMetaData } from "../api/image_meta.slint";
 import { PipelineDeleteConfirmState, PipelineEditState } from "../api/pipeline_edit.slint";
@@ -12,75 +12,6 @@ import { Ink } from "../ink/palette.slint";
 import { ChannelPicker } from "../editor/channel_picker.slint";
 
 // -- Global state --------------------------------------------
-// -- Inline radio-option row ----------------------------------
-
-component SourceOption inherits Rectangle {
-    in property <string> label;
-    in property <string> description;
-    in property <bool> selected;
-    callback clicked;
-
-    height: 42px;
-    border-radius: 6px;
-    background: selected ? Ink.focus.with-alpha(0.12) : (ta.has-hover ? Ink.raised : transparent);
-    border-width: 1px;
-    border-color: selected ? Ink.focus.with-alpha(0.5) : Ink.border-soft;
-    animate background, border-color { duration: 80ms; }
-
-    HorizontalLayout {
-        padding-left: 10px;
-        padding-right: 10px;
-        spacing: 10px;
-        alignment: start;
-
-        // Radio circle
-        VerticalLayout {
-            alignment: center;
-            Rectangle {
-                width: 16px;
-                height: 16px;
-                border-radius: 8px;
-                border-width: 1.5px;
-                border-color: selected ? Ink.focus : Ink.border;
-                background: transparent;
-                if selected: Rectangle {
-                    x: 4px;
-                    y: 4px;
-                    width: 8px;
-                    height: 8px;
-                    border-radius: 4px;
-                    background: Ink.focus;
-                }
-            }
-        }
-
-        VerticalLayout {
-            alignment: center;
-            spacing: 2px;
-            Text {
-                text: label;
-                font-size: Ink.fs-body;
-                font-weight: selected ? 600 : 400;
-                color: selected ? Ink.text : Ink.text-dim;
-            }
-
-            Text {
-                text: description;
-                font-size: Ink.fs-caption;
-                color: Ink.text-mute;
-                overflow: elide;
-            }
-        }
-    }
-
-    ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => {
-            root.clicked();
-        }
-    }
-}
-
 // -- Field label + input row ----------------------------------
 
 component LabeledInput inherits VerticalLayout {
@@ -139,13 +70,13 @@ export component PipelineEditDialog inherits InkDialog {
         }
 
         VerticalLayout {
-            spacing: 4px;
+            spacing: 6px;
 
-            SourceOption {
-                label: ImageMetaData.is-rgb == false ? "Channel" : "Image";
+            InkOptionCard {
+                title: ImageMetaData.is-rgb == false ? "Channel" : "Image";
                 description: ImageMetaData.is-rgb == false ? "Read directly from an image channel (0-based)" : "Read directly from the RGB image";
-                selected: PipelineEditState.source-type == 2;
-                clicked => {
+                checked: PipelineEditState.source-type == 2;
+                picked => {
                     // For RGB images only source 0 is setup
                     if ImageMetaData.is-rgb == true {
                         PipelineEditState.source-channel = 0;
@@ -155,7 +86,7 @@ export component PipelineEditDialog inherits InkDialog {
             }
 
             if PipelineEditState.source-type == 2 && ImageMetaData.is-rgb == false: HorizontalLayout {
-                padding-left: 26px;
+                padding-left: 34px;
                 padding-top: 2px;
                 padding-bottom: 4px;
                 spacing: 8px;
@@ -177,35 +108,35 @@ export component PipelineEditDialog inherits InkDialog {
                 }
             }
 
-            SourceOption {
-                label: "None";
+            InkOptionCard {
+                title: "None";
                 description: "No image - the first step loads one (Load Image Channel)";
-                selected: PipelineEditState.source-type == 3;
-                clicked => {
+                checked: PipelineEditState.source-type == 3;
+                picked => {
                     PipelineEditState.source-type = 3;
                 }
             }
 
-            SourceOption {
-                label: "Scratchpad";
+            InkOptionCard {
+                title: "Scratchpad";
                 description: "Start with an empty image";
-                selected: PipelineEditState.source-type == 0;
-                clicked => {
+                checked: PipelineEditState.source-type == 0;
+                picked => {
                     PipelineEditState.source-type = 0;
                 }
             }
 
-            SourceOption {
-                label: "Shared memory slot";
+            InkOptionCard {
+                title: "Shared memory slot";
                 description: "The image an earlier pipeline stored (Image Cache → Shared)";
-                selected: PipelineEditState.source-type == 1;
-                clicked => {
+                checked: PipelineEditState.source-type == 1;
+                picked => {
                     PipelineEditState.source-type = 1;
                 }
             }
 
             if PipelineEditState.source-type == 1: HorizontalLayout {
-                padding-left: 26px;
+                padding-left: 34px;
                 padding-top: 2px;
                 padding-bottom: 4px;
                 spacing: 8px;
