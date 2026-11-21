@@ -2,17 +2,15 @@
 // Licensed under the PolyForm Noncommercial License 1.0.0.
 
 // editor/images_list_panel.slint — the project's images (design G): the
-// count and folder in the head, Plate / List, a search; as a plate the
-// wells and the chosen well's images, as a list all of them (a virtual
-// list: only the rows in view exist). Selecting one opens it.
+// count and folder in the head, Folders / Groups, a search, then the images
+// under a head per folder or per group (the project's "Grouping") - a
+// virtual list: only the rows in view exist. Selecting one opens it.
 
 import { ImageItemData, ImagesListState, WellState } from "../api/images_list.slint";
 import { ImageReviewState } from "../api/image_review.slint";
 import { ImageReviewPopover, MarkerFilterRow } from "image_review_card.slint";
-import { LayoutState } from "../api/layout.slint";
-import { PlateView, WellColor } from "plate_view.slint";
 import { ListView } from "std-widgets.slint";
-import { Ink, InkIcons, InkCheckbox, InkSearchField, InkBusy, InkButton, InkButtonKind, InkIconButton, InkHint, InkSegmented, InkCaption, InkDivider, InkTipZone } from "../ink/ink.slint";
+import { Ink, InkIcons, InkCheckbox, InkSearchField, InkBusy, InkButton, InkButtonKind, InkIconButton, InkHint, InkSegmented, InkTipZone } from "../ink/ink.slint";
 
 // How far an image is, as a dot: analysed filled, preview an amber ring,
 // new a faint ring - the legend above the list says so.
@@ -176,7 +174,7 @@ component FolderRow inherits Rectangle {
     callback skip-toggled;
 
     accessible-role: button;
-    accessible-label: "Folder " + root.data.folder_parent + root.data.name + ", " + root.data.count + " images";
+    accessible-label: (root.data.group_head ? "Group " : "Folder ") + root.data.folder_parent + root.data.name + ", " + root.data.count + " images";
     accessible-expandable: true;
     accessible-expanded: !root.data.collapsed;
     accessible-action-default => { root.clicked(); }
@@ -213,8 +211,9 @@ component FolderRow inherits Rectangle {
             colorize: Ink.text-dim;
             accessible-role: none;
         }
-        // Analyse this folder's images (unticked: skipped by Run).
-        VerticalLayout {
+        // Analyse this folder's images (unticked: skipped by Run) - a
+        // folder's head only, not a group's.
+        if !root.data.group_head: VerticalLayout {
             alignment: center;
             InkCheckbox {
                 checked: !root.data.skipped;
@@ -275,9 +274,6 @@ component FolderRow inherits Rectangle {
 
 export component ImagesListPanel inherits Rectangle {
     property <length> row-h: 30px;
-    property <bool> plate: LayoutState.images-as-plate;
-    property <int> well: ImagesListState.selected-well;
-    property <string> well-name: root.well >= 0 && root.well < ImagesListState.plate-wells.length ? ImagesListState.plate-wells[root.well].name : "";
 
     // Ctrl+F: the search field.
     property <int> focus-search-mirror: ImagesListState.focus_search_requested;
@@ -313,12 +309,13 @@ export component ImagesListPanel inherits Rectangle {
             VerticalLayout {
                 alignment: center;
                 InkSegmented {
-                    width: 104px;
-                    label: "Show the images as";
-                    model: ["Plate", "List"];
-                    selected: root.plate ? 0 : 1;
+                    width: 124px;
+                    label: "List the images by";
+                    model: ["Folders", "Groups"];
+                    selected: ImagesListState.by-groups ? 1 : 0;
                     picked(i) => {
-                        LayoutState.images-as-plate = i == 0;
+                        ImagesListState.by-groups = i == 1;
+                        ImagesListState.by-groups-changed(i == 1);
                     }
                 }
             }
@@ -418,69 +415,44 @@ export component ImagesListPanel inherits Rectangle {
             padding-bottom: 4px;
         }
 
-        // What the dots in the rows mean.
+        // What the dots in the rows mean - and, with heads, fold them all.
         if ImagesListState.images_list.length > 0: HorizontalLayout {
             height: 22px;
             padding-left: Ink.pad-panel + 2px;
+            padding-right: 6px;
             spacing: 14px;
-            alignment: start;
-            for st[i] in [WellState.analysed, WellState.preview, WellState.new]: HorizontalLayout {
-                spacing: 5px;
-                VerticalLayout {
-                    alignment: center;
-                    StateDot {
-                        state: st;
+            HorizontalLayout {
+                spacing: 14px;
+                alignment: start;
+                for st[i] in [WellState.analysed, WellState.preview, WellState.new]: HorizontalLayout {
+                    spacing: 5px;
+                    VerticalLayout {
+                        alignment: center;
+                        StateDot {
+                            state: st;
+                        }
+                    }
+                    Text {
+                        text: i == 0 ? "analysed" : i == 1 ? "preview" : "new";
+                        font-size: Ink.fs-caption;
+                        color: Ink.text-dim;
+                        vertical-alignment: center;
                     }
                 }
-                Text {
-                    text: i == 0 ? "analysed" : i == 1 ? "preview" : "new";
-                    font-size: Ink.fs-caption;
-                    color: Ink.text-dim;
-                    vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            if ImagesListState.images_list[0].folder: InkIconButton {
+                y: (parent.height - self.height) / 2;
+                size: 22px;
+                icon: ImagesListState.all-folded ? InkIcons.expand : InkIcons.collapse;
+                label: ImagesListState.all-folded ? "Unfold all" : (ImagesListState.by-groups ? "Fold all groups" : "Fold all folders");
+                clicked => {
+                    ImagesListState.fold-all();
                 }
             }
         }
 
-        // -- Plate: the wells, the chosen well's images --
-        if root.plate: VerticalLayout {
-            vertical-stretch: 1;
-            spacing: 0px;
-            VerticalLayout {
-                vertical-stretch: 0;
-                padding: Ink.pad-panel;
-                padding-top: 6px;
-                PlateView { }
-            }
-            InkDivider { }
-            if root.well-name != "": HorizontalLayout {
-                padding-left: Ink.pad-panel;
-                InkCaption {
-                    height: 28px;
-                    text: "WELL " + root.well-name + " · " + ImagesListState.well-images.length + " IMAGES";
-                }
-            }
-            if root.well-name == "" && ImagesListState.plate-wells.length > 0: HorizontalLayout {
-                padding-left: Ink.pad-panel;
-                InkHint {
-                    height: 28px;
-                    text: "Pick a well to see its images.";
-                }
-            }
-            ListView {
-                vertical-stretch: 1;
-                for data in ImagesListState.well-images: ImageRow {
-                    x: 4px;
-                    width: parent.width - 8px;
-                    height: root.row-h;
-                    data: data;
-                    clicked => {
-                        ImagesListState.image_selected(data.path);
-                    }
-                }
-            }
-        }
-
-        if !root.plate: list-box := Rectangle {
+        list-box := Rectangle {
             vertical-stretch: 1;
 
             // A row clicked here is in view: the list stays where it is.

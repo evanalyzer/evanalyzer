@@ -317,8 +317,9 @@ pub fn reject_newer_results(conn: &Connection) -> Result<(), InternalErrors> {
     Ok(())
 }
 
-/// Adds the review columns of `images` (note, marker, disabled_by) to a
-/// results file written before them - a no-op on a newer one. They came
+/// Adds the later columns of `images` (disabled and its reason, the
+/// review: note, marker, disabled_by) to a results file written before
+/// them - a no-op on a newer one. They came
 /// without a format bump: an older build reading a newer file just doesn't
 /// see them. A file without images (not written by an analysis) stays as it
 /// is.
@@ -334,7 +335,9 @@ pub fn add_review_columns(conn: &Connection) -> Result<(), InternalErrors> {
         return Ok(());
     }
     conn.execute_batch(
-        "ALTER TABLE images ADD COLUMN IF NOT EXISTS note VARCHAR;
+        "ALTER TABLE images ADD COLUMN IF NOT EXISTS disabled BOOLEAN DEFAULT false;
+         ALTER TABLE images ADD COLUMN IF NOT EXISTS disabled_reason VARCHAR;
+         ALTER TABLE images ADD COLUMN IF NOT EXISTS note VARCHAR;
          ALTER TABLE images ADD COLUMN IF NOT EXISTS marker UTINYINT;
          ALTER TABLE images ADD COLUMN IF NOT EXISTS disabled_by VARCHAR;",
     )

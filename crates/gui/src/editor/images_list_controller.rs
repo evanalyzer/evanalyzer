@@ -16,7 +16,7 @@ use crate::editor::object_list_controller::ObjectListController;
 use crate::editor::viewport_controller::ViewportController;
 use crate::helper::size_formater::format_bytes;
 use crate::{AppWindow, DialogType, GlobalAppState, ObjectHighlightBox, ViewportObjectState};
-use crate::{ImageItemData, ImagesListState, PlateWell, WellState};
+use crate::{ImageItemData, ImagesListState, WellState};
 use evanalyzer_app::project::ImageListExt;
 use evanalyzer_app::project::collect_images_at_root;
 use evanalyzer_app::project::{ProjectExt, SelectNewProjectRootAction};
@@ -26,7 +26,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 /// Which images were previewed (this session) or are in the analysis open
-/// in Results - the states of the plate's wells and of the image rows. Kept
+/// in Results - the states of the image rows. Kept
 /// in `UiState::image_states`: the preview worker and the results controller
 /// write it.
 #[derive(Default, Clone)]
@@ -46,8 +46,11 @@ pub struct ImagesListControllerState {
     /// The chip picker's last search, to list it again when the marker
     /// filter changes.
     pub quick_query: RwLock<String>,
-    /// The images of each well of the plate view, as `plate-wells` lists them.
-    pub well_items: RwLock<Vec<Vec<ImageItemData>>>,
+    /// The list is by groups - the wells of the project's "Grouping" -
+    /// not by folders. This session only.
+    pub by_groups: std::sync::atomic::AtomicBool,
+    /// Folded group heads (by the group's name) - this session only.
+    pub collapsed_groups: std::sync::Mutex<std::collections::BTreeSet<String>>,
 }
 pub struct ImagesListController {
     pub(crate) ui: slint::Weak<AppWindow>,
@@ -80,7 +83,8 @@ impl ImagesListController {
                 image_filter_text: RwLock::new(String::new()),
                 marker_filter: std::sync::atomic::AtomicU8::new(0),
                 quick_query: RwLock::new(String::new()),
-                well_items: RwLock::new(Vec::new()),
+                by_groups: std::sync::atomic::AtomicBool::new(false),
+                collapsed_groups: Default::default(),
             }),
             object_list_controller,
             classification_controller,
@@ -489,12 +493,12 @@ impl ImagesListController {
             state.on_folder_parent(|path| folder_split(&path).0.into());
         }
 
-        // The plate follows previews and opened analyses. Weak: `UiState`
-        // keeps the listener, and this controller keeps `UiState`.
+        // The rows' state dots follow previews and opened analyses. Weak:
+        // `UiState` keeps the listener, and this controller keeps `UiState`.
         let weak = Arc::downgrade(self);
         self.app_state.on_image_states_changed(move || {
             if let Some(manager) = weak.upgrade() {
-                manager.sync_plate_to_slint();
+                manager.sync_row_states_to_slint();
             }
         });
 
@@ -586,11 +590,27 @@ impl ImagesListController {
                         });
                 });
 
-            // A well of the plate view: show its images
+            // Fold every head, or unfold them all
             let manager = Arc::clone(self);
             ui.global::<ImagesListState>()
-                .on_well_selected(move |index| {
-                    manager.show_well_images(index);
+                .on_fold_all(move || manager.fold_all());
+
+            // Listed by folders or by groups
+            let manager = Arc::clone(self);
+            ui.global::<ImagesListState>()
+                .on_by_groups_changed(move |on| {
+                    manager
+                        .image_controller_state
+                        .by_groups
+                        .store(on, std::sync::atomic::Ordering::Relaxed);
+                    manager.sync_image_list_to_slint();
+                    let image_path = manager
+                        .app_state
+                        .get_project()
+                        .get_current_image_path_cloned();
+                    if let Some(image_path) = image_path {
+                        manager.set_selected_image_index_in_slint_images_list(image_path, false);
+                    }
                 });
 
             // Rerun folder scan on selected image root
@@ -607,6 +627,21 @@ impl ImagesListController {
     /// Folds the list's `folder` (relative to the image folder) or unfolds
     /// it, and keeps the open image marked.
     pub fn toggle_folder(&self, folder: PathBuf) {
+        // A group's head: folded for this session only.
+        if let Some(name) = folder.to_string_lossy().strip_prefix(GROUP_HEAD_PREFIX) {
+            {
+                let mut collapsed = self
+                    .image_controller_state
+                    .collapsed_groups
+                    .lock()
+                    .expect("Poisoned");
+                if !collapsed.remove(name) {
+                    collapsed.insert(name.to_string());
+                }
+            }
+            self.sync_image_list_to_slint();
+            return;
+        }
         {
             // Saved in the project, but no edit: no undo step - an unsaved
             // change, though, so the save button asks for it.
@@ -622,6 +657,60 @@ impl ImagesListController {
         if let Some(image_path) = image_path {
             self.set_selected_image_index_in_slint_images_list(image_path, false);
         }
+    }
+
+    /// Folds every head of the list (its folders, or its groups), or
+    /// unfolds them all when every one is folded. Folders: saved in the
+    /// project like a single fold (an unsaved change, no undo step);
+    /// groups: this session.
+    pub fn fold_all(&self) {
+        let by_groups = self
+            .image_controller_state
+            .by_groups
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if by_groups {
+            let names: std::collections::BTreeSet<String> = {
+                let project = self.app_state.get_project();
+                let paths: Vec<&std::path::Path> =
+                    project.images.list.0.keys().map(PathBuf::as_path).collect();
+                let layout = evanalyzer_app::images::plate_layout(&paths, &project.plate);
+                let mut names: std::collections::BTreeSet<String> =
+                    layout.wells.into_iter().map(|w| w.name).collect();
+                if layout.unplaced > 0 {
+                    names.insert("No group".to_string());
+                }
+                names
+            };
+            let mut collapsed = self
+                .image_controller_state
+                .collapsed_groups
+                .lock()
+                .expect("Poisoned");
+            *collapsed = if names.is_subset(&collapsed) {
+                Default::default()
+            } else {
+                names
+            };
+        } else {
+            {
+                let mut project = self.app_state.get_project_runtime_write();
+                let folders: std::collections::BTreeSet<PathBuf> = project
+                    .images
+                    .list
+                    .0
+                    .keys()
+                    .map(|p| p.parent().map(PathBuf::from).unwrap_or_default())
+                    .collect();
+                let collapsed = &mut project.images.collapsed_folders;
+                *collapsed = if folders.is_subset(collapsed) {
+                    Default::default()
+                } else {
+                    folders
+                };
+            }
+            self.app_state.mark_dirty();
+        }
+        self.sync_image_list_to_slint();
     }
 
     /// Skips the images right in `folder` (relative to the image folder)
@@ -723,15 +812,41 @@ impl ImagesListController {
         let image_states = state.image_states();
         let project = state.get_project();
         let images_guard = &project.images.list;
-        let (slint_items, image_count) = build_image_list_items(
-            images_guard,
-            &filter_text,
-            &image_states,
-            &project.images.root.clone().unwrap_or_default(),
-            &project.images.collapsed_folders,
-            &project.images.skipped_folders,
-            marker_filter,
-        );
+        let by_groups = self
+            .image_controller_state
+            .by_groups
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let (slint_items, image_count) = if by_groups {
+            build_group_rows(
+                images_guard,
+                &project.plate,
+                &filter_text,
+                marker_filter,
+                &image_states,
+                &project.images.root.clone().unwrap_or_default(),
+                &self
+                    .image_controller_state
+                    .collapsed_groups
+                    .lock()
+                    .expect("Poisoned"),
+                &project.images.skipped_folders,
+            )
+        } else {
+            build_image_list_items(
+                images_guard,
+                &filter_text,
+                &image_states,
+                &project.images.root.clone().unwrap_or_default(),
+                &project.images.collapsed_folders,
+                &project.images.skipped_folders,
+                marker_filter,
+            )
+        };
+        // Every head folded (no heads: false) - the fold-all button.
+        let all_folded = {
+            let mut heads = slint_items.iter().filter(|row| row.folder).peekable();
+            heads.peek().is_some() && heads.all(|row| row.collapsed)
+        };
         let any_marker = marker_filter != 0
             || images_guard
                 .values()
@@ -746,20 +861,7 @@ impl ImagesListController {
                 .filter(|path| !project.images.is_skipped(path))
                 .count()
         };
-        let plate = build_plate(
-            images_guard,
-            &project.plate,
-            &image_states,
-            &project.images.root.clone().unwrap_or_default(),
-        );
         drop(project);
-        *self
-            .image_controller_state
-            .well_items
-            .write()
-            .expect("Poisoned") = plate.well_items;
-        let plate_wells = plate.wells;
-        let (plate_rows, plate_cols) = (plate.rows, plate.cols);
 
         // The final assignment goes into the event loop
         crate::helper::ui_thread::invoke_from_event_loop(move || {
@@ -768,16 +870,11 @@ impl ImagesListController {
                     let images_state = ui_ready.global::<ImagesListState>();
                     images_state.set_images_list(model);
                     images_state.set_image_count(image_count as i32);
+                    images_state.set_all_folded(all_folded);
                     images_state.set_any_marker(any_marker);
                     images_state.set_marker_filter(i32::from(marker_filter));
                     images_state.set_total_images(total_images as i32);
                     images_state.set_run_images(run_images as i32);
-                    images_state.set_plate_rows(plate_rows);
-                    images_state.set_plate_cols(plate_cols);
-                    images_state.set_plate_wells(slint::ModelRc::new(slint::VecModel::from(plate_wells)));
-                    // The wells may have changed: no well selected.
-                    images_state.set_selected_well(-1);
-                    images_state.set_well_images(slint::ModelRc::default());
                 }else{
                     warn!("Failed to upgrade UI handle in sync_image_list_to_slint, cannot update image list!");
                 }
@@ -822,24 +919,10 @@ impl ImagesListController {
         .ok();
     }
 
-    /// Only the plate: its wells' states changed (an image was previewed,
-    /// an analysis opened) - cheaper than the whole list.
-    pub fn sync_plate_to_slint(&self) {
+    /// Only the rows' states changed (an image was previewed, an analysis
+    /// opened) - cheaper than the whole list.
+    pub fn sync_row_states_to_slint(&self) {
         let image_states = self.app_state.image_states();
-        let project = self.app_state.get_project();
-        let plate = build_plate(
-            &project.images.list,
-            &project.plate,
-            &image_states,
-            &project.images.root.clone().unwrap_or_default(),
-        );
-        drop(project);
-        *self
-            .image_controller_state
-            .well_items
-            .write()
-            .expect("Poisoned") = plate.well_items;
-        let wells = plate.wells;
         // The rows' states, by path (patched in place: rebuilding the list
         // would lose the scroll position and the chosen well).
         let row_states: std::collections::HashMap<slint::SharedString, WellState> =
@@ -848,10 +931,7 @@ impl ImagesListController {
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let state = ui.global::<ImagesListState>();
-                // The same wells as before (same images), so the selected
-                // one stays.
-                state.set_plate_wells(slint::ModelRc::new(slint::VecModel::from(wells)));
-                for model in [state.get_images_list(), state.get_well_images()] {
+                for model in [state.get_images_list()] {
                     for row in 0..model.row_count() {
                         if let Some(mut item) = model.row_data(row) {
                             if item.folder {
@@ -882,29 +962,6 @@ impl ImagesListController {
                         }
                     }
                 }
-            }
-        })
-        .ok();
-    }
-
-    /// Shows the images of well `index` (of `plate-wells`) under the plate.
-    pub fn show_well_images(&self, index: i32) {
-        let items = usize::try_from(index)
-            .ok()
-            .and_then(|index| {
-                self.image_controller_state
-                    .well_items
-                    .read()
-                    .expect("Poisoned")
-                    .get(index)
-                    .cloned()
-            })
-            .unwrap_or_default();
-        let ui_weak = self.ui.clone();
-        crate::helper::ui_thread::invoke_from_event_loop(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.global::<ImagesListState>()
-                    .set_well_images(slint::ModelRc::new(slint::VecModel::from(items)));
             }
         })
         .ok();
@@ -992,6 +1049,105 @@ fn row_of_image(
         .position(|rel_path| root.join(rel_path) == selected)
 }
 
+/// Whether `entry` is listed: its marker passes the marker filter and the
+/// search text (lowercase, may be empty) is in its path or its note.
+fn is_listed(
+    entry: &evanalyzer_cfg::settings::images_settings::ImageEntry,
+    filter_text_lowercase: &str,
+    marker_filter: u8,
+) -> bool {
+    if !has_filtered_marker(entry, marker_filter) {
+        return false;
+    }
+    if filter_text_lowercase.is_empty() {
+        return true;
+    }
+    entry
+        .rel_path
+        .to_string_lossy()
+        .to_lowercase()
+        .contains(filter_text_lowercase)
+        || (!entry.review.note.is_empty()
+            && entry
+                .review
+                .note
+                .to_lowercase()
+                .contains(filter_text_lowercase))
+}
+
+/// A group head's row path: the prefix, then the group's name - told
+/// apart from a folder's when it is clicked.
+const GROUP_HEAD_PREFIX: &str = "group:";
+
+/// The listed images by group: the wells the project's "Grouping" finds in
+/// the names (as the results' plate does), a head per well in plate order,
+/// then the images no well was found for. A folded head (`collapsed`, by
+/// name; not while searching) keeps only itself.
+#[allow(clippy::too_many_arguments)]
+fn build_group_rows(
+    images: &evanalyzer_cfg::settings::images_settings::ImageList,
+    plate: &evanalyzer_cfg::settings::plate_settings::PlateSettings,
+    filter_text_lowercase: &str,
+    marker_filter: u8,
+    states: &ImageStates,
+    image_root: &std::path::Path,
+    collapsed: &std::collections::BTreeSet<String>,
+    skipped: &std::collections::BTreeSet<PathBuf>,
+) -> (Vec<ImageItemData>, usize) {
+    let matching: Vec<_> = images
+        .values()
+        .filter(|entry| is_listed(entry, filter_text_lowercase, marker_filter))
+        .collect();
+    let paths: Vec<&std::path::Path> = matching.iter().map(|e| e.rel_path.as_path()).collect();
+    let layout = evanalyzer_app::images::plate_layout(&paths, plate);
+    let mut placed = vec![false; matching.len()];
+    let mut groups: Vec<(String, Vec<usize>)> = layout
+        .wells
+        .iter()
+        .map(|well| {
+            well.images.iter().for_each(|&i| placed[i] = true);
+            (well.name.clone(), well.images.clone())
+        })
+        .collect();
+    let unplaced: Vec<usize> = (0..matching.len()).filter(|&i| !placed[i]).collect();
+    if !unplaced.is_empty() {
+        groups.push(("No group".to_string(), unplaced));
+    }
+    let searching = !filter_text_lowercase.is_empty() || marker_filter != 0;
+    let mut rows = Vec::with_capacity(matching.len() + groups.len());
+    for (name, indices) in groups {
+        let folded = !searching && collapsed.contains(&name);
+        let analysed = indices
+            .iter()
+            .filter(|&&i| states.analysed.contains(&matching[i].rel_path))
+            .count();
+        let head = rows.len() as i32;
+        rows.push(ImageItemData {
+            name: name.as_str().into(),
+            path: format!("{GROUP_HEAD_PREFIX}{name}").into(),
+            folder: true,
+            group_head: true,
+            count: indices.len() as i32,
+            analysed: analysed as i32,
+            collapsed: folded,
+            head,
+            ..Default::default()
+        });
+        if !folded {
+            rows.extend(indices.into_iter().map(|i| {
+                let entry = matching[i];
+                ImageItemData {
+                    skipped: skipped
+                        .contains(entry.rel_path.parent().unwrap_or(std::path::Path::new(""))),
+                    head,
+                    ..image_list_item(entry, states, image_root)
+                }
+            }));
+        }
+    }
+    (rows, matching.len())
+}
+
 /// Builds the Slint-facing row list for `sync_image_list_to_slint`: applies
 /// the (already-lowercased) filter text against `rel_path` and the note and
 /// the marker filter (see [`has_filtered_marker`]), then maps each
@@ -1014,25 +1170,7 @@ fn build_image_list_items(
 ) -> (Vec<ImageItemData>, usize) {
     let matching: Vec<_> = images
         .values()
-        .filter(|entry| {
-            if !has_filtered_marker(entry, marker_filter) {
-                return false;
-            }
-            if filter_text_lowercase.is_empty() {
-                return true;
-            }
-            entry
-                .rel_path
-                .to_string_lossy()
-                .to_lowercase()
-                .contains(filter_text_lowercase)
-                || (!entry.review.note.is_empty()
-                    && entry
-                        .review
-                        .note
-                        .to_lowercase()
-                        .contains(filter_text_lowercase))
-        })
+        .filter(|entry| is_listed(entry, filter_text_lowercase, marker_filter))
         .collect();
     let count = matching.len();
     let folder_of = |entry: &evanalyzer_cfg::settings::images_settings::ImageEntry| {
@@ -1310,71 +1448,6 @@ fn project_rows(
         .collect()
 }
 
-/// The plate view of `images`: the size, the wells, each well's images.
-struct PlateItems {
-    rows: i32,
-    cols: i32,
-    wells: Vec<PlateWell>,
-    well_items: Vec<Vec<ImageItemData>>,
-}
-
-/// Groups `images` into wells by `plate` (see `evanalyzer_app::images::plate_layout`).
-/// A well is `analysed` when one of its images is in the analysis open in
-/// Results, else `preview` when one was previewed, else `new`.
-fn build_plate(
-    images: &evanalyzer_cfg::settings::images_settings::ImageList,
-    plate: &evanalyzer_cfg::settings::plate_settings::PlateSettings,
-    states: &ImageStates,
-    image_root: &std::path::Path,
-) -> PlateItems {
-    let entries: Vec<&std::path::Path> = images.values().map(|e| e.rel_path.as_path()).collect();
-    let state_of = |indices: &[usize]| {
-        let of = |state| {
-            indices
-                .iter()
-                .any(|&i| image_state(entries[i], states, image_root) == state)
-        };
-        if of(WellState::Analysed) {
-            WellState::Analysed
-        } else if of(WellState::Preview) {
-            WellState::Preview
-        } else {
-            WellState::New
-        }
-    };
-    let paths: Vec<&std::path::Path> = images
-        .values()
-        .map(|entry| entry.rel_path.as_path())
-        .collect();
-    let layout = evanalyzer_app::images::plate_layout(&paths, plate);
-    let items: Vec<ImageItemData> = images
-        .values()
-        .map(|entry| image_list_item(entry, states, image_root))
-        .collect();
-    let wells = layout
-        .wells
-        .iter()
-        .map(|well| PlateWell {
-            row: well.row as i32,
-            col: well.col as i32,
-            name: well.name.clone().into(),
-            image_count: well.images.len() as i32,
-            state: state_of(&well.images),
-        })
-        .collect();
-    let well_items = layout
-        .wells
-        .iter()
-        .map(|well| well.images.iter().map(|&i| items[i].clone()).collect())
-        .collect();
-    PlateItems {
-        rows: layout.rows as i32,
-        cols: layout.cols as i32,
-        wells,
-        well_items,
-    }
-}
-
 /// A folder path split into what comes before its last name (with the
 /// trailing separator) and the last name: "/home/a/C14" → ("/home/a/", "C14").
 fn folder_split(path: &str) -> (String, String) {
@@ -1591,6 +1664,49 @@ mod tests {
 
         controller.toggle_folder(PathBuf::from("Serum"));
         assert!(!folded(&state), "unfolded again");
+    }
+
+    /// Fold all folds every folder, a second click unfolds them all; by
+    /// groups it folds every group instead (not saved).
+    #[test]
+    fn fold_all_folds_every_head_then_unfolds_them() {
+        let controller = make_controller();
+        let state = controller.app_state.clone();
+        {
+            let mut project = state.get_project_write();
+            for path in ["Serum/A01_01.tif", "Plasma/B02_01.tif"] {
+                project.images.list.insert(
+                    PathBuf::from(path),
+                    ImageEntry {
+                        rel_path: PathBuf::from(path),
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+        let folded = || state.get_project().images.collapsed_folders.len();
+        controller.fold_all();
+        assert_eq!(folded(), 2, "both folders");
+        assert!(state.is_dirty());
+        controller.toggle_folder(PathBuf::from("Serum"));
+        controller.fold_all();
+        assert_eq!(folded(), 2, "one open: all fold again");
+        controller.fold_all();
+        assert_eq!(folded(), 0, "all folded: all open");
+
+        controller
+            .image_controller_state
+            .by_groups
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        controller.fold_all();
+        let groups = controller
+            .image_controller_state
+            .collapsed_groups
+            .lock()
+            .unwrap()
+            .clone();
+        assert_eq!(groups.into_iter().collect::<Vec<_>>(), ["A1", "B2"]);
+        assert_eq!(folded(), 0, "folders untouched");
     }
 
     /// A marker or a left out is an undo step and marks the project
@@ -1992,6 +2108,49 @@ mod tests {
         images
     }
 
+    /// Listed by groups: a head per well the project's "Grouping" finds, in
+    /// plate order, then "No group" for images without a well; a folded
+    /// head keeps only itself, a search opens it again.
+    #[test]
+    fn listed_by_groups_the_images_follow_their_wells_head() {
+        let images = image_list_of(&["B03_01.tif", "A01_02.tif", "notes.tif", "A01_01.tif"]);
+        let build = |search: &str, collapsed: &[&str]| {
+            build_group_rows(
+                &images,
+                &Default::default(),
+                search,
+                0,
+                &ImageStates::default(),
+                std::path::Path::new("/data"),
+                &collapsed.iter().map(|s| s.to_string()).collect(),
+                &Default::default(),
+            )
+        };
+        let (rows, count) = build("", &[]);
+        assert_eq!(count, 4);
+        assert_eq!(
+            row_names(&rows),
+            [
+                "▸ A1 (2)",
+                "A01_01.tif",
+                "A01_02.tif",
+                "▸ B3 (1)",
+                "B03_01.tif",
+                "▸ No group (1)",
+                "notes.tif"
+            ]
+        );
+        assert!(rows[0].group_head);
+        assert_eq!(rows[0].path, "group:A1");
+        let (rows, _) = build("", &["A1"]);
+        assert_eq!(row_names(&rows)[..2], ["▸ A1 (2)", "▸ B3 (1)"]);
+        let (rows, count) = build("a01_02", &["A1"]);
+        assert_eq!(
+            (row_names(&rows), count),
+            (vec!["▸ A1 (1)".to_string(), "A01_02.tif".into()], 1)
+        );
+    }
+
     /// (head or image, name, count) of each row - heads marked "▸".
     fn row_names(rows: &[ImageItemData]) -> Vec<String> {
         rows.iter()
@@ -2205,70 +2364,6 @@ mod tests {
         assert_eq!(rows[0].state, WellState::Preview);
         assert_eq!(rows[1].image_dimension, "", "not read yet");
         assert_eq!(rows[1].state, WellState::Analysed);
-    }
-
-    #[test]
-    fn a_wells_state_is_analysed_before_preview_before_new() {
-        let mut images = evanalyzer_cfg::settings::images_settings::ImageList::default();
-        for name in ["A01_01.tif", "A01_02.tif", "A02_01.tif", "A03_01.tif"] {
-            images.insert(
-                PathBuf::from(name),
-                ImageEntry {
-                    rel_path: PathBuf::from(name),
-                    ..Default::default()
-                },
-            );
-        }
-        let states = ImageStates {
-            previewed: [
-                PathBuf::from("/root/A01_02.tif"),
-                PathBuf::from("/root/A02_01.tif"),
-            ]
-            .into_iter()
-            .collect(),
-            analysed: [PathBuf::from("A01_01.tif")].into_iter().collect(),
-        };
-        let plate = build_plate(
-            &images,
-            &Default::default(),
-            &states,
-            std::path::Path::new("/root"),
-        );
-        let state: Vec<WellState> = plate.wells.iter().map(|w| w.state).collect();
-        assert_eq!(
-            state,
-            [WellState::Analysed, WellState::Preview, WellState::New]
-        );
-    }
-
-    #[test]
-    fn build_plate_puts_each_image_in_its_well_in_number_order() {
-        let mut images = evanalyzer_cfg::settings::images_settings::ImageList::default();
-        for name in ["B03_02.tif", "A01_01.tif", "B03_01.tif", "notes.tif"] {
-            images.insert(
-                PathBuf::from(name),
-                ImageEntry {
-                    rel_path: PathBuf::from(name),
-                    ..Default::default()
-                },
-            );
-        }
-        let plate = build_plate(
-            &images,
-            &Default::default(),
-            &Default::default(),
-            std::path::Path::new("/root"),
-        );
-        assert_eq!((plate.rows, plate.cols), (2, 3));
-        let names: Vec<String> = plate.wells.iter().map(|w| w.name.to_string()).collect();
-        assert_eq!(names, ["A1", "B3"]);
-        assert_eq!(plate.wells[1].image_count, 2);
-        assert_eq!((plate.wells[1].row, plate.wells[1].col), (1, 2));
-        let b3: Vec<String> = plate.well_items[1]
-            .iter()
-            .map(|i| i.path.to_string())
-            .collect();
-        assert_eq!(b3, ["B03_01.tif", "B03_02.tif"]);
     }
 
     #[test]
