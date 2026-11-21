@@ -10,6 +10,7 @@ import { ResultsState } from "../api/results.slint";
 import { Ink, InkButton, InkButtonKind, InkIcons, InkMultiSelect, InkSegmented } from "../ink/ink.slint";
 import { CheckBox, ComboBox, LineEdit } from "../ink/std_compat.slint";
 import { ListView, ScrollView } from "std-widgets.slint";
+import { ViewBar, BarChip, BarCount } from "results_view_bar.slint";
 
 component SortHead inherits Rectangle {
     in property <string> text;
@@ -86,17 +87,8 @@ export component ResultsTracksAllView inherits Rectangle {
         padding: 12px;
         spacing: 12px;
 
-        // -- Filters and how many --
-        Rectangle {
-            background: Ink.panel;
-            border-radius: Ink.radius-lg;
-            border-width: 1px;
-            border-color: Ink.border;
-            height: filters.preferred-height;
-            filters := HorizontalLayout {
-                padding: 10px;
-                padding-left: 14px;
-                spacing: 12px;
+        // -- Filters and how many: the results' view bar --
+        ViewBar {
                 VerticalLayout {
                     alignment: center;
                     ComboBox {
@@ -121,82 +113,16 @@ export component ResultsTracksAllView inherits Rectangle {
                         }
                     }
                 }
-                // The track filters in a dropdown; the badge counts the
+                // The track filters in a popover; the badge counts the
                 // ones changed from the default (design canvas "Tracks
                 // toolbar", board 3).
-                filters-pill := Rectangle {
-                    height: Ink.control-h;
-                    width: filters-pill-row.preferred-width;
-                    border-radius: Ink.radius-sm;
-                    background: filters-ta.has-hover ? Ink.hover : Ink.field;
-                    border-width: 1px;
-                    border-color: root.active-filters > 0 ? Ink.focus : (filters-ta.has-hover ? Ink.text-faint : Ink.border);
-                    accessible-role: combobox;
-                    accessible-label: "Track filters";
-                    accessible-value: root.active-filters + " active";
-                    accessible-action-default => {
-                        filters-popup.show();
-                    }
-                    filters-pill-row := HorizontalLayout {
-                        padding-left: 10px;
-                        padding-right: 8px;
-                        spacing: 8px;
-                        Text {
-                            text: "Filters";
-                            font-size: Ink.fs-body;
-                            color: Ink.text;
-                            vertical-alignment: center;
-                        }
-                        if root.active-filters > 0: VerticalLayout {
-                            alignment: center;
-                            Rectangle {
-                                height: 16px;
-                                width: max(16px, badge.preferred-width + 10px);
-                                border-radius: 8px;
-                                background: Ink.focus;
-                                badge := Text {
-                                    text: root.active-filters;
-                                    font-size: Ink.fs-caption;
-                                    font-weight: 600;
-                                    color: Ink.panel;
-                                }
-                            }
-                        }
-                        Image {
-                            source: InkIcons.caret-down;
-                            width: 10px;
-                            colorize: Ink.text-mute;
-                        }
-                    }
-                    filters-ta := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            filters-popup.show();
-                        }
-                    }
-                    filters-popup := PopupWindow {
-                        x: 0;
-                        y: filters-pill.height + 4px;
-                        width: 280px;
-                        // Explicit, like InkMultiSelect: an inferred height
-                        // misplaces the popup.
-                        height: 162px;
-                        close-policy: close-on-click-outside;
-                        Rectangle {
-                            width: 280px;
-                            height: 162px;
-                            background: Ink.panel;
-                            border-width: 1px;
-                            border-color: Ink.border;
-                            border-radius: Ink.radius-md;
-                            drop-shadow-color: Ink.shadow;
-                            drop-shadow-blur: 24px;
-                            drop-shadow-offset-y: 8px;
-                            VerticalLayout {
-                                padding: 14px;
-                                padding-top: 12px;
-                                spacing: 10px;
-                                alignment: start;
+                VerticalLayout {
+                    alignment: center;
+                    BarChip {
+                        label: "Filters";
+                        badge: root.active-filters;
+                        active: root.active-filters > 0;
+                        popover-width: 280px;
                                 Text {
                                     text: "SHOW ONLY TRACKS";
                                     font-size: Ink.fs-caption;
@@ -272,8 +198,6 @@ export component ResultsTracksAllView inherits Rectangle {
                                 }
                             }
                         }
-                    }
-                }
                 // "Columns" inline, like a label beside its field.
                 HorizontalLayout {
                     width: columns-label.preferred-width + 6px + 110px;
@@ -300,14 +224,9 @@ export component ResultsTracksAllView inherits Rectangle {
                 Rectangle {
                     horizontal-stretch: 1;
                 }
-                Text {
-                    text: ResultsState.tracks-all-summary;
-                    horizontal-stretch: 0;
-                    font-size: Ink.fs-secondary;
-                    color: Ink.text-dim;
-                    vertical-alignment: center;
-                    overflow: elide;
+                BarCount {
                     min-width: 120px;
+                    text: ResultsState.tracks-all-summary;
                 }
                 VerticalLayout {
                     alignment: center;
@@ -323,7 +242,6 @@ export component ResultsTracksAllView inherits Rectangle {
                         }
                     }
                 }
-            }
         }
 
         HorizontalLayout {

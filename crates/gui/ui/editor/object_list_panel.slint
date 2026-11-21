@@ -175,6 +175,40 @@ component RowLink inherits Text {
 }
 
 // An object: a list row, or a line of the table.
+// An object's classes as colour squares - one per class (an object can
+// have several, e.g. a spot that is also an outside-cell spot), at most
+// three, then "+n".
+component ClassSwatches inherits HorizontalLayout {
+    in property <[color]> colors;
+    in property <color> fallback;
+    spacing: 2px;
+    alignment: start;
+    if root.colors.length == 0: VerticalLayout {
+        alignment: center;
+        Rectangle {
+            width: 8px;
+            height: 8px;
+            border-radius: 2px;
+            background: root.fallback;
+        }
+    }
+    for c[i] in root.colors: VerticalLayout {
+        alignment: center;
+        if i < 3: Rectangle {
+            width: 8px;
+            height: 8px;
+            border-radius: 2px;
+            background: c;
+        }
+    }
+    if root.colors.length > 3: Text {
+        text: "+" + (root.colors.length - 3);
+        font-size: Ink.fs-caption;
+        color: Ink.text-dim;
+        vertical-alignment: center;
+    }
+}
+
 component ObjectRow inherits Rectangle {
     in property <ObjectItemDataSlint> data;
     // The channel whose mean the list shows.
@@ -214,14 +248,9 @@ component ObjectRow inherits Rectangle {
             padding-left: 8px;
             padding-right: 8px;
             spacing: 8px;
-            VerticalLayout {
-                alignment: center;
-                Rectangle {
-                    width: 8px;
-                    height: 8px;
-                    border-radius: 2px;
-                    background: root.data.class_colors.length > 0 ? root.data.class_colors[0] : root.data.display_color;
-                }
+            ClassSwatches {
+                colors: root.data.class_colors;
+                fallback: root.data.display_color;
             }
             // The mean of the channel picked in Image (the class is the
             // colour; the id is in the details).
@@ -360,19 +389,16 @@ component ObjectRow inherits Rectangle {
             HorizontalLayout {
                 width: TableCols.classes;
                 spacing: 5px;
-                VerticalLayout {
-                    alignment: center;
-                    Rectangle {
-                        width: 8px;
-                        height: 8px;
-                        border-radius: 2px;
-                        background: root.data.class_colors.length > 0 ? root.data.class_colors[0] : root.data.display_color;
-                    }
+                ClassSwatches {
+                    colors: root.data.class_colors;
+                    fallback: root.data.display_color;
                 }
 
                 Text {
                     horizontal-stretch: 1;
-                    text: root.data.class_names.length > 0 ? root.data.class_names[0] : "Unclassified";
+                    text: root.data.class_names.length == 0 ? "Unclassified"
+                        : root.data.class_names.length == 1 ? root.data.class_names[0]
+                        : root.data.class_names[0] + " +" + (root.data.class_names.length - 1);
                     font-size: Ink.fs-secondary;
                     color: root.data.class_names.length > 0 ? Ink.text : Ink.text-mute;
                     vertical-alignment: center;

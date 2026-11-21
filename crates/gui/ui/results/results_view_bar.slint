@@ -1,0 +1,240 @@
+// Copyright 2026 Joachim Danmayr.
+// Licensed under the PolyForm Noncommercial License 1.0.0.
+
+// results/results_view_bar.slint — the bar on top of every results view
+// (design canvas "Results rework", A): what is shown, as chips that open a
+// popover each, then the view's own few settings; on the right how many
+// rows, the pages and ⋯. One look for List, Plate, Charts, Tracks, Paths.
+//
+//   ViewBar { BarChip { … popover content … } … BarSpacer { } BarCount { } BarMore { … } }
+
+import { Ink, InkIcons, InkIconButton, InkMenuFrame } from "../ink/ink.slint";
+
+// The bar's frame: a panel across the view, its parts in a row.
+export component ViewBar inherits Rectangle {
+    background: Ink.panel;
+    border-radius: Ink.radius-lg;
+    border-width: 1px;
+    border-color: Ink.border;
+    height: row.preferred-height;
+
+    row := HorizontalLayout {
+        padding: 8px;
+        padding-left: 10px;
+        spacing: 8px;
+        @children
+    }
+}
+
+// Pushes what follows to the bar's right end.
+export component BarSpacer inherits Rectangle {
+    horizontal-stretch: 1;
+}
+
+// A small grey caption before a control ("A row per").
+export component BarLabel inherits Text {
+    font-size: Ink.fs-secondary;
+    color: Ink.text-dim;
+    vertical-alignment: center;
+    horizontal-stretch: 0;
+}
+
+// A picker: "Images · All ▾" - a click opens its popover (the chip's
+// children). `active`: the picker narrows what is shown (outlined, and
+// `badge` - e.g. how many filters - beside the name).
+export component BarChip inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <int> badge;
+    in property <bool> active;
+    in property <bool> enabled: true;
+    // The popover's width; its height is its content's.
+    in property <length> popover-width: 300px;
+    callback opened;
+
+    height: Ink.control-h;
+    width: chip-row.preferred-width;
+    border-radius: Ink.radius-sm;
+    background: ta.has-hover && root.enabled ? Ink.hover : Ink.field;
+    border-width: 1px;
+    border-color: root.active ? Ink.focus : (ta.has-hover && root.enabled ? Ink.text-faint : Ink.border);
+    opacity: root.enabled ? 1.0 : 0.5;
+    accessible-role: combobox;
+    accessible-label: root.label;
+    accessible-value: root.value;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        root.open();
+    }
+
+    public function open() {
+        root.opened();
+        popup.show();
+    }
+
+    public function close() {
+        popup.close();
+    }
+
+    chip-row := HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 8px;
+        spacing: 6px;
+        // Grey before a value ("Images · All"), alone the chip's name.
+        Text {
+            text: root.label;
+            font-size: Ink.fs-body;
+            color: root.value != "" ? Ink.text-dim : Ink.text;
+            vertical-alignment: center;
+        }
+        if root.value != "": Text {
+            text: root.value;
+            font-size: Ink.fs-body;
+            color: Ink.text;
+            vertical-alignment: center;
+        }
+        if root.badge > 0: VerticalLayout {
+            alignment: center;
+            Rectangle {
+                height: 16px;
+                width: max(16px, badge-text.preferred-width + 10px);
+                border-radius: 8px;
+                background: Ink.focus;
+                badge-text := Text {
+                    text: root.badge;
+                    font-size: Ink.fs-caption;
+                    font-weight: 600;
+                    color: Ink.panel;
+                }
+            }
+        }
+        Image {
+            source: InkIcons.caret-down;
+            width: 10px;
+            colorize: Ink.text-mute;
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            root.open();
+        }
+    }
+
+    popup := PopupWindow {
+        x: 0;
+        y: root.height + 4px;
+        width: root.popover-width;
+        // Explicit (an inferred height misplaces a popup): its content's.
+        height: body.preferred-height;
+        close-policy: close-on-click-outside;
+
+        Rectangle {
+            background: Ink.panel-blur ? Ink.glass : Ink.panel;
+            backdrop-blur: Ink.backdrop;
+            border-width: 1px;
+            border-color: Ink.border;
+            border-radius: Ink.radius-md;
+            drop-shadow-color: Ink.shadow;
+            drop-shadow-blur: 24px;
+            drop-shadow-offset-y: 8px;
+        }
+
+        // Clicks on the popover stay in it.
+        TouchArea { }
+
+        body := VerticalLayout {
+            padding: 12px;
+            spacing: 10px;
+            alignment: start;
+            @children
+        }
+    }
+}
+
+// A caption inside a popover ("SHOW ONLY TRACKS").
+export component BarCaption inherits Text {
+    font-size: Ink.fs-caption;
+    font-weight: 600;
+    color: Ink.text-mute;
+}
+
+// How many rows, and with `pages` the page and its arrows.
+export component BarCount inherits HorizontalLayout {
+    in property <string> text;
+    in property <bool> pages;
+    in property <int> page: 1;
+    in property <bool> has-previous;
+    in property <bool> has-next;
+    callback previous;
+    callback next;
+
+    spacing: 4px;
+    horizontal-stretch: 0;
+
+    Text {
+        text: root.text;
+        font-size: Ink.fs-secondary;
+        color: Ink.text-dim;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    if root.pages: VerticalLayout {
+        alignment: center;
+        InkIconButton {
+            size: 26px;
+            icon: InkIcons.caret-left;
+            label: "Previous page";
+            enabled: root.has-previous;
+            clicked => {
+                root.previous();
+            }
+        }
+    }
+    if root.pages: Text {
+        text: "Page " + root.page;
+        font-size: Ink.fs-secondary;
+        color: Ink.text-dim;
+        vertical-alignment: center;
+    }
+    if root.pages: VerticalLayout {
+        alignment: center;
+        InkIconButton {
+            size: 26px;
+            icon: InkIcons.caret-right;
+            label: "Next page";
+            enabled: root.has-next;
+            clicked => {
+                root.next();
+            }
+        }
+    }
+}
+
+// ⋯: the view's rarely used settings and actions (its children:
+// `InkMenuItem`s).
+export component BarMore inherits VerticalLayout {
+    in property <length> menu-width: 240px;
+    alignment: center;
+
+    more := InkIconButton {
+        size: 26px;
+        icon: InkIcons.more;
+        label: "More";
+        clicked => {
+            menu.show();
+        }
+    }
+
+    menu := PopupWindow {
+        x: more.x + more.width - root.menu-width;
+        y: more.y + more.height + 4px;
+        InkMenuFrame {
+            open-y: root.absolute-position.y + more.y + more.height + 4px;
+            menu-width: root.menu-width;
+            @children
+        }
+    }
+}
