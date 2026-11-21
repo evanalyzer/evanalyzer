@@ -13849,11 +13849,12 @@ mod tests {
         assert!(bead.cells.iter().all(|cell| cell.pinned));
     }
 
-    /// In the settings dialog a tab's settings start right below the tabs -
-    /// the other tabs' settings (hidden) push nothing down.
+    /// The settings dialog shows the step's sections as collapsible
+    /// sections, "Advanced" the last: a click on its head opens it, a
+    /// second closes it - the dialog's own state, not the card's.
     #[test]
-    fn a_settings_dialog_tab_shows_its_settings_at_the_top() {
-        let (ui, _ui_state, _controller) = with_spots(2);
+    fn a_settings_dialog_section_opens_and_closes_on_its_head() {
+        let (ui, _ui_state, _controller) = selected(vec![step("Threshold")]);
         ui.window().set_size(slint::LogicalSize::new(1280.0, 900.0));
         ui.global::<crate::LayoutState>()
             .set_mode(crate::WorkspaceMode::Pipelines);
@@ -13861,22 +13862,25 @@ mod tests {
         let step_id = panel.get_active_commands().row_data(0).unwrap().step_id;
         panel.invoke_open_step_settings(step_id);
         drain_ui_queue();
+        let card = panel.get_active_commands().row_data(0).unwrap();
+        let advanced = card
+            .advanced_parameters
+            .row_data(0)
+            .expect("Threshold has advanced settings")
+            .display_name;
+        let shown = || texts(&ui, advanced.as_str()).len();
+        let closed = shown();
 
-        // Each tab has one setting, "Output class": where it starts.
-        let first_setting_y = || {
-            texts(&ui, "Output class")
-                .first()
-                .expect("the tab's setting")
-                .absolute_position()
-                .y
-        };
-        let on_spot = first_setting_y();
-        let bead_tab = texts(&ui, "Bead").into_iter().next().expect("the Bead tab");
-        click_at(&ui, center_of(&bead_tab));
-        let on_bead = first_setting_y();
-        assert_eq!(
-            on_bead, on_spot,
-            "the Bead tab's setting starts where the Spot tab's did"
+        let head = texts(&ui, "Advanced").pop().expect("the Advanced section");
+        click_at(&ui, center_of(&head));
+        assert_eq!(shown(), closed + 1, "open: its settings are shown");
+
+        let head = texts(&ui, "Advanced").pop().expect("the Advanced section");
+        click_at(&ui, center_of(&head));
+        assert_eq!(shown(), closed, "closed again");
+        assert!(
+            !panel.get_active_commands().row_data(0).unwrap().expanded,
+            "the card stays as it was"
         );
     }
 

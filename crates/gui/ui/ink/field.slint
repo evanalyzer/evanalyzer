@@ -313,11 +313,20 @@ export component InkNumberField inherits Rectangle {
         opacity: root.enabled ? 1.0 : 0.5;
         clip: true;
 
+        // A click edits; Ctrl + wheel steps (also while editing). No drag
+        // to change the value - users changed values by accident with it.
         frame-ta := TouchArea {
             enabled: root.enabled;
             mouse-cursor: MouseCursor.text;
             clicked => {
                 input.focus();
+            }
+            scroll-event(e) => {
+                if e.modifiers.control && e.delta-y != 0 {
+                    root.step-by(e.delta-y > 0 ? 1 : -1);
+                    return accept;
+                }
+                reject
             }
         }
 
@@ -353,50 +362,6 @@ export component InkNumberField inherits Rectangle {
                 edited => {
                     root.changed(self.text);
                 }
-            }
-        }
-
-        // Scrub: drag sideways over the number (a step per 4 px) - a click
-        // without a drag edits it; Ctrl + wheel steps. Gone while editing.
-        scrub := TouchArea {
-            x: keys.x;
-            width: keys.width;
-            enabled: root.enabled && !input.has-focus;
-            mouse-cursor: MouseCursor.ew-resize;
-            property <length> start-x;
-            property <float> base;
-            property <bool> scrubbed;
-            property <string> next;
-            pointer-event(e) => {
-                if e.kind == PointerEventKind.down {
-                    self.start-x = self.mouse-x;
-                    self.base = root.shown;
-                    self.scrubbed = false;
-                }
-            }
-            moved => {
-                if self.pressed && (self.scrubbed || abs(self.mouse-x - self.start-x) > 3px) {
-                    self.scrubbed = true;
-                    // A property, not a `let`: Slint 1.18 generates broken
-                    // Rust for a string local used twice.
-                    self.next = clamp(self.base + round((self.mouse-x - self.start-x) / 4px) * root.by, root.lo, root.hi).to-fixed(root.decimals);
-                    if self.next != input.text {
-                        input.text = self.next;
-                        root.changed(self.next);
-                    }
-                }
-            }
-            clicked => {
-                if !self.scrubbed {
-                    input.focus();
-                }
-            }
-            scroll-event(e) => {
-                if e.modifiers.control && e.delta-y != 0 {
-                    root.step-by(e.delta-y > 0 ? 1 : -1);
-                    return accept;
-                }
-                reject
             }
         }
 

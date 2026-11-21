@@ -4,7 +4,7 @@
 //!
 //! A sync after each change and each preview builds the steps' rows anew.
 //! Handing Slint new models makes it recreate every card and field - a
-//! field being typed into or scrubbed loses the keyboard focus. Here the
+//! field being typed into or stepped loses the keyboard focus. Here the
 //! new rows are merged into the shown models instead: a row whose content
 //! is unchanged stays as it is, a changed one is updated in place (its
 //! field keeps the focus), and only rows added, removed or moved replace a
