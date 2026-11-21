@@ -55,7 +55,7 @@ pub struct ExtractObjects {
     /// with the same number - what the Threshold's class choice means. Inside
     /// a module, map to one of the module's own classes to keep the
     /// objects internal to the module.
-    #[cmdsmeta(optional, display_name = "Class Mapping")]
+    #[cmdsmeta(optional, display_name = "Class Mapping", visibility = Advanced)]
     pub class_mapping: Vec<ExtractClassMapping>,
 }
 

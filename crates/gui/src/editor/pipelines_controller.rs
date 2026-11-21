@@ -2430,9 +2430,14 @@ impl PipelinesController {
                     let (new_summary, params_now, needs_full_resync) = {
                         let mut project = manager.app_state.get_project_write();
                         let definitions = project.modules.clone();
-                        // A measurement setting is picked by label.
-                        let measurements =
-                            evanalyzer_app::settings_of::measurement_choices(&project);
+                        // A measurement setting is picked by label - in an
+                        // opened module among the module's own.
+                        let measurements = match manager.open_module_key(pipeline_id) {
+                            Some(key) => evanalyzer_app::settings_of::module_measurement_choices(
+                                &project, &key,
+                            ),
+                            None => evanalyzer_app::settings_of::measurement_choices(&project),
+                        };
                         let Some(step) = manager
                             .shown_steps_mut(&mut project, pipeline_id)
                             .and_then(|steps| steps.get_mut(step_idx as usize))
@@ -4294,6 +4299,9 @@ impl PipelinesController {
             data.into_iter().map(problem_item).collect::<Vec<_>>(),
         )));
         let cards = state.get_active_commands();
+        // A problem at a setting the cards don't show (an advanced one,
+        // collapsed): the cards are filled again - with it in view.
+        let mut hidden_problem = false;
         for (i, (step_id, problems, notes)) in marks.into_iter().enumerate() {
             let Some(mut card) = cards.row_data(i) else {
                 continue;
@@ -4302,6 +4310,7 @@ impl PipelinesController {
                 continue;
             }
             let mut changed = false;
+            let mut seen: Vec<String> = Vec::new();
             // The settings, and the copies a module card's sections and
             // tables show (see `card_layout`).
             let mut lists = vec![card.parameters.clone(), card.advanced_parameters.clone()];
@@ -4314,6 +4323,7 @@ impl PipelinesController {
                     let Some(mut parameter) = list.row_data(k) else {
                         continue;
                     };
+                    seen.push(parameter.name.to_string());
                     let note = notes
                         .get(parameter.name.as_str())
                         .cloned()
@@ -4329,6 +4339,12 @@ impl PipelinesController {
                     }
                 }
             }
+            hidden_problem |= notes.iter().any(|(name, note)| {
+                !note.problem.is_empty()
+                    && !seen
+                        .iter()
+                        .any(|shown| name == shown || name.starts_with(&format!("{shown}.")))
+            });
             refresh_section_problems(&card);
             let shown: Vec<(SharedString, bool, SharedString)> = card
                 .problems
@@ -4359,6 +4375,9 @@ impl PipelinesController {
             if changed {
                 cards.set_row_data(i, card);
             }
+        }
+        if hidden_problem {
+            self.sync_steps_of_selected_pipeline_to_slint(pipeline_id, false);
         }
     }
 
@@ -5510,7 +5529,10 @@ impl PipelinesController {
             total_enabled_across_all,
         ): (String, String, Vec<StepData>, i32, i32, i32) = {
             let project = self.app_state.get_project();
-            let measurements = evanalyzer_app::settings_of::measurement_choices(&project);
+            let measurements = match &open_module {
+                Some(key) => evanalyzer_app::settings_of::module_measurement_choices(&project, key),
+                None => evanalyzer_app::settings_of::measurement_choices(&project),
+            };
             let total_enabled_across_all = project
                 .pipelines
                 .iter()
@@ -5860,7 +5882,16 @@ impl PipelinesController {
                         let (advanced_defs, basic_defs): (Vec<ParameterDef>, Vec<ParameterDef>) =
                             filter_for_display(d.parameters, show_advanced)
                                 .into_iter()
-                                .partition(|p| p.advanced);
+                                // An advanced setting with a problem stays
+                                // in view: the problem is shown at it.
+                                .partition(|p| {
+                                    let inside = format!("{}.", p.name);
+                                    p.advanced
+                                        && !notes.iter().any(|(name, note)| {
+                                            !note.problem.is_empty()
+                                                && (*name == p.name || name.starts_with(&inside))
+                                        })
+                                });
 
                         let convert = |p: ParameterDef| -> CommandParameter {
                             let p_name = p.name.clone();
@@ -9216,7 +9247,8 @@ mod tests {
                 .row_data(0)
                 .unwrap()
                 .advanced_count,
-            2
+            3,
+            "unit, value source and the measurement's ID"
         );
 
         panel.invoke_toggle_advanced(panel.get_active_commands().row_data(0).unwrap().id);
@@ -13588,7 +13620,31 @@ mod tests {
             panel.get_open_module_values(),
             "Only this step uses this module - changes reach no other step"
         );
-        assert_eq!(class_of(1), "2");
+        // Without a problem the class mapping is an advanced setting.
+        assert!(
+            !ui_names(&panel.get_active_commands().row_data(1).unwrap().parameters)
+                .contains(&"class_mapping".to_string())
+        );
+        panel.invoke_toggle_advanced(panel.get_active_commands().row_data(1).unwrap().id);
+        drain_ui_queue();
+        let advanced = panel
+            .get_active_commands()
+            .row_data(1)
+            .unwrap()
+            .advanced_parameters;
+        let mapping = advanced
+            .iter()
+            .find(|p| p.name == "class_mapping")
+            .expect("the class mapping among the advanced settings");
+        let class = mapping
+            .group_items
+            .row_data(0)
+            .unwrap()
+            .fields
+            .iter()
+            .find(|f| f.name == "object_class")
+            .map(|f| f.value.to_string());
+        assert_eq!(class.as_deref(), Some("2"), "the module's default");
     }
 
     fn section_views(ui: &AppWindow, step: usize) -> Vec<SectionView> {

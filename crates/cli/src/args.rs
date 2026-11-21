@@ -35,11 +35,18 @@ pub enum ProjectSubCommand {
     New(ProjectNewArgs),
     /// Print a project's images, classes and pipelines
     Info(ProjectInfoArgs),
-    /// Check a project as a run would
+    /// Check a project as a run would, or templates as the app uses them
     ///
-    /// Its images on disk, its pipelines and modules as the editor checks
-    /// them, and the channels the pipelines read against the images'.
-    /// Warnings are printed; errors and missing images fail.
+    /// A project (.evaproj): its images on disk, its pipelines and modules
+    /// as the editor checks them, and the channels the pipelines read
+    /// against the images'. Warnings are printed; errors and missing images
+    /// fail.
+    ///
+    /// A project template (.evatemplate), a library module (.evamodule) or
+    /// a folder of them: each made into a project as the app does (a module
+    /// used twice and inside another module, with its default values),
+    /// checked as the editor checks it, its run's job made - and with
+    /// --image a preview run on that image. Fails if one isn't usable.
     Validate(ValidateArgs),
     /// Write a project's methods paragraph and citations (Markdown)
     Cite(CiteArgs),
@@ -169,9 +176,14 @@ pub struct ProjectNewArgs {
 
 #[derive(Args)]
 pub struct ValidateArgs {
-    /// Project file (.evaproj) to validate
+    /// Project file (.evaproj), template (.evatemplate), module
+    /// (.evamodule) or a folder of templates and modules to validate
     #[arg(long)]
     pub project: PathBuf,
+
+    /// Templates and modules: an image to run a preview of each on
+    #[arg(long)]
+    pub image: Option<PathBuf>,
 
     /// Check the project with a step's setting changed (repeatable)
     ///

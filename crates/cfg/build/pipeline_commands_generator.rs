@@ -1983,7 +1983,9 @@ fn leaf_param_def_literal(
     } else {
         1.0_f32
     };
-    let advanced = meta.visibility.is_advanced();
+    // A measurement step's ID is filled in by itself: only for those who
+    // want another name.
+    let advanced = meta.visibility.is_advanced() || meta.measurement_id.is_some();
     Some(format!(
         "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: {param_type}, options: {options_expr}, min: {min:.1}f32, max: {max:.1}f32, step: {step:.4}f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: {option_advanced_expr}, section: String::new() }}",
     ))

@@ -44,7 +44,19 @@ pub struct ExpandedCommand {
     /// The module uses the command belongs to, outermost first - each
     /// ends after its last command (see [`ScopeCounter::end_of`]).
     pub uses: Vec<UseId>,
+    /// Where the command is inside its module step: the ids of the steps
+    /// leading to it (a nested module's, then its step's, ...) - empty for a
+    /// command step of the pipeline.
+    pub path: Vec<StepId>,
     pub command: PipelineCommand,
+}
+
+/// What names a module use's measurements (see `measurement_names`): its
+/// module and the object class it makes - its first class parameter.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UseNaming {
+    pub module: String,
+    pub class: Option<ObjectClass>,
 }
 
 /// One use of a module in a job, numbered at expansion.
@@ -72,6 +84,7 @@ pub enum UseEnd {
 pub struct ScopeCounter {
     last: u32,
     ends: BTreeMap<UseId, UseEnd>,
+    naming: BTreeMap<UseId, UseNaming>,
 }
 
 impl ScopeCounter {
@@ -85,6 +98,11 @@ impl ScopeCounter {
     /// What goes when use `id` ends.
     pub fn end_of(&self, id: UseId) -> Option<&UseEnd> {
         self.ends.get(&id)
+    }
+
+    /// What names use `id`'s measurements.
+    pub fn naming_of(&self, id: UseId) -> Option<&UseNaming> {
+        self.naming.get(&id)
     }
 }
 
@@ -152,6 +170,7 @@ pub fn expand_step_breaking_at(
                 step_id: step.id,
                 scope: Scope::Global,
                 uses: Vec::new(),
+                path: Vec::new(),
                 command: command.clone(),
             }])
         }
@@ -172,24 +191,28 @@ pub fn expand_step_breaking_at(
                 None,
                 &mut Vec::new(),
                 &mut Vec::new(),
+                &mut Vec::new(),
                 inner,
             )?;
             let last = commands.len().saturating_sub(1);
             Ok(commands
                 .into_iter()
                 .enumerate()
-                .map(|(i, (scope, uses, command, target))| ExpandedCommand {
-                    step_id: if target {
-                        StepId::INNER_BREAKPOINT
-                    } else if i == last {
-                        step.id
-                    } else {
-                        StepId::UNASSIGNED
+                .map(
+                    |(i, (scope, uses, path, command, target))| ExpandedCommand {
+                        step_id: if target {
+                            StepId::INNER_BREAKPOINT
+                        } else if i == last {
+                            step.id
+                        } else {
+                            StepId::UNASSIGNED
+                        },
+                        scope,
+                        uses,
+                        path,
+                        command,
                     },
-                    scope,
-                    uses,
-                    command,
-                })
+                )
                 .collect())
         }
     }
@@ -212,7 +235,8 @@ fn only_inside_slot(slot: u64) -> InternalErrors {
 /// with the scope it runs in and the uses it belongs to. `around` is the
 /// frame of the use in the pipeline this one is nested in - `None` for that
 /// use itself, which gets a new scope from `scopes`. `open` holds the keys
-/// of the modules being expanded around this one, `uses` their uses.
+/// of the modules being expanded around this one, `uses` their uses,
+/// `path` the steps leading to this one (see [`ExpandedCommand::path`]).
 /// `target`: the path to a breakpoint's step inside this module (see
 /// [`expand_step_breaking_at`]) - its command is marked `true`.
 #[allow(clippy::type_complexity)]
@@ -223,8 +247,9 @@ fn expand_instance(
     around: Option<&mut Frame>,
     open: &mut Vec<String>,
     uses: &mut Vec<UseId>,
+    path: &mut Vec<StepId>,
     target: Option<&[StepId]>,
-) -> Result<Vec<(Scope, Vec<UseId>, PipelineCommand, bool)>, InternalErrors> {
+) -> Result<Vec<(Scope, Vec<UseId>, Vec<StepId>, PipelineCommand, bool)>, InternalErrors> {
     let raw = definition_of(instance, definitions)?;
     if open.contains(&instance.key) {
         return Err(module_error(&instance.key, "contains itself".into()));
@@ -262,6 +287,15 @@ fn expand_instance(
     };
 
     let steps = steps_with_values(instance, &definition)?;
+    if let Some(&id) = uses.last() {
+        scopes.naming.insert(
+            id,
+            UseNaming {
+                module: instance.key.clone(),
+                class: naming_class(instance, &definition, &steps, definitions),
+            },
+        );
+    }
 
     open.push(instance.key.clone());
     let mut commands = Vec::new();
@@ -288,7 +322,15 @@ fn expand_instance(
                     ));
                 }
                 let hit = target == Some(&[step.id][..]);
-                commands.push((frame.scope, uses.clone(), command.clone(), hit))
+                path.push(step.id);
+                commands.push((
+                    frame.scope,
+                    uses.clone(),
+                    path.clone(),
+                    command.clone(),
+                    hit,
+                ));
+                path.pop();
             }
             StepContent::Module(inner) => {
                 // The path goes on into this module - or ends at it: then
@@ -297,6 +339,7 @@ fn expand_instance(
                     .and_then(|path| path.split_first())
                     .filter(|(first, _)| **first == step.id)
                     .map(|(_, rest)| rest);
+                path.push(step.id);
                 let mut nested = expand_instance(
                     inner,
                     definitions,
@@ -304,12 +347,14 @@ fn expand_instance(
                     Some(&mut *frame),
                     open,
                     uses,
+                    path,
                     rest.filter(|rest| !rest.is_empty()),
                 )?;
+                path.pop();
                 if rest.is_some_and(|rest| rest.is_empty())
                     && let Some(last) = nested.last_mut()
                 {
-                    last.3 = true;
+                    last.4 = true;
                 }
                 commands.extend(nested);
             }
@@ -318,6 +363,52 @@ fn expand_instance(
     open.pop();
     uses.pop();
     Ok(commands)
+}
+
+/// The object class a use of `definition` makes: the value of its first
+/// parameter bound to an object class setting (of a list the first class) -
+/// `steps` are the definition's steps with the use's values.
+fn naming_class(
+    instance: &ModuleInstance,
+    definition: &ModuleDefinition,
+    steps: &[PipelineStepSettings],
+    definitions: &[ModuleDefinition],
+) -> Option<ObjectClass> {
+    definition.parameters.iter().find_map(|parameter| {
+        let binding = parameter.bindings.first()?;
+        let step = steps.iter().find(|s| s.id == binding.step)?;
+        let param_type = match &step.content {
+            StepContent::Command(command) => {
+                find_param(&crate::algos::command_parameters(command), &binding.param)?
+                    .param_type
+                    .clone()
+            }
+            StepContent::Module(inner) => {
+                module_parameters(inner, definitions)
+                    .ok()?
+                    .into_iter()
+                    .find(|p| p.name == binding.param)?
+                    .param_type
+            }
+        };
+        if !matches!(param_type, ParamType::ObjClass | ParamType::MultiObjClass) {
+            return None;
+        }
+        first_class_in(own_value(instance, parameter))
+    })
+}
+
+/// The first object class in `value` (`"16"`, `"L1"`, a list of them).
+fn first_class_in(value: &ParamValue) -> Option<ObjectClass> {
+    match value {
+        ParamValue::Text(text) => text
+            .split(',')
+            .find_map(|t| ObjectClass::from_text(t.trim()))
+            .filter(|c| *c != ObjectClass::Unset),
+        ParamValue::Int(n) => u32::try_from(*n).ok().map(ObjectClass::Global),
+        ParamValue::List(items) => items.iter().find_map(first_class_in),
+        _ => None,
+    }
 }
 
 /// Refuses a module class `definition` uses without defining it - in a

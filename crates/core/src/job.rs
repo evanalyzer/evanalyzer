@@ -12,6 +12,7 @@ pub(crate) mod algos_from_config;
 mod algos_from_config_tests;
 pub(crate) mod job_executor;
 pub(crate) mod job_generator;
+pub mod measurement_names;
 pub mod modules;
 pub(crate) mod object_index;
 pub(crate) mod object_scratch;

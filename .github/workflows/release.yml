@@ -47,10 +47,11 @@ jobs:
     # pattern means the example images are never even fetched, not just
     # filtered out afterwards - the server never sends those blobs.
     #
-    # Every fetched template is also checked against this repo's current
-    # ProjectTemplate/ModuleTemplate types before anything is uploaded -
-    # see crates/cfg/examples/check_templates.rs for why that's stronger
-    # than a generic JSON Schema check. A failure here fails this job, which
+    # Every fetched template is also checked to be usable with this repo's
+    # code before anything is uploaded - readable, made into a project as
+    # the app does, checked as the editor checks it, its run's job made and
+    # a preview run on the fixture image (see
+    # crates/app/examples/check_templates.rs). A failure here fails this job, which
     # blocks every build-* job below (needs: [templates]) and the release
     # itself - no need for a separate scheduled check, since "before the
     # project is built and before it's released" is exactly this point.
@@ -96,15 +97,17 @@ jobs:
 
       # Blocking for real releases. On a test tag (e.g. 0.1.0-test.11) a
       # failure is only reported (step below) and the builds still run.
-      - name: Check templates against the current schema
+      - name: Check templates are usable
         id: check_templates
         continue-on-error: ${{ startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-test.') }}
-        run: cargo run -p evanalyzer_cfg --example check_templates -- templates
+        run: >-
+          cargo run -p evanalyzer_app --example check_templates --
+          templates --image crates/core/tests/multi-channel-4D-series.ome.tif
 
       - name: Report template check failure (test tag - not blocking)
         if: steps.check_templates.outcome == 'failure'
         run: |
-          echo "::warning title=Template check failed::Some templates don't match the current schema (see the step above). Not blocking because ${GITHUB_REF_NAME} is a test tag."
+          echo "::warning title=Template check failed::Some templates aren't usable with this version (see the step above). Not blocking because ${GITHUB_REF_NAME} is a test tag."
           echo "### :warning: Template check failed (not blocking on test tag \`${GITHUB_REF_NAME}\`)" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4

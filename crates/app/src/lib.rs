@@ -40,7 +40,8 @@ pub mod object_shape {
 /// ones, and a Script step's `param`s (declared in its script).
 pub mod settings_of {
     pub use crate::workspace::measurement_choices::{
-        MeasurementChoice, measurement_choices, measurement_setting_text, show_measurement_choices,
+        MeasurementChoice, measurement_choices, measurement_setting_text,
+        module_measurement_choices, show_measurement_choices,
     };
     pub use evanalyzer_core::{
         HsvBounds, apply_command_param, command_parameters, declared_script_params,
@@ -73,6 +74,10 @@ pub mod modules {
         content_hash, insert_module_template, library_name, merge_module_definitions,
         modified_since_inserted, modules_used_by, project_copy, save_module_template,
         save_pipeline_as_module, update_available, update_from_library,
+    };
+    pub use crate::workspace::template_checks::{
+        TemplateCheck, check_module_template, check_project_template, check_template_file,
+        is_template_path, validate_templates,
     };
     pub use evanalyzer_core::module_parameters;
     pub use evanalyzer_core::module_steps_with_values;

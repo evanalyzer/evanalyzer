@@ -191,14 +191,17 @@ jobs:
     # Templates (`.evatemplate`/`.evamodule`) live in a separate repository
     # (evanalyzer/evanalyzer-templates), not this one - see release.yml's
     # "templates" job for how they're fetched/shipped. This checks every
-    # template there - not just the subset release.yml actually ships -
-    # still deserializes as ProjectTemplate/ModuleTemplate under this
-    # repo's current schema (crates/cfg/examples/check_templates.rs),
-    # catching a schema change breaking published templates as early as a
-    # push/PR here, rather than only at release time.
+    # template there - not just the subset release.yml actually ships - is
+    # still usable with this repo's code (crates/app/examples/check_templates.rs):
+    # readable, made into a project as the app does (a module used twice and
+    # inside another module), checked as the editor checks it, its run's job
+    # made and a preview run on the fixture image. A change here breaking
+    # published templates is caught as early as a push/PR, not only at
+    # release time.
     #
-    # `evanalyzer_cfg` has no native dependencies, so - like `fmt` - this
-    # doesn't need the libtorch/JRE downloads the `test` job pays for.
+    # The app crate builds DuckDB but neither the GUI nor libtorch (modules
+    # with AI steps get no preview), so this doesn't need the libtorch/JRE
+    # downloads the `test` job pays for.
     runs-on: ubuntu-latest
     container:
       image: joda001/evanalyzer-toolchain:0.3.1
@@ -222,8 +225,10 @@ jobs:
             https://github.com/evanalyzer/evanalyzer-templates.git evanalyzer-templates
           git -C evanalyzer-templates sparse-checkout set --no-cone '*.evatemplate' '*.evamodule'
 
-      - name: Check every template against the current schema
-        run: cargo run -p evanalyzer_cfg --example check_templates -- evanalyzer-templates
+      - name: Check every template is usable
+        run: >-
+          cargo run -p evanalyzer_app --example check_templates --
+          evanalyzer-templates --image crates/core/tests/multi-channel-4D-series.ome.tif
 
   licenses:
     # The About dialog's license list

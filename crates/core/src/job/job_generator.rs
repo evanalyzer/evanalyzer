@@ -15,6 +15,7 @@ use crate::{
     job::{
         algos_from_config::into_pipeline_step,
         job_executor::{JobExecutor, TILE_MERGE_PIPELINE_ID},
+        measurement_names::MeasurementNamer,
         modules::{ExpandedCommand, ScopeCounter, UseId, expand_step, expand_step_breaking_at},
         pipeline_step::PipelineStep,
     },
@@ -611,6 +612,9 @@ fn generate_job_from_project_settings_intenal(
         .map(|c| (c.global(), c.color))
         .collect();
 
+    // Names the measurements made inside module uses.
+    let mut namer = MeasurementNamer::new(config.classification.classes());
+
     // The images of skipped folders stay out of the run.
     let skipped = config.images.skipped_folders.clone();
     let is_skipped = |path: &Path| {
@@ -683,12 +687,7 @@ fn generate_job_from_project_settings_intenal(
         let mut roles = RoleTracker::new();
         for step in pipeline_setting.steps.iter().filter(|s| s.enabled) {
             // A module runs as its commands.
-            for ExpandedCommand {
-                step_id,
-                scope,
-                uses,
-                command,
-            } in step_commands(
+            let mut expanded = step_commands(
                 &pipeline_setting.name,
                 step,
                 &config.modules,
@@ -696,7 +695,16 @@ fn generate_job_from_project_settings_intenal(
                 breakpoint
                     .filter(|b| b.pipeline_id == pipeline_setting.id && b.step_id == step.id)
                     .map(|b| b.inner.as_slice()),
-            )? {
+            )?;
+            name_measurements(&mut namer, pipeline_setting, step, &mut expanded, &scopes)?;
+            for ExpandedCommand {
+                step_id,
+                scope,
+                uses,
+                command,
+                ..
+            } in expanded
+            {
                 // A Threshold without an ID measures nothing (one a script or
                 // another command runs) - no name to check.
                 let unmeasured =
@@ -864,6 +872,25 @@ fn step_commands(
     })
 }
 
+/// Names the measurements `expanded` (pipeline step `step`) makes inside
+/// module uses and points the settings picking them there.
+fn name_measurements(
+    namer: &mut MeasurementNamer,
+    pipeline: &PipelineSettings,
+    step: &PipelineStepSettings,
+    expanded: &mut [ExpandedCommand],
+    scopes: &ScopeCounter,
+) -> Result<(), InternalErrors> {
+    namer
+        .name_step(pipeline.id, step.id, expanded, scopes)
+        .map_err(|e| {
+            InternalErrors::InvalidArgument(format!(
+                "Pipeline \"{}\", step {}: {e}",
+                pipeline.name, step.id
+            ))
+        })
+}
+
 /// The enabled dataset steps of `config`'s enabled pipelines, in pipeline
 /// and step order. Image steps aren't built, so an image step this build
 /// can't run (e.g. an AI step in a build without the `libtorch` feature) doesn't matter.
@@ -873,11 +900,13 @@ pub(crate) fn dataset_steps_from_project_settings(
     let mut steps = Vec::new();
     // Dataset steps have no scope: they only use project classes.
     let mut scopes = ScopeCounter::default();
+    let mut namer = MeasurementNamer::new(config.classification.classes());
     for pipeline in config.pipelines.iter().filter(|p| p.enabled) {
         for step in pipeline.steps.iter().filter(|s| s.enabled) {
-            for ExpandedCommand { command, .. } in
-                step_commands(&pipeline.name, step, &config.modules, &mut scopes, None)?
-            {
+            let mut expanded =
+                step_commands(&pipeline.name, step, &config.modules, &mut scopes, None)?;
+            name_measurements(&mut namer, pipeline, step, &mut expanded, &scopes)?;
+            for ExpandedCommand { command, .. } in expanded {
                 if !matches!(command.category(), CommandCategory::Dataset) {
                     continue;
                 }

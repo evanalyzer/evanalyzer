@@ -17,6 +17,7 @@ use crate::workspace::module_insights::resolved_commands;
 use evanalyzer_cfg::core_types::measurement_label;
 use evanalyzer_cfg::settings::parameter_def::{ParamType, ParameterDef};
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+use evanalyzer_cfg::settings::pipeline_settings::StepContent;
 
 /// One measurement to pick.
 #[derive(Clone, Debug, PartialEq)]
@@ -25,21 +26,70 @@ pub struct MeasurementChoice {
     pub key: String,
 }
 
-/// The measurements the project's steps make - every pipeline, steps in
-/// modules too - in the pipelines' order.
+/// The measurements a pipeline's step can pick - every pipeline's, steps in
+/// modules too - in the pipelines' order. One made inside a module use is
+/// shown by the name it has in a run (`threshold_evs_cy5 · …`) and
+/// stored as a reference to its step there (`use_reference`).
 pub fn measurement_choices(project: &ProjectWithRuntime) -> Vec<MeasurementChoice> {
+    let names = evanalyzer_core::measurement_names(project);
     let mut choices: Vec<MeasurementChoice> = Vec::new();
     for pipeline in &project.pipelines {
         for step in &pipeline.steps {
             for resolved in resolved_commands(step, &project.modules) {
-                for info in evanalyzer_core::measurement_outputs(&resolved.command) {
-                    if !choices.iter().any(|c| c.key == info.key) {
+                let mut path = vec![step.id];
+                path.extend_from_slice(&resolved.steps);
+                let run_name = (!resolved.steps.is_empty())
+                    .then(|| {
+                        names
+                            .iter()
+                            .find(|n| n.pipeline == pipeline.id && n.path == path)
+                    })
+                    .flatten();
+                // Inside a module but not named: not in a run (disabled).
+                if !resolved.steps.is_empty() && run_name.is_none() {
+                    continue;
+                }
+                for mut info in evanalyzer_core::measurement_outputs(&resolved.command) {
+                    let key = match run_name {
+                        Some(named) => {
+                            info.step = named.name.clone();
+                            evanalyzer_core::use_reference(pipeline.id, &path, &info.key)
+                        }
+                        None => info.key.clone(),
+                    };
+                    if !choices.iter().any(|c| c.key == key) {
                         choices.push(MeasurementChoice {
                             label: measurement_label(&info),
-                            key: info.key,
+                            key,
                         });
                     }
                 }
+            }
+        }
+    }
+    choices
+}
+
+/// The measurements a step of module `key` can pick: its own steps'
+/// (stored by their keys in the module - each use means its own).
+pub fn module_measurement_choices(
+    project: &ProjectWithRuntime,
+    key: &str,
+) -> Vec<MeasurementChoice> {
+    let Some(definition) = project.modules.iter().find(|d| d.key == key) else {
+        return Vec::new();
+    };
+    let mut choices: Vec<MeasurementChoice> = Vec::new();
+    for step in definition.steps.iter().filter(|s| s.enabled) {
+        let StepContent::Command(command) = &step.content else {
+            continue;
+        };
+        for info in evanalyzer_core::measurement_outputs(command) {
+            if !choices.iter().any(|c| c.key == info.key) {
+                choices.push(MeasurementChoice {
+                    label: measurement_label(&info),
+                    key: info.key,
+                });
             }
         }
     }

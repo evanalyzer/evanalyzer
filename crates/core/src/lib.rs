@@ -117,8 +117,11 @@ pub use crate::job::job_generator::pipeline_classes;
 pub use crate::job::job_generator::{
     PreviewOutput, generate_preview_job_from_project_settings, generate_preview_job_with_breakpoint,
 };
+pub use crate::job::measurement_names::{
+    MeasurementNamer, UseMeasurement, measurement_names, use_reference,
+};
 pub use crate::job::modules::{
-    ExpandedCommand, ScopeCounter, UseEnd, UseId, expand_step, module_parameters,
+    ExpandedCommand, ScopeCounter, UseEnd, UseId, UseNaming, expand_step, module_parameters,
     module_steps_with_values, own_numbers, renumbered, set_module_parameter, value_from_text,
 };
 pub use crate::job::pipeline_step::PipelineStep;

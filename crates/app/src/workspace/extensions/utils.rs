@@ -179,24 +179,35 @@ pub fn assign_step_ids(steps: &mut [PipelineStepSettings]) -> usize {
 }
 
 /// Gives each measurement step without an ID the next free one
-/// ("pearson_01", …) - in the pipelines and the module definitions: one set
-/// of names for the project. A name already given stays, also one used
-/// twice: the checks report that (`check_project`). How many got one.
+/// ("pearson_01", …) - where it's written: among the pipelines' own steps
+/// (one set of names for the project), and in each module definition (its
+/// own set - a run names a module's measurements per use, see
+/// `evanalyzer_core::measurement_names`). A name already given stays, also
+/// one used twice: the checks report that (`check_project`). How many got
+/// one.
 pub fn assign_measurement_ids(project: &mut ProjectSettings) -> usize {
-    let mut names: Vec<(&'static str, &mut String)> = project
+    fn names(steps: &mut [PipelineStepSettings]) -> Vec<(&'static str, &mut String)> {
+        steps
+            .iter_mut()
+            .filter_map(|step| match &mut step.content {
+                StepContent::Command(command) => {
+                    let prefix = command.measurement_id_prefix()?;
+                    command.measurement_id_mut().map(|name| (prefix, name))
+                }
+                StepContent::Module(_) => None,
+            })
+            .collect()
+    }
+    let mut pipelines: Vec<(&'static str, &mut String)> = project
         .pipelines
         .iter_mut()
-        .flat_map(|p| p.steps.iter_mut())
-        .chain(project.modules.iter_mut().flat_map(|m| m.steps.iter_mut()))
-        .filter_map(|step| match &mut step.content {
-            StepContent::Command(command) => {
-                let prefix = command.measurement_id_prefix()?;
-                command.measurement_id_mut().map(|name| (prefix, name))
-            }
-            StepContent::Module(_) => None,
-        })
+        .flat_map(|p| names(&mut p.steps))
         .collect();
-    fill_measurement_ids(&mut names)
+    let mut filled = fill_measurement_ids(&mut pipelines);
+    for module in &mut project.modules {
+        filled += fill_measurement_ids(&mut names(&mut module.steps));
+    }
+    filled
 }
 
 /// The empty names of `names` (prefix, name) get the next free one of their
@@ -422,7 +433,8 @@ mod tests {
 
     use super::*;
 
-    /// In a project: the pipelines' measurement steps, then the modules'.
+    /// In a project: the pipelines' measurement steps from one set of
+    /// names, each module's from its own.
     #[test]
     fn a_projects_measurement_steps_without_an_id_get_one() {
         use evanalyzer_cfg::core_types::PipelineId;
@@ -467,7 +479,7 @@ mod tests {
             .chain(&project.modules[0].steps)
             .map(name)
             .collect();
-        assert_eq!(names, ["coloc_02", "coloc_01", "coloc_03"]);
+        assert_eq!(names, ["coloc_02", "coloc_01", "coloc_01"]);
     }
 
     /// Empty names get the next free number of their kind; names already

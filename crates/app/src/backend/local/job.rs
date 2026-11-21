@@ -202,6 +202,146 @@ mod tests {
         );
     }
 
+    /// A preview of the fixture image's first plane: its measurements and
+    /// why it was left out (if it was).
+    fn preview_plane(
+        settings: ProjectSettings,
+        dir: &tempfile::TempDir,
+    ) -> evanalyzer_cfg::core_types::PipelineMeasurements {
+        let job = start_preview(PreviewRequest {
+            settings,
+            project_path: dir.path().to_path_buf(),
+            viewport: PreviewViewport {
+                offset_x: 0.0,
+                offset_y: 0.0,
+                viewport_width: 256.0,
+                viewport_height: 256.0,
+                zoom: 1.0,
+            },
+            breakpoint: None,
+            prediction: None,
+            max_visible_tiles: None,
+            breakpoint_tiles: 1,
+            whole_image: false,
+        })
+        .unwrap();
+        drain(&job);
+        let output = job.wait().unwrap();
+        let mut planes = output
+            .preview_measurements
+            .expect("a preview's measurements");
+        assert_eq!(planes.len(), 1);
+        planes.remove(0)
+    }
+
+    /// A detection module with a Threshold - its ID empty, as in a library
+    /// file - used in a pipeline, twice inside another module, and again
+    /// with the same class: each use measures under a name of its own, an
+    /// Exclude rule in the module picks its own use's threshold, one in the
+    /// pipeline the threshold of a use inside the other module.
+    #[test]
+    fn a_module_used_several_times_and_nested_measures_once_per_use() {
+        use evanalyzer_cfg::settings::modules::ModuleDefinition;
+        use evanalyzer_cfg::settings::pipeline_settings::PipelineSettings;
+        let (dir, mut settings) = project_with_fixture_image();
+        let meta =
+            serde_json::to_value(evanalyzer_cfg::settings::meta_data::MetaData::default()).unwrap();
+        let ev: ModuleDefinition = serde_json::from_value(serde_json::json!({
+            "key": "EV",
+            "meta": meta.clone(),
+            "steps": [
+                {"id": 4, "enabled": true, "command": {"type": "THRESHOLD", "thresholds": [
+                    {"method": {"type": "MANUAL"}, "minThreshold": 100.0,
+                     "maxThreshold": 65535.0, "unit": "BIT", "segmentationClass": 1,
+                     "valueSource": "ACTUAL_IMAGE"}]}},
+                {"id": 5, "enabled": true, "command": {"type": "CONNECTED_COMPONENTS", "minSize": 1}},
+                {"id": 6, "enabled": true, "command": {"type": "EXTRACT_OBJECTS",
+                    "maxObjectsBeforeFail": 1000000,
+                    "classMapping": [{"segmentationClass": 1, "objectClass": {"GLOBAL": 1}}]}},
+                {"id": 8, "enabled": true, "command": {"type": "EXCLUDE_IMAGE",
+                    "excludeWhen": "ANY_RULE",
+                    "rules": [{"measurement": "threshold_01/threshold_1",
+                               "comparison": "ABOVE", "value": 1.0e12}]}}
+            ],
+            "parameters": [{"key": "evs", "label": "EVs", "default": "1",
+                "bindings": [{"step": 6, "param": "class_mapping.0.object_class"}]}]
+        }))
+        .unwrap();
+        let coloc: ModuleDefinition = serde_json::from_value(serde_json::json!({
+            "key": "COLOC",
+            "meta": meta,
+            "steps": [
+                {"id": 1, "enabled": true, "module": {"key": "EV", "values": {"evs": "15"}}},
+                {"id": 2, "enabled": true, "module": {"key": "EV", "values": {"evs": "16"}}}
+            ],
+            "parameters": []
+        }))
+        .unwrap();
+        let pipeline: PipelineSettings = serde_json::from_value(serde_json::json!({
+            "id": 1, "name": "EVs", "imageSource": {"CHANNEL": 0}, "enabled": true,
+            "steps": [
+                {"id": 1, "enabled": true, "module": {"key": "EV", "values": {}}},
+                {"id": 2, "enabled": true, "module": {"key": "COLOC", "values": {}}},
+                {"id": 3, "enabled": true, "module": {"key": "EV", "values": {}}},
+                {"id": 4, "enabled": true, "command": {"type": "EXCLUDE_IMAGE",
+                    "excludeWhen": "ANY_RULE",
+                    "rules": [{"measurement": "@1.2.2.4:threshold_01/threshold_1",
+                               "comparison": "BELOW", "value": 1.0e12}]}}
+            ]
+        }))
+        .unwrap();
+        settings.modules = vec![ev, coloc];
+        settings.pipelines = vec![pipeline];
+        for (id, name) in [(1, "EVs"), (15, "EVs CY3"), (16, "EVs CY5")] {
+            if let Some(class) = settings
+                .classification
+                .classes_mut()
+                .iter_mut()
+                .find(|c| c.id == id)
+            {
+                class.name = name.into();
+            } else {
+                settings.classification.classes_mut().push(
+                    evanalyzer_cfg::settings::classification_settings::Class {
+                        id,
+                        name: name.into(),
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+        // As loading a project does: the module's Threshold gets its ID.
+        crate::workspace::extensions::utils::assign_measurement_ids(&mut settings);
+        let problems = crate::workspace::module_checks::check_project(&settings);
+        assert!(
+            problems
+                .iter()
+                .all(|p| p.severity != crate::workspace::module_checks::Severity::Error),
+            "{problems:?}"
+        );
+
+        let plane = preview_plane(settings, &dir);
+        let mut steps: Vec<&str> = plane
+            .measurements
+            .iter()
+            .map(|m| m.info.step.as_str())
+            .collect();
+        steps.dedup();
+        assert_eq!(
+            steps,
+            [
+                "threshold_evs",
+                "threshold_evs_cy3",
+                "threshold_evs_cy5",
+                "threshold_evs_2"
+            ]
+        );
+        // The pipeline's rule picked the second use inside Coloc.
+        let reason = plane.excluded.expect("left out by the pipeline's rule");
+        assert!(reason.contains("threshold_evs_cy5"), "{reason}");
+        assert!(!reason.contains("threshold_evs_cy3"), "{reason}");
+    }
+
     /// The tiles a preview of the fixture image runs.
     fn tiles_run(whole_image: bool, max_visible_tiles: Option<u32>) -> usize {
         let (dir, settings) = project_with_fixture_image();

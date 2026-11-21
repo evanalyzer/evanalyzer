@@ -30,6 +30,7 @@ pub mod module_library;
 pub mod plate_layout;
 pub(crate) mod project_owner;
 pub mod settings;
+pub mod template_checks;
 pub mod templates;
 
 pub use frontend::Frontend;

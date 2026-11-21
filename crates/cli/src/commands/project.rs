@@ -100,6 +100,20 @@ pub fn run(args: ProjectInfoArgs, backend: &dyn Backend) -> Result<(), InternalE
 /// editor checks them, and the channels the pipelines read against the
 /// images'. Warnings are printed; errors (and missing images) fail.
 pub fn run_validate(args: ValidateArgs, backend: &dyn Backend) -> Result<(), InternalErrors> {
+    // Templates and modules: usable as the app uses them.
+    if evanalyzer_app::modules::is_template_path(&args.project) {
+        if !args.set.is_empty() {
+            return Err(InternalErrors::InvalidArgument(
+                "--set only changes a project (.evaproj), not templates".into(),
+            ));
+        }
+        return evanalyzer_app::modules::validate_templates(&args.project, args.image.as_deref());
+    }
+    if args.image.is_some() {
+        return Err(InternalErrors::InvalidArgument(
+            "--image is for templates and modules - a project validates its own images".into(),
+        ));
+    }
     let mut project = load_project(backend.files(), &args.project)?;
     let changes = crate::overrides::apply_overrides(&mut project, &args.set)?;
     let settings = &project.settings;
@@ -338,6 +352,7 @@ mod tests {
 
         let result = run_validate(ValidateArgs {
             project: file.path.clone(),
+            image: None,
             set: Vec::new(),
         });
 
@@ -355,6 +370,7 @@ mod tests {
 
         let result = run_validate(ValidateArgs {
             project: file.path.clone(),
+            image: None,
             set: Vec::new(),
         });
 
@@ -395,6 +411,7 @@ mod tests {
     fn validate_with(file: &TempProjectFile, set: &[&str]) -> Result<(), InternalErrors> {
         run_validate(ValidateArgs {
             project: file.path.clone(),
+            image: None,
             set: set.iter().map(|s| s.to_string()).collect(),
         })
     }

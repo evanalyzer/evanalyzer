@@ -341,69 +341,113 @@ fn check_dataset_classes(project: &ProjectSettings) -> Vec<ModuleProblem> {
     problems
 }
 
-/// The measurement steps' IDs in what runs: each valid, none twice (a
-/// name starts its measurements' keys). A module used twice names its
-/// measurement the same both times unless the name is its parameter.
+/// The measurement steps' IDs: each valid, none twice where it's written -
+/// among the pipelines' own steps, or in one module definition (a name
+/// starts its measurements' keys). A module's measurements are named per
+/// use in a run (`measurement_names`) - those names mustn't be a pipeline
+/// step's ID either.
 fn check_measurement_ids(project: &ProjectSettings) -> Vec<ModuleProblem> {
     let mut problems = Vec::new();
-    // (name, its step, where it is as a message says it, the module's key)
-    let mut uses: Vec<(String, (PipelineId, StepId), String, Option<String>)> = Vec::new();
+    let invalid = |name: &str| {
+        format!(
+            "The measurement ID “{name}” may only have letters, digits and _ - it names the \
+             measurements' columns"
+        )
+    };
+    // The pipelines' own steps and the names of the module uses' measurements
+    // in a run: (name, its step, where it is as a message says it).
+    let mut names: Vec<(String, (PipelineId, StepId), String)> = Vec::new();
     for pipeline in project.pipelines.iter().filter(|p| p.enabled) {
-        for (position, step) in pipeline.steps.iter().enumerate() {
-            let module = match &step.content {
-                StepContent::Module(instance) => Some(instance.key.clone()),
-                StepContent::Command(_) => None,
+        for (position, step) in pipeline.steps.iter().enumerate().filter(|(_, s)| s.enabled) {
+            let StepContent::Command(command) = &step.content else {
+                continue;
             };
-            for command in resolved_commands(step, &project.modules) {
-                let Some(name) = command.command.measurement_id() else {
-                    continue;
-                };
-                let at = (pipeline.id, step.id);
-                if !is_valid_measurement_id(name) {
-                    problems.push(ModuleProblem::error(
-                        None,
-                        Some(at),
-                        format!(
-                            "The measurement ID “{name}” may only have letters, digits and _ - \
-                             it names the measurements' columns"
-                        ),
-                    ));
-                }
-                let place = format!("step {} of “{}”", position + 1, pipeline.name);
-                uses.push((name.to_string(), at, place, module.clone()));
+            let Some(name) = command.measurement_id().filter(|n| measures(command, n)) else {
+                continue;
+            };
+            let at = (pipeline.id, step.id);
+            if !is_valid_measurement_id(name) {
+                problems.push(ModuleProblem::error(None, Some(at), invalid(name)));
             }
+            let place = format!("step {} of “{}”", position + 1, pipeline.name);
+            names.push((name.to_string(), at, place));
         }
     }
-    for group in same_names(&uses, |(name, ..)| name.as_str()) {
+    for named in evanalyzer_core::measurement_names(project) {
+        let Some(pipeline) = project.pipelines.iter().find(|p| p.id == named.pipeline) else {
+            continue;
+        };
+        let Some(&step) = named.path.first() else {
+            continue;
+        };
+        let position = pipeline
+            .steps
+            .iter()
+            .position(|s| s.id == step)
+            .unwrap_or(0);
+        let place = format!("the module in step {} of “{}”", position + 1, pipeline.name);
+        names.push((named.name, (named.pipeline, step), place));
+    }
+    for group in same_names(&names, |(name, ..)| name.as_str()) {
         for &i in &group {
-            let (name, at, _, module) = &uses[i];
+            let (name, at, _) = &names[i];
             let others: Vec<&str> = group
                 .iter()
                 .filter(|&&j| j != i)
-                .map(|&j| uses[j].2.as_str())
+                .map(|&j| names[j].2.as_str())
                 .collect();
-            let message = match module {
-                Some(key)
-                    if group
-                        .iter()
-                        .any(|&j| j != i && uses[j].3.as_ref() == Some(key)) =>
-                {
-                    format!(
-                        "The module “{key}” is used more than once and names its measurement \
-                         “{name}” each time - make the name a module parameter, so each use \
-                         gets its own"
-                    )
-                }
-                _ => format!(
-                    "The measurement ID “{name}” is also used by {} - each measurement \
-                     step needs its own",
+            problems.push(ModuleProblem::error(
+                None,
+                Some(*at),
+                format!(
+                    "The measurement ID “{name}” is also used by {} - each measurement step \
+                     needs its own",
                     others.join(", ")
                 ),
+            ));
+        }
+    }
+    // Each module definition: its own steps' IDs.
+    for definition in &project.modules {
+        let mut own: Vec<(String, StepId)> = Vec::new();
+        for step in &definition.steps {
+            let StepContent::Command(command) = &step.content else {
+                continue;
             };
-            problems.push(ModuleProblem::error(None, Some(*at), message));
+            let Some(name) = command.measurement_id().filter(|n| measures(command, n)) else {
+                continue;
+            };
+            if !is_valid_measurement_id(name) {
+                problems.push(ModuleProblem::error(
+                    Some(&definition.key),
+                    None,
+                    invalid(name),
+                ));
+            }
+            own.push((name.to_string(), step.id));
+        }
+        for group in same_names(&own, |(name, _)| name.as_str()) {
+            let steps: Vec<String> = group.iter().map(|&i| own[i].1.to_string()).collect();
+            problems.push(ModuleProblem::error(
+                Some(&definition.key),
+                None,
+                format!(
+                    "The module “{}” has the measurement ID “{}” more than once (its steps {}) - \
+                     each measurement step needs its own",
+                    definition.key,
+                    own[group[0]].0,
+                    steps.join(", ")
+                ),
+            ));
         }
     }
     problems
+}
+
+/// Whether `command`, with measurement ID `name`, measures: a Threshold
+/// without an ID measures nothing.
+fn measures(command: &PipelineCommand, name: &str) -> bool {
+    !(name.is_empty() && matches!(command, PipelineCommand::Threshold(_)))
 }
 
 /// The groups (indexes into `items`) whose names are the same, case aside -
@@ -1336,10 +1380,10 @@ mod tests {
         assert!(messages_at(&problems, 3)[0].contains("may only have letters, digits and _"));
     }
 
-    /// A module used twice names its measurement the same both times - the
-    /// message says how each use gets its own.
+    /// A module used twice measures under one ID in its definition - each
+    /// use names it itself in a run, so that's fine.
     #[test]
-    fn a_module_measuring_used_twice_is_told_to_make_the_name_a_parameter() {
+    fn a_module_measuring_used_twice_is_no_problem() {
         let mut project = ProjectSettings::default();
         project.modules.push(ModuleDefinition {
             key: "COLOC".into(),
@@ -1354,14 +1398,34 @@ mod tests {
             .push(nuclei(vec![uses(4, "COLOC", &[]), uses(9, "COLOC", &[])]));
         let problems = check_project(&project);
         for at in [4, 9] {
-            let [message] = messages_at(&problems, at)[..] else {
-                panic!("step {at}: one problem, got {problems:?}");
-            };
-            assert!(
-                message.contains("make the name a module parameter"),
-                "{message}"
-            );
+            assert!(messages_at(&problems, at).is_empty(), "{problems:?}");
         }
+    }
+
+    /// In one module definition each measurement step needs its own ID.
+    #[test]
+    fn a_module_with_one_measurement_id_twice_is_told() {
+        let mut project = ProjectSettings::default();
+        project.modules.push(ModuleDefinition {
+            key: "COLOC".into(),
+            meta: Default::default(),
+            classes: vec![],
+            steps: vec![step(1, pearson("coloc")), step(2, pearson("COLOC"))],
+            parameters: vec![],
+            origin: None,
+        });
+        let problems = check_project(&project);
+        let messages: Vec<&str> = problems
+            .iter()
+            .filter(|p| p.module.as_deref() == Some("COLOC"))
+            .map(|p| p.message.as_str())
+            .collect();
+        assert_eq!(messages.len(), 1, "{problems:?}");
+        assert!(
+            messages[0].contains("more than once (its steps 1, 2)"),
+            "{}",
+            messages[0]
+        );
     }
 
     /// Module SMOOTH (a blur, its kernel size parameter 1) used by pipeline 1.
