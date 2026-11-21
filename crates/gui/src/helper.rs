@@ -10,6 +10,7 @@
 pub mod color_generators;
 pub(crate) mod delayed_indicator;
 pub(crate) mod markdown;
+pub mod number_format;
 pub mod size_formater;
 pub(crate) mod ui_thread;
 pub(crate) mod worker_supervisor;

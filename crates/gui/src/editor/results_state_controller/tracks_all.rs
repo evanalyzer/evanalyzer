@@ -215,8 +215,6 @@ impl Shown {
         };
         match (TrackMotion::VALUES[i].0, TrackMotion::VALUES[i].2) {
             ("turning", _) => format!("{value:+.1}"),
-            (_, MotionKind::Angle) => format!("{value:.1}"),
-            (_, MotionKind::Ratio) => format!("{value:.2}"),
             _ => format_chart_value(value),
         }
     }
@@ -779,7 +777,7 @@ impl ResultsStateController {
                 track
                     .motion
                     .msd_alpha
-                    .map_or_else(|| "–".to_string(), |a| format!("{a:.2}")),
+                    .map_or_else(|| "–".to_string(), format_chart_value),
                 first.0,
                 last.0
             ),
@@ -816,7 +814,7 @@ impl ResultsStateController {
             speed: with_unit(shown.speed(&track), shown.speed_unit()).into(),
             straightness: track
                 .straightness()
-                .map_or_else(|| "–".to_string(), |s| format!("{s:.2}"))
+                .map_or_else(|| "–".to_string(), format_chart_value)
                 .into(),
             turning: track
                 .motion
@@ -831,7 +829,7 @@ impl ResultsStateController {
             msd_alpha: track
                 .motion
                 .msd_alpha
-                .map_or_else(|| "–".to_string(), |a| format!("{a:.2}"))
+                .map_or_else(|| "–".to_string(), format_chart_value)
                 .into(),
             path: path_commands.into(),
             path_scale: if extent > 0.0 {

@@ -10,6 +10,7 @@
 use crate::editor::images_list_controller::ImagesListController;
 use crate::editor::viewport_controller::ViewportController;
 use crate::helper::delayed_indicator::DelayedIndicator;
+use crate::helper::number_format::{NO_VALUE, format_number};
 
 mod coloc;
 mod paths;
@@ -4484,6 +4485,12 @@ impl ResultsStateController {
             Some(_) => ListGroupBy::Objects,
             None => list_filter.group_by,
         };
+        // A row per object: Count would be 1 in every row - it means
+        // something per image or well only.
+        let mut columns = columns;
+        if group_by == ListGroupBy::Objects {
+            columns.retain(|c| *c != Column::Count);
+        }
         ListQuery {
             plane,
             images,
@@ -6211,15 +6218,9 @@ fn image_summary_text(selected: usize, total: usize) -> slint::SharedString {
     }
 }
 
-// Chart axis-label formatting: whole numbers stay whole (most of these
-// values, e.g. area/perimeter, are naturally integer-ish), everything else
-// gets 2 decimal places rather than however many the raw f64 has.
+// Chart labels: the results' one number format.
 fn format_chart_value(value: f64) -> String {
-    if value.fract().abs() < f64::EPSILON {
-        format!("{value:.0}")
-    } else {
-        format!("{value:.2}")
-    }
+    format_number(value)
 }
 
 // "All classes" (selected by default) followed by one entry per class from
@@ -6730,8 +6731,8 @@ fn flatten_grid_cells(result: &DatabaseResult) -> Vec<MatrixCell> {
                     // Heatmap arms) even though its `CellValue` is `Empty`.
                     let exists = cell.search_key.is_some();
                     let (has_value, value, label) = match &cell.value {
-                        CellValue::Float(v) => (true, *v, format!("{v:.2}")),
-                        _ if exists => (false, 0.0, "—".to_string()),
+                        CellValue::Float(v) => (true, *v, format_number(f64::from(*v))),
+                        _ if exists => (false, 0.0, NO_VALUE.to_string()),
                         _ => (false, 0.0, String::new()),
                     };
                     // Prefer the cell's own search key — the well id
@@ -6787,10 +6788,10 @@ fn color_scale_gradient_slint(schema: &ColorSchema) -> Vec<Color> {
 
 fn cell_to_string(cell: &Cell) -> slint::SharedString {
     match &cell.value {
-        CellValue::Empty => "NaN".into(),
+        CellValue::Empty => NO_VALUE.into(),
         CellValue::String(value) => short_object_id(value).into(),
-        CellValue::Float(value) => format!("{value:.3}").into(),
-        CellValue::Integer(value) => value.to_string().into(),
+        CellValue::Float(value) => format_number(f64::from(*value)).into(),
+        CellValue::Integer(value) => format_number(f64::from(*value)).into(),
         CellValue::Class((name, _color)) => name.as_str().into(),
     }
 }

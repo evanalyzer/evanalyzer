@@ -259,6 +259,14 @@ export component InkMultiSelect inherits Rectangle {
         }
     }
 
+    // As tall as what it lists (up to 300px, then it scrolls): the head
+    // rows, the items - grouped ones under a header per group.
+    property <length> popup-height: min(300px,
+        (root.show-select-all ? 32px : 0px) + (root.show-search ? 36px : 0px)
+        + (root.groups.length == 0 ? 8px + root.items.length * root.row-pitch
+            : 8px + root.groups.length * 22px + root.items.length * root.row-pitch)
+        + 2px);
+
     popup := PopupWindow {
         x: 0;
         y: pill.height + 4px;
@@ -281,12 +289,13 @@ export component InkMultiSelect inherits Rectangle {
         // hundred pixels too high, which is what made the top rows look
         // unclickable (they were being drawn - and hit-tested - outside
         // where they visually appeared to be).
-        height: 300px;
+        height: root.popup-height;
 
         Rectangle {
             width: max(root.pill-width, 320px);
-            height: 300px;
-            background: Ink.panel;
+            height: root.popup-height;
+            background: Ink.panel-blur ? Ink.glass : Ink.panel;
+            backdrop-blur: Ink.backdrop;
             border-width: 1px;
             border-color: Ink.border;
             border-radius: Ink.radius-md;

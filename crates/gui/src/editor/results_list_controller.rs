@@ -69,8 +69,13 @@ impl ResultsListController {
         let ui_handle = self.ui.clone();
         if let Some(ui) = ui_handle.upgrade() {
             let manager = self.clone();
+            let weak = ui.as_weak();
             ui.global::<ResultsListState>().on_refresh_clicked(move || {
+                // The analysis open stays the one ticked - a new one comes
+                // on top, the rows move.
+                let open = weak.upgrade().and_then(|ui| open_results_path(&ui));
                 manager.sync_results_files_to_slint();
+                manager.select_open(open);
             });
 
             let table = self.results_state_controller.clone();
@@ -301,6 +306,18 @@ impl ResultsListController {
         }
     }
 
+    /// Ticks `open` (the analysis open in Results) in the list again, once
+    /// the list filled in the meantime is shown - none if nothing is open.
+    fn select_open(&self, open: Option<String>) {
+        let ui_handle = self.ui.clone();
+        let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_handle.upgrade() {
+                let state = ui.global::<ResultsListState>();
+                state.set_selected_result_index(index_of(&state, open.as_deref()));
+            }
+        });
+    }
+
     /// The list after deleting: the question closed (or saying what was
     /// left), `open` (the analysis open in Results, if another one) still
     /// selected.
@@ -312,14 +329,7 @@ impl ResultsListController {
                 return;
             };
             let state = ui.global::<ResultsListState>();
-            let list = state.get_results_list();
-            let index = open
-                .and_then(|open| {
-                    (0..slint::Model::row_count(&list))
-                        .find(|&i| slint::Model::row_data(&list, i).is_some_and(|r| r.path == open))
-                })
-                .map_or(-1, |i| i as i32);
-            state.set_selected_result_index(index);
+            state.set_selected_result_index(index_of(&state, open.as_deref()));
             state.set_delete_busy(false);
             match result {
                 Ok(()) => {
@@ -463,6 +473,16 @@ fn collect_results_files(
             },
         ));
     }
+}
+
+/// The row of analysis `open` in the list shown, -1 for none.
+fn index_of(state: &ResultsListState, open: Option<&str>) -> i32 {
+    let list = state.get_results_list();
+    open.and_then(|open| {
+        (0..slint::Model::row_count(&list))
+            .find(|&i| slint::Model::row_data(&list, i).is_some_and(|r| r.path == open))
+    })
+    .map_or(-1, |i| i as i32)
 }
 
 fn format_file_size(bytes: u64) -> String {

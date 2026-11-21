@@ -144,7 +144,7 @@ pub(super) fn nearest_segment(placed: &[Placed], x: f64, y: f64, w: f64, h: f64)
 }
 
 fn format_value(v: Option<f64>) -> String {
-    v.map_or("–".to_string(), format_chart_value)
+    crate::helper::number_format::format_optional(v)
 }
 
 impl ResultsStateController {

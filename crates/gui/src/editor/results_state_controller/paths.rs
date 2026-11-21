@@ -412,9 +412,9 @@ impl ResultsStateController {
                     "#{} · {} · LIN {} · turning {} · MSD α {}",
                     t.track_id,
                     t.image,
-                    value(t.motion.lin, &|v| format!("{v:.2}")),
+                    value(t.motion.lin, &format_chart_value),
                     value(t.motion.turning, &|v| format!("{v:+.1}°")),
-                    value(t.motion.msd_alpha, &|v| format!("{v:.2}")),
+                    value(t.motion.msd_alpha, &format_chart_value),
                 )
             })
             .unwrap_or_default();

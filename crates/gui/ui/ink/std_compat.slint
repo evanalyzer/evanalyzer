@@ -162,7 +162,8 @@ export component ComboBox inherits Rectangle {
         height: min(list.preferred-height + 8px, 280px);
 
         Rectangle {
-            background: Ink.panel;
+            background: Ink.panel-blur ? Ink.glass : Ink.panel;
+            backdrop-blur: Ink.backdrop;
             border-radius: Ink.radius-md;
             border-width: 1px;
             border-color: Ink.border;
