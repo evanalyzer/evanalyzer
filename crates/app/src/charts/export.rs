@@ -41,8 +41,13 @@ pub fn svg_in_cm(svg: &str, width_cm: f64, height_cm: f64) -> String {
     )
 }
 
+/// The most pixels a PNG is drawn with (256 MB as RGBA): e.g. 60 × 40 cm
+/// at 600 dpi.
+const MAX_PNG_PIXELS: u64 = 64 * 1024 * 1024;
+
 /// `svg` rendered at `dpi` for `width_cm` × `height_cm` - a PNG with its
 /// dpi in it. `fonts`: the font files the text is drawn with (the app's).
+/// Larger than [`MAX_PNG_PIXELS`]: an error, not a picture.
 pub fn png(
     svg: &str,
     width_cm: f64,
@@ -64,6 +69,11 @@ pub fn png(
     let pixels_per_cm = dpi / 2.54;
     let width = (width_cm * pixels_per_cm).round().max(1.0) as u32;
     let height = (height_cm * pixels_per_cm).round().max(1.0) as u32;
+    if u64::from(width) * u64::from(height) > MAX_PNG_PIXELS {
+        return Err(format!(
+            "{width} × {height} pixels is too large a picture: lower the dpi or the size"
+        ));
+    }
     let mut pixmap = tiny_skia::Pixmap::new(width, height).ok_or("the picture is too large")?;
     let size = tree.size();
     let transform = tiny_skia::Transform::from_scale(
@@ -72,11 +82,15 @@ pub fn png(
     );
     resvg::render(&tree, transform, &mut pixmap.as_mut());
 
-    // Straight (not premultiplied) RGBA for the PNG.
-    let mut rgba = Vec::with_capacity((width * height * 4) as usize);
-    for pixel in pixmap.pixels() {
-        let c = pixel.demultiply();
-        rgba.extend_from_slice(&[c.red(), c.green(), c.blue(), c.alpha()]);
+    // Straight (not premultiplied) RGBA for the PNG, in place: no second
+    // picture in RAM.
+    for pixel in pixmap.data_mut().chunks_exact_mut(4) {
+        let alpha = u32::from(pixel[3]);
+        if alpha != 0 && alpha != 255 {
+            for channel in &mut pixel[..3] {
+                *channel = ((u32::from(*channel) * 255 + alpha / 2) / alpha).min(255) as u8;
+            }
+        }
     }
     let mut out = Vec::new();
     {
@@ -90,7 +104,9 @@ pub fn png(
             unit: png::Unit::Meter,
         }));
         let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
-        writer.write_image_data(&rgba).map_err(|e| e.to_string())?;
+        writer
+            .write_image_data(pixmap.data())
+            .map_err(|e| e.to_string())?;
     }
     Ok(out)
 }
@@ -153,6 +169,26 @@ mod tests {
         assert_eq!((info.width, info.height), (2008, 1181));
         let dims = info.pixel_dims.expect("its dpi");
         assert_eq!(dims.xppu, 11811, "300 dpi in pixels per metre");
+    }
+
+    #[test]
+    fn a_png_is_straight_rgba_and_too_large_ones_are_refused() {
+        // A half transparent red square on nothing.
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 10 10"><rect width="10" height="10" fill="#ff0000" fill-opacity="0.5"/></svg>"##;
+        let bytes = png(svg, 2.54, 2.54, 10.0, &[]).expect("png");
+        let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+        let mut reader = decoder.read_info().unwrap();
+        let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+        reader.next_frame(&mut pixels).unwrap();
+        let [r, g, b, a] = [pixels[0], pixels[1], pixels[2], pixels[3]];
+        assert!(
+            r >= 254 && g == 0 && b == 0,
+            "not premultiplied: {r} {g} {b}"
+        );
+        assert!((127..=128).contains(&a), "{a}");
+
+        let error = png(svg, 60.0, 60.0, 600.0, &[]).unwrap_err();
+        assert!(error.contains("too large"), "{error}");
     }
 
     #[test]
