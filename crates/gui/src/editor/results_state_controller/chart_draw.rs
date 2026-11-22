@@ -261,6 +261,27 @@ impl ResultsStateController {
         self.draw_chart();
     }
 
+    /// No chart (an error, the results closed): no data, marks or picture
+    /// left - nothing to export or click from an old one.
+    pub(super) fn clear_chart(&self) {
+        let mut data = self.chart_data.lock().expect("Poisoned");
+        *data = ChartData::None;
+        self.chart_marks.lock().expect("Poisoned").clear();
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let state = ui.global::<ResultsState>();
+            state.set_chart_picture(slint::Image::default());
+            state.set_chart_hits(ModelRc::default());
+            state.set_chart_stats_rows(ModelRc::default());
+            state.set_chart_stats_tsv("".into());
+        })
+        .ok();
+        drop(data);
+    }
+
     /// The chart shown, drawn at the area's size and scheme, its marks
     /// pushed.
     pub(super) fn draw_chart(&self) {

@@ -3108,6 +3108,7 @@ impl ResultsStateController {
         *self.current_image.lock().expect("Poisoned") = None;
         self.list_row_locations.lock().expect("Poisoned").clear();
         self.scatter_points.lock().expect("Poisoned").clear();
+        self.clear_chart();
         *self.export_populated.lock().expect("Poisoned") = false;
         self.export_image_selection
             .lock()
@@ -4456,6 +4457,7 @@ impl ResultsStateController {
     }
 
     fn push_chart_error(&self, message: String) {
+        self.clear_chart();
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
