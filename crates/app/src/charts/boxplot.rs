@@ -32,6 +32,10 @@ pub struct BoxSpec {
     pub q3: f64,
     pub max: f64,
     pub mean: f64,
+    /// The values' standard deviation, and how many objects they come from
+    /// (= `count` per object) - for a front end's numbers.
+    pub sd: f64,
+    pub objects: usize,
     /// The furthest values within 1.5 × IQR of Q1 and Q3.
     pub whisker_low: f64,
     pub whisker_high: f64,
@@ -341,6 +345,8 @@ mod tests {
             q3,
             max: hi.max(outliers.iter().copied().fold(hi, f64::max)),
             mean: median,
+            sd: 0.0,
+            objects: 100,
             whisker_low: lo,
             whisker_high: hi,
             outliers,

@@ -346,6 +346,8 @@ export struct ChartHit {
     width: float,
     height: float,
     label: string,
+    // Its numbers, for the tooltip a click opens ("Median" / "385").
+    lines: [ChartCard],
 }
 
 /// How a boxplot is drawn: a log axis, grid lines, every image a dot, the

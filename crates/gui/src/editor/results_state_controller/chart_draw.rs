@@ -89,6 +89,8 @@ fn box_specs(boxes: &[BoxplotBox], factor: f64, colors: u8) -> Vec<BoxSpec> {
             q3: b.q3 * factor,
             max: b.max * factor,
             mean: b.mean * factor,
+            sd: b.sd * factor,
+            objects: b.object_count,
             whisker_low: b.whisker_low * factor,
             whisker_high: b.whisker_high * factor,
             outliers: b.outliers.iter().map(|v| v * factor).collect(),
@@ -98,6 +100,30 @@ fn box_specs(boxes: &[BoxplotBox], factor: f64, colors: u8) -> Vec<BoxSpec> {
             count_noun: if b.image_count > 0 { " images".into() } else { String::new() },
         })
         .collect()
+}
+
+/// A box's numbers for its tooltip, as drawn (unit, % of control).
+fn box_numbers(spec: &BoxSpec, look: &ChartLook) -> Vec<(String, String)> {
+    let f = |v: f64| format_number(v);
+    let (whiskers, low, high) = if look.min_max {
+        ("Min – max", spec.min, spec.max)
+    } else {
+        ("Whiskers (1.5 IQR)", spec.whisker_low, spec.whisker_high)
+    };
+    let sd = spec.sd;
+    let mut lines = vec![
+        ("Median".to_string(), f(spec.median)),
+        ("Q1 – Q3".to_string(), format!("{} – {}", f(spec.q1), f(spec.q3))),
+        (whiskers.to_string(), format!("{} – {}", f(low), f(high))),
+        ("Mean ± SD".to_string(), format!("{} ± {}", f(spec.mean), f(sd))),
+    ];
+    if spec.count_noun.is_empty() {
+        lines.push(("Objects".to_string(), f(spec.count as f64)));
+    } else {
+        lines.push(("Images".to_string(), f(spec.count as f64)));
+        lines.push(("Objects".to_string(), f(spec.objects as f64)));
+    }
+    lines
 }
 
 impl ResultsStateController {
@@ -149,16 +175,18 @@ impl ResultsStateController {
             canvas.width,
             canvas.height,
         );
-        let hits: Vec<(f32, f32, f32, f32, String)> = drawing
+        let hits: Vec<(f32, f32, f32, f32, String, Vec<(String, String)>)> = drawing
             .hits
             .iter()
             .map(|hit| {
+                let spec = &specs[hit.index];
                 (
                     hit.x as f32,
                     hit.y as f32,
                     hit.width as f32,
                     hit.height as f32,
-                    specs[hit.index].label.clone(),
+                    spec.label.clone(),
+                    box_numbers(spec, &look),
                 )
             })
             .collect();
@@ -175,12 +203,21 @@ impl ResultsStateController {
             }
             let hits: Vec<ChartHit> = hits
                 .into_iter()
-                .map(|(x, y, width, height, label)| ChartHit {
+                .map(|(x, y, width, height, label, lines)| ChartHit {
                     x,
                     y,
                     width,
                     height,
                     label: label.into(),
+                    lines: ModelRc::from(Rc::new(VecModel::from(
+                        lines
+                            .into_iter()
+                            .map(|(label, value)| crate::ChartCard {
+                                label: label.into(),
+                                value: value.into(),
+                            })
+                            .collect::<Vec<_>>(),
+                    ))),
                 })
                 .collect();
             state.set_chart_hits(ModelRc::from(Rc::new(VecModel::from(hits))));
@@ -228,6 +265,37 @@ impl ResultsStateController {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_box_names_its_numbers_per_image_with_images_and_objects() {
+        let spec = BoxSpec {
+            label: "A1".into(),
+            color: Rgb(0),
+            min: 1.0,
+            q1: 2.0,
+            median: 3.0,
+            q3: 4.0,
+            max: 9.0,
+            mean: 3.5,
+            sd: 1.25,
+            objects: 120,
+            whisker_low: 1.0,
+            whisker_high: 6.0,
+            outliers: vec![9.0],
+            count: 16,
+            points: Vec::new(),
+            count_noun: " images".into(),
+        };
+        let lines = box_numbers(&spec, &ChartLook::default());
+        let get = |label: &str| lines.iter().find(|(l, _)| l == label).map(|(_, v)| v.clone());
+        assert_eq!(get("Median").as_deref(), Some("3"));
+        assert_eq!(get("Whiskers (1.5 IQR)").as_deref(), Some("1 – 6"));
+        assert_eq!(get("Images").as_deref(), Some("16"));
+        assert_eq!(get("Objects").as_deref(), Some("120"));
+        let min_max = ChartLook { min_max: true, ..ChartLook::default() };
+        let lines = box_numbers(&spec, &min_max);
+        assert!(lines.iter().any(|(l, v)| l == "Min – max" && v == "1 – 9"));
+    }
 
     #[test]
     fn the_colours_follow_the_look() {
