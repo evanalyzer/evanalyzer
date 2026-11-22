@@ -13,7 +13,6 @@
 use crate::types::classes::ObjectClass;
 use crate::types::ids::ObjectId;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 
 /// The unit of a measurement's values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -171,26 +170,6 @@ pub fn is_valid_measurement_id(name: &str) -> bool {
     !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// The first free name "`prefix`_01", "`prefix`_02", ... - `taken` holds the
-/// IDs in use, lower-case (IDs differing only in case are the same).
-pub fn next_measurement_id(prefix: &str, taken: &HashSet<String>) -> String {
-    (1..)
-        .map(|n| format!("{prefix}_{n:02}"))
-        .find(|name| !taken.contains(&name.to_lowercase()))
-        .expect("a free number")
-}
-
-/// How a measurement is offered to pick: "step · name", e.g.
-/// "quality_01 · Focus score (channel 0)" - unique, as step names are and a
-/// step's names are (two areas differing by unit get it added) - step IDs are unique.
-pub fn measurement_label(info: &MeasurementInfo) -> String {
-    match info.unit {
-        MeasurementUnit::SquarePixels => format!("{} · {} (px²)", info.step, info.name),
-        MeasurementUnit::SquareMicrometers => format!("{} · {} (µm²)", info.step, info.name),
-        _ => format!("{} · {}", info.step, info.name),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,17 +180,5 @@ mod tests {
         for bad in ["", "nuclei coloc", "a/b", "a.b", "äpfel", "x-y"] {
             assert!(!is_valid_measurement_id(bad), "{bad:?}");
         }
-    }
-
-    #[test]
-    fn a_new_name_takes_the_first_free_number_whatever_the_case() {
-        let taken: HashSet<String> = ["pearson_01", "pearson_03"].map(String::from).into();
-        assert_eq!(next_measurement_id("pearson", &taken), "pearson_02");
-        let taken: HashSet<String> = ["pearson_01".to_string()].into();
-        assert_eq!(next_measurement_id("PEARSON", &taken), "PEARSON_02");
-        assert_eq!(
-            next_measurement_id("texture", &HashSet::new()),
-            "texture_01"
-        );
     }
 }

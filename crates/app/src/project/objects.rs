@@ -11,6 +11,7 @@ use crate::project::ProjectWithRuntime;
 use bitvec::vec::BitVec;
 use evanalyzer_cfg::core_types::{ObjectId, SegmentationClass};
 use evanalyzer_cfg::object_class_set_from_u32;
+use evanalyzer_core::ObjectMetricSettingsExt;
 
 use bitvec::{order::Lsb0, slice::BitSlice};
 use evanalyzer_cfg::{

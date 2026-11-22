@@ -14,3 +14,4 @@ pub mod pipeline_cache;
 pub mod pipeline_context;
 pub mod pipeline_measure;
 pub mod scope;
+pub mod step_roles;

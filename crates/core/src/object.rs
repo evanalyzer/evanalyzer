@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 
 /// An object's (or annotation's) intensities over its mask - one
 /// implementation for the pipeline and stored annotations.
+pub mod annotation_plane;
 pub mod classes;
 pub mod intensities;
 pub mod regions;

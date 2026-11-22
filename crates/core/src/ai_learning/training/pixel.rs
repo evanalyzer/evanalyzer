@@ -21,6 +21,7 @@ use crate::algos::StructureTensor;
 use crate::image::{ImageContainer, ImageReader, ImageTile, ManagedImage, ReadMode};
 use crate::memory::analysis::MAX_TILE_SIZE;
 use crate::object::Object;
+use crate::object::annotation_plane::ObjectMetricSettingsExt;
 use crate::pipeline::pipeline::PipelineImageMeta;
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::pipeline::pipeline_context::PipelineContext;
@@ -269,7 +270,7 @@ pub struct PixelTrainingJob {
     pub channel: i32,
     /// How the analyses using the model handle z-stacks, which decides the
     /// image each annotation is trained on - the one an analysis uses it on
-    /// (see `ObjectMetricSettings::belongs_to`): plane by plane
+    /// (see `ObjectMetricSettingsExt::belongs_to`): plane by plane
     /// (`SingleStack`, `AllStacks`) its own plane of its frame - annotations
     /// drawn on a z-projection are left out; with a z-projection (Max, …)
     /// the projection of its frame, over every plane.
@@ -280,7 +281,7 @@ pub struct PixelTrainingJob {
 /// plane by plane (`per_z_plane`) each on its own plane `Some(z)` of its
 /// frame - those drawn on a z-projection left out -, else on the
 /// z-projection (`None`) of its frame. As an analysis uses them (see
-/// `ObjectMetricSettings::belongs_to`). Annotations without a class label
+/// `ObjectMetricSettingsExt::belongs_to`). Annotations without a class label
 /// are left out.
 fn annotations_by_plane(
     annotations: &[ObjectMetricSettings],

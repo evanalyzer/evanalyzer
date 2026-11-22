@@ -47,3 +47,5 @@ pub use crate::templates::checks::{
 pub use evanalyzer_core::module_parameters;
 pub use evanalyzer_core::module_steps_with_values;
 pub use evanalyzer_core::set_module_parameter;
+/// What a step does at its place in the pipeline, and what may follow.
+pub use evanalyzer_core::{RoleTracker, step_roles, tracker_after};

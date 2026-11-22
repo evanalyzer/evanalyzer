@@ -31,6 +31,7 @@ use crate::{ResultItemData, ResultsListState};
 use evanalyzer_app::ai_learning::load_classifier_settings;
 use evanalyzer_app::fs::FileSystem;
 use evanalyzer_app::modules::ClassRole;
+use evanalyzer_app::modules::{step_roles, tracker_after};
 use evanalyzer_app::project::ImageEntryExt;
 use evanalyzer_app::project::ImageListExt;
 use evanalyzer_app::templates::load_module_templates;
@@ -64,7 +65,6 @@ use evanalyzer_cfg::settings::pipeline_settings::{
     PipelineSettings, PipelineStepSettings, StepContent,
 };
 use evanalyzer_cfg::settings::project_settings::{PinnedSetting, ProjectSettings};
-use evanalyzer_cfg::settings::step_roles::{step_roles, tracker_after};
 use evanalyzer_cfg::settings::templates::ModuleTemplate;
 use evanalyzer_gui_slint::CommandAuthor;
 use log::debug;

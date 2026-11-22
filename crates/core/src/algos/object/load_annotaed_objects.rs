@@ -9,7 +9,7 @@
 //! crossing a tile border stays one object, and its intensities are measured on
 //! whichever image tiles it covers. Which annotations a plane gets is
 //! `use_on`: by default those of that plane (see
-//! `ObjectMetricSettings::belongs_to`), or every one of the frame or image -
+//! `ObjectMetricSettingsExt::belongs_to`), or every one of the frame or image -
 //! e.g. a region outlined once. A loaded object is of the plane analysed.
 //!
 //! **Author:** Joachim Danmayr
@@ -19,6 +19,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 use crate::ImageDimensionality;
+use crate::object::annotation_plane::ObjectMetricSettingsExt;
 use crate::{
     algos::{ExecutionScope, ImageAlgorithm},
     object::Object,

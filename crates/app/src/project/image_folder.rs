@@ -18,9 +18,9 @@ use crate::images::ImageMeta;
 use crate::project::ProjectWithRuntime;
 use crate::project::images::ImageListExt;
 use crate::project::utils::{get_relative_key, is_in_root};
-use evanalyzer_cfg::settings::images_settings::ImageEntry;
 use evanalyzer_cfg::settings::images_settings::SeriesSettings;
 use evanalyzer_cfg::settings::images_settings::{ChannelSettings, ImageReview, PixelSizeSettings};
+use evanalyzer_cfg::settings::images_settings::{ImageEntry, ImageSettings};
 use human_sort::compare;
 use log::{info, trace, warn};
 use rayon::prelude::*;
@@ -512,4 +512,36 @@ pub(super) fn is_supported_image_path(path: &Path, formats: &[String]) -> bool {
             formats.iter().any(|format| *format == ext)
         })
         .unwrap_or(false)
+}
+
+/// The project's image settings: which images an analysis leaves out.
+pub trait ImageSettingsExt {
+    /// Whether an analysis leaves out the image at `rel_path` (relative to
+    /// `root`): it lies right in a skipped folder.
+    fn is_skipped(&self, rel_path: &Path) -> bool;
+}
+
+impl ImageSettingsExt for ImageSettings {
+    fn is_skipped(&self, rel_path: &Path) -> bool {
+        !self.skipped_folders.is_empty()
+            && self
+                .skipped_folders
+                .contains(rel_path.parent().unwrap_or(Path::new("")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_images_right_in_a_skipped_folder_are_left_out() {
+        let images = ImageSettings {
+            skipped_folders: [PathBuf::from("A")].into_iter().collect(),
+            ..Default::default()
+        };
+        assert!(images.is_skipped(Path::new("A/a.tif")));
+        assert!(!images.is_skipped(Path::new("A/sub/s.tif")));
+        assert!(!images.is_skipped(Path::new("top.tif")));
+    }
 }

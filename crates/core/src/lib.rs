@@ -72,6 +72,7 @@ pub use crate::object::Object;
 pub use crate::object::ObjectClasses;
 pub use crate::object::ObjectInit;
 pub use crate::object::Track;
+pub use crate::object::annotation_plane::ObjectMetricSettingsExt;
 pub use crate::object::intensities::{ChannelTile, IntensityAccumulator, MaskIntensities};
 pub use crate::object::regions::{measure_on_planes, ring_of};
 pub use crate::pipeline::pipeline::{
@@ -79,6 +80,7 @@ pub use crate::pipeline::pipeline::{
 };
 pub use crate::pipeline::pipeline_cache::{AnalysedPlane, GlobalPipelineCache};
 pub use crate::pipeline::pipeline_cache::{channel_pixel_slice, sample_channel_pixel};
+pub use crate::pipeline::step_roles::{RoleTracker, run_commands, step_roles, tracker_after};
 
 // Job execution
 pub use crate::algos::{HsvBounds, hsv_range_around};

@@ -24,7 +24,7 @@ use std::sync::mpsc::Receiver;
 /// `AiLearningSettings` model descriptor. `channel` is pixel training's
 /// only; `z_stack_handling` (how the analyses handle z-stacks) decides for
 /// both which image each annotation is trained on - its own plane, or the
-/// z-projection of its frame (see `ObjectMetricSettings::belongs_to`).
+/// z-projection of its frame (see `ObjectMetricSettingsExt::belongs_to`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PixelTrainingParams {
     pub channel: i32,

@@ -7,6 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::pipeline::step_roles::RoleTracker;
 use crate::{
     DuckDbExporter, MemoryExporter,
     algos::{EndScope, ExecutionScope, KeepImage, TileMerge},
@@ -40,7 +41,6 @@ use evanalyzer_cfg::{
         pipeline_command_settings::MathImageCacheImageCacheModeSettings,
         pipeline_settings::{PipelineSettings, PipelineStepSettings},
         project_settings::ProjectSettings,
-        step_roles::RoleTracker,
     },
 };
 use log::{error, info, warn};
@@ -2042,8 +2042,6 @@ mod tests {
                 .insert(image.rel_path.clone(), std::sync::Arc::new(image));
         }
         project.images.skipped_folders = [PathBuf::from("A")].into_iter().collect();
-        assert!(project.images.is_skipped(Path::new("A/a.tif")));
-        assert!(!project.images.is_skipped(Path::new("A/sub/s.tif")));
 
         let job = generate_job_from_project_settings_intenal(
             project.clone(),

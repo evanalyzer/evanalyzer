@@ -143,20 +143,6 @@ pub struct ObjectMetricSettings {
     pub sum_yz: u64,
 }
 
-impl ObjectMetricSettings {
-    /// Whether this object (of one plane, or drawn on a z-projection - not a
-    /// volume's) belongs to plane `z` of frame `t`, or (`z: None`) to the
-    /// z-projection of frame `t`: what an analysis of that image uses, and
-    /// what the viewer shows on it (see [`Self::z_projection`]).
-    pub fn belongs_to(&self, z: Option<i32>, t: i32) -> bool {
-        self.t_stack == t
-            && match z {
-                None => true,
-                Some(z) => self.z_projection == ZProjection::None && self.z_stack == z,
-            }
-    }
-}
-
 fn is_zero(value: &u64) -> bool {
     *value == 0
 }
@@ -168,32 +154,6 @@ fn is_one_plane(value: &ZProjection) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_planes_object_belongs_to_its_plane_and_the_projections_of_its_frame() {
-        let object = ObjectMetricSettings {
-            z_stack: 3,
-            t_stack: 1,
-            ..Default::default()
-        };
-        assert!(object.belongs_to(Some(3), 1));
-        assert!(object.belongs_to(None, 1));
-        assert!(!object.belongs_to(Some(2), 1), "another plane");
-        assert!(!object.belongs_to(Some(3), 0), "another frame");
-        assert!(!object.belongs_to(None, 0), "a projection of another frame");
-    }
-
-    #[test]
-    fn an_object_drawn_on_a_projection_belongs_to_the_projections_of_its_frame_only() {
-        let object = ObjectMetricSettings {
-            t_stack: 1,
-            z_projection: ZProjection::MaxIntensity,
-            ..Default::default()
-        };
-        assert!(object.belongs_to(None, 1));
-        assert!(!object.belongs_to(Some(0), 1), "not plane 0, its unused z");
-        assert!(!object.belongs_to(None, 2));
-    }
 
     #[test]
     fn an_object_of_one_plane_is_saved_without_a_projection() {

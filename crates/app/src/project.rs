@@ -48,8 +48,11 @@ pub use class_ids::{ClassIdChange, change_class_id, free_class_ids, next_class_i
 pub use classes::ClassificationExt;
 pub use current_image::{ConfigValueSource, DEFAULT_FRAME_INTERVAL_S};
 pub use image_entry::ImageEntryExt;
-pub use image_folder::{ProjectAction, SelectNewProjectRootAction, collect_images_at_root};
+pub use image_folder::{
+    ImageSettingsExt, ProjectAction, SelectNewProjectRootAction, collect_images_at_root,
+};
 pub use images::{GlobalImageSettingsExt, ImageListExt};
 pub use load_save::{SaveProjectActions, load_project};
 pub use objects::{ObjectExt, ShownPlane};
+pub use plate_layout::PlateSettingsExt;
 pub use results_images::{ResultsImageFinder, find_results_image, run_image_root};

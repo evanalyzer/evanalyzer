@@ -18,6 +18,7 @@ use crate::helper::size_formater::format_bytes;
 use crate::{AppWindow, DialogType, GlobalAppState, ObjectHighlightBox, ViewportObjectState};
 use crate::{ImageItemData, ImagesListState, WellState};
 use evanalyzer_app::project::ImageListExt;
+use evanalyzer_app::project::ImageSettingsExt;
 use evanalyzer_app::project::SelectNewProjectRootAction;
 use evanalyzer_app::project::collect_images_at_root;
 use log::{debug, info, warn};

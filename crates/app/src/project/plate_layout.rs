@@ -15,7 +15,7 @@ use crate::results::local::{
     AUTO_GROUPING_PATTERNS, FOLDER_GROUPING_REGEX, best_matching_dimensions, col_number_to_index,
     row_index_to_letter, row_letter_to_index,
 };
-use evanalyzer_cfg::settings::plate_settings::{GroupingMode, PlateSettings};
+use evanalyzer_cfg::settings::plate_settings::{GroupingMode, PlateSettings, WellLayout};
 use regex::Regex;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -162,6 +162,33 @@ fn grouping_regex(plate: &PlateSettings, texts: &[String]) -> Option<Regex> {
     }
 }
 
+/// The plate settings' well layout: an image order for a fresh grid, and
+/// changing the layout so the order keeps one entry per grid position.
+pub trait PlateSettingsExt {
+    /// `well_image_order` for a fresh `rows` x `cols` grid: in number order.
+    fn default_image_order(rows: u32, cols: u32) -> Vec<u32>;
+    /// Sets the well layout, keeping `well_image_order` one entry per grid
+    /// position: the existing entries stay, a bigger grid gets the next
+    /// numbers appended, a smaller one is cut.
+    fn set_well_layout(&mut self, layout: WellLayout);
+}
+
+impl PlateSettingsExt for PlateSettings {
+    fn default_image_order(rows: u32, cols: u32) -> Vec<u32> {
+        (1..=rows * cols).collect()
+    }
+
+    fn set_well_layout(&mut self, layout: WellLayout) {
+        self.well_layout = layout;
+        if let WellLayout::Fixed { rows, cols } = layout {
+            let n = (rows * cols) as usize;
+            self.well_image_order.truncate(n);
+            let next = self.well_image_order.len() as u32 + 1;
+            self.well_image_order.extend(next..=n as u32);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,5 +283,20 @@ mod tests {
         let got = layout(&[], &PlateSettings::default());
         assert_eq!((got.rows, got.cols), (2, 3));
         assert!(got.wells.is_empty());
+    }
+
+    #[test]
+    fn set_well_layout_keeps_one_image_order_entry_per_position() {
+        let mut settings = PlateSettings::default();
+        settings.set_well_layout(WellLayout::Fixed { rows: 2, cols: 2 });
+        assert_eq!(settings.well_image_order, vec![1, 2, 3, 4]);
+        settings.well_image_order = vec![4, 3, 2, 1];
+        settings.set_well_layout(WellLayout::Fixed { rows: 2, cols: 3 });
+        assert_eq!(settings.well_image_order, vec![4, 3, 2, 1, 5, 6]);
+        settings.set_well_layout(WellLayout::Fixed { rows: 1, cols: 2 });
+        assert_eq!(settings.well_image_order, vec![4, 3]);
+        // Auto keeps the order for when a fixed grid is chosen again.
+        settings.set_well_layout(WellLayout::Auto);
+        assert_eq!(settings.well_image_order, vec![4, 3]);
     }
 }

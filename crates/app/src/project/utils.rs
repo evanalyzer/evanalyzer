@@ -7,7 +7,6 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use evanalyzer_cfg::core_types::next_measurement_id;
 use evanalyzer_cfg::core_types::{InternalErrors, StepId};
 use evanalyzer_cfg::settings::modules::ModuleDefinition;
 use evanalyzer_cfg::settings::parameter_def::ParamType;
@@ -426,6 +425,15 @@ pub fn wavelength_to_rgb_float(wavelength: f32) -> [f32; 3] {
     // fade-out curve used for full (1.0) intensity - every value reaching
     // this point is already fully saturated.
     [r, g, b]
+}
+
+/// The first free name "`prefix`_01", "`prefix`_02", ... - `taken` holds the
+/// IDs in use, lower-case (IDs differing only in case are the same).
+fn next_measurement_id(prefix: &str, taken: &HashSet<String>) -> String {
+    (1..)
+        .map(|n| format!("{prefix}_{n:02}"))
+        .find(|name| !taken.contains(&name.to_lowercase()))
+        .expect("a free number")
 }
 
 #[cfg(test)]
@@ -963,6 +971,18 @@ mod tests {
         assert!(
             err.contains("CELL_RECONSTRUCTION") && err.contains("id 2"),
             "{err}"
+        );
+    }
+
+    #[test]
+    fn a_new_name_takes_the_first_free_number_whatever_the_case() {
+        let taken: HashSet<String> = ["pearson_01", "pearson_03"].map(String::from).into();
+        assert_eq!(next_measurement_id("pearson", &taken), "pearson_02");
+        let taken: HashSet<String> = ["pearson_01".to_string()].into();
+        assert_eq!(next_measurement_id("PEARSON", &taken), "PEARSON_02");
+        assert_eq!(
+            next_measurement_id("texture", &HashSet::new()),
+            "texture_01"
         );
     }
 }

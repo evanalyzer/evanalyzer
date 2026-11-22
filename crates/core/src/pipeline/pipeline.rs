@@ -147,7 +147,7 @@ pub struct StepPlace {
     /// A module instance's scope, or `Global`.
     pub scope: Scope,
     /// The category the command works as at its place (see
-    /// `evanalyzer_cfg::settings::step_roles`) - `None` for a command that
+    /// `crate::pipeline::step_roles`) - `None` for a command that
     /// isn't a project step (e.g. `TileMerge`).
     pub role: Option<CommandCategory>,
     /// The image the tile pass kept for this whole-image command

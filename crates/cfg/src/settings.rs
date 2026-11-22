@@ -23,5 +23,4 @@ pub mod pipeline_command_settings;
 pub mod pipeline_settings;
 pub mod plate_settings;
 pub mod project_settings;
-pub mod step_roles;
 pub mod templates;

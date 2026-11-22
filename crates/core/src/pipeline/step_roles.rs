@@ -18,7 +18,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use crate::settings::{
+use evanalyzer_cfg::settings::{
     modules::ModuleDefinition,
     pipeline_command::{CommandCategory, PipelineCommand},
     pipeline_settings::{PipelineStepSettings, StepContent},
@@ -148,9 +148,9 @@ pub fn tracker_after(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::modules::ModuleInstance;
-    use crate::types::ids::StepId;
     use CommandCategory::*;
+    use evanalyzer_cfg::core_types::StepId;
+    use evanalyzer_cfg::settings::modules::ModuleInstance;
 
     fn command(key: &str) -> PipelineCommand {
         PipelineCommand::default_for_key(key).unwrap_or_else(|| panic!("no command `{key}`"))

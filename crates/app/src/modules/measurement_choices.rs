@@ -14,7 +14,7 @@
 
 use crate::modules::insights::resolved_commands;
 use crate::project::ProjectWithRuntime;
-use evanalyzer_cfg::core_types::measurement_label;
+use evanalyzer_cfg::core_types::{MeasurementInfo, MeasurementUnit};
 use evanalyzer_cfg::settings::parameter_def::{ParamType, ParameterDef};
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
 use evanalyzer_cfg::settings::pipeline_settings::StepContent;
@@ -149,6 +149,17 @@ pub fn measurement_setting_text(
             .find(|c| c.label == text)
             .map_or_else(|| text.to_string(), |c| c.key.clone()),
         _ => text.to_string(),
+    }
+}
+
+/// How a measurement is offered to pick: "step · name", e.g.
+/// "quality_01 · Focus score (channel 0)" - unique, as step names are and a
+/// step's names are (two areas differing by unit get it added) - step IDs are unique.
+pub fn measurement_label(info: &MeasurementInfo) -> String {
+    match info.unit {
+        MeasurementUnit::SquarePixels => format!("{} · {} (px²)", info.step, info.name),
+        MeasurementUnit::SquareMicrometers => format!("{} · {} (µm²)", info.step, info.name),
+        _ => format!("{} · {}", info.step, info.name),
     }
 }
 

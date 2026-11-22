@@ -96,7 +96,7 @@ pub struct ObjectTrainingJob {
     pub images: Vec<TrainingImage>,
     /// How the analyses using the model handle z-stacks: each object is
     /// measured on the image an analysis uses it on (see
-    /// `ObjectMetricSettings::belongs_to`) - plane by plane its own plane
+    /// `ObjectMetricSettingsExt::belongs_to`) - plane by plane its own plane
     /// (objects drawn on a z-projection are skipped), with a z-projection
     /// that projection of its frame.
     pub z_stack_handling: ZStackHandling,

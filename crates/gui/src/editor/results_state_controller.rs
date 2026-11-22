@@ -11,6 +11,7 @@ use crate::editor::images_list_controller::ImagesListController;
 use crate::editor::viewport_controller::ViewportController;
 use crate::helper::delayed_indicator::DelayedIndicator;
 use crate::helper::number_format::{NO_VALUE, format_number};
+use evanalyzer_app::project::PlateSettingsExt;
 
 mod chart_draw;
 mod chart_export;

@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::RangeInclusive,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::Arc,
 };
 
@@ -44,17 +44,6 @@ pub struct ImageSettings {
     /// project unsaved but takes no undo step.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub collapsed_folders: BTreeSet<PathBuf>,
-}
-
-impl ImageSettings {
-    /// Whether an analysis leaves out the image at `rel_path` (relative to
-    /// `root`): it lies right in a skipped folder.
-    pub fn is_skipped(&self, rel_path: &Path) -> bool {
-        !self.skipped_folders.is_empty()
-            && self
-                .skipped_folders
-                .contains(rel_path.parent().unwrap_or(Path::new("")))
-    }
 }
 
 // In memory the map and every entry are shared between copies until one
