@@ -250,6 +250,19 @@ pub(super) fn adapt_column(column: &Column, settings: &ColocSettings) -> Option<
     ))
 }
 
+/// A column's name in the pickers: lengths, areas and volumes in µm, µm²
+/// and µm³ - the unit the table shows them in (`in_micrometers`).
+pub(super) fn picker_label(name: &str) -> String {
+    name.replace("[nm²]", "[µm²]")
+        .replace("[nm³]", "[µm³]")
+        .replace("[nm]", "[µm]")
+}
+
+/// A model of `items` for a Slint property.
+fn model_of<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
+    ModelRc::from(Rc::new(VecModel::from(items)))
+}
+
 /// The coloc box's own entry in `column_sections_open`.
 const COLOC_BOX: &str = "coloc box";
 
@@ -357,12 +370,14 @@ impl ResultsStateController {
             if matches!(entry.key, Column::Children(_) | Column::Parent(_)) {
                 continue;
             }
-            if !filter.is_empty() && !entry.display_name.to_lowercase().contains(&filter) {
+            // nm as µm, as the table shows them.
+            let label = picker_label(&entry.display_name);
+            if !filter.is_empty() && !label.to_lowercase().contains(&filter) {
                 continue;
             }
             let item = MultiSelectItem {
                 key: entry.key.as_key(&classes).into(),
-                value: entry.display_name.as_str().into(),
+                value: label.into(),
                 color: Color::default(),
                 group: entry.group.as_str().into(),
                 selected: selected.contains(&entry.key),
@@ -439,8 +454,28 @@ impl ResultsStateController {
                 .collect::<Vec<_>>()
                 .join(", "),
         };
+        let partner_order = partner_items
+            .iter()
+            .filter(|item| item.selected)
+            .map(|item| item.value.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
         let count = i32::from(settings.count_partners);
         let only_occurring = settings.only_occurring;
+
+        // The panel's parts: the starting sets, the intensity grid, the coloc
+        // columns by kind.
+        let presets =
+            super::column_panel::preset_cards(&super::column_panel::presets(&available, &raw), &selected);
+        let (intensity_channels, intensity_cells) =
+            super::column_panel::intensity_grid(&available, &selected, &classes);
+        let intensity_section = sections.iter().find(|section| section.group == "intensity");
+        let intensity_title = intensity_section
+            .map(|section| section.title.clone())
+            .unwrap_or_default();
+        let intensity_open = intensity_section.is_some_and(|section| section.open);
+        let coloc_kinds =
+            super::column_panel::coloc_kinds(&available, &selected, &settings, &classes, &filter);
 
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
@@ -461,8 +496,20 @@ impl ResultsStateController {
             state.set_list_coloc_open(coloc_open);
             state.set_list_coloc_partner_items(model(partner_items));
             state.set_list_coloc_partner_summary(partner_summary.into());
+            state.set_list_coloc_partner_order(partner_order.into());
             state.set_list_coloc_count(count);
             state.set_list_coloc_only_occurring(only_occurring);
+            state.set_list_column_presets(model_of(presets));
+            state.set_list_intensity_channels(model_of(
+                intensity_channels.into_iter().map(slint::SharedString::from).collect(),
+            ));
+            state.set_list_intensity_stats(model_of(super::column_panel::intensity_heads()));
+            state.set_list_intensity_cells(model_of(intensity_cells));
+            state.set_list_intensity_title(intensity_title.into());
+            state.set_list_intensity_open(intensity_open);
+            state.set_list_coloc_kinds(model_of(
+                coloc_kinds.into_iter().map(super::column_panel::ColocKindUi::into_slint).collect(),
+            ));
         })
         .ok();
     }
@@ -600,6 +647,13 @@ impl ResultsStateController {
                 } else {
                     settings.partners.push(class);
                 }
+            });
+        });
+        let manager = self.clone();
+        state.on_list_coloc_partners_all(move |on| {
+            let all = coloc_classes(&manager.raw_columns.lock().expect("Poisoned"));
+            manager.change_coloc_settings(|settings| {
+                settings.partners = if on { all } else { Vec::new() };
             });
         });
         let manager = self.clone();

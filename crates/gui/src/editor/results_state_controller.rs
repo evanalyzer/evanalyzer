@@ -13,6 +13,7 @@ use crate::helper::delayed_indicator::DelayedIndicator;
 use crate::helper::number_format::{NO_VALUE, format_number};
 
 mod coloc;
+mod column_panel;
 mod paths;
 pub(crate) mod split;
 mod tracks;
@@ -779,6 +780,7 @@ impl ResultsStateController {
             self.attach_split_callbacks(&ui);
             self.attach_views_callbacks(&ui);
             self.attach_coloc_callbacks(&ui);
+            self.attach_column_panel_callbacks(&ui);
             self.attach_tracks_callbacks(&ui);
             self.attach_tracks_all_callbacks(&ui);
             self.attach_paths_callbacks(&ui);

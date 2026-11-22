@@ -18,6 +18,41 @@ export struct ColumnSection {
     items: [MultiSelectItem],
 }
 
+/// A cell of the List's intensity grid (channels × values): the column's
+/// picker key ("" - the results lack it) and whether it is shown.
+export struct IntensityCell {
+    key: string,
+    selected: bool,
+}
+
+/// A starting set of the List's columns ("Basic", "Shape", ...): `active`
+/// while exactly its columns are shown.
+export struct ColumnPreset {
+    key: string,
+    title: string,
+    description: string,
+    active: bool,
+}
+
+/// A coloc column in the List's coloc builder: `glyph` says per partner
+/// class what it needs - ● overlaps, ○ must not, · either.
+export struct ColocColumnItem {
+    key: string,
+    name: string,
+    glyph: string,
+    selected: bool,
+}
+
+/// A kind of coloc columns (each class, at least, exactly) with its
+/// columns.
+export struct ColocKind {
+    group: string,
+    title: string,
+    description: string,
+    count: string,
+    items: [ColocColumnItem],
+}
+
 // Tracks: only with tracked objects - one image's tracks, beside it.
 export enum ResultsRailMode { list, matrix, charts, tracks, paths, trees }
 
@@ -471,6 +506,10 @@ export global ResultsState {
 
     // -------- Navigation --------
     in-out property <ResultsRailMode> rail-mode: ResultsRailMode.list;
+    // The part of the view the left panel shows ("Columns", "Images", ...;
+    // "" - closed): a chip on the view's bar opens it (design canvas
+    // "Results rework", PanelNav D - the chips are the switch).
+    in-out property <string> panel-part: "";
     in-out property <MatrixLevel> matrix-level: MatrixLevel.plate;
     in-out property <[BreadcrumbItem]> breadcrumb: [{ label: "All results" }];
     callback rail-mode-selected(ResultsRailMode);
@@ -539,11 +578,24 @@ export global ResultsState {
     in-out property <[ColumnSection]> list-column-sections: [];
     in-out property <string> list-columns-filter: "";
     in-out property <[ColumnSection]> list-coloc-sections: [];
+    // The same columns for the panel's coloc builder, with their glyphs;
+    // `list-coloc-glyph-head`: the partner classes' initials over them.
+    in-out property <[ColocKind]> list-coloc-kinds: [];
+    // The panel's starting sets and the intensity grid (`list-intensity-
+    // cells`: a row per channel, `list-intensity-stats` values each).
+    in-out property <[ColumnPreset]> list-column-presets: [];
+    in-out property <[string]> list-intensity-channels: [];
+    in-out property <[string]> list-intensity-stats: [];
+    in-out property <[IntensityCell]> list-intensity-cells: [];
+    in-out property <string> list-intensity-title: "";
+    in-out property <bool> list-intensity-open: false;
     in-out property <string> list-coloc-title: "";
     in-out property <bool> list-coloc-open: true;
     // The partner classes the combinations are made of.
     in-out property <[MultiSelectItem]> list-coloc-partner-items: [];
     in-out property <string> list-coloc-partner-summary: "";
+    // The chosen partner classes by name, in the order of the coloc marks.
+    in-out property <string> list-coloc-partner-order: "";
     // 0: objects (1 / 0 per object), 1: partner objects.
     in-out property <int> list-coloc-count: 0;
     in-out property <bool> list-coloc-only-occurring: true;
@@ -700,10 +752,17 @@ export global ResultsState {
     callback list-columns-select-none();
     // A section's All / None (its group), folded / opened, the search.
     callback list-columns-section-select(string, bool);
+    // The panel: a starting set; a whole channel (row) or value (column) of
+    // the intensity grid on or off.
+    callback list-columns-preset(string);
+    callback list-intensity-row(int);
+    callback list-intensity-column(int);
     callback list-columns-section-toggled(string, bool);
     callback list-columns-filter-changed(string);
     callback list-coloc-toggled(bool);
     callback list-coloc-partner-toggled(string);
+    // Every partner class on (true) or off.
+    callback list-coloc-partners-all(bool);
     callback list-coloc-count-picked(int);
     callback list-coloc-only-occurring-changed(bool);
 
