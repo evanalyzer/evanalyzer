@@ -535,6 +535,7 @@ export component ResultsListView inherits Rectangle {
                                 for header[idx] in ResultsState.list-column-headers: head-cell := Rectangle {
                                     property <bool> sortable: idx < ResultsState.list-column-sortable.length && ResultsState.list-column-sortable[idx];
                                     property <bool> sorted: ResultsState.list-sort-index == idx;
+                                    property <bool> numeric: idx < ResultsState.list-column-numeric.length && ResultsState.list-column-numeric[idx];
                                     horizontal-stretch: 1;
                                     clip: true;
                                     width: ResultsState.list-column-widths[idx] * 1px;
@@ -554,14 +555,14 @@ export component ResultsListView inherits Rectangle {
                                     VerticalLayout {
                                         alignment: center;
                                         spacing: 0px;
-                                        Text {
+                                        head-name := Text {
                                             text: header + (head-cell.sorted ? (ResultsState.list-sort-descending ? " ▼" : " ▲") : "");
                                             color: head-cell.sorted || sort-ta.has-hover ? Ink.text : Ink.text-dim;
                                             width: ResultsState.list-column-widths[idx] * 1px;
                                             font-size: Ink.fs-secondary;
                                             font-weight: 600;
                                             overflow: elide;
-                                            horizontal-alignment: start;
+                                            horizontal-alignment: head-cell.numeric ? right : left;
                                         }
                                         if idx < ResultsState.list-column-subs.length && ResultsState.list-column-subs[idx] != "": Text {
                                             text: ResultsState.list-column-subs[idx];
@@ -569,8 +570,13 @@ export component ResultsListView inherits Rectangle {
                                             font-size: Ink.fs-caption;
                                             color: Ink.text-mute;
                                             overflow: elide;
-                                            horizontal-alignment: start;
+                                            horizontal-alignment: head-cell.numeric ? right : left;
                                         }
+                                    }
+                                    // A name cut short: whole on hover.
+                                    InkTipZone {
+                                        wanted: sort-ta.has-hover && head-name.preferred-width > head-name.width;
+                                        text: header;
                                     }
                                 }
                                 Rectangle { }
@@ -708,7 +714,7 @@ export component ResultsListView inherits Rectangle {
                                             color: row.failed ? Ink.warn : drill ? Ink.focus : Ink.text;
                                             overflow: elide;
                                             vertical-alignment: center;
-                                            horizontal-alignment: start;
+                                            horizontal-alignment: c-index < ResultsState.list-column-numeric.length && ResultsState.list-column-numeric[c-index] ? right : left;
                                         }
                                         // A children's count: down to them.
                                         if col-visible && drill: TouchArea {

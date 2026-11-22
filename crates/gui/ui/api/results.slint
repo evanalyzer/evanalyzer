@@ -703,6 +703,8 @@ export global ResultsState {
     in-out property <[string]> list-column-headers: [];
     // Per column head: a click sorts by it; the sorted one (-1 none) and
     // its direction (▲ ascending, ▼ descending).
+    // Columns of numbers: right-aligned, head and cells.
+    in-out property <[bool]> list-column-numeric: [];
     in-out property <[bool]> list-column-sortable: [];
     in-out property <int> list-sort-index: -1;
     in-out property <bool> list-sort-descending: false;

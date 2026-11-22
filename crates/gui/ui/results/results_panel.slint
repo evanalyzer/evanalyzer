@@ -8,7 +8,7 @@
 // starting sets, the groups, intensity as a channels × values grid and the
 // coloc builder; a list to pick one item from.
 
-import { Ink, InkIcons, InkHint, InkCheckList, InkOptionCard, InkSearchField, InkSwitch, MultiSelectItem } from "../ink/ink.slint";
+import { Ink, InkIcons, InkHint, InkCheckList, InkOptionCard, InkSearchField, InkSwitch, InkTipZone, MultiSelectItem } from "../ink/ink.slint";
 import { ColumnSection, ColumnPreset, ColocColumnItem, ColocKind, IntensityCell, ResultsState } from "../api/results.slint";
 import { CheckBox, LineEdit } from "../ink/std_compat.slint";
 
@@ -120,6 +120,11 @@ component PickRow inherits Rectangle {
             root.clicked();
         }
     }
+    // A name cut short: whole on hover.
+    InkTipZone {
+        wanted: ta.has-hover && row-text.preferred-width > row-text.width;
+        text: root.text;
+    }
     HorizontalLayout {
         padding-left: 6px;
         padding-right: 6px;
@@ -140,7 +145,7 @@ component PickRow inherits Rectangle {
                 background: root.swatch;
             }
         }
-        Text {
+        row-text := Text {
             horizontal-stretch: 1;
             min-width: 0px;
             text: root.text;

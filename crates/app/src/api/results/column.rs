@@ -457,11 +457,13 @@ impl Column {
                     (ColocMatch::AtLeast, 1) => {
                         format!("{prefix} {}", classes_label(&c.with, classes))
                     }
+                    // Short ("Coloc at least A, B"): the names are long
+                    // enough with their classes.
                     (ColocMatch::AtLeast, _) => {
-                        format!("{prefix} at least {}", classes_label(&c.with, classes))
+                        format!("Coloc at least {}", classes_label(&c.with, classes))
                     }
                     (ColocMatch::Exactly, _) => {
-                        format!("{prefix} exactly {}", classes_label(&c.with, classes))
+                        format!("Coloc exactly {}", classes_label(&c.with, classes))
                     }
                 }
             }

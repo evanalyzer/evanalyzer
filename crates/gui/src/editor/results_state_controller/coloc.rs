@@ -71,7 +71,7 @@ pub(super) fn coloc_classes(raw: &[ColumnEntry]) -> Vec<ObjectClass> {
 
 /// The sets of partner classes objects have (the results' "with exactly"
 /// columns among all classes).
-fn coloc_sets(raw: &[ColumnEntry]) -> Vec<Vec<ObjectClass>> {
+pub(super) fn coloc_sets(raw: &[ColumnEntry]) -> Vec<Vec<ObjectClass>> {
     raw.iter()
         .filter_map(|entry| match &entry.key {
             Column::Coloc(ColocColumn {
@@ -856,11 +856,11 @@ mod tests {
         );
         assert_eq!(
             at_least(&[2, 3], false).display_label(&classes),
-            "Coloc with at least class 2, class 3"
+            "Coloc at least class 2, class 3"
         );
         assert_eq!(
             exactly(&[2, 3], &[2, 3, 4]).display_label(&classes),
-            "Coloc with exactly class 2, class 3"
+            "Coloc exactly class 2, class 3"
         );
         assert_eq!(
             exactly(&[], &[2, 3]).display_label(&classes),

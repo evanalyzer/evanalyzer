@@ -163,11 +163,19 @@ pub(super) fn presets(available: &[ColumnEntry], raw: &[ColumnEntry]) -> Vec<Pre
         });
     }
     if !coloc_classes(raw).is_empty() {
+        // With each class some object overlaps - not those no combination
+        // holds (a column of zeros).
+        let occurring: Vec<ObjectClass> = super::coloc::coloc_sets(raw).into_iter().flatten().collect();
         let mut coloc = identity;
         coloc.extend(
             available
                 .iter()
                 .filter(|entry| entry.group == COLOC_GROUP)
+                .filter(|entry| match &entry.key {
+                    Column::ColocCount(class) => occurring.contains(class),
+                    Column::Coloc(c) => c.with.iter().all(|class| occurring.contains(class)),
+                    _ => false,
+                })
                 .map(|entry| entry.key.clone()),
         );
         sets.push(Preset {
@@ -637,6 +645,27 @@ mod tests {
         let row = INTENSITY_VALUES.len();
         assert!(cells[row].selected);
         assert!(!cells[row + 1].key.is_empty() && !cells[row + 1].selected);
+    }
+
+    #[test]
+    fn the_coloc_set_leaves_out_classes_no_combination_holds() {
+        let [a, b] = [2, 3].map(ObjectClass::Global);
+        let mut available = vec![
+            entry(Column::ImageName, "General"),
+            entry(Column::ObjectId, "General"),
+            entry(Column::ObjectClass, "General"),
+            entry(Column::ColocCount(a), COLOC_GROUP),
+            entry(Column::ColocCount(b), COLOC_GROUP),
+        ];
+        // Objects overlap with class 2 only.
+        available.push(entry(
+            Column::coloc(ColocMatch::Exactly, vec![a], vec![a, b], false),
+            COLOC_EXACTLY_GROUP,
+        ));
+        let sets = presets(&available, &available);
+        let coloc = sets.iter().find(|s| s.key == "coloc").expect("coloc set");
+        assert!(coloc.columns.contains(&Column::ColocCount(a)));
+        assert!(!coloc.columns.contains(&Column::ColocCount(b)));
     }
 
     #[test]

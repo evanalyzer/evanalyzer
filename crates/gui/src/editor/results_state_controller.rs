@@ -4914,6 +4914,9 @@ impl ResultsStateController {
                 )
             })
             .collect();
+        // Number columns right-aligned (digits under digits): those whose
+        // filled cells on this page are all numbers.
+        let numeric = numeric_columns(&result.rows, headers.len());
         let mut column_widths = list_column_widths(
             &headers,
             row_cells.iter().map(|(cells, ..)| cells.as_slice()),
@@ -4951,6 +4954,7 @@ impl ResultsStateController {
                 state.set_list_column_headers(ModelRc::from(Rc::new(VecModel::from(headers))));
                 state.set_list_column_subs(ModelRc::from(Rc::new(VecModel::from(header_subs))));
                 state.set_list_column_widths(ModelRc::from(Rc::new(VecModel::from(column_widths))));
+                state.set_list_column_numeric(ModelRc::from(Rc::new(VecModel::from(numeric))));
                 state.set_list_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
                 state.set_list_checked_images(0);
                 state.set_list_checked_rows(0);
@@ -6426,6 +6430,24 @@ fn image_summary_text(selected: usize, total: usize) -> slint::SharedString {
     } else {
         list_summary(selected, total, "Images")
     }
+}
+
+/// Per column of `rows` (`count` of them): whether it holds numbers - at
+/// least one, and no text or class.
+fn numeric_columns(rows: &[Vec<Cell>], count: usize) -> Vec<bool> {
+    (0..count)
+        .map(|i| {
+            let mut any = false;
+            for row in rows {
+                match row.get(i).map(|cell| &cell.value) {
+                    Some(CellValue::Float(_) | CellValue::Integer(_)) => any = true,
+                    Some(CellValue::String(_) | CellValue::Class(_)) => return false,
+                    Some(CellValue::Empty) | None => {}
+                }
+            }
+            any
+        })
+        .collect()
 }
 
 /// A head's unit line (`split_header`'s) with nm, nm² and nm³ as µm, µm²
@@ -8770,7 +8792,7 @@ pub(crate) mod tests {
                 (
                     "Coloc · exactly".to_string(),
                     vec![
-                        "Coloc with exactly ClassB".to_string(),
+                        "Coloc exactly ClassB".to_string(),
                         "Coloc with no class".to_string()
                     ]
                 ),
@@ -8806,7 +8828,7 @@ pub(crate) mod tests {
         drain_ui_queue();
         assert_eq!(
             headers(),
-            ["Coloc with ClassB", "Coloc with exactly ClassB"]
+            ["Coloc with ClassB", "Coloc exactly ClassB"]
         );
 
         // Without ClassB as a partner class, no coloc column is left.

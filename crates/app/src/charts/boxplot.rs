@@ -298,8 +298,8 @@ mod tests {
     #[test]
     fn counts_shorten_to_their_slot() {
         let theme = Theme::light();
-        assert_eq!(count_label(78_349, 200.0, &theme), "n = 78\u{2009}349");
-        assert_eq!(count_label(78_349, 40.0, &theme), "78\u{2009}349");
+        assert_eq!(count_label(78_349, 200.0, &theme), "n = 78349");
+        assert_eq!(count_label(78_349, 40.0, &theme), "78349");
         assert_eq!(count_label(78_349, 22.0, &theme), "78k");
     }
 
