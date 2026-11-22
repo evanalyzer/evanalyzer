@@ -384,7 +384,9 @@ impl ResultsGenerator {
             };
             let pages_before = row as usize / limit as usize;
             return Ok(Some(
-                (1..=pages_before).map(|page| (page * limit as usize).to_string()).collect(),
+                (1..=pages_before)
+                    .map(|page| (page * limit as usize).to_string())
+                    .collect(),
             ));
         }
         // Every `limit`-th object before it: the last of each page before
@@ -9652,7 +9654,10 @@ mod tests {
                         columns: vec![Column::AreaSizePx],
                         with_coloc_details: false,
                         related_to: None,
-                        page: Pagination { limit: 2, after: None },
+                        page: Pagination {
+                            limit: 2,
+                            after: None,
+                        },
                         transpond_table: false,
                         sort: Some(SortBy {
                             column: Column::AreaSizePx,
