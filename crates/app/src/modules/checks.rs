@@ -18,13 +18,13 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use crate::workspace::extensions::classification_ext::ClassificationExt;
-use crate::workspace::extensions::images_ext::ImageListExt;
-use crate::workspace::module_editing::{remove_binding, same_kind, setting_at};
-use crate::workspace::module_insights::{
+use crate::modules::editing::{remove_binding, same_kind, setting_at};
+use crate::modules::insights::{
     ResolvedCommand, assigned_classes, channels_read, classes_in, created_classes, creates_objects,
     image_channels, parameters_setting, read_classes, resolved_commands,
 };
+use crate::project::classes::ClassificationExt;
+use crate::project::images::ImageListExt;
 use evanalyzer_cfg::{
     core_types::{
         ImageAddress, ModuleParamKey, ObjectClass, PipelineId, StepId, is_valid_measurement_id,
@@ -1239,7 +1239,7 @@ mod tests {
             "texture_01 is used once"
         );
     }
-    use crate::workspace::module_editing::{ClassRole, create_module, plan_module};
+    use crate::modules::editing::{ClassRole, create_module, plan_module};
     use evanalyzer_cfg::core_types::{ModuleParamKey, SegmentationClass};
     use evanalyzer_cfg::settings::classification_settings::Class;
     use evanalyzer_cfg::settings::modules::{ModuleParameterDef, ParamBinding, ParamValue};

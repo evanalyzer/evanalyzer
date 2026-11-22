@@ -35,7 +35,7 @@ use crate::training::RunningTraining;
 use crate::training::StartTrainingError;
 use crate::training::TrainedClassifier;
 use crate::training::TrainingRequest;
-use crate::workspace::settings::AppSettings;
+use crate::user::settings::AppSettings;
 use evanalyzer_cfg::core_types::InternalErrors;
 use std::path::Path;
 use std::sync::Arc;

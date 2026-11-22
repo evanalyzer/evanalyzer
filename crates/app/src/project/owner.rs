@@ -13,7 +13,7 @@ use crate::backend::Backend;
 use crate::backend::LocalBackend;
 use crate::images::ImageMeta;
 use crate::images::ImageSource;
-use crate::workspace::extensions::project_ext::ProjectExt;
+use crate::project::project_ext::ProjectExt;
 use evanalyzer_cfg::{
     core_types::{InternalErrors, ObjectClass, ObjectId, PipelineId},
     settings::{object_settings::ObjectMetricSettings, project_settings::ProjectSettings},
@@ -220,10 +220,7 @@ impl ProjectOwner {
 
     /// Loads a project from disk replacing the current project.
     pub fn load_project(&self, path: &PathBuf) -> Result<(), InternalErrors> {
-        let project = crate::workspace::extensions::project_ext::load_project(
-            self.backend.get().files(),
-            path,
-        )?;
+        let project = crate::project::project_ext::load_project(self.backend.get().files(), path)?;
         *lock_project_write(&self.project) = project;
         *self.current_path.lock().unwrap() = Some(path.clone());
         Ok(())
@@ -293,8 +290,7 @@ impl AppHandle {
 
     /// Loads a project from disk replacing the current project.
     pub fn load_project(&self, path: &PathBuf) -> Result<(), InternalErrors> {
-        let project =
-            crate::workspace::extensions::project_ext::load_project(self.backend().files(), path)?;
+        let project = crate::project::project_ext::load_project(self.backend().files(), path)?;
         *lock_project_write(&self.project) = project;
         Ok(())
     }
@@ -438,7 +434,7 @@ impl ProjectWithRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace::extensions::images_ext::ImageListExt;
+    use crate::project::images::ImageListExt;
     use evanalyzer_cfg::settings::images_settings::{ImageEntry, SeriesSettings};
     use std::collections::BTreeMap;
     use std::path::Path;

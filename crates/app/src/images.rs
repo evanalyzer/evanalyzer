@@ -11,15 +11,14 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 pub(crate) mod local;
+mod pixels;
 mod source;
 mod types;
 
 pub use source::ImageSource;
 pub use types::*;
 
-// The public paths these had before (`evanalyzer_app::images::...`); they
-// move into `images/pixels.rs` and `project/` with the project features.
-pub use crate::workspace::images::{
-    Erased, annotation_from_mask, erase_mask, stroke_mask, union_mask,
-};
-pub use crate::workspace::plate_layout::{PlateLayout, WellImages, plate_layout, texts_in_group};
+pub use pixels::{Erased, annotation_from_mask, erase_mask, stroke_mask, union_mask};
+
+// The public path it had before (`evanalyzer_app::images::...`).
+pub use crate::project::plate_layout::{PlateLayout, WellImages, plate_layout, texts_in_group};

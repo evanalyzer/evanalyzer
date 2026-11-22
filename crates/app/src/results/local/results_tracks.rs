@@ -848,7 +848,7 @@ mod tests {
         // µm per minute: 1 nm pixels, a frame every 30 s.
         let um_per_min = seven.motion.in_units(
             TrackMotion::VCL,
-            crate::workspace::settings::SpeedUnit::UmPerMin,
+            crate::user::settings::SpeedUnit::UmPerMin,
             Some(0.001),
             Some(30.0),
         );

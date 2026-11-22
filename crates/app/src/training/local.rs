@@ -13,11 +13,11 @@
 
 use crate::jobs::CancelHandle;
 use crate::jobs::local::join_job;
+use crate::project::image_entry::ImageEntryExt;
+use crate::project::images::ImageListExt;
 use crate::training::{
     PixelTrainingParams, RunningTraining, StartTrainingError, TrainedClassifier, TrainingItems,
 };
-use crate::workspace::extensions::image_entry_ext::ImageEntryExt;
-use crate::workspace::extensions::images_ext::ImageListExt;
 use evanalyzer_cfg::core_types::{
     InternalErrors, ObjectClass, SegmentationClass, TrainingProgressEvent,
 };
@@ -244,10 +244,10 @@ fn resolve_pixel_label(
 
 #[cfg(test)]
 mod tests {
-    use crate::files::LocalFileSystem;
-    use crate::workspace::ai_learning::{
+    use crate::ai::learning::{
         load_classifier_settings, pixel_class_labels_from_project, save_trained_model,
     };
+    use crate::files::LocalFileSystem;
     use evanalyzer_cfg::settings::ai_learning_settings::ObjectClassLabel;
     use std::path::PathBuf;
 

@@ -79,7 +79,7 @@ pub fn parse_file(path: &Path) -> Result<RdfModel, RdfError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace::bioimageio::rdf_model::ModelKind;
+    use crate::ai::bioimageio::rdf_model::ModelKind;
 
     #[test]
     fn parses_04_cellpose_style() {

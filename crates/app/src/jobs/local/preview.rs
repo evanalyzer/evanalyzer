@@ -9,7 +9,7 @@
 
 use super::spawn_job;
 use crate::jobs::{PreviewRequest, RunningJob, StartPreviewError};
-use crate::workspace::settings::ViewportMemorySettings;
+use crate::user::settings::ViewportMemorySettings;
 use evanalyzer_core::PreviewTileSettings;
 use log::{debug, error};
 

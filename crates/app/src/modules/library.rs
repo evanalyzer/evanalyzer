@@ -31,7 +31,7 @@ use evanalyzer_cfg::{
 };
 use std::path::Path;
 
-use crate::workspace::module_editing::{ClassRole, create_module, plan_module};
+use crate::modules::editing::{ClassRole, create_module, plan_module};
 
 /// The keys of the modules `steps` use - also the modules those use inside -
 /// each once, in the order first met.

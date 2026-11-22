@@ -13,6 +13,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 mod column;
+mod folders;
 pub(crate) mod local;
 mod source;
 mod types;
@@ -30,9 +31,7 @@ pub use view::{COLOR_SCALE_GRADIENT_STOPS, color_scale_gradient, view_settings};
 pub use local::ResultsGenerator as LocalResultsGenerator;
 pub use local::{colorize, colorize_thumbnail};
 
-// The public paths these had before (`evanalyzer_app::results::...`); they
-// move into `results/` with the project features.
-pub use crate::workspace::analysis_folders::{AnalysisFolder, analysis_folder, delete_analysis};
 /// A track's MSD over lag as Measure Track Motion fits it (the details
 /// panel's plot: the same points the step fitted).
 pub use evanalyzer_core::{MotionPoint, msd_curve};
+pub use folders::{AnalysisFolder, analysis_folder, delete_analysis};

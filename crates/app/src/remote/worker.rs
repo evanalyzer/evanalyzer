@@ -34,9 +34,9 @@ use crate::backend::Backend;
 use crate::images::ImageSource;
 use crate::jobs::CancelHandle;
 use crate::jobs::StartPreviewError;
+use crate::project::images::ImageListExt;
 use crate::results::ResultsSource;
 use crate::training::StartTrainingError;
-use crate::workspace::extensions::images_ext::ImageListExt;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::images_settings::ImageList;
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
@@ -518,7 +518,7 @@ impl Session {
             Request::StartPreview(mut req) => {
                 // The preview runs here: a number asked for is capped at
                 // what this computer can take.
-                let cap = crate::workspace::settings::ViewportMemorySettings::auto_preview_tiles(
+                let cap = crate::user::settings::ViewportMemorySettings::auto_preview_tiles(
                     crate::backend::local::system::cpu_ram_diagnostics().1,
                 );
                 req.max_visible_tiles = req.max_visible_tiles.map(|n| n.min(cap));
@@ -733,7 +733,7 @@ impl Session {
         if let (Some(save_to), Ok(model), true) =
             (&save_to, &result, self.disconnected.load(Ordering::SeqCst))
         {
-            match crate::workspace::ai_learning::save_trained_model(
+            match crate::ai::learning::save_trained_model(
                 self.backend.files(),
                 model,
                 &save_to.project_dir,
@@ -1050,7 +1050,7 @@ mod session_tests {
     use crate::images::{ImageChannel, ImageMeta, TileRequest};
     use crate::jobs::{AnalysisRequest, PreviewRequest, RunningJob};
     use crate::training::{RunningTraining, TrainingRequest};
-    use crate::workspace::settings::AppSettings;
+    use crate::user::settings::AppSettings;
     use evanalyzer_cfg::settings::ai_learning_settings::{
         AiLearningBackendSettings, AiLearningClassifierSettings, AiLearningSettings,
     };

@@ -29,11 +29,11 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::files::FileSystem;
-use crate::workspace::extensions::annotations_ext::same_shape;
-use crate::workspace::extensions::classification_ext::ClassificationExt;
-use crate::workspace::extensions::images_ext::ImageListExt;
-use crate::workspace::extensions::project_ext::ProjectExt;
-use crate::workspace::project_owner::ProjectWithRuntime;
+use crate::project::annotations::same_shape;
+use crate::project::classes::ClassificationExt;
+use crate::project::images::ImageListExt;
+use crate::project::owner::ProjectWithRuntime;
+use crate::project::project_ext::ProjectExt;
 use bitvec::prelude::{BitVec, Lsb0};
 use evanalyzer_cfg::core_types::{ImagePlane, ObjectClass, ZProjection};
 use evanalyzer_cfg::settings::classification_settings::Class;
@@ -1121,7 +1121,7 @@ mod tests {
         measure_pending(&mut pending, |path, series, objects| {
             let source =
                 crate::images::local::open_image_source(path).map_err(|e| e.to_string())?;
-            crate::workspace::annotation_measure::measure_on_source(&source, series, objects)
+            crate::annotations::measure::measure_on_source(&source, series, objects)
                 .map_err(|e| e.to_string())
         });
         apply_import(project, pending, replace, mapping)

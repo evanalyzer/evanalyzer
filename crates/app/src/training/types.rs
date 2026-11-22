@@ -156,7 +156,7 @@ pub struct TrainingRequest {
     pub settings: AiLearningSettings,
     pub pixel_params: PixelTrainingParams,
     /// Where the front end will save the model (with
-    /// [`save_trained_model`](crate::workspace::ai_learning::save_trained_model)).
+    /// [`save_trained_model`](crate::ai::learning::save_trained_model)).
     /// On a server, a training with a destination keeps running when the
     /// client disconnects, and the worker saves the model there itself.
     pub save_to: Option<ModelDestination>,

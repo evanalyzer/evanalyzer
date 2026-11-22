@@ -59,7 +59,7 @@ pub fn command_file_paths(project: &ProjectSettings) -> Vec<PathBuf> {
         }
     }
     let mut paths = Vec::new();
-    for command in crate::workspace::class_ids::all_commands(project) {
+    for command in crate::project::class_ids::all_commands(project) {
         collect(command.to_parameters(), &mut paths);
     }
     paths

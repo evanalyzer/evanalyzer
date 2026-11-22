@@ -25,7 +25,7 @@ pub trait ClassificationExt {
     fn add_class(&mut self, new_class: Class) -> ObjectClass;
 
     /// Adds `new_class` with its own id - one of
-    /// [`free_class_ids`](crate::workspace::class_ids::free_class_ids).
+    /// [`free_class_ids`](crate::project::class_ids::free_class_ids).
     ///
     /// # Errors
     /// If the id is 0 (the background's) or taken.
@@ -67,7 +67,7 @@ pub trait ClassificationExt {
 
 impl ClassificationExt for ClassificationSettings {
     fn add_class(&mut self, mut new_class: Class) -> ObjectClass {
-        new_class.id = crate::workspace::class_ids::next_class_id(self);
+        new_class.id = crate::project::class_ids::next_class_id(self);
         let id = new_class.global();
         self.classes_mut().push(new_class);
         id
@@ -122,7 +122,7 @@ impl ClassificationExt for ClassificationSettings {
         }
         let index = self.classes().iter().position(|c| c.global() == class_id)?;
         let mut copy = self.classes()[index].clone();
-        copy.id = crate::workspace::class_ids::next_class_id(self);
+        copy.id = crate::project::class_ids::next_class_id(self);
         copy.name = format!("{} copy", copy.name);
         let id = copy.global();
         self.classes_mut().insert(index + 1, copy);

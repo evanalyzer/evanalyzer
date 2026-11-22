@@ -15,7 +15,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use crate::workspace::extensions::images_ext::ImageListExt;
+use crate::project::images::ImageListExt;
 use chrono::Utc;
 use evanalyzer_cfg::{
     core_types::{
@@ -37,7 +37,7 @@ use evanalyzer_core::{ExpandedCommand, ScopeCounter, expand_step};
 use std::collections::BTreeSet;
 use std::ops::RangeInclusive;
 
-use crate::workspace::extensions::utils::assign_step_ids;
+use crate::project::utils::assign_step_ids;
 
 /// What a project class becomes in the new module.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -423,7 +423,7 @@ fn create_in_module(
         instance.values = handed_in.into_iter().collect();
     }
     outer.steps.insert(start, uses_new);
-    crate::workspace::extensions::utils::assign_module_step_ids(outer)?;
+    crate::project::utils::assign_module_step_ids(outer)?;
     let step = outer.steps[start].id;
 
     // A parameter of the outer module setting moved settings sets them
@@ -1252,7 +1252,7 @@ fn expand_in_module(
             step
         }),
     );
-    crate::workspace::extensions::utils::assign_module_step_ids(outer)?;
+    crate::project::utils::assign_module_step_ids(outer)?;
     let new_id: std::collections::BTreeMap<StepId, StepId> = old_ids
         .into_iter()
         .zip(
@@ -2745,9 +2745,9 @@ mod tests {
             ]
         );
         assert!(
-            crate::workspace::module_checks::check_modules(&project)
+            crate::modules::checks::check_modules(&project)
                 .iter()
-                .all(|p| p.severity != crate::workspace::module_checks::Severity::Error),
+                .all(|p| p.severity != crate::modules::checks::Severity::Error),
             "the module is valid"
         );
     }
@@ -3643,11 +3643,11 @@ mod tests {
             ["class_mapping.0.object_class", "input_classes"],
             "not the Threshold's or the mapping's segmentation class"
         );
-        let problems = crate::workspace::module_checks::check_module(&project, &definition.key);
+        let problems = crate::modules::checks::check_module(&project, &definition.key);
         assert!(
             !problems
                 .iter()
-                .any(|p| p.severity == crate::workspace::module_checks::Severity::Error),
+                .any(|p| p.severity == crate::modules::checks::Severity::Error),
             "{:?}",
             problems.iter().map(|p| &p.message).collect::<Vec<_>>()
         );
@@ -3663,7 +3663,7 @@ mod tests {
             .unwrap();
         parameter.bindings.reverse();
         let key = definition.key.clone();
-        let problems = crate::workspace::module_checks::check_module(&project, &key);
+        let problems = crate::modules::checks::check_module(&project, &key);
         assert!(
             problems
                 .iter()

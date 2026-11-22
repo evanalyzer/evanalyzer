@@ -460,13 +460,13 @@ mod tests {
     use crate::files::*;
     use crate::images::*;
     use crate::jobs::*;
+    use crate::project::ProjectWithRuntime;
+    use crate::project::images::ImageListExt;
+    use crate::project::project_ext::ProjectExt;
     use crate::remote::{RemoteBackend, Worker};
     use crate::results::*;
     use crate::training::*;
-    use crate::workspace::ProjectWithRuntime;
-    use crate::workspace::extensions::images_ext::ImageListExt;
-    use crate::workspace::extensions::project_ext::ProjectExt;
-    use crate::workspace::settings::AppSettings;
+    use crate::user::settings::AppSettings;
     use evanalyzer_cfg::core_types::InternalErrors;
     use evanalyzer_cfg::settings::classification_settings::Class;
     use std::path::{Path, PathBuf};

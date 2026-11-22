@@ -11,9 +11,9 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::project::image_entry::ImageEntryExt;
+use crate::project::images::ImageListExt;
 use crate::training::TrainedClassifier;
-use crate::workspace::extensions::image_entry_ext::ImageEntryExt;
-use crate::workspace::extensions::images_ext::ImageListExt;
 use evanalyzer_cfg::EVANALYZER_TRAINED_AI_MODELS;
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass, SegmentationClass};
 use evanalyzer_cfg::settings::ai_learning_settings::{
@@ -122,7 +122,7 @@ pub fn model_is_used(project: &ProjectSettings, model: &Path) -> bool {
     let Some(name) = model.file_name() else {
         return false;
     };
-    crate::workspace::class_ids::all_commands(project).any(|command| {
+    crate::project::class_ids::all_commands(project).any(|command| {
         let path = match command {
             PipelineCommand::PixelClassifier(s) => &s.model_path,
             PipelineCommand::AiObjectClassifier(s) => &s.model_path,
@@ -268,7 +268,7 @@ pub fn pipeline_for_model(
 /// classes, Extract Objects without a mapping) adds every class of the
 /// project.
 pub fn classes_the_pipelines_give(project: &ProjectSettings) -> Vec<ObjectClass> {
-    use crate::workspace::module_insights::{assigned_classes, resolved_commands};
+    use crate::modules::insights::{assigned_classes, resolved_commands};
     let mut ids = std::collections::BTreeSet::new();
     for pipeline in project.pipelines.iter().filter(|p| p.enabled) {
         for step in &pipeline.steps {

@@ -10,8 +10,8 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use crate::workspace::extensions::images_ext::ImageListExt;
-use crate::workspace::module_editing::{setting_at, uses_segmentation_class};
+use crate::modules::editing::{setting_at, uses_segmentation_class};
+use crate::project::images::ImageListExt;
 use evanalyzer_cfg::{
     core_types::{InternalErrors, MAX_CLASS_ID, ModuleParamKey, ObjectClass, SegmentationClass},
     settings::{
@@ -307,7 +307,7 @@ fn rewrite_value(value: &mut ParamValue, from: u32, to: u32) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace::module_editing::{ClassRole, create_module};
+    use crate::modules::editing::{ClassRole, create_module};
     use evanalyzer_cfg::core_types::{ImageAddress, PipelineId, StepId};
     use evanalyzer_cfg::settings::classification_settings::Class;
     use evanalyzer_cfg::settings::pipeline_command_settings::{

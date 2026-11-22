@@ -261,7 +261,7 @@ mod tests {
         configure_from(&LocalFileSystem::default(), path)
     }
     use super::*;
-    use crate::workspace::bioimageio::rdf_parser::parse_str;
+    use crate::ai::bioimageio::rdf_parser::parse_str;
 
     #[test]
     fn configures_cellpose_with_channels() {

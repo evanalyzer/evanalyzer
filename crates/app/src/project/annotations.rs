@@ -15,9 +15,9 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use crate::workspace::extensions::images_ext::ImageListExt;
-use crate::workspace::extensions::project_ext::ProjectExt;
-use crate::workspace::project_owner::ProjectWithRuntime;
+use crate::project::images::ImageListExt;
+use crate::project::owner::ProjectWithRuntime;
+use crate::project::project_ext::ProjectExt;
 use evanalyzer_cfg::core_types::{ObjectClass, ObjectId, SegmentationClass, ZProjection};
 use evanalyzer_cfg::settings::object_settings::{ObjectMetricSettings, TrackSettings};
 

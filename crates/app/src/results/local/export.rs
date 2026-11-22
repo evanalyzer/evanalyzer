@@ -23,7 +23,7 @@ use crate::results::{
     TimeCourseResult, TrackMotion, TrackSummary, TrackSummaryFilter,
 };
 use crate::results::{ProfileExportContent, ProfileFilter, ProfileLines, ProfilePoint};
-use crate::workspace::settings::SpeedUnit;
+use crate::user::settings::SpeedUnit;
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use evanalyzer_cfg::settings::images_settings::ImageMarker;
 use rust_xlsxwriter::{Color, Format, FormatAlign, Workbook, Worksheet, XlsxError};

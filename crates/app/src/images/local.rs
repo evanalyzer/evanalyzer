@@ -16,7 +16,7 @@ use evanalyzer_core::{ImageReader, ReadMode};
 use std::path::Path;
 
 /// Opens a local image as an [`ImageSource`]: one thread-safe reader, parsed
-/// once. [`AppHandle`](crate::workspace::AppHandle) caches it and serves both
+/// once. [`AppHandle`](crate::project::AppHandle) caches it and serves both
 /// metadata and tile reads from it, the channels of a tile read in parallel.
 pub fn open_image_source(path: &Path) -> Result<ImageReader, InternalErrors> {
     ImageReader::new(&path.to_path_buf(), ReadMode::SplitChannels)

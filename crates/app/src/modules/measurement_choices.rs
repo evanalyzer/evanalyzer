@@ -12,8 +12,8 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use crate::workspace::ProjectWithRuntime;
-use crate::workspace::module_insights::resolved_commands;
+use crate::modules::insights::resolved_commands;
+use crate::project::ProjectWithRuntime;
 use evanalyzer_cfg::core_types::measurement_label;
 use evanalyzer_cfg::settings::parameter_def::{ParamType, ParameterDef};
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;

@@ -20,7 +20,7 @@ use crate::images::{ImageMeta, ImageSource};
 use crate::jobs::{AnalysisRequest, JobInfo, PreviewRequest, RunningJob, StartPreviewError};
 use crate::results::ResultsSource;
 use crate::training::{RunningTraining, StartTrainingError, TrainingRequest};
-use crate::workspace::settings::AppSettings;
+use crate::user::settings::AppSettings;
 use evanalyzer_cfg::core_types::InternalErrors;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};

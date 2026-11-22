@@ -55,7 +55,7 @@ pub struct PreviewRequest {
     /// ([`ViewportMemorySettings::auto_preview_tiles`]); a server also caps
     /// a number asked for at that.
     ///
-    /// [`ViewportMemorySettings::auto_preview_tiles`]: crate::workspace::settings::ViewportMemorySettings::auto_preview_tiles
+    /// [`ViewportMemorySettings::auto_preview_tiles`]: crate::user::settings::ViewportMemorySettings::auto_preview_tiles
     pub max_visible_tiles: Option<u32>,
     /// How many tiles send their breakpoint image (the visible ones nearest
     /// the viewport centre) - they are kept where the window is, so the

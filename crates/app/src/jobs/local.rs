@@ -32,9 +32,9 @@ mod tests {
     use super::*;
     use crate::backend::LocalBackend;
     use crate::jobs::{PreviewRequest, PreviewViewport, RunningJob};
-    use crate::workspace::ProjectWithRuntime;
-    use crate::workspace::extensions::images_ext::ImageListExt;
-    use crate::workspace::extensions::project_ext::ProjectExt;
+    use crate::project::ProjectWithRuntime;
+    use crate::project::images::ImageListExt;
+    use crate::project::project_ext::ProjectExt;
     use evanalyzer_cfg::core_types::InternalErrors;
     use evanalyzer_cfg::settings::project_settings::ProjectSettings;
     use evanalyzer_core::ProgressEvent;
@@ -311,12 +311,12 @@ mod tests {
             }
         }
         // As loading a project does: the module's Threshold gets its ID.
-        crate::workspace::extensions::utils::assign_measurement_ids(&mut settings);
-        let problems = crate::workspace::module_checks::check_project(&settings);
+        crate::project::utils::assign_measurement_ids(&mut settings);
+        let problems = crate::modules::checks::check_project(&settings);
         assert!(
             problems
                 .iter()
-                .all(|p| p.severity != crate::workspace::module_checks::Severity::Error),
+                .all(|p| p.severity != crate::modules::checks::Severity::Error),
             "{problems:?}"
         );
 

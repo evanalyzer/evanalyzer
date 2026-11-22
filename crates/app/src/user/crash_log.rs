@@ -19,7 +19,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use crate::workspace::settings::get_user_folder;
+use crate::user::folder::get_user_folder;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::panic::PanicHookInfo;

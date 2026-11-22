@@ -42,7 +42,7 @@ use crate::results::WellFilter;
 use crate::results::{ImageEntry, ImageReviewChange};
 use crate::training::TrainingItems;
 use crate::training::TrainingRequest;
-use crate::workspace::settings::AppSettings;
+use crate::user::settings::AppSettings;
 use evanalyzer_cfg::core_types::{InternalErrors, PipelineId, StepId, TrainingProgressEvent};
 use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
@@ -847,7 +847,7 @@ mod tests {
             .trace_simple_type::<crate::results::TimeCourseLayout>()
             .unwrap();
         tracer
-            .trace_simple_type::<crate::workspace::settings::SpeedUnit>()
+            .trace_simple_type::<crate::user::settings::SpeedUnit>()
             .unwrap();
         tracer
             .trace_simple_type::<crate::results::TrackHistory>()

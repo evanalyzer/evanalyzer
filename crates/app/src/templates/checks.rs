@@ -15,11 +15,11 @@
 
 use crate::backend::LocalBackend;
 use crate::jobs::{PreviewRequest, PreviewViewport, StartPreviewError};
-use crate::workspace::ProjectWithRuntime;
-use crate::workspace::extensions::project_ext::ProjectExt;
-use crate::workspace::module_checks::{Severity, check_project};
-use crate::workspace::module_insights::resolved_commands;
-use crate::workspace::module_library::insert_module_template;
+use crate::modules::checks::{Severity, check_project};
+use crate::modules::insights::resolved_commands;
+use crate::modules::library::insert_module_template;
+use crate::project::ProjectWithRuntime;
+use crate::project::project_ext::ProjectExt;
 use evanalyzer_cfg::core_types::{ImageAddress, InternalErrors, PipelineId, StepId};
 use evanalyzer_cfg::settings::modules::{ModuleDefinition, ModuleInstance};
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;

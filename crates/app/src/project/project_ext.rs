@@ -10,17 +10,17 @@
 use crate::backend::Backend;
 use crate::files::FileSystem;
 use crate::images::ImageMeta;
-use crate::workspace::ProjectTmpSettings;
-use crate::workspace::ProjectWithRuntime;
-use crate::workspace::extensions::classification_ext::ClassificationExt;
-use crate::workspace::extensions::image_entry_ext::ImageEntryExt;
-use crate::workspace::extensions::images_ext::ImageListExt;
-use crate::workspace::extensions::object_ext::{ObjectExt, ShownPlane};
-use crate::workspace::extensions::utils::{
+use crate::project::ProjectTmpSettings;
+use crate::project::ProjectWithRuntime;
+use crate::project::classes::ClassificationExt;
+use crate::project::image_entry::ImageEntryExt;
+use crate::project::images::ImageListExt;
+use crate::project::objects::{ObjectExt, ShownPlane};
+use crate::project::utils::{
     ASSIGNED_WAVELENGTHS, channel_colors, class_name_of_channel, get_relative_key, is_in_root,
     rgb_to_u32, wavelength_colors,
 };
-use crate::workspace::{FocusChannels, PipelineFocus};
+use crate::project::{FocusChannels, PipelineFocus};
 use bitvec::{order::Lsb0, vec::BitVec};
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectId, PipelineId, ZProjection};
 use evanalyzer_cfg::settings::classification_settings::ClassificationSettings;
@@ -229,13 +229,13 @@ pub trait ProjectExt {
     fn set_selected_object_class(&mut self, object_class: ObjectClass);
     fn get_selected_object_class(&self) -> ObjectClass;
     /// Gives class `from` the id `to` with every reference to it (see
-    /// [`change_class_id`](crate::workspace::class_ids::change_class_id)),
+    /// [`change_class_id`](crate::project::class_ids::change_class_id)),
     /// and the editor's state too: the selected class, hidden classes.
     fn change_class_id(
         &mut self,
         from: u32,
         to: u32,
-    ) -> Result<crate::workspace::class_ids::ClassIdChange, InternalErrors>;
+    ) -> Result<crate::project::class_ids::ClassIdChange, InternalErrors>;
     fn delete_all_classes(&mut self);
     fn get_object_classes(&self) -> &Vec<Class>;
     fn get_image_absolute_path_from_relative(&self, path: &Path) -> Option<PathBuf>;
@@ -1245,8 +1245,8 @@ impl ProjectExt for ProjectWithRuntime {
         &mut self,
         from: u32,
         to: u32,
-    ) -> Result<crate::workspace::class_ids::ClassIdChange, InternalErrors> {
-        let change = crate::workspace::class_ids::change_class_id(&mut self.settings, from, to)?;
+    ) -> Result<crate::project::class_ids::ClassIdChange, InternalErrors> {
+        let change = crate::project::class_ids::change_class_id(&mut self.settings, from, to)?;
         let (old, new) = (ObjectClass::Global(from), ObjectClass::Global(to));
         let tmp = &mut self.tmp_settings;
         if tmp.selected_object_class == old {
@@ -1703,11 +1703,11 @@ impl ProjectExt for ProjectWithRuntime {
         // know about the project directory to resolve them.
         let mut on_disk_settings = self.settings.clone();
         if let Some(project_dir) = final_path.parent() {
-            crate::workspace::extensions::utils::relativize_file_paths(
+            crate::project::utils::relativize_file_paths(
                 &mut on_disk_settings.pipelines,
                 project_dir,
             );
-            crate::workspace::extensions::utils::relativize_module_file_paths(
+            crate::project::utils::relativize_module_file_paths(
                 &mut on_disk_settings.modules,
                 project_dir,
             );
@@ -2153,18 +2153,15 @@ pub fn load_project(
     // file's own directory, so the rest of the app can keep treating them as
     // plain absolute paths.
     if let Some(project_dir) = path.parent() {
-        crate::workspace::extensions::utils::resolve_file_paths(&mut inner.pipelines, project_dir);
-        crate::workspace::extensions::utils::resolve_module_file_paths(
-            &mut inner.modules,
-            project_dir,
-        );
+        crate::project::utils::resolve_file_paths(&mut inner.pipelines, project_dir);
+        crate::project::utils::resolve_module_file_paths(&mut inner.modules, project_dir);
     }
 
     // Values for parameters a module no longer has (e.g. a hand edit).
-    crate::workspace::module_editing::prune_module_values(&mut inner);
+    crate::modules::editing::prune_module_values(&mut inner);
 
     // Module mistakes show in the editor too; here they're logged.
-    for problem in crate::workspace::module_checks::check_project(&inner) {
+    for problem in crate::modules::checks::check_project(&inner) {
         warn!("{}", problem.message);
     }
 
@@ -2304,7 +2301,7 @@ mod tests {
     use crate::files::LocalFileSystem;
 
     use super::*;
-    use crate::workspace::extensions::utils::wavelength_to_rgb_u32;
+    use crate::project::utils::wavelength_to_rgb_u32;
     use evanalyzer_cfg::core_types::ImageAddress;
 
     fn fs() -> LocalFileSystem {
@@ -4142,7 +4139,7 @@ mod tests {
     /// the metadata is read, and for another image, the stored one counts.
     #[test]
     fn the_shown_plane_stays_within_the_current_images_frames_and_planes() {
-        use crate::workspace::extensions::object_ext::ShownPlane;
+        use crate::project::objects::ShownPlane;
         use evanalyzer_cfg::settings::images_settings::{TStackSettings, ZStackSettings};
         let mut project = ProjectWithRuntime::default();
         project.set_global_t_stack(&TStackSettings {
