@@ -273,7 +273,10 @@ impl ResultsStateController {
         } else {
             Theme::light()
         };
-        let Some(rendered) = self.render_chart(canvas.width, canvas.height, &theme) else {
+        // The data stays locked until its picture is queued: a drawing of
+        // older data (a resize meanwhile) can't land after a newer one.
+        let data = self.chart_data.lock().expect("Poisoned");
+        let Some(rendered) = self.render_data(&data, canvas.width, canvas.height, &theme) else {
             return;
         };
         *self.chart_marks.lock().expect("Poisoned") = rendered.marks;
@@ -283,18 +286,30 @@ impl ResultsStateController {
             rendered.stat_rows,
             rendered.tsv,
         );
+        drop(data);
     }
 
     /// The chart shown, drawn `width` × `height` in `theme` (the screen's,
     /// or an export's).
     pub(super) fn render_chart(&self, width: f64, height: f64, theme: &Theme) -> Option<Rendered> {
+        let data = self.chart_data.lock().expect("Poisoned");
+        self.render_data(&data, width, height, theme)
+    }
+
+    /// `data` drawn `width` × `height` in `theme`.
+    fn render_data(
+        &self,
+        data: &ChartData,
+        width: f64,
+        height: f64,
+        theme: &Theme,
+    ) -> Option<Rendered> {
         let canvas = ChartCanvas {
             width,
             height,
             dark: false,
         };
-        let data = self.chart_data.lock().expect("Poisoned");
-        Some(match &*data {
+        Some(match data {
             ChartData::None => return None,
             ChartData::Boxplot(boxes) => self.draw_boxplot(boxes, canvas, theme),
             ChartData::Bars(boxes) => self.draw_bars(boxes, canvas, theme),
