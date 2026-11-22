@@ -1077,6 +1077,16 @@ export global ResultsState {
     // look's colour).
     in property <[color]> chart-box-palette: [];
     callback chart-box-color-picked(string, int);
+    // Saving the chart shown (design canvas "Results rework", ChartExport):
+    // PNG (0), SVG (1) or its numbers as CSV (2); the size in cm; the PNG's
+    // dpi; a transparent ground (else white). The message says how it went.
+    in-out property <int> chart-export-format: 0;
+    in-out property <float> chart-export-width: 17;
+    in-out property <float> chart-export-height: 10;
+    in-out property <int> chart-export-dpi: 300;
+    in-out property <bool> chart-export-transparent: false;
+    in-out property <string> chart-export-message: "";
+    callback chart-export-save();
     // A click in a drawn chart (px) - the scatter's nearest dot.
     callback chart-picture-clicked(float, float);
     // The boxplot: a value per image (each image a dot), else per object.

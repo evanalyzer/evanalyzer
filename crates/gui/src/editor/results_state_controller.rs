@@ -13,6 +13,7 @@ use crate::helper::delayed_indicator::DelayedIndicator;
 use crate::helper::number_format::{NO_VALUE, format_number};
 
 mod chart_draw;
+mod chart_export;
 mod coloc;
 mod column_panel;
 mod paths;
@@ -811,6 +812,7 @@ impl ResultsStateController {
             self.attach_coloc_callbacks(&ui);
             self.attach_column_panel_callbacks(&ui);
             self.attach_chart_draw_callbacks(&ui);
+            self.attach_chart_export_callbacks(&ui);
             self.attach_tracks_callbacks(&ui);
             self.attach_tracks_all_callbacks(&ui);
             self.attach_paths_callbacks(&ui);

@@ -174,6 +174,23 @@ fn box_numbers(spec: &BoxSpec, look: &ChartLook) -> Vec<(String, String)> {
     lines
 }
 
+/// A drawn chart: its picture, the click areas and numbers of its boxes,
+/// where its dots lie.
+pub(super) struct Rendered {
+    pub svg: String,
+    hits: Vec<HitRow>,
+    stat_rows: Vec<(u32, Vec<String>)>,
+    tsv: String,
+    marks: Vec<evanalyzer_app::charts::Hit>,
+}
+
+impl Rendered {
+    /// Only a picture.
+    fn picture(svg: String) -> Self {
+        Self { svg, hits: Vec::new(), stat_rows: Vec::new(), tsv: String::new(), marks: Vec::new() }
+    }
+}
+
 /// The data of the chart shown - what `draw_chart` draws from (again at a
 /// new size or look).
 #[derive(Default)]
@@ -228,24 +245,35 @@ impl ResultsStateController {
             return;
         }
         let theme = if canvas.dark { Theme::dark() } else { Theme::light() };
+        let Some(rendered) = self.render_chart(canvas.width, canvas.height, &theme) else {
+            return;
+        };
+        *self.chart_marks.lock().expect("Poisoned") = rendered.marks;
+        self.push_picture(rendered.svg, rendered.hits, rendered.stat_rows, rendered.tsv);
+    }
+
+    /// The chart shown, drawn `width` × `height` in `theme` (the screen's,
+    /// or an export's).
+    pub(super) fn render_chart(&self, width: f64, height: f64, theme: &Theme) -> Option<Rendered> {
+        let canvas = ChartCanvas { width, height, dark: false };
         let data = self.chart_data.lock().expect("Poisoned");
-        match &*data {
-            ChartData::None => {}
-            ChartData::Boxplot(boxes) => self.draw_boxplot(boxes, canvas, &theme),
-            ChartData::Bars(boxes) => self.draw_bars(boxes, canvas, &theme),
-            ChartData::Histogram(histogram) => self.draw_histogram(histogram, canvas, &theme),
-            ChartData::Scatter(scatter) => self.draw_scatter(scatter, canvas, &theme),
+        Some(match &*data {
+            ChartData::None => return None,
+            ChartData::Boxplot(boxes) => self.draw_boxplot(boxes, canvas, theme),
+            ChartData::Bars(boxes) => self.draw_bars(boxes, canvas, theme),
+            ChartData::Histogram(histogram) => self.draw_histogram(histogram, canvas, theme),
+            ChartData::Scatter(scatter) => self.draw_scatter(scatter, canvas, theme),
             ChartData::Lines(spec) => {
                 let grid = self.chart_look.lock().expect("Poisoned").grid;
-                let drawing = lines::draw(spec, grid, Rgb(PALETTE[0]), &theme, canvas.width, canvas.height);
-                self.push_picture(drawing.svg, Vec::new(), Vec::new(), String::new());
+                let drawing = lines::draw(spec, grid, Rgb(PALETTE[0]), theme, width, height);
+                Rendered::picture(drawing.svg)
             }
-        }
+        })
     }
 
     /// The scatter: both values (µm), a dot per object - where they landed
     /// kept for clicks.
-    fn draw_scatter(&self, scatter: &ScatterResult, canvas: ChartCanvas, theme: &Theme) {
+    fn draw_scatter(&self, scatter: &ScatterResult, canvas: ChartCanvas, theme: &Theme) -> Rendered {
         let look = self.chart_look.lock().expect("Poisoned").clone();
         let (x_label, y_label, class_color) = {
             let classes = self.classes.lock().expect("Poisoned");
@@ -275,8 +303,7 @@ impl ResultsStateController {
             canvas.width,
             canvas.height,
         );
-        *self.chart_marks.lock().expect("Poisoned") = drawing.hits;
-        self.push_picture(drawing.svg, Vec::new(), Vec::new(), String::new());
+        Rendered { marks: drawing.hits, ..Rendered::picture(drawing.svg) }
     }
 
     /// A click in the scatter (px): the nearest dot within 8 px - its
@@ -307,7 +334,7 @@ impl ResultsStateController {
     }
 
     /// The histogram: the value's axis (µm), the counts, linear or log.
-    fn draw_histogram(&self, histogram: &HistogramResult, canvas: ChartCanvas, theme: &Theme) {
+    fn draw_histogram(&self, histogram: &HistogramResult, canvas: ChartCanvas, theme: &Theme) -> Rendered {
         let look = self.chart_look.lock().expect("Poisoned").clone();
         let (label, x_title, log_counts, class_color) = {
             let classes = self.classes.lock().expect("Poisoned");
@@ -340,12 +367,12 @@ impl ResultsStateController {
             canvas.width,
             canvas.height,
         );
-        self.push_picture(drawing.svg, Vec::new(), Vec::new(), String::new());
+        Rendered::picture(drawing.svg)
     }
 
     /// The bars: a group's mean and error bar, its dots - the boxplot's
     /// tooltip and numbers.
-    fn draw_bars(&self, boxes: &[BoxplotBox], canvas: ChartCanvas, theme: &Theme) {
+    fn draw_bars(&self, boxes: &[BoxplotBox], canvas: ChartCanvas, theme: &Theme) -> Rendered {
         let look = self.chart_look.lock().expect("Poisoned").clone();
         let (label, mut title) = {
             let classes = self.classes.lock().expect("Poisoned");
@@ -413,11 +440,11 @@ impl ResultsStateController {
                 (spec.color.0, cells)
             })
             .collect();
-        self.push_picture(drawing.svg, hits, stat_rows, stats_tsv(&specs));
+        Rendered { svg: drawing.svg, hits, stat_rows, tsv: stats_tsv(&specs), marks: Vec::new() }
     }
 
     /// The boxplot: a box per group, the look's options.
-    fn draw_boxplot(&self, boxes: &[BoxplotBox], canvas: ChartCanvas, theme: &Theme) {
+    fn draw_boxplot(&self, boxes: &[BoxplotBox], canvas: ChartCanvas, theme: &Theme) -> Rendered {
         let look = self.chart_look.lock().expect("Poisoned").clone();
         let (label, title) = {
             let classes = self.classes.lock().expect("Poisoned");
@@ -477,7 +504,7 @@ impl ResultsStateController {
             })
             .collect();
         let tsv = stats_tsv(&specs);
-        self.push_picture(svg, hits, stat_rows, tsv);
+        Rendered { svg, hits, stat_rows, tsv, marks: Vec::new() }
     }
 
     /// A drawn chart to the view: the picture, its marks, the numbers.

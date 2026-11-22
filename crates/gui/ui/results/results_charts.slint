@@ -912,9 +912,142 @@ component ChartsBar inherits ViewBar {
     InkHint {
         vertical-alignment: center;
         horizontal-stretch: 0;
-        text: root.kind == ResultsChartKind2.boxplot ? "Click a box for its numbers · double-click: its objects in the List"
+        text: ResultsState.chart-export-message != "" ? ResultsState.chart-export-message
+            : root.kind == ResultsChartKind2.boxplot ? "Click a box for its numbers · double-click: its objects in the List"
             : root.kind == ResultsChartKind2.bar ? "Click a bar for its numbers · double-click: its objects in the List"
             : root.kind == ResultsChartKind2.scatter ? "Click a point to see its object on its image." : "";
+    }
+    VerticalLayout {
+        alignment: center;
+        InkButton {
+            small: true;
+            text: "Save chart…";
+            tip: "The chart as PNG or SVG - as on screen, sized for a paper - or its numbers as CSV";
+            clicked => {
+                export-popup.show();
+            }
+        }
+    }
+    export-popup := PopupWindow {
+        x: root.width - self.width - 8px;
+        y: root.height + 4px;
+        width: 380px;
+        height: export-body.preferred-height;
+        close-policy: close-on-click-outside;
+        // Floating: blurred.
+        Rectangle {
+            background: Ink.panel-blur ? Ink.glass : Ink.panel;
+            backdrop-blur: Ink.backdrop;
+            border-width: 1px;
+            border-color: Ink.border;
+            border-radius: Ink.radius-md;
+            drop-shadow-color: Ink.shadow;
+            drop-shadow-blur: 24px;
+            drop-shadow-offset-y: 8px;
+        }
+        TouchArea { }
+        export-body := VerticalLayout {
+            padding: 14px;
+            spacing: 12px;
+            Text {
+                text: "Save the chart";
+                font-size: Ink.fs-heading;
+                font-weight: 600;
+                color: Ink.text;
+            }
+            InkSegmented {
+                equal: true;
+                label: "Format";
+                model: ["PNG", "SVG", "CSV data"];
+                selected: ResultsState.chart-export-format;
+                picked(i) => {
+                    ResultsState.chart-export-format = i;
+                }
+            }
+            if ResultsState.chart-export-format != 2: VerticalLayout {
+                spacing: 8px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    InkNumberField {
+                        label: "Width";
+                        unit: "cm";
+                        value: ResultsState.chart-export-width;
+                        min: 3;
+                        max: 60;
+                        step: 0.5;
+                        changed(v) => {
+                            ResultsState.chart-export-width = clamp(v.to-float(), 3, 60);
+                        }
+                    }
+                    Text {
+                        text: "×";
+                        color: Ink.text-dim;
+                        vertical-alignment: center;
+                    }
+                    InkNumberField {
+                        label: "Height";
+                        unit: "cm";
+                        value: ResultsState.chart-export-height;
+                        min: 3;
+                        max: 60;
+                        step: 0.5;
+                        changed(v) => {
+                            ResultsState.chart-export-height = clamp(v.to-float(), 3, 60);
+                        }
+                    }
+                }
+                InkSegmented {
+                    equal: true;
+                    label: "Size";
+                    model: ["One column", "Two columns", "As on screen"];
+                    selected: ResultsState.chart-export-width == 8.5 ? 0 : ResultsState.chart-export-width == 17.5 ? 1 : -1;
+                    picked(i) => {
+                        if i == 0 {
+                            ResultsState.chart-export-width = 8.5;
+                            ResultsState.chart-export-height = 6;
+                        } else if i == 1 {
+                            ResultsState.chart-export-width = 17.5;
+                            ResultsState.chart-export-height = 10;
+                        } else {
+                            ResultsState.chart-export-width = 26;
+                            ResultsState.chart-export-height = 16;
+                        }
+                    }
+                }
+                if ResultsState.chart-export-format == 0: InkSegmented {
+                    equal: true;
+                    label: "Resolution";
+                    model: ["150 dpi", "300 dpi", "600 dpi"];
+                    selected: ResultsState.chart-export-dpi == 150 ? 0 : ResultsState.chart-export-dpi == 600 ? 2 : 1;
+                    picked(i) => {
+                        ResultsState.chart-export-dpi = i == 0 ? 150 : i == 2 ? 600 : 300;
+                    }
+                }
+                InkSwitch {
+                    text: "Transparent ground";
+                    checked: ResultsState.chart-export-transparent;
+                    toggled(on) => {
+                        ResultsState.chart-export-transparent = on;
+                    }
+                }
+            }
+            InkHint {
+                text: ResultsState.chart-export-format == 2
+                    ? "The plotted numbers: a row per image (a dot each), box, bin, point or position."
+                    : "Exactly the chart on screen - the same look, light colours. Text is about 8 pt.";
+            }
+            HorizontalLayout {
+                alignment: end;
+                InkButton {
+                    kind: InkButtonKind.primary;
+                    text: "Save…";
+                    clicked => {
+                        export-popup.close();
+                        ResultsState.chart-export-save();
+                    }
+                }
+            }
+        }
     }
 }
 
