@@ -16,7 +16,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use crate::api::FileSystem;
+use crate::files::FileSystem;
 use chrono::Utc;
 use evanalyzer_cfg::{
     CURRENT_MODULE_TEMPLATE_SCHEMA_VERSION, MODULE_TEMPLATE_EXTENSION,
@@ -403,7 +403,7 @@ pub fn update_from_library(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::LocalFileSystem;
+    use crate::files::LocalFileSystem;
     use evanalyzer_cfg::core_types::{ModuleParamKey, PipelineId, StepId};
     use evanalyzer_cfg::settings::modules::{
         ModuleInstance, ModuleParameterDef, ParamBinding, ParamValue,

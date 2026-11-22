@@ -13,7 +13,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use crate::api::{ImageSource, TileRequest};
+use crate::images::{ImageSource, TileRequest};
 use evanalyzer_cfg::core_types::{InternalErrors, ZProjection};
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 use evanalyzer_core::measure_on_planes;
@@ -61,7 +61,7 @@ pub fn measure_on_source(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::local::image_reader::open_image_source;
+    use crate::images::local::open_image_source;
     use bitvec::prelude::*;
     use evanalyzer_cfg::core_types::ImagePlane;
     use evanalyzer_cfg::core_types::ImageTile;
@@ -197,13 +197,13 @@ mod tests {
     }
 
     impl ImageSource for Recording {
-        fn meta(&self) -> &crate::api::ImageMeta {
+        fn meta(&self) -> &crate::images::ImageMeta {
             self.inner.meta()
         }
         fn read_tile(
             &self,
             req: &TileRequest,
-        ) -> Result<Vec<crate::api::ImageChannel>, InternalErrors> {
+        ) -> Result<Vec<crate::images::ImageChannel>, InternalErrors> {
             self.requests.lock().unwrap().push(req.clone());
             if self.fail {
                 return Err(InternalErrors::Io("tile unreadable".into()));

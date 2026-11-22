@@ -1,8 +1,10 @@
 //! # evanalyzer_app
 //!
-//! - [`api`]: the contract between front ends and backends.
-//! - [`backend`]: where the work runs - [`backend::local`] (this process,
-//!   the only module calling `evanalyzer_core`) or [`backend::remote`].
+//! - [`api`]: what travels between front ends and backends.
+//! - [`backend`]: the `Backend` trait and [`backend::local`] (this process,
+//!   the only module calling `evanalyzer_core`).
+//! - [`remote`]: everything on the network - the remote backend, the
+//!   worker and the wire between them.
 //! - [`workspace`]: the UI side - the open project, editing, undo.
 //!
 //! **Author:** Joachim Danmayr
@@ -12,8 +14,13 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-mod api;
 mod backend;
+mod files;
+pub mod images;
+mod jobs;
+mod remote;
+pub mod results;
+mod training;
 mod workspace;
 
 pub mod charts;
@@ -114,85 +121,13 @@ pub mod memory {
     pub use evanalyzer_core::memory::format_binary_bytes;
 }
 
-pub mod results {
-    pub use crate::api::Aggregation;
-    pub use crate::api::BoxplotBox;
-    pub use crate::api::BoxplotFilter;
-    pub use crate::api::BoxplotGroup;
-    pub use crate::api::COLOR_SCALE_GRADIENT_STOPS;
-    pub use crate::api::Cell;
-    pub use crate::api::CellValue;
-    pub use crate::api::ColorScale;
-    pub use crate::api::ColorSchema;
-    pub use crate::api::Column;
-    pub use crate::api::ColumnEntry;
-    pub use crate::api::DatabaseResult;
-    pub use crate::api::ExportFormat;
-    pub use crate::api::GroupedByImageFilter;
-    pub use crate::api::Grouping;
-    pub use crate::api::HistogramFilter;
-    pub use crate::api::HistogramResult;
-    pub use crate::api::ImageEntry;
-    pub use crate::api::ImageHeatmapFilter;
-    pub use crate::api::ImageReviewChange;
-    pub use crate::api::ListFilter;
-    pub use crate::api::MeasurementColumn;
-    pub use crate::api::MotionKind;
-    pub use crate::api::Pagination;
-    pub use crate::api::PlaneFilter;
-    pub use crate::api::PlateFilter;
-    pub use crate::api::PlateFilterMulti;
-    pub use crate::api::PlateSize;
-    pub use crate::api::ResultExport;
-    pub use crate::api::ResultsSource;
-    pub use crate::api::RunStatus;
-    pub use crate::api::ScatterFilter;
-    pub use crate::api::ScatterResult;
-    pub use crate::api::SortBy;
-    pub use crate::api::View;
-    pub use crate::api::WellFilter;
-    pub use crate::api::WellSize;
-    pub use crate::api::WellsBatchFilter;
-    pub use crate::api::WellsBatchFilterMulti;
-    pub use crate::api::color_scale_gradient;
-    pub use crate::api::view_settings;
-    pub use crate::api::{ChannelDisplay, DrawBrightness, DrawStyle, DrawnImages, ImageDisplay};
-    pub use crate::api::{
-        ChildColumn, ChildValue, ColocColumn, ColocMatch, ParentColumn, ParentValue, RelatedTo,
-    };
-    pub use crate::api::{
-        ImageObjectsFilter, ImageTracks, ImageTracksFilter, LineageEvent, ResultObject,
-        TrackFromStart, TrackLineage, TrackMotion, TrackPath, TrackPaths, TrackPathsFilter,
-        TrackPoint, drift_at,
-    };
-    pub use crate::api::{
-        ProfileExport, ProfileExportContent, ProfileFilter, ProfileLines, ProfileObject,
-        ProfilePoint, ProfileResult, ProfileStep, ProfileStepFilter,
-    };
-    pub use crate::api::{TREE_NEURON_VALUES, TreeNeuron, TreeNeurons, TreeSegment};
-    pub use crate::api::{
-        TimeCourseExport, TimeCourseFilter, TimeCourseLayout, TimeCourseLines, TimeCourseNormalize,
-        TimeCoursePoint, TimeCourseResult, TimeCourseStat, TrackHistory, TrackSummary,
-        TrackSummaryExport, TrackSummaryFilter,
-    };
-    pub use crate::backend::local::results::{colorize, colorize_thumbnail};
-    pub use crate::workspace::analysis_folders::{
-        AnalysisFolder, analysis_folder, delete_analysis,
-    };
-    /// A track's MSD over lag as Measure Track Motion fits it (the details
-    /// panel's plot: the same points the step fitted).
-    pub use evanalyzer_core::{MotionPoint, msd_curve};
-
-    pub use crate::backend::local::ResultsGenerator as LocalResultsGenerator;
-}
-
 pub mod fs {
-    pub use crate::api::DirEntry;
-    pub use crate::api::FileSystem;
-    pub use crate::api::Place;
-    pub use crate::api::PlaceKind;
+    pub use crate::files::DirEntry;
+    pub use crate::files::FileSystem;
+    pub use crate::files::Place;
+    pub use crate::files::PlaceKind;
 
-    pub use crate::backend::LocalFileSystem;
+    pub use crate::files::LocalFileSystem;
 }
 
 pub mod utils {
@@ -239,7 +174,7 @@ pub mod bioimageio {
 }
 
 pub mod templates {
-    pub use crate::api::TemplateFolders;
+    pub use crate::backend::TemplateFolders;
     pub use crate::workspace::templates::load_module_template_from_file;
     pub use crate::workspace::templates::load_module_templates;
     pub use crate::workspace::templates::load_project_template_from_file;
@@ -247,13 +182,13 @@ pub mod templates {
 }
 
 pub mod ai_learning {
-    pub use crate::api::CancelHandle;
-    pub use crate::api::ModelDestination;
-    pub use crate::api::PixelTrainingParams;
-    pub use crate::api::RunningTraining;
-    pub use crate::api::StartTrainingError;
-    pub use crate::api::TrainingItems;
-    pub use crate::api::TrainingRequest;
+    pub use crate::jobs::CancelHandle;
+    pub use crate::training::ModelDestination;
+    pub use crate::training::PixelTrainingParams;
+    pub use crate::training::RunningTraining;
+    pub use crate::training::StartTrainingError;
+    pub use crate::training::TrainingItems;
+    pub use crate::training::TrainingRequest;
     pub use crate::workspace::ai_learning::load_classifier_settings;
     pub use crate::workspace::ai_learning::model_is_used;
     pub use crate::workspace::ai_learning::model_output_path;
@@ -266,9 +201,9 @@ pub mod ai_learning {
 }
 
 pub mod backends {
-    pub use crate::api::Backend;
-    pub use crate::api::ConnectionSecurity;
-    pub use crate::api::SystemInfo;
+    pub use crate::backend::Backend;
+    pub use crate::backend::ConnectionSecurity;
+    pub use crate::backend::SystemInfo;
     pub mod local {
         pub use crate::backend::LocalBackend;
         pub use crate::backend::local::system::{
@@ -276,22 +211,22 @@ pub mod backends {
         };
     }
     pub mod remote {
-        pub use crate::backend::RemoteBackend;
-        pub use crate::backend::ServerCertificate;
-        pub use crate::backend::TlsTrust;
-        pub use crate::backend::Worker;
-        pub use crate::backend::generate_token;
-        pub use crate::backend::server_certificate;
+        pub use crate::remote::RemoteBackend;
+        pub use crate::remote::ServerCertificate;
+        pub use crate::remote::TlsTrust;
+        pub use crate::remote::Worker;
+        pub use crate::remote::generate_token;
+        pub use crate::remote::server_certificate;
     }
 }
 
 pub mod analysis {
-    pub use crate::api::AnalysisRequest;
-    pub use crate::api::CancelHandle;
-    pub use crate::api::JobInfo;
-    pub use crate::api::JobState;
-    pub use crate::api::ProgressEvent;
-    pub use crate::api::RunningJob;
+    pub use crate::jobs::AnalysisRequest;
+    pub use crate::jobs::CancelHandle;
+    pub use crate::jobs::JobInfo;
+    pub use crate::jobs::JobState;
+    pub use crate::jobs::ProgressEvent;
+    pub use crate::jobs::RunningJob;
     pub use evanalyzer_core::check_pipeline_channels;
     pub use evanalyzer_core::random_job_name;
     pub use evanalyzer_core::{
@@ -300,29 +235,7 @@ pub mod analysis {
 }
 
 pub mod preview {
-    pub use crate::api::PreviewRequest;
-    pub use crate::api::PreviewViewport;
-    pub use crate::api::StartPreviewError;
-}
-
-pub mod images {
-    pub use crate::api::FileChannel;
-    pub use crate::api::ImageChannel;
-    pub use crate::api::ImageContainer;
-    pub use crate::api::ImageInfo;
-    pub use crate::api::ImageMeta;
-    pub use crate::api::ImageSource;
-    pub use crate::api::ManagedImage;
-    pub use crate::api::Point2d;
-    pub use crate::api::PyramidInfo;
-    pub use crate::api::TileRequest;
-    pub use crate::api::{
-        DeviceInfo, EnvironmentInfo, ExperimenterInfo, FilterInfo, LightSourceInfo,
-    };
-    pub use crate::workspace::images::{
-        Erased, annotation_from_mask, erase_mask, stroke_mask, union_mask,
-    };
-    pub use crate::workspace::plate_layout::{
-        PlateLayout, WellImages, plate_layout, texts_in_group,
-    };
+    pub use crate::jobs::PreviewRequest;
+    pub use crate::jobs::PreviewViewport;
+    pub use crate::jobs::StartPreviewError;
 }

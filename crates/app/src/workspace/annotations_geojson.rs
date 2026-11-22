@@ -28,7 +28,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use crate::api::FileSystem;
+use crate::files::FileSystem;
 use crate::workspace::extensions::annotations_ext::same_shape;
 use crate::workspace::extensions::classification_ext::ClassificationExt;
 use crate::workspace::extensions::images_ext::ImageListExt;
@@ -1083,7 +1083,7 @@ mod tests {
         let file = dir.path().join("all.geojson");
         let written = export_image_geojson(
             &project,
-            &crate::backend::LocalFileSystem::default(),
+            &crate::files::LocalFileSystem::default(),
             Path::new("a.tif"),
             &HashSet::from([Some(nuclei)]),
             &file,
@@ -1116,11 +1116,11 @@ mod tests {
         replace: bool,
         mapping: &HashMap<String, ClassTarget>,
     ) -> ImportReport {
-        let files = crate::backend::LocalFileSystem::default();
+        let files = crate::files::LocalFileSystem::default();
         let mut pending = read_image_geojson(project, &files, file, Path::new(rel), 0).unwrap();
         measure_pending(&mut pending, |path, series, objects| {
-            let source = crate::backend::local::image_reader::open_image_source(path)
-                .map_err(|e| e.to_string())?;
+            let source =
+                crate::images::local::open_image_source(path).map_err(|e| e.to_string())?;
             crate::workspace::annotation_measure::measure_on_source(&source, series, objects)
                 .map_err(|e| e.to_string())
         });
@@ -1163,7 +1163,7 @@ mod tests {
         assert!(image_annotation_classes(&source, Path::new("sub/b.tif"), &[]).is_empty());
 
         let dir = tempfile::tempdir().unwrap();
-        let files = crate::backend::LocalFileSystem::default();
+        let files = crate::files::LocalFileSystem::default();
         // Only the Nuclei: one.
         let only = dir.path().join("only nuclei.geojson");
         let written = export_image_geojson(
@@ -1359,7 +1359,7 @@ mod tests {
         std::fs::write(&file, text.to_string()).unwrap();
 
         // What the mapping dialog lists; the defaults: unknown names new.
-        let files = crate::backend::LocalFileSystem::default();
+        let files = crate::files::LocalFileSystem::default();
         let pending = read_image_geojson(&project, &files, &file, Path::new("a.tif"), 0).unwrap();
         let names: Vec<(String, usize)> = pending
             .file_classes()

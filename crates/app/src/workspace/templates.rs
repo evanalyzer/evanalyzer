@@ -7,7 +7,8 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use crate::api::{Backend, FileSystem};
+use crate::backend::Backend;
+use crate::files::FileSystem;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::templates::{ModuleTemplate, ProjectTemplate};
 use evanalyzer_cfg::{MODULE_TEMPLATE_EXTENSION, PROJECT_FILE_TEMPLATE_EXTENSIONS};
@@ -101,7 +102,7 @@ fn load_templates_from_folder<T: serde::de::DeserializeOwned>(
 
 #[cfg(test)]
 mod tests {
-    use crate::backend::LocalFileSystem;
+    use crate::files::LocalFileSystem;
 
     use super::*;
     use evanalyzer_cfg::core_types::{ImageAddress, PipelineId};

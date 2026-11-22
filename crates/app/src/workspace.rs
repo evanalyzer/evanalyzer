@@ -2,7 +2,7 @@
 //!
 //! The UI side: the open project and everything the user does with it -
 //! editing, undo, templates, settings. Reaches files and compute only
-//! through `crate::api::Backend`, so it works the same against a server.
+//! through `crate::backend::Backend`, so it works the same against a server.
 //!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-10-10

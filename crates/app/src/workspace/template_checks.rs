@@ -13,8 +13,8 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use crate::api::{PreviewRequest, PreviewViewport, StartPreviewError};
 use crate::backend::LocalBackend;
+use crate::jobs::{PreviewRequest, PreviewViewport, StartPreviewError};
 use crate::workspace::ProjectWithRuntime;
 use crate::workspace::extensions::project_ext::ProjectExt;
 use crate::workspace::module_checks::{Severity, check_project};
@@ -279,7 +279,7 @@ fn check_usable(mut settings: ProjectSettings, image: Option<&Path>) -> Template
         check.not_run = Some(format!("the image hasn't the channels it reads ({e})"));
         return check;
     }
-    let preview = crate::backend::local::job::start_preview(PreviewRequest {
+    let preview = crate::jobs::local::start_preview(PreviewRequest {
         settings,
         project_path: dir.path().to_path_buf(),
         viewport: PreviewViewport {

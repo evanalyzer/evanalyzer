@@ -7,9 +7,9 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use crate::api::Backend;
-use crate::api::FileSystem;
-use crate::api::ImageMeta;
+use crate::backend::Backend;
+use crate::files::FileSystem;
+use crate::images::ImageMeta;
 use crate::workspace::ProjectTmpSettings;
 use crate::workspace::ProjectWithRuntime;
 use crate::workspace::extensions::classification_ext::ClassificationExt;
@@ -152,8 +152,8 @@ pub trait ProjectExt {
     fn drawn_image_display(
         &self,
     ) -> (
-        crate::api::ImageDisplay,
-        BTreeMap<String, crate::api::ImageDisplay>,
+        crate::results::ImageDisplay,
+        BTreeMap<String, crate::results::ImageDisplay>,
     );
     fn channel_display_colors(&self, channels: &[(i32, f32)]) -> BTreeMap<i32, [f32; 3]>;
     fn set_grayscale(&mut self, grayscale: bool);
@@ -744,8 +744,8 @@ impl ProjectExt for ProjectWithRuntime {
     fn drawn_image_display(
         &self,
     ) -> (
-        crate::api::ImageDisplay,
-        BTreeMap<String, crate::api::ImageDisplay>,
+        crate::results::ImageDisplay,
+        BTreeMap<String, crate::results::ImageDisplay>,
     ) {
         let global = &self.images.settings;
         let project = image_display(global, None);
@@ -2189,7 +2189,7 @@ fn read_text(files: &dyn FileSystem, path: &Path) -> Result<String, InternalErro
 fn image_display(
     global: &GlobalImageSettings,
     series: Option<&SeriesSettings>,
-) -> crate::api::ImageDisplay {
+) -> crate::results::ImageDisplay {
     let z_projection = series
         .and_then(|s| s.z_stack.as_ref())
         .or(global.z_stack.as_ref())
@@ -2213,13 +2213,13 @@ fn image_display(
                 .and_then(|c| c.histogram.as_ref())
                 .or(project.and_then(|c| c.histogram.as_ref()))
                 .map(|h| (h.min, h.max));
-            (id, crate::api::ChannelDisplay { visible, range })
+            (id, crate::results::ChannelDisplay { visible, range })
         })
         // Shown and auto-scaled is what a channel missing here gets: left
         // out, so an image without settings of its own equals the project.
-        .filter(|(_, shown)| *shown != crate::api::ChannelDisplay::default())
+        .filter(|(_, shown)| *shown != crate::results::ChannelDisplay::default())
         .collect();
-    crate::api::ImageDisplay {
+    crate::results::ImageDisplay {
         z_projection,
         channels,
     }
@@ -2301,7 +2301,7 @@ mod tests {
     }
 
     use crate::backend::LocalBackend;
-    use crate::backend::LocalFileSystem;
+    use crate::files::LocalFileSystem;
 
     use super::*;
     use crate::workspace::extensions::utils::wavelength_to_rgb_u32;
@@ -3240,7 +3240,7 @@ mod tests {
         let mut resolutions = BTreeMap::new();
         resolutions.insert(
             0,
-            crate::api::PyramidInfo {
+            crate::images::PyramidInfo {
                 width: 4,
                 height: 4,
                 nr_bits: 8,

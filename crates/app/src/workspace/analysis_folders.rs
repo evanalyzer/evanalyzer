@@ -13,7 +13,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use crate::api::FileSystem;
+use crate::files::FileSystem;
 use evanalyzer_cfg::RESULTS_FILE_EXTENSION;
 use std::path::{Path, PathBuf};
 
@@ -170,7 +170,7 @@ fn count_files(files: &dyn FileSystem, dir: &Path) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::LocalFileSystem;
+    use crate::files::LocalFileSystem;
     use evanalyzer_cfg::core_types::InternalErrors;
 
     /// A project with one analysis: results file and journal, settings,
@@ -289,13 +289,13 @@ mod tests {
     }
 
     impl FileSystem for Stubborn {
-        fn places(&self) -> Result<Vec<crate::api::Place>, InternalErrors> {
+        fn places(&self) -> Result<Vec<crate::files::Place>, InternalErrors> {
             self.inner.places()
         }
-        fn list_dir(&self, dir: &Path) -> Result<Vec<crate::api::DirEntry>, InternalErrors> {
+        fn list_dir(&self, dir: &Path) -> Result<Vec<crate::files::DirEntry>, InternalErrors> {
             self.inner.list_dir(dir)
         }
-        fn stat(&self, path: &Path) -> Result<Option<crate::api::DirEntry>, InternalErrors> {
+        fn stat(&self, path: &Path) -> Result<Option<crate::files::DirEntry>, InternalErrors> {
             if self.stat_fails {
                 return Err(InternalErrors::Io("stat refused".into()));
             }

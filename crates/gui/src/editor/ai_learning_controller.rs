@@ -684,7 +684,7 @@ impl AiLearningController {
 
     /// Builds an `AiLearningSettings` from the dialog's state, gathers
     /// training data from the project (every object with an assigned class -
-    /// see `evanalyzer_app::backend::local::training::start_training`'s doc comment;
+    /// see `evanalyzer_app`'s `training::local::start_training`'s doc comment;
     /// `training_images`/`training_objects` aren't needed here since labels
     /// already live on the project's objects via `assign_object_class`, not
     /// in Slint-only state), then runs training on a background thread and

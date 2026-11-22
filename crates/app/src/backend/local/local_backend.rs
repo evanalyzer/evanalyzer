@@ -7,23 +7,23 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use crate::api::AnalysisRequest;
-use crate::api::Backend;
-use crate::api::FileSystem;
-use crate::api::ImageMeta;
-use crate::api::ImageSource;
-use crate::api::PreviewRequest;
-use crate::api::ResultsSource;
-use crate::api::RunningJob;
-use crate::api::RunningTraining;
-use crate::api::StartPreviewError;
-use crate::api::StartTrainingError;
-use crate::api::SystemInfo;
-use crate::api::TemplateFolders;
-use crate::api::TrainingRequest;
-use crate::backend::LocalFileSystem;
-use crate::backend::local::image_reader::open_image_source;
-use crate::backend::local::results::LocalResults;
+use crate::backend::Backend;
+use crate::backend::SystemInfo;
+use crate::backend::TemplateFolders;
+use crate::files::FileSystem;
+use crate::files::LocalFileSystem;
+use crate::images::ImageMeta;
+use crate::images::ImageSource;
+use crate::images::local::open_image_source;
+use crate::jobs::AnalysisRequest;
+use crate::jobs::PreviewRequest;
+use crate::jobs::RunningJob;
+use crate::jobs::StartPreviewError;
+use crate::results::ResultsSource;
+use crate::results::local::LocalResults;
+use crate::training::RunningTraining;
+use crate::training::StartTrainingError;
+use crate::training::TrainingRequest;
 use crate::workspace::settings::{self, AppSettings};
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_core::{ImageReader, ReadMode};
@@ -138,7 +138,7 @@ impl Backend for LocalBackend {
 
     fn start_analysis(&self, req: AnalysisRequest) -> Result<RunningJob, InternalErrors> {
         self.check_project_paths(Some(&req.project_path), &req.settings)?;
-        super::job::start_analysis(
+        crate::jobs::local::start_analysis(
             req.settings,
             req.project_path,
             req.job_name,
@@ -149,13 +149,13 @@ impl Backend for LocalBackend {
 
     fn start_preview(&self, req: PreviewRequest) -> Result<RunningJob, StartPreviewError> {
         self.check_project_paths(Some(&req.project_path), &req.settings)?;
-        super::job::start_preview(req)
+        crate::jobs::local::start_preview(req)
     }
 
     fn start_training(&self, req: TrainingRequest) -> Result<RunningTraining, StartTrainingError> {
         self.check_project_paths(None, &req.project)
             .map_err(StartTrainingError::Failed)?;
-        super::training::start_training(&req.project, req.settings, req.pixel_params)
+        crate::training::local::start_training(&req.project, req.settings, req.pixel_params)
     }
 
     fn open_image(&self, path: &Path) -> Result<Arc<dyn ImageSource>, InternalErrors> {

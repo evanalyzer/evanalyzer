@@ -11,7 +11,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use crate::api::TrainedClassifier;
+use crate::training::TrainedClassifier;
 use crate::workspace::extensions::image_entry_ext::ImageEntryExt;
 use crate::workspace::extensions::images_ext::ImageListExt;
 use evanalyzer_cfg::EVANALYZER_TRAINED_AI_MODELS;
@@ -301,7 +301,7 @@ pub fn model_output_path(project_dir: &Path, model_name: &str) -> PathBuf {
 ///
 /// Written through `files` (the backend's), next to the project.
 pub fn save_trained_model(
-    files: &dyn crate::api::FileSystem,
+    files: &dyn crate::files::FileSystem,
     classifier: &TrainedClassifier,
     project_dir: &Path,
     model_name: &str,
@@ -320,7 +320,7 @@ pub fn save_trained_model(
 /// the server is read. Only the `settings` part is parsed - the fitted model
 /// can be large and isn't needed here.
 pub fn load_classifier_settings(
-    files: &dyn crate::api::FileSystem,
+    files: &dyn crate::files::FileSystem,
     path: &Path,
 ) -> Result<AiLearningSettings, InternalErrors> {
     #[derive(Deserialize)]
@@ -664,7 +664,7 @@ mod tests {
         assert_eq!(prediction_target(&project, None), None);
     }
 
-    use crate::backend::LocalFileSystem;
+    use crate::files::LocalFileSystem;
     use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 
     use super::*;

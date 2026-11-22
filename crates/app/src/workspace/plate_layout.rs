@@ -11,7 +11,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use crate::backend::local::results::{
+use crate::results::local::{
     AUTO_GROUPING_PATTERNS, FOLDER_GROUPING_REGEX, best_matching_dimensions, col_number_to_index,
     row_index_to_letter, row_letter_to_index,
 };

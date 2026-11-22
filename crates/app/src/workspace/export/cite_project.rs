@@ -57,7 +57,7 @@ pub fn command_citations(
 /// Writes through `files` (the backend's), so the citation lands next to
 /// the project wherever it lives.
 pub fn cite_project(
-    files: &dyn crate::api::FileSystem,
+    files: &dyn crate::files::FileSystem,
     config: &ProjectSettings,
     output_file: &PathBuf,
 ) -> Result<(), InternalErrors> {
@@ -258,7 +258,7 @@ fn methods_text(pipelines: &[(&str, Vec<(String, Vec<&'static str>)>)]) -> Strin
 
 #[cfg(test)]
 mod tests {
-    use crate::backend::LocalFileSystem;
+    use crate::files::LocalFileSystem;
 
     use super::*;
     use evanalyzer_cfg::core_types::{ImageAddress, PipelineId};

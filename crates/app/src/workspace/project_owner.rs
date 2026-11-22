@@ -9,10 +9,10 @@
 
 // app/src/project_owner.rs
 
-use crate::api::Backend;
-use crate::api::ImageMeta;
-use crate::api::ImageSource;
+use crate::backend::Backend;
 use crate::backend::LocalBackend;
+use crate::images::ImageMeta;
+use crate::images::ImageSource;
 use crate::workspace::extensions::project_ext::ProjectExt;
 use evanalyzer_cfg::{
     core_types::{InternalErrors, ObjectClass, ObjectId, PipelineId},

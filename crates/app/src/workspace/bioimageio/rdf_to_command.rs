@@ -102,7 +102,7 @@ pub struct ConfiguredModel {
 /// the server is configured with server paths) and configures a command
 /// from it. The weight path is resolved relative to the RDF file's directory.
 pub fn configure_from(
-    files: &dyn crate::api::FileSystem,
+    files: &dyn crate::files::FileSystem,
     path: &Path,
 ) -> Result<ConfiguredModel, ConfigureError> {
     let bytes = files
@@ -255,7 +255,7 @@ fn config_f32(rdf: &RdfModel, path: &[&str]) -> Option<f32> {
 
 #[cfg(test)]
 mod tests {
-    use crate::backend::LocalFileSystem;
+    use crate::files::LocalFileSystem;
 
     fn configure_from_file(path: &Path) -> Result<ConfiguredModel, ConfigureError> {
         configure_from(&LocalFileSystem::default(), path)
