@@ -69,7 +69,7 @@ impl ResultCharts {
                     return Ok(BoxplotResult { boxes: Vec::new() });
                 }
                 format!(
-                    "WHERE class_id IN ({})",
+                    "AND class_id IN ({})",
                     ids.iter()
                         .map(u32::to_string)
                         .collect::<Vec<_>>()
@@ -85,7 +85,7 @@ impl ResultCharts {
                  FROM ({per_class}) AS u\n\
              ),\n\
              filtered AS (\n\
-                 SELECT * FROM exploded {class_filter}\n\
+                 SELECT * FROM exploded WHERE v IS NOT NULL {class_filter}\n\
              ),\n\
              stats AS (\n\
                  SELECT class_id,\n\
@@ -404,7 +404,7 @@ impl ResultCharts {
                         COUNT(*) AS n,\n\
                         AVG(v) AS mean_v,\n\
                         STDDEV_SAMP(v) AS sd_v\n\
-                 FROM filtered WHERE g <> ''\n\
+                 FROM filtered WHERE g <> '' AND v IS NOT NULL\n\
                  GROUP BY g\n\
              )\n\
              SELECT s.g, s.min_v, s.q1, s.med, s.q3, s.max_v, s.n,\n\
@@ -1135,6 +1135,32 @@ mod tests {
         let mut a_means = means.boxes[0].image_values.clone();
         a_means.sort_by(f64::total_cmp);
         assert_eq!(a_means, vec![20.0, 50.0]);
+    }
+
+    #[test]
+    fn a_coloc_with_the_own_class_drops_out_of_the_aggregates() {
+        let objects = [
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10)
+                .with_coloc(r#"{"2":["00000000-0000-0000-0000-000000000001"]}"#),
+            ObjectSpec::new("img1.tif", "ClassB", 2, 99),
+        ];
+        let generator = open(&objects);
+        let result = ResultCharts {}
+            .paint_boxplot(
+                &generator,
+                &BoxplotFilter {
+                    plane: plane(),
+                    images: None,
+                    object_classes: None,
+                    column: Column::ColocCount(ObjectClass::Global(2)),
+                    group_by: BoxplotGroup::Class,
+                    grouping: Default::default(),
+                    per_image: false,
+                },
+            )
+            .expect("boxplot");
+        let labels: Vec<&str> = result.boxes.iter().map(|b| b.label.as_str()).collect();
+        assert_eq!(labels, ["ClassA"], "class B's own coloc has no values");
     }
 
     #[test]

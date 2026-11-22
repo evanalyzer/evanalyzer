@@ -3848,7 +3848,12 @@ impl ObjectColumnNeeds {
     fn for_columns(columns: &[Column]) -> Self {
         Self {
             image_name: columns.contains(&Column::ImageName),
-            class: columns.contains(&Column::ObjectClass),
+            // A coloc column also needs the object's classes: its coloc
+            // with its own class has no value.
+            class: columns.contains(&Column::ObjectClass)
+                || columns
+                    .iter()
+                    .any(|c| matches!(c, Column::ColocCount(_) | Column::Coloc(_))),
             area_px: columns.contains(&Column::AreaSizePx),
             area_nm2: columns.contains(&Column::AreaSizeNm),
             perimeter_px: columns.contains(&Column::PerimeterPx),
@@ -4512,6 +4517,16 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
             value: CellValue::Float(object.eccentricity as f32),
             ..no_bg
         },
+        // A coloc of the object's own class wasn't measured (a class isn't
+        // colocalized with itself): no value, not 0.
+        Column::ColocCount(class) if is_own_class(object, std::slice::from_ref(class), classes) => Cell {
+            value: CellValue::Empty,
+            ..no_bg
+        },
+        Column::Coloc(c) if is_own_class(object, &c.with, classes) => Cell {
+            value: CellValue::Empty,
+            ..no_bg
+        },
         Column::ColocCount(class) => Cell {
             value: CellValue::Integer(
                 coloc_partners(object, *class).map_or(0, |ids| ids.len() as i32),
@@ -4624,6 +4639,36 @@ fn coloc_value(c: &ColocColumn, partners_of: impl Fn(ObjectClass) -> usize) -> u
         (true, false) => 1,
         (true, true) => c.with.iter().map(|class| partners_of(*class)).sum(),
     }
+}
+
+/// Whether one of `with` is a class of `object` - its coloc with its own
+/// class, never measured.
+fn is_own_class(object: &ObjectRow, with: &[ObjectClass], classes: &[Class]) -> bool {
+    with.iter().any(|class| {
+        classes
+            .iter()
+            .find(|c| c.global() == *class)
+            .is_some_and(|c| object.object_class_name.contains(&c.name))
+    })
+}
+
+/// `expr` - or NULL for an object of one of `with`'s classes (its coloc
+/// with its own class isn't measured: no value, left out of aggregates).
+fn unless_own_class(with: &[ObjectClass], expr: String) -> String {
+    let ids: Vec<String> = with
+        .iter()
+        .filter_map(|class| match class {
+            ObjectClass::Global(id) => Some(id.to_string()),
+            _ => None,
+        })
+        .collect();
+    if ids.is_empty() {
+        return expr;
+    }
+    format!(
+        "(CASE WHEN list_has_any(object_class_id, [{}]) THEN NULL ELSE {expr} END)",
+        ids.join(", ")
+    )
 }
 
 /// SQL for a [`Column::Coloc`] value of the row's object (see
@@ -4749,11 +4794,11 @@ pub(super) fn column_aggregate_expr(column: &Column) -> Result<String, InternalE
         Column::Extent => "area_px / ((bbox_xmax_px - bbox_xmin_px + 1) \
              * (bbox_ymax_px - bbox_ymin_px + 1))::DOUBLE"
             .to_string(),
-        Column::ColocCount(class) => format!(
-            "COALESCE(len(coloc_partner_ids[{}]), 0)",
-            coloc_class_key(*class)
+        Column::ColocCount(class) => unless_own_class(
+            std::slice::from_ref(class),
+            format!("COALESCE(len(coloc_partner_ids[{}]), 0)", coloc_class_key(*class)),
         ),
-        Column::Coloc(c) => coloc_value_expr(c),
+        Column::Coloc(c) => unless_own_class(&c.with, coloc_value_expr(c)),
         // Gray values, like the list view; NULL (left out of every
         // aggregate) for a channel the object wasn't measured in.
         Column::IntensitySum(channel) => format!("intensity_sum_gray[{}]", channel + 1),
@@ -7874,6 +7919,34 @@ mod tests {
     // -- with_coloc_details fan-out ----------------------------------------
 
     #[test]
+    fn a_coloc_with_the_objects_own_class_has_no_value() {
+        // A (class 1) overlaps B (class 2): B's "coloc with class 2" was
+        // never measured - empty, not 0; A's is 1.
+        let objects = vec![
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10)
+                .with_coloc(r#"{"2":["00000000-0000-0000-0000-000000000001"]}"#),
+            ObjectSpec::new("img1.tif", "ClassB", 2, 99),
+        ];
+        let generator = open(&objects);
+        let result = generator
+            .get_object_list(&ListFilter {
+                plane: plane(),
+                images: None,
+                object_classes: None,
+                columns: vec![Column::ColocCount(ObjectClass::Global(2))],
+                with_coloc_details: false,
+                related_to: None,
+                page: no_page(),
+                transpond_table: false,
+                sort: None,
+            })
+            .unwrap();
+        let values: Vec<&CellValue> = result.rows.iter().map(|row| &row[0].value).collect();
+        assert!(matches!(values[0], CellValue::Integer(1)));
+        assert!(matches!(values[1], CellValue::Empty), "own class: no value");
+    }
+
+    #[test]
     fn get_object_list_with_coloc_details_resolves_the_partners_own_metric() {
         // Object A colocalizes with class 2, partnered with object B (the
         // second seeded object, id index 1). Both a coloc-class column
@@ -7930,10 +8003,9 @@ mod tests {
 
         let row_b = &result.rows[1];
         assert_eq!(int_cell(&row_b[0]), 99, "object B's own area");
-        assert_eq!(
-            int_cell(&row_b[1]),
-            0,
-            "object B itself has no colocalizing partners"
+        assert!(
+            matches!(row_b[1].value, CellValue::Empty),
+            "object B is of class 2 itself: its coloc with class 2 has no value"
         );
         assert!(
             matches!(row_b[2].value, CellValue::String(ref s) if s == "-"),
