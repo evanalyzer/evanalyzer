@@ -495,14 +495,14 @@ export component SplitFilmstrip inherits Rectangle {
         height: 1px;
         background: #2E2E33;
     }
+    // The strip takes the width the well's name leaves.
     HorizontalLayout {
         padding-left: 12px;
         padding-right: 12px;
         spacing: 10px;
-        alignment: start;
         Text {
-            width: 52px;
-            text: "WELL " + ResultsState.active-well;
+            horizontal-stretch: 0;
+            text: "WELL " + ResultsState.split-well;
             font-size: Ink.fs-caption;
             font-weight: 600;
             letter-spacing: 0.6px;

@@ -3180,6 +3180,7 @@ impl ResultsStateController {
             state.set_peek_label("".into());
             state.set_peek_can_step(false);
             state.set_split_title("".into());
+            state.set_split_well("".into());
             state.set_split_missing("".into());
             state.set_split_image_key("".into());
             state.set_split_pos(0);
@@ -13023,6 +13024,15 @@ pub(crate) mod tests {
             Some("A1_02.tif"),
             "not in the well: stays"
         );
+        // The well opened: its tiles' card holds the image's key - the
+        // title still names the well.
+        *controller.current_well.lock().unwrap() = Some("A1".into());
+        state.set_active_well("A1_01.tif".into());
+        controller.split_show_image_named("A1_01.tif");
+        drain_ui_queue();
+        assert_eq!(state.get_split_title(), "Well A1 · A1_01.tif");
+        state.invoke_split_show_image("A1_02.tif".into());
+        drain_ui_queue();
 
         // "Open in Images" from the plate: its title on the bar, no ‹ ›.
         state.invoke_split_open_in_images();

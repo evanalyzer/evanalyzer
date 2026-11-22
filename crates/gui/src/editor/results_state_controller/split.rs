@@ -1229,13 +1229,19 @@ impl ResultsStateController {
             )
         });
 
+        // The well opened (its images' heatmap: the card's key is then the
+        // image's), else the well clicked on the plate.
+        let opened_well = self.current_well.lock().expect("Poisoned").clone();
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             let Some(ui) = ui_weak.upgrade() else {
                 return;
             };
             let state = ui.global::<ResultsState>();
-            let well = state.get_active_well();
+            let well = opened_well
+                .map(slint::SharedString::from)
+                .unwrap_or_else(|| state.get_active_well());
+            state.set_split_well(if plate { well.clone() } else { "".into() });
             state.set_split_title(
                 if plate && !well.is_empty() && title_image.is_some() {
                     format!("Well {well} · {image_name}")
