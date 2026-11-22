@@ -3662,13 +3662,9 @@ impl ResultsStateController {
                     grouping: self.current_grouping(),
                     per_image: chart_filter.per_image,
                 }) {
-                    Ok(boxplot) => {
-                        self.push_boxplot_in_slint(&boxplot.boxes);
-                        // Bars: the same groups, drawn as bars.
-                        if chart_filter.kind == ChartKind::Bar {
-                            self.set_bars(boxplot.boxes);
-                        }
-                    }
+                    // Bars: the same groups, drawn (once) as bars.
+                    Ok(boxplot) => self
+                        .push_boxplot_in_slint(boxplot.boxes, chart_filter.kind == ChartKind::Bar),
                     Err(err) => self.push_chart_error(err.to_string()),
                 }
             }
@@ -4572,16 +4568,17 @@ impl ResultsStateController {
         .ok();
     }
 
-    fn push_boxplot_in_slint(&self, boxes: &[BoxplotBox]) {
+    /// `as_bars`: the groups drawn as bars instead of boxes.
+    fn push_boxplot_in_slint(&self, boxes: Vec<BoxplotBox>, as_bars: bool) {
         // Drawn by the chart module; the boxes below say whether there are
-        // any (and serve the tests).
-        self.set_boxplot_boxes(boxes.to_vec());
+        // any (and serve the tests). The rows first: the boxes move into
+        // the chart's data.
         // Every box normalized against the combined min/max across *all*
         // boxes, so they stay comparable to each other on one shared axis
         // rather than each box silently rescaling to its own range.
         let mut min = f64::INFINITY;
         let mut max = f64::NEG_INFINITY;
-        for b in boxes {
+        for b in &boxes {
             min = min
                 .min(b.min)
                 .min(b.outliers.iter().copied().fold(b.min, f64::min));
@@ -4618,6 +4615,11 @@ impl ResultsStateController {
                 )
             })
             .collect();
+        if as_bars {
+            self.set_bars(boxes);
+        } else {
+            self.set_boxplot_boxes(boxes);
+        }
 
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
