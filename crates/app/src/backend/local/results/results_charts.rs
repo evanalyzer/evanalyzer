@@ -33,6 +33,9 @@ impl ResultCharts {
     ) -> Result<BoxplotResult, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         let classes = database.get_object_classes()?;
+        if filter.per_image {
+            return self.paint_per_image_boxplot(database, filter, &classes);
+        }
         let value_expr = chart_value_expr(&filter.column)?;
 
         let mut conditions = vec![
@@ -149,11 +152,191 @@ impl ResultCharts {
                     whisker_high: w_hi.unwrap_or(max_v),
                     outliers: extract_f64_list(outliers),
                     object_count: n as usize,
+                    image_values: Vec::new(),
+                    image_count: 0,
                 }
             })
             .collect();
 
         Ok(BoxplotResult { boxes })
+    }
+
+    /// A box per class, image, well, plate row or column of a value per
+    /// image: the count of the wanted classes' objects (`Column::Count` -
+    /// images without any count 0) or `filter.column`'s mean over them
+    /// (images without any have none). Each box keeps its images' values,
+    /// the dots.
+    fn paint_per_image_boxplot(
+        &self,
+        database: &ResultsGenerator,
+        filter: &BoxplotFilter,
+        classes: &[evanalyzer_cfg::settings::classification_settings::Class],
+    ) -> Result<BoxplotResult, InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let empty = || Ok(BoxplotResult { boxes: Vec::new() });
+        let count = filter.column == Column::Count;
+        let value_expr = if count { "1".to_string() } else { chart_value_expr(&filter.column)? };
+        let wanted: Option<Vec<u32>> = filter.object_classes.as_ref().map(|wanted| {
+            wanted
+                .iter()
+                .filter_map(|id| match id {
+                    ObjectClass::Global(n) => Some(*n),
+                    ObjectClass::Unset | ObjectClass::Local(_) => None,
+                })
+                .collect()
+        });
+        if wanted.as_ref().is_some_and(Vec::is_empty) {
+            return empty();
+        }
+        let mut conditions = vec![
+            database.object_on_plane_sql("", filter.plane.z_stack)?,
+            format!("t_stack = {}", filter.plane.t_stack),
+        ];
+        let mut image_condition = "true".to_string();
+        if let Some(images) = &filter.images {
+            if images.is_empty() {
+                return empty();
+            }
+            image_condition = format!("image_rel_path IN ({})", sql_string_in_list(images));
+            conditions.push(image_condition.clone());
+        }
+        let by_class = filter.group_by == BoxplotGroup::Class;
+        // A box's key, from an image's name or path (both tables have them).
+        let key = match filter.group_by {
+            BoxplotGroup::Class => "NULL".to_string(),
+            BoxplotGroup::Image => "image_name".to_string(),
+            group => {
+                let grouping = database.grouping_sql(&filter.grouping)?;
+                let part = match group {
+                    BoxplotGroup::Well => 1,
+                    BoxplotGroup::WellRow => 2,
+                    _ => 3,
+                };
+                format!("regexp_extract({}, '{}', {part})", grouping.column, grouping.regex)
+            }
+        };
+        let class_ids = |ids: &[u32]| ids.iter().map(u32::to_string).collect::<Vec<_>>().join(", ");
+        // The objects: a box key (the class, or the image's group) and a value.
+        let source = if by_class {
+            let only = match &wanted {
+                Some(ids) => format!("WHERE class_id IN ({})", class_ids(ids)),
+                None => String::new(),
+            };
+            format!(
+                "SELECT CAST(class_id AS VARCHAR) AS g, image_rel_path, {value_expr} AS v \
+                 FROM ({}) AS u {only}",
+                objects_per_class_sql(&conditions.join(" AND "))
+            )
+        } else {
+            if let Some(ids) = &wanted {
+                conditions.push(class_filter_sql("object_class_id", ids));
+            }
+            format!(
+                "SELECT {key} AS g, image_rel_path, {value_expr} AS v FROM objects WHERE {}",
+                conditions.join(" AND ")
+            )
+        };
+        // A value per image; counting, also the images without objects.
+        let per_image = if count {
+            let boxes = if by_class {
+                match &wanted {
+                    Some(ids) => format!(
+                        "(SELECT CAST(unnest([{}]) AS VARCHAR) AS g)",
+                        class_ids(ids)
+                    ),
+                    None => "(SELECT DISTINCT g FROM src)".to_string(),
+                }
+            } else {
+                String::new()
+            };
+            let base = if by_class {
+                format!("SELECT b.g, i.image_rel_path FROM images i CROSS JOIN {boxes} b WHERE {image_condition}")
+            } else {
+                format!("SELECT {key} AS g, image_rel_path FROM images WHERE {image_condition}")
+            };
+            format!(
+                "SELECT b.g, b.image_rel_path, COALESCE(p.n, 0) AS v, COALESCE(p.n, 0) AS n \
+                 FROM ({base}) b \
+                 LEFT JOIN (SELECT g, image_rel_path, COUNT(*) AS n FROM src GROUP BY g, image_rel_path) p \
+                   ON p.g IS NOT DISTINCT FROM b.g AND p.image_rel_path = b.image_rel_path"
+            )
+        } else {
+            "SELECT g, image_rel_path, AVG(v) AS v, COUNT(*) AS n FROM src GROUP BY g, image_rel_path".to_string()
+        };
+        let sql = format!(
+            "WITH src AS ({source}),\n\
+             per_image AS ({per_image}),\n\
+             filtered AS (SELECT * FROM per_image WHERE g IS NOT NULL AND g <> '' AND v IS NOT NULL),\n\
+             stats AS (\n\
+                 SELECT g, MIN(v) AS min_v, quantile_cont(v, 0.25) AS q1, quantile_cont(v, 0.5) AS med,\n\
+                        quantile_cont(v, 0.75) AS q3, MAX(v) AS max_v, COUNT(*) AS images, SUM(n) AS objects\n\
+                 FROM filtered GROUP BY g\n\
+             )\n\
+             SELECT s.g, s.min_v, s.q1, s.med, s.q3, s.max_v, s.images, s.objects,\n\
+                    LIST(f.v) FILTER (WHERE f.v < s.q1 - 1.5 * (s.q3 - s.q1) OR f.v > s.q3 + 1.5 * (s.q3 - s.q1)) AS outliers,\n\
+                    MIN(f.v) FILTER (WHERE f.v >= s.q1 - 1.5 * (s.q3 - s.q1)) AS w_lo,\n\
+                    MAX(f.v) FILTER (WHERE f.v <= s.q3 + 1.5 * (s.q3 - s.q1)) AS w_hi,\n\
+                    LIST(f.v) AS all_v\n\
+             FROM stats s JOIN filtered f ON f.g = s.g\n\
+             GROUP BY s.g, s.min_v, s.q1, s.med, s.q3, s.max_v, s.images, s.objects\n\
+             ORDER BY {order}",
+            order = if by_class { "CAST(s.g AS INTEGER)" } else { "regexp_replace(s.g, '[0-9]+$', ''), TRY_CAST(regexp_extract(s.g, '([0-9]+)$', 1) AS INTEGER), s.g" },
+        );
+        let mut stmt = database.connection().prepare(&sql).map_err(err)?;
+        #[allow(clippy::type_complexity)]
+        let rows: Vec<(String, f64, f64, f64, f64, f64, i64, f64, Value, Option<f64>, Option<f64>, Value)> = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get::<_, Option<f64>>(7)?.unwrap_or(0.0),
+                    row.get(8)?,
+                    row.get(9)?,
+                    row.get(10)?,
+                    row.get(11)?,
+                ))
+            })
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)?;
+        Ok(BoxplotResult {
+            boxes: rows
+                .into_iter()
+                .map(|(g, min_v, q1, median, q3, max_v, images, objects, outliers, w_lo, w_hi, all)| {
+                    let (label, color) = match (by_class, g.parse::<u32>()) {
+                        (true, Ok(id)) => {
+                            let class = ObjectClass::Global(id);
+                            let color = classes
+                                .iter()
+                                .find(|c| c.global() == class)
+                                .map_or(0, |c| c.color);
+                            (class_display_label(class, classes), color)
+                        }
+                        _ => (g, 0),
+                    };
+                    BoxplotBox {
+                        label,
+                        color,
+                        min: min_v,
+                        q1,
+                        median,
+                        q3,
+                        max: max_v,
+                        whisker_low: w_lo.unwrap_or(min_v),
+                        whisker_high: w_hi.unwrap_or(max_v),
+                        outliers: extract_f64_list(outliers),
+                        object_count: objects as usize,
+                        image_values: extract_f64_list(all),
+                        image_count: images as usize,
+                    }
+                })
+                .collect(),
+        })
     }
 
     /// One box per image, well, plate row or column (`filter.group_by`):
@@ -221,7 +404,7 @@ impl ResultCharts {
              FROM stats s\n\
              JOIN filtered f ON f.g = s.g\n\
              GROUP BY s.g, s.min_v, s.q1, s.med, s.q3, s.max_v, s.n\n\
-             ORDER BY length(s.g), s.g",
+             ORDER BY regexp_replace(s.g, '[0-9]+$', ''), TRY_CAST(regexp_extract(s.g, '([0-9]+)$', 1) AS INTEGER), s.g",
             conditions = conditions.join(" AND ")
         );
         let mut stmt = database.connection().prepare(&sql).map_err(err)?;
@@ -260,6 +443,8 @@ impl ResultCharts {
                         whisker_high: w_hi.unwrap_or(max_v),
                         outliers: extract_f64_list(outliers),
                         object_count: n as usize,
+                        image_values: Vec::new(),
+                        image_count: 0,
                     },
                 )
                 .collect(),
@@ -838,6 +1023,7 @@ mod tests {
                     column: Column::AreaSizePx,
                     group_by: Default::default(),
                     grouping: Default::default(),
+                    per_image: false,
                 },
             )
             .expect("boxplot");
@@ -856,6 +1042,79 @@ mod tests {
         // the outlier, so they don't draw it twice.
         assert_eq!(b.whisker_low, 10.0);
         assert_eq!(b.whisker_high, 40.0);
+    }
+
+    #[test]
+    fn a_per_image_boxplot_has_a_value_per_image_and_counts_empty_images_as_zero() {
+        // img1: two A objects; img2: one A, one B - img1 has no B (count 0).
+        let objects = [
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 30),
+            ObjectSpec::new("img2.tif", "ClassA", 1, 50),
+            ObjectSpec::new("img2.tif", "ClassB", 2, 70),
+        ];
+        let generator = open(&objects);
+        let boxplot = |column: Column| {
+            ResultCharts {}
+                .paint_boxplot(
+                    &generator,
+                    &BoxplotFilter {
+                        plane: plane(),
+                        images: None,
+                        object_classes: None,
+                        column,
+                        group_by: BoxplotGroup::Class,
+                        grouping: Default::default(),
+                        per_image: true,
+                    },
+                )
+                .expect("boxplot")
+        };
+        let counts = boxplot(Column::Count);
+        assert_eq!(counts.boxes.len(), 2);
+        let (a, b) = (&counts.boxes[0], &counts.boxes[1]);
+        assert_eq!((a.label.as_str(), a.image_count, a.object_count), ("ClassA", 2, 3));
+        let mut a_values = a.image_values.clone();
+        a_values.sort_by(f64::total_cmp);
+        assert_eq!(a_values, vec![1.0, 2.0]);
+        let mut b_values = b.image_values.clone();
+        b_values.sort_by(f64::total_cmp);
+        assert_eq!(b_values, vec![0.0, 1.0], "img1 has no B: 0");
+        // The mean area per image: images without objects have none.
+        let means = boxplot(Column::AreaSizePx);
+        let b = &means.boxes[1];
+        assert_eq!(b.image_values, vec![70.0]);
+        let mut a_means = means.boxes[0].image_values.clone();
+        a_means.sort_by(f64::total_cmp);
+        assert_eq!(a_means, vec![20.0, 50.0]);
+    }
+
+    #[test]
+    fn well_boxes_are_in_plate_order() {
+        let objects = [
+            ObjectSpec::new("A10_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("B1_01.tif", "ClassA", 1, 20),
+            ObjectSpec::new("A2_01.tif", "ClassA", 1, 30),
+        ];
+        let generator = open(&objects);
+        for per_image in [false, true] {
+            let result = ResultCharts {}
+                .paint_boxplot(
+                    &generator,
+                    &BoxplotFilter {
+                        plane: plane(),
+                        images: None,
+                        object_classes: None,
+                        column: Column::AreaSizePx,
+                        group_by: BoxplotGroup::Well,
+                        grouping: Default::default(),
+                        per_image,
+                    },
+                )
+                .expect("boxplot");
+            let labels: Vec<&str> = result.boxes.iter().map(|b| b.label.as_str()).collect();
+            assert_eq!(labels, ["A2", "A10", "B1"], "per image: {per_image}");
+        }
     }
 
     #[test]
@@ -881,6 +1140,7 @@ mod tests {
                         column: Column::AreaSizePx,
                         group_by,
                         grouping: Grouping::Auto,
+                        per_image: false,
                     },
                 )
                 .expect("boxplot")
@@ -920,6 +1180,7 @@ mod tests {
                     column: Column::AreaSizePx,
                     group_by: Default::default(),
                     grouping: Default::default(),
+                    per_image: false,
                 },
             )
             .expect("boxplot");
@@ -952,6 +1213,7 @@ mod tests {
                     column: Column::AreaSizePx,
                     group_by: Default::default(),
                     grouping: Default::default(),
+                    per_image: false,
                 },
             )
             .expect("boxplot");
@@ -974,6 +1236,7 @@ mod tests {
                     column: Column::AreaSizePx,
                     group_by: Default::default(),
                     grouping: Default::default(),
+                    per_image: false,
                 },
             )
             .expect("boxplot");
@@ -994,6 +1257,7 @@ mod tests {
                     column: Column::AreaSizePx,
                     group_by: Default::default(),
                     grouping: Default::default(),
+                    per_image: false,
                 },
             )
             .expect("boxplot");
@@ -1013,6 +1277,7 @@ mod tests {
                 column: Column::ObjectId,
                 group_by: Default::default(),
                 grouping: Default::default(),
+                per_image: false,
             },
         );
         assert!(result.is_err());
@@ -1538,6 +1803,7 @@ mod tests {
                     column: Column::AreaSizePx,
                     group_by: Default::default(),
                     grouping: Default::default(),
+                    per_image: false,
                 },
             )
             .expect("boxplot");
@@ -1564,6 +1830,7 @@ mod tests {
                     column: Column::AreaSizePx,
                     group_by: Default::default(),
                     grouping: Default::default(),
+                    per_image: false,
                 },
             )
             .expect("boxplot");

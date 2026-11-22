@@ -676,24 +676,26 @@ component ColocBuilder inherits VerticalLayout {
                                 }
                             }
                             Text {
-                                horizontal-stretch: 1;
-                                min-width: 0px;
                                 text: block.name;
                                 font-size: Ink.fs-body;
                                 font-weight: 600;
                                 color: Ink.text;
-                                overflow: elide;
                                 vertical-alignment: center;
                             }
-                            Text {
+                            // The classes: as many as fit, whole on hover.
+                            block-classes := Text {
+                                horizontal-stretch: 1;
+                                min-width: 0px;
                                 text: block.classes;
                                 font-size: Ink.fs-caption;
                                 font-family: Ink.font-mono;
                                 color: Ink.text-dim;
+                                horizontal-alignment: right;
                                 vertical-alignment: center;
+                                overflow: elide;
                             }
                         }
-                        TouchArea {
+                        block-ta := TouchArea {
                             mouse-cursor: pointer;
                             accessible-role: button;
                             accessible-label: block.name;
@@ -705,6 +707,10 @@ component ColocBuilder inherits VerticalLayout {
                             clicked => {
                                 root.toggled(block.key, !block.open);
                             }
+                        }
+                        InkTipZone {
+                            wanted: block-ta.has-hover && block-classes.preferred-width > block-classes.width;
+                            text: block.classes;
                         }
                     }
                     if block.open: VerticalLayout {

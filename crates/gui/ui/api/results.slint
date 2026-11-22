@@ -1041,6 +1041,9 @@ export global ResultsState {
     in-out property <bool> chart-box-log: false;
     in-out property <bool> chart-grid: true;
     callback chart-look-changed(bool, bool);
+    // The boxplot: a value per image (each image a dot), else per object.
+    in-out property <bool> chart-per-image: false;
+    callback chart-per-image-changed(bool);
 
     // -- Over time: a line per class / image / well / track (0..3), mean ±
     // SD or median + IQR (summary 0 / 1), relative to the first time point,

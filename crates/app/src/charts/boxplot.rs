@@ -36,6 +36,11 @@ pub struct BoxSpec {
     pub outliers: Vec<f64>,
     /// How many values the box holds.
     pub count: usize,
+    /// Each a dot - e.g. every image's value (empty: only the far values
+    /// are dots).
+    pub points: Vec<f64>,
+    /// What `count` counts, after the number (" images"; "" values).
+    pub count_noun: String,
 }
 
 /// How the boxplot is drawn.
@@ -49,6 +54,9 @@ pub struct BoxplotLook {
 
 /// Far values beyond this many times the whiskers' span cut the axis.
 const MAX_STRETCH: f64 = 3.0;
+
+/// Turned names are shortened to this many characters.
+const TURNED_CHARS: usize = 14;
 
 /// At most this many far values of a box are drawn as dots - beyond, the
 /// picture would grow (and slow) without showing more.
@@ -86,9 +94,30 @@ pub fn draw(boxes: &[BoxSpec], look: &BoxplotLook, theme: &Theme, width: f64, he
         (whisker_lo, whisker_hi)
     };
 
-    // The frame: tick labels and the title left, names and counts below.
+    // The frame: tick labels and the title left, names and counts below -
+    // names turned when they don't fit under their box (then no counts).
     let top = 16.0;
-    let bottom = height - (font * 2.0 + 18.0);
+    let slot_guess = (width - 80.0) / boxes.len() as f64;
+    let widest_name = boxes
+        .iter()
+        .map(|b| theme.text_width(&b.label))
+        .fold(0.0, f64::max);
+    let turned = widest_name > slot_guess - 6.0;
+    let turned_names: Vec<String> = boxes
+        .iter()
+        .map(|b| fit(&b.label, theme.font_size * 0.58 * TURNED_CHARS as f64, theme))
+        .collect();
+    let below = if turned {
+        let longest = turned_names
+            .iter()
+            .map(|name| theme.text_width(name))
+            .fold(0.0, f64::max);
+        // Turned by 50 degrees: about this high.
+        (longest * 0.77 + font + 12.0).min(height * 0.4)
+    } else {
+        font * 2.0 + 18.0
+    };
+    let bottom = height - below;
     let tick_count = ((bottom - top) / 56.0).round().clamp(2.0, 10.0) as usize;
     let scale = Scale::nice(lo, hi, tick_count, log);
     let ticks = scale.ticks(tick_count);
@@ -142,11 +171,11 @@ pub fn draw(boxes: &[BoxSpec], look: &BoxplotLook, theme: &Theme, width: f64, he
         );
         svg.line(cx - box_w / 2.0, y_med, cx + box_w / 2.0, y_med, b.color, 2.5);
 
-        // The far values: dots (at most MAX_DOTS, an even sample with the
-        // extremes), or at an edge their number.
+        // The dots - every point, or else the far values (at most MAX_DOTS,
+        // an even sample with the extremes) - or at an edge their number.
         let (mut above, mut below) = (0usize, 0usize);
-        let inside: Vec<f64> = b
-            .outliers
+        let dots = if b.points.is_empty() { &b.outliers } else { &b.points };
+        let inside: Vec<f64> = dots
             .iter()
             .copied()
             .filter(|v| {
@@ -159,10 +188,14 @@ pub fn draw(boxes: &[BoxSpec], look: &BoxplotLook, theme: &Theme, width: f64, he
                 (top..=bottom).contains(&y)
             })
             .collect();
+        let spread = if b.points.is_empty() { 0.5 } else { 0.8 };
         for (k, v) in sample(&inside, MAX_DOTS).into_iter().enumerate() {
-            // A little spread sideways, the same every time.
-            let jitter = ((k as f64 * 0.618_034).fract() - 0.5) * box_w * 0.5;
-            svg.circle(cx + jitter, y_of(v), 2.4, b.color, 0.55);
+            // A little spread sideways, the same every time; among all the
+            // points the far ones darker.
+            let jitter = ((k as f64 * 0.618_034).fract() - 0.5) * box_w * spread;
+            let far = !b.points.is_empty() && (v < b.whisker_low || v > b.whisker_high);
+            let (color, opacity) = if far { (theme.text, 0.85) } else { (b.color, 0.55) };
+            svg.circle(cx + jitter, y_of(v), 2.6, color, opacity);
         }
         if above > 0 {
             svg.polygon(&[(cx - 4.0, top + 6.0), (cx + 4.0, top + 6.0), (cx, top)], b.color, 0.9);
@@ -173,11 +206,15 @@ pub fn draw(boxes: &[BoxSpec], look: &BoxplotLook, theme: &Theme, width: f64, he
             svg.text(cx + 7.0, bottom - 1.0, &format_number(below as f64), theme.text_dim, Anchor::Start, None, false);
         }
 
-        // Its name and how many, shortened to its slot.
-        let name = fit(&b.label, slot - 6.0, theme);
-        svg.text(cx, bottom + font + 6.0, &name, theme.text, Anchor::Middle, None, false);
-        let count = count_label(b.count, slot - 6.0, theme);
-        svg.text(cx, bottom + font * 2.0 + 10.0, &count, theme.text_dim, Anchor::Middle, None, false);
+        // Its name and how many, shortened to its slot - or turned.
+        if turned {
+            svg.text_turned(cx + font * 0.3, bottom + 10.0, &turned_names[i], theme.text, -50.0);
+        } else {
+            let name = fit(&b.label, slot - 6.0, theme);
+            svg.text(cx, bottom + font + 6.0, &name, theme.text, Anchor::Middle, None, false);
+            let count = count_label(b.count, &b.count_noun, slot - 6.0, theme);
+            svg.text(cx, bottom + font * 2.0 + 10.0, &count, theme.text_dim, Anchor::Middle, None, false);
+        }
 
         hits.push(Hit { index: i, x: cx - slot / 2.0, y: top, width: slot, height: bottom - top });
     }
@@ -197,9 +234,13 @@ fn sample(values: &[f64], max: usize) -> Vec<f64> {
     (0..max).map(|i| sorted[i * last / (max - 1)]).collect()
 }
 
-/// "n = 78 349", or as room allows "78 349", "78k".
-fn count_label(count: usize, width: f64, theme: &Theme) -> String {
+/// "n = 16 images", or as room allows "n = 16", "16", "16k".
+fn count_label(count: usize, noun: &str, width: f64, theme: &Theme) -> String {
     let number = format_number(count as f64);
+    let long = format!("n = {number}{noun}");
+    if theme.text_width(&long) <= width {
+        return long;
+    }
     let long = format!("n = {number}");
     if theme.text_width(&long) <= width {
         return long;
@@ -244,6 +285,8 @@ mod tests {
             whisker_high: hi,
             outliers,
             count: 100,
+            points: Vec::new(),
+            count_noun: String::new(),
         }
     }
 
@@ -296,11 +339,34 @@ mod tests {
     }
 
     #[test]
+    fn every_point_is_a_dot_the_far_ones_darker() {
+        let mut b = spec("a", 10.0, 12.0, 14.0, 8.0, 18.0, vec![30.0]);
+        b.points = vec![9.0, 11.0, 12.0, 13.0, 17.0, 30.0];
+        let drawing = draw(&[b], &look(), &Theme::light(), 400.0, 300.0);
+        assert_eq!(drawing.svg.matches("<circle").count(), 6);
+        let dark = format!("<circle cx=\"");
+        assert!(drawing.svg.contains(&dark));
+        assert!(drawing.svg.contains(&format!("fill=\"{}\" fill-opacity=\"0.85\"", Theme::light().text.hex())));
+    }
+
+    #[test]
+    fn names_that_do_not_fit_are_turned() {
+        let boxes: Vec<BoxSpec> = (0..60)
+            .map(|i| spec(&format!("well A{i}"), 10.0, 12.0, 14.0, 8.0, 18.0, vec![]))
+            .collect();
+        let drawing = draw(&boxes, &look(), &Theme::light(), 800.0, 400.0);
+        assert!(drawing.svg.contains("rotate(-50)"));
+        assert!(drawing.svg.contains(">well A59<"), "every name drawn");
+        assert!(!drawing.svg.contains("n = "), "no counts under turned names");
+    }
+
+    #[test]
     fn counts_shorten_to_their_slot() {
         let theme = Theme::light();
-        assert_eq!(count_label(78_349, 200.0, &theme), "n = 78349");
-        assert_eq!(count_label(78_349, 40.0, &theme), "78349");
-        assert_eq!(count_label(78_349, 22.0, &theme), "78k");
+        assert_eq!(count_label(16, " images", 200.0, &theme), "n = 16 images");
+        assert_eq!(count_label(78_349, "", 200.0, &theme), "n = 78349");
+        assert_eq!(count_label(78_349, "", 40.0, &theme), "78349");
+        assert_eq!(count_label(78_349, "", 22.0, &theme), "78k");
     }
 
     #[test]

@@ -1147,6 +1147,7 @@ mod tests {
                 column: Column::AreaSizePx,
                 group_by: Default::default(),
                 grouping: Default::default(),
+                per_image: false,
             }),
             "boxplot",
         );
@@ -1429,6 +1430,7 @@ mod tests {
                 column: Column::AreaSizePx,
                 group_by: Default::default(),
                 grouping: Default::default(),
+                per_image: false,
             }),
             "boxplot",
         );

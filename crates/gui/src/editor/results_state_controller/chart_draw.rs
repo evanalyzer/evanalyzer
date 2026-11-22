@@ -71,7 +71,10 @@ fn box_specs(boxes: &[BoxplotBox], factor: f64) -> Vec<BoxSpec> {
             whisker_low: b.whisker_low * factor,
             whisker_high: b.whisker_high * factor,
             outliers: b.outliers.iter().map(|v| v * factor).collect(),
-            count: b.object_count,
+            // Per image: its images' values, each a dot.
+            count: if b.image_count > 0 { b.image_count } else { b.object_count },
+            points: b.image_values.iter().map(|v| v * factor).collect(),
+            count_noun: if b.image_count > 0 { " images".into() } else { String::new() },
         })
         .collect()
 }
@@ -90,9 +93,13 @@ impl ResultsStateController {
             return;
         }
         let look = self.chart_look.lock().expect("Poisoned").clone();
-        let label = {
+        let (label, title) = {
             let classes = self.classes.lock().expect("Poisoned");
-            self.chart_filter.lock().expect("Poisoned").column.display_label(&classes)
+            let chart = self.chart_filter.lock().expect("Poisoned");
+            (
+                chart.column.display_label(&classes),
+                super::column_panel::chart_value_label(&chart.column, chart.per_image, &classes),
+            )
         };
         let factor = unit_factor(&label);
         let specs = box_specs(&self.chart_boxes.lock().expect("Poisoned"), factor);
@@ -100,7 +107,7 @@ impl ResultsStateController {
         let drawing = boxplot::draw(
             &specs,
             &BoxplotLook {
-                y_title: super::coloc::picker_label(&label),
+                y_title: title,
                 log: look.log,
                 grid: look.grid,
             },
@@ -195,6 +202,8 @@ mod tests {
             whisker_high: 5e6,
             outliers: vec![9e6],
             object_count: 7,
+            image_values: Vec::new(),
+            image_count: 0,
         }];
         let specs = box_specs(&boxes, 1e-6);
         assert_eq!(specs[0].median, 3.0);

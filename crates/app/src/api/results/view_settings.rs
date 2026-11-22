@@ -284,6 +284,8 @@ pub struct ChartView {
     pub y_column: Option<String>,
     pub class: Option<u32>,
     pub group_by: BoxplotGroup,
+    /// Boxplot: a value per image (each image a dot), else per object.
+    pub per_image: bool,
     pub bins: usize,
     pub log_counts: bool,
     /// The scatter's points picker (0..3, see `scatter_points_limit`).
@@ -310,6 +312,7 @@ impl Default for ChartView {
             y_column: None,
             class: None,
             group_by: BoxplotGroup::Class,
+            per_image: false,
             bins: DEFAULT_HISTOGRAM_BINS,
             log_counts: false,
             points: 1,

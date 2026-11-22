@@ -425,6 +425,7 @@ impl ResultsStateController {
                 None => None,
             };
             chart.group_by = view.group_by;
+            chart.per_image = view.per_image;
             chart.bins = view.bins.clamp(5, 200);
             chart.log_counts = view.log_counts;
             chart.max_points = scatter_points_limit(view.points);
@@ -529,6 +530,7 @@ impl ResultsStateController {
                     .and_then(class_id)
                     .or(unavailable.chart_class),
                 group_by: filter.group_by,
+                per_image: filter.per_image,
                 bins: filter.bins,
                 log_counts: filter.log_counts,
                 points: points_index(filter.max_points),
@@ -1055,6 +1057,7 @@ impl ResultsStateController {
                 BoxplotGroup::WellColumn => 4,
                 _ => 0,
             });
+            state.set_chart_per_image(chart.per_image);
             state.set_chart_bins(chart.bins as i32);
             state.set_chart_log_counts(chart.log_counts);
             state.set_chart_points_index(points_index(chart.max_points));

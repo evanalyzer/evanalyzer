@@ -1,5 +1,5 @@
 {
-  "protocol_version": 51,
+  "protocol_version": 52,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -62,6 +62,14 @@
         },
         {
           "object_count": "U64"
+        },
+        {
+          "image_values": {
+            "SEQ": "F64"
+          }
+        },
+        {
+          "image_count": "U64"
         }
       ]
     },
@@ -102,6 +110,9 @@
           "grouping": {
             "TYPENAME": "Grouping"
           }
+        },
+        {
+          "per_image": "BOOL"
         }
       ]
     },

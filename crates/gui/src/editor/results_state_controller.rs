@@ -283,8 +283,10 @@ struct ChartFilter {
     /// `None` means no class filter (every object) — doesn't apply to
     /// Boxplot, which always groups by every class present regardless.
     pub object_class: Option<ObjectClass>,
-    /// Boxplot: a box per class, image, well, plate row or column.
+    /// Boxplot: a box per class, image, well, plate row or column; a value
+    /// per image (each image a dot), else per object.
     pub group_by: BoxplotGroup,
+    pub per_image: bool,
     /// Histogram: its bins, its counts on a log scale.
     pub bins: usize,
     pub log_counts: bool,
@@ -316,6 +318,7 @@ impl Default for ChartFilter {
             y_column: Column::default(),
             object_class: None,
             group_by: BoxplotGroup::default(),
+            per_image: false,
             bins: CHART_HISTOGRAM_BINS,
             log_counts: false,
             max_points: Some(CHART_SCATTER_MAX_POINTS),
@@ -2173,6 +2176,30 @@ impl ResultsStateController {
 
             let manager = self.clone();
             ui.global::<ResultsState>()
+                .on_chart_per_image_changed(move |per_image| {
+                    {
+                        let mut chart = manager.chart_filter.lock().expect("Poisoned");
+                        chart.per_image = per_image;
+                        // Objects per image means nothing per object.
+                        if !per_image && chart.column == Column::Count {
+                            if let Some(first) = manager
+                                .available_columns
+                                .lock()
+                                .expect("Poisoned")
+                                .iter()
+                                .find(|entry| is_chartable_column(&entry.key))
+                            {
+                                chart.column = first.key.clone();
+                            }
+                        }
+                    }
+                    manager.push_chart_picker();
+                    manager.push_chart_value_summary();
+                    manager.refresh_charts();
+                });
+
+            let manager = self.clone();
+            ui.global::<ResultsState>()
                 .on_chart_group_selected(move |group| {
                     manager.chart_filter.lock().expect("Poisened").group_by = match group {
                         1 => BoxplotGroup::Image,
@@ -3611,14 +3638,16 @@ impl ResultsStateController {
                 match db.boxplot(&BoxplotFilter {
                     plane,
                     images: None,
-                    // Boxplot always groups by every class present —
-                    // the CLASS dropdown doesn't gate it the way it
-                    // does Histogram/Scatter (see `ChartFilter::object_class`'s
-                    // doc comment).
-                    object_classes: None,
+                    // A box per class: every class. A box per image, well,
+                    // ...: the objects of the class picked.
+                    object_classes: match chart_filter.group_by {
+                        BoxplotGroup::Class => None,
+                        _ => chart_filter.object_class.map(|class| vec![class]),
+                    },
                     column: chart_filter.column,
                     group_by: chart_filter.group_by,
                     grouping: self.current_grouping(),
+                    per_image: chart_filter.per_image,
                 }) {
                     Ok(boxplot) => self.push_boxplot_in_slint(&boxplot.boxes),
                     Err(err) => self.push_chart_error(err.to_string()),

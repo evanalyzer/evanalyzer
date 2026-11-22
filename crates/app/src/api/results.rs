@@ -1274,6 +1274,10 @@ pub struct BoxplotFilter {
     /// How images are put into wells (for the well groupings).
     #[serde(default)]
     pub grouping: Grouping,
+    /// A value per image (the objects' count, or `column`'s mean over the
+    /// image's objects) - each image a dot - instead of a value per object.
+    #[serde(default)]
+    pub per_image: bool,
 }
 
 /// What a boxplot's box stands for.
@@ -1342,6 +1346,12 @@ pub struct BoxplotBox {
     pub whisker_high: f64,
     pub outliers: Vec<f64>,
     pub object_count: usize,
+    /// Per image (`BoxplotFilter::per_image`): every image's value - the
+    /// dots - and how many images.
+    #[serde(default)]
+    pub image_values: Vec<f64>,
+    #[serde(default)]
+    pub image_count: usize,
 }
 
 #[derive(Serialize, Deserialize)]

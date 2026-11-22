@@ -22,9 +22,12 @@ use crate::{ColocColumnItem, ColocKind, ColumnPreset, IntensityCell};
 use slint::SharedString;
 use evanalyzer_app::results::{ColocMatch, view_settings::DEFAULT_LIST_COLUMNS};
 
+/// A channel's intensity column of one value (e.g. `Column::IntensityAvg`).
+type IntensityOf = fn(u32) -> Column;
+
 /// The intensity grid's values, in its column order: the short head and
 /// the column of a channel.
-const INTENSITY_VALUES: [(&str, fn(u32) -> Column); 9] = [
+const INTENSITY_VALUES: [(&str, IntensityOf); 9] = [
     ("Mean", Column::IntensityAvg),
     ("Sum", Column::IntensitySum),
     ("Min", Column::IntensityMin),
@@ -93,6 +96,17 @@ pub(super) fn intensity_grid(
 /// The intensity grid's heads.
 pub(super) fn intensity_heads() -> Vec<SharedString> {
     INTENSITY_VALUES.iter().map(|(head, _)| (*head).into()).collect()
+}
+
+/// A chart value's name: "Objects per image" for the count per image, the
+/// column's (µm) else - "Area [µm²] · mean per image" per image.
+pub(super) fn chart_value_label(column: &Column, per_image: bool, classes: &[Class]) -> String {
+    let name = picker_label(&column.display_label(classes));
+    match (per_image, column) {
+        (true, Column::Count) => "Objects per image".to_string(),
+        (true, _) => format!("{name} · mean per image"),
+        _ => name,
+    }
 }
 
 /// A one-choice picker's parts, made off the UI thread.
@@ -553,12 +567,17 @@ impl ResultsStateController {
     /// The Charts' value picker - the columns a chart can draw - with the
     /// column of the slot being picked (X, or scatter's Y) chosen.
     pub(super) fn push_chart_picker(&self) {
+        // A boxplot per image offers the objects' count too.
+        let per_image = {
+            let chart = self.chart_filter.lock().expect("Poisoned");
+            chart.per_image && chart.kind == ChartKind::Boxplot
+        };
         let available: Vec<ColumnEntry> = self
             .available_columns
             .lock()
             .expect("Poisoned")
             .iter()
-            .filter(|entry| is_chartable_column(&entry.key))
+            .filter(|entry| is_chartable_column(&entry.key) || (per_image && entry.key == Column::Count))
             .cloned()
             .collect();
         let y = *self.chart_value_y.lock().expect("Poisoned");
@@ -587,6 +606,22 @@ impl ResultsStateController {
         .ok();
     }
 
+    /// The value's name on the bar: "Objects per image" for the count.
+    pub(super) fn push_chart_value_summary(&self) {
+        let label = {
+            let classes = self.classes.lock().expect("Poisoned");
+            let chart = self.chart_filter.lock().expect("Poisoned");
+            chart_value_label(&chart.column, chart.per_image, &classes)
+        };
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.global::<ResultsState>().set_chart_column_summary(label.into());
+            }
+        })
+        .ok();
+    }
+
     /// The chart draws column `key` on the slot being picked (X, or
     /// scatter's Y).
     fn pick_chart_column(self: &Arc<Self>, key: &str) {
@@ -595,7 +630,8 @@ impl ResultsStateController {
             warn!("Unknown chart column key picked: {key}");
             return;
         };
-        let label = picker_label(&column.display_label(&classes));
+        let per_image = self.chart_filter.lock().expect("Poisoned").per_image;
+        let label = chart_value_label(&column, per_image, &classes);
         let y = *self.chart_value_y.lock().expect("Poisoned");
         {
             let mut chart = self.chart_filter.lock().expect("Poisoned");

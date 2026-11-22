@@ -386,6 +386,7 @@ fn main() {
                         column: Column::AreaSizePx,
                         group_by: Default::default(),
                         grouping: Default::default(),
+                        per_image: false,
                     })
                     .unwrap()
                     .boxes

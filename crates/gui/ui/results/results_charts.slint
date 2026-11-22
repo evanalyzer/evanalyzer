@@ -436,7 +436,7 @@ component ChartsPanel inherits ViewPanel {
         && !(root.kind == ResultsChartKind2.over-time && ResultsState.chart-time-lines == 0)
         && !(root.kind == ResultsChartKind2.profile && ResultsState.chart-profile-lines == 0);
     // The parts this kind has.
-    parts: root.kind == ResultsChartKind2.boxplot ? ["Value", "Groups", "Look"]
+    parts: root.kind == ResultsChartKind2.boxplot ? (ResultsState.chart-group == 0 ? ["Value", "Groups", "Look"] : ["Value", "Class", "Groups", "Look"])
         : root.kind == ResultsChartKind2.histogram || root.kind == ResultsChartKind2.scatter ? ["Value", "Class", "Look"]
         : root.has-class ? ["Value", "Class", "Groups", "Look"] : ["Value", "Groups", "Look"];
     part: ResultsState.chart-panel-part;
@@ -502,12 +502,30 @@ component ChartsPanel inherits ViewPanel {
         }
     }
 
-    if root.current == "Groups" && root.kind == ResultsChartKind2.boxplot: IndexChoiceList {
-        model: ["Class", "Image", "Well", "Plate row", "Plate column"];
-        current: ResultsState.chart-group;
-        picked(i) => {
-            ResultsState.chart-group = i;
-            ResultsState.chart-group-selected(i);
+    if root.current == "Groups" && root.kind == ResultsChartKind2.boxplot: VerticalLayout {
+        spacing: 12px;
+        IndexChoiceList {
+            title: "A BOX PER";
+            model: ["Class", "Image", "Well", "Plate row", "Plate column"];
+            current: ResultsState.chart-group;
+            picked(i) => {
+                ResultsState.chart-group = i;
+                ResultsState.chart-group-selected(i);
+            }
+        }
+        IndexChoiceList {
+            title: "A VALUE PER";
+            model: ["Object", "Image - a dot each"];
+            current: ResultsState.chart-per-image ? 1 : 0;
+            picked(i) => {
+                ResultsState.chart-per-image = i == 1;
+                ResultsState.chart-per-image-changed(i == 1);
+            }
+        }
+        InkHint {
+            text: ResultsState.chart-per-image
+                ? "Each image one value: its objects' count, or the mean of the value over them - images compared, not objects."
+                : "Each object one value.";
         }
     }
     if root.current == "Groups" && root.kind == ResultsChartKind2.over-time: IndexChoiceList {

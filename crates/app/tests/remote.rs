@@ -940,6 +940,7 @@ fn remote_grouped_matrix_and_chart_queries_match_local_ones() {
         column: Column::AreaSizePx,
         group_by: Default::default(),
         grouping: Default::default(),
+        per_image: false,
     };
     same(
         "boxplot",

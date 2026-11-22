@@ -159,6 +159,20 @@ impl Svg {
         let _ = write!(self.out, ">{}</text>", escape(text));
     }
 
+    /// `text` turned by `angle` degrees (negative: up to the right) around
+    /// its end at `x`, `y` - names under narrow slots.
+    pub fn text_turned(&mut self, x: f64, y: f64, text: &str, color: Rgb, angle: f64) {
+        let _ = write!(
+            self.out,
+            r#"<text x="0" y="0" fill="{}" text-anchor="end" transform="translate({},{}) rotate({})">{}</text>"#,
+            color.hex(),
+            n(x),
+            n(y),
+            n(angle),
+            escape(text)
+        );
+    }
+
     /// `text` turned upright (read bottom to top), centred on `x`, `y`.
     pub fn text_vertical(&mut self, x: f64, y: f64, text: &str, color: Rgb) {
         let _ = write!(
