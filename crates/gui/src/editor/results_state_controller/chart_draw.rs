@@ -47,6 +47,12 @@ const PALETTE: [u32; 8] = [
     0x2a6bdf, 0xe46a33, 0x2e9e5b, 0x7b4fc9, 0x14a39a, 0xc2477a, 0xb8860b, 0x5b5bd6,
 ];
 
+/// The colours a box can be given (the box tooltip's swatches).
+pub(super) const PICKABLE: [u32; 12] = [
+    0x2a6bdf, 0xe46a33, 0x2e9e5b, 0x7b4fc9, 0x14a39a, 0xc2477a, 0xd9472b, 0xe8a317, 0x5c7cfa,
+    0x52525b, 0x97978f, 0x18181b,
+];
+
 /// The factor that turns a value named `label` into the unit the results
 /// show (nm, nm², nm³ as µm, µm², µm³ - `in_micrometers`).
 fn unit_factor(label: &str) -> f64 {
@@ -76,13 +82,17 @@ fn box_color(index: usize, class_color: u32, colors: u8) -> Rgb {
 
 /// The boxes for the chart module, values times `factor` (the shown unit,
 /// % of control).
-fn box_specs(boxes: &[BoxplotBox], factor: f64, colors: u8) -> Vec<BoxSpec> {
+fn box_specs(boxes: &[BoxplotBox], factor: f64, look: &ChartLook) -> Vec<BoxSpec> {
     boxes
         .iter()
         .enumerate()
         .map(|(i, b)| BoxSpec {
             label: b.label.clone(),
-            color: box_color(i, b.color, colors),
+            // A colour picked for the box over the look's.
+            color: look
+                .box_colors
+                .get(&b.label)
+                .map_or_else(|| box_color(i, b.color, look.colors), |c| Rgb(*c)),
             min: b.min * factor,
             q1: b.q1 * factor,
             median: b.median * factor,
@@ -189,7 +199,7 @@ impl ResultsStateController {
                 factor = 100.0 / first.median;
             }
         }
-        let specs = box_specs(&self.chart_boxes.lock().expect("Poisoned"), factor, look.colors);
+        let specs = box_specs(&self.chart_boxes.lock().expect("Poisoned"), factor, &look);
         let theme = if canvas.dark { Theme::dark() } else { Theme::light() };
         let drawing = boxplot::draw(
             &specs,
@@ -281,6 +291,9 @@ impl ResultsStateController {
 
     pub(super) fn attach_chart_draw_callbacks(self: &Arc<Self>, ui: &AppWindow) {
         let state = ui.global::<ResultsState>();
+        state.set_chart_box_palette(ModelRc::from(Rc::new(VecModel::from(
+            PICKABLE.iter().map(|c| bg_color_to_slint(*c)).collect::<Vec<_>>(),
+        ))));
         let manager = self.clone();
         state.on_chart_resized(move |width, height, dark| {
             let canvas = ChartCanvas {
@@ -299,7 +312,25 @@ impl ResultsStateController {
             }
         });
         let manager = self.clone();
+        state.on_chart_box_color_picked(move |label, index| {
+            {
+                let mut look = manager.chart_look.lock().expect("Poisoned");
+                match usize::try_from(index).ok().and_then(|i| PICKABLE.get(i)) {
+                    Some(color) => {
+                        look.box_colors.insert(label.to_string(), *color);
+                    }
+                    // Back to the look's colour.
+                    None => {
+                        look.box_colors.remove(label.as_str());
+                    }
+                }
+            }
+            manager.remember_view();
+            manager.draw_chart();
+        });
+        let manager = self.clone();
         state.on_chart_box_look_changed(move |look| {
+            let box_colors = manager.chart_look.lock().expect("Poisoned").box_colors.clone();
             *manager.chart_look.lock().expect("Poisoned") = ChartLook {
                 log: look.log,
                 grid: look.grid,
@@ -309,6 +340,7 @@ impl ResultsStateController {
                 relative: look.relative,
                 min_max: look.min_max,
                 colors: u8::try_from(look.colors).unwrap_or(0),
+                box_colors,
             };
             manager.remember_view();
             manager.draw_chart();
@@ -408,7 +440,10 @@ mod tests {
             mean: 3e6,
             sd: 1e6,
         }];
-        let specs = box_specs(&boxes, 1e-6, 0);
+        let specs = box_specs(&boxes, 1e-6, &ChartLook::default());
+        let mut picked = ChartLook::default();
+        picked.box_colors.insert("a".into(), 0x123456);
+        assert_eq!(box_specs(&boxes, 1.0, &picked)[0].color, Rgb(0x123456), "a picked colour wins");
         assert_eq!(specs[0].median, 3.0);
         assert_eq!(specs[0].outliers, [9.0]);
         assert_eq!(specs[0].color, Rgb(PALETTE[0]), "no class colour: the palette's");

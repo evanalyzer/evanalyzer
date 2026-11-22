@@ -1069,6 +1069,10 @@ export global ResultsState {
     in-out property <[ChartStatRow]> chart-stats-rows: [];
     in-out property <string> chart-stats-tsv: "";
     in-out property <bool> chart-stats-open: true;
+    // A box's own colour: one of `chart-box-palette` (-1: back to the
+    // look's colour).
+    in property <[color]> chart-box-palette: [];
+    callback chart-box-color-picked(string, int);
     // The boxplot: a value per image (each image a dot), else per object.
     in-out property <bool> chart-per-image: false;
     callback chart-per-image-changed(bool);

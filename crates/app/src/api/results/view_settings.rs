@@ -290,6 +290,9 @@ pub struct BoxLook {
     pub relative: bool,
     pub min_max: bool,
     pub colors: u8,
+    /// A colour picked for a box (by its name, `0xRRGGBB`) - over the
+    /// colours above.
+    pub box_colors: std::collections::BTreeMap<String, u32>,
 }
 
 impl Default for BoxLook {
@@ -303,6 +306,7 @@ impl Default for BoxLook {
             relative: false,
             min_max: false,
             colors: 0,
+            box_colors: Default::default(),
         }
     }
 }
