@@ -281,12 +281,22 @@ impl ResultCharts {
             } else {
                 String::new()
             };
+            // Only the images analysed on this plane (as the plate): a
+            // disabled, failed or unmeasured image has no count, not 0.
+            let measured = format!(
+                "NOT i.disabled AND i.successful AND {}",
+                database.measured_on_plane_sql("i", &filter.plane)?
+            );
             let base = if by_class {
                 format!(
-                    "SELECT b.g, i.image_rel_path FROM images i CROSS JOIN {boxes} b WHERE {image_condition}"
+                    "SELECT b.g, i.image_rel_path FROM images i CROSS JOIN {boxes} b \
+                     WHERE {image_condition} AND {measured}"
                 )
             } else {
-                format!("SELECT {key} AS g, image_rel_path FROM images WHERE {image_condition}")
+                format!(
+                    "SELECT {key} AS g, i.image_rel_path FROM images i \
+                     WHERE {image_condition} AND {measured}"
+                )
             };
             format!(
                 "SELECT b.g, b.image_rel_path, COALESCE(p.n, 0) AS v, COALESCE(p.n, 0) AS n \
@@ -1229,6 +1239,22 @@ mod tests {
         let mut a_means = means.boxes[0].image_values.clone();
         a_means.sort_by(f64::total_cmp);
         assert_eq!(a_means, vec![20.0, 50.0]);
+        // A disabled (or failed, or not analysed) image is no image with
+        // 0 objects: as the plate, it has no count at all.
+        generator
+            .connection()
+            .execute(
+                "UPDATE images SET disabled = true WHERE image_rel_path = 'img2.tif'",
+                [],
+            )
+            .unwrap();
+        let counts = boxplot(Column::Count);
+        let values: Vec<Vec<f64>> = counts
+            .boxes
+            .iter()
+            .map(|b| b.image_values.clone())
+            .collect();
+        assert_eq!(values, [vec![2.0], vec![0.0]]);
     }
 
     #[test]

@@ -196,7 +196,7 @@ impl ResultsGenerator {
     /// plane count. So there a plane at the edge of the analysed range on
     /// which no image found anything at all, or a run without a single
     /// object, counts as not analysed (empty).
-    fn measured_on_plane_sql(
+    pub(super) fn measured_on_plane_sql(
         &self,
         alias: &str,
         plane: &PlaneFilter,
