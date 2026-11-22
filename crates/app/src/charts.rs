@@ -10,6 +10,7 @@
 //! - [`Theme`]: the colours and font - light or dark, as the app.
 //! - [`bar`]: a group's mean with its error bar.
 //! - [`boxplot`]: a box per group.
+//! - [`export`]: a drawn chart as a PNG (at a dpi) or a print-sized SVG.
 //! - [`histogram`]: how many values per bin.
 //! - [`lines`]: values over time or a profile's positions.
 //! - [`scatter`]: a dot per object over two values.
@@ -23,6 +24,7 @@
 
 mod axis;
 pub mod bar;
+pub mod export;
 pub mod boxplot;
 pub mod histogram;
 pub mod lines;
