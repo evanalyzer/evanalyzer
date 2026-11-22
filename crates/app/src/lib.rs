@@ -38,10 +38,10 @@ pub mod charts;
 pub mod number_format;
 
 pub mod prelude {
+    pub use crate::images::image_entry as image_entry_ext;
+    pub use crate::images::image_list as images_ext;
     pub use crate::project::annotations as annotations_ext;
     pub use crate::project::classes as classification_ext;
-    pub use crate::project::image_entry as image_entry_ext;
-    pub use crate::project::images as images_ext;
     pub use crate::project::objects as object_ext;
     pub use crate::project::utils;
 }
@@ -68,6 +68,7 @@ pub mod settings_of {
 pub mod global {
     pub use crate::project::AppHandle;
     pub use crate::project::Frontend;
+    pub use crate::results::SpeedUnit;
     pub use crate::user::crash_log;
     pub use crate::user::folder::USER_FOLDER_NAME;
     pub use crate::user::recent::RecentProject;
@@ -81,7 +82,7 @@ pub mod global {
     pub use crate::user::settings::PredictionOverlayPrefs;
     pub use crate::user::settings::UserInformation;
     pub use crate::user::settings::ViewportMemorySettings;
-    pub use crate::user::settings::{ResultsSplitSettings, SpeedUnit, TrailMode};
+    pub use crate::user::settings::{ResultsSplitSettings, TrailMode};
     pub use evanalyzer_core::memory::accounting::AccountingAllocator;
 }
 

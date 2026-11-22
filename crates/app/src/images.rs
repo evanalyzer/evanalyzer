@@ -10,15 +10,16 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+pub mod image_entry;
+pub mod image_list;
 pub(crate) mod local;
 mod pixels;
 mod source;
 mod types;
 
+pub use image_entry::ImageEntryExt;
+pub use image_list::{GlobalImageSettingsExt, ImageListExt};
 pub use source::ImageSource;
 pub use types::*;
 
 pub use pixels::{Erased, annotation_from_mask, erase_mask, stroke_mask, union_mask};
-
-// The public path it had before (`evanalyzer_app::images::...`).
-pub use crate::project::plate_layout::{PlateLayout, WellImages, plate_layout, texts_in_group};

@@ -12,6 +12,7 @@ use super::results_generator::{
 };
 use super::results_time_course::{TimeCourseHead, TimeCourseQuery};
 use super::results_tracks::{TrackSummaryHead, TrackSummaryQuery};
+use crate::results::SpeedUnit;
 use crate::results::{
     Aggregation, Cell, CellValue, Column, ColumnEntry, DatabaseResult, GroupedByImageFilter,
     ImageHeatmapFilter, ListFilter, Pagination, PlaneFilter, PlateFilterMulti, View,
@@ -23,7 +24,6 @@ use crate::results::{
     TimeCourseResult, TrackMotion, TrackSummary, TrackSummaryFilter,
 };
 use crate::results::{ProfileExportContent, ProfileFilter, ProfileLines, ProfilePoint};
-use crate::user::settings::SpeedUnit;
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use evanalyzer_cfg::settings::images_settings::ImageMarker;
 use rust_xlsxwriter::{Color, Format, FormatAlign, Workbook, Worksheet, XlsxError};

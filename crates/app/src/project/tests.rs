@@ -11,10 +11,10 @@
 
 use super::{image_folder::*, load_save::*, results_images::*};
 use crate::images::ImageMeta;
+use crate::images::image_list::GlobalImageSettingsExt;
+use crate::images::image_list::ImageListExt;
 use crate::project::ProjectWithRuntime;
 use crate::project::classes::ClassificationExt;
-use crate::project::images::GlobalImageSettingsExt;
-use crate::project::images::ImageListExt;
 use crate::project::utils::ASSIGNED_WAVELENGTHS;
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectId, PipelineId, ZProjection};
 use evanalyzer_cfg::settings::images_settings::SeriesSettings;

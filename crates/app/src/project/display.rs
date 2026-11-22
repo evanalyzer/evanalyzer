@@ -10,11 +10,11 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::images::image_entry::ImageEntryExt;
+use crate::images::image_list::GlobalImageSettingsExt;
+use crate::images::image_list::ImageListExt;
 use crate::project::FocusChannels;
 use crate::project::ProjectWithRuntime;
-use crate::project::image_entry::ImageEntryExt;
-use crate::project::images::GlobalImageSettingsExt;
-use crate::project::images::ImageListExt;
 use crate::project::utils::{ASSIGNED_WAVELENGTHS, wavelength_colors};
 use evanalyzer_cfg::core_types::ZProjection;
 use evanalyzer_cfg::settings::images_settings::SeriesSettings;

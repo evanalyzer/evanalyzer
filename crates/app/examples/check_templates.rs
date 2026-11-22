@@ -37,7 +37,9 @@ fn main() {
         eprintln!("usage: check_templates <folder> [--image <file>]");
         std::process::exit(2);
     };
-    if let Err(e) = evanalyzer_app::modules::validate_templates(&folder, image.as_deref()) {
+    let backend = evanalyzer_app::backends::local::LocalBackend::default();
+    if let Err(e) = evanalyzer_app::modules::validate_templates(&folder, image.as_deref(), &backend)
+    {
         eprintln!("{e}");
         std::process::exit(1);
     }

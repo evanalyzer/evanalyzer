@@ -15,7 +15,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use crate::project::images::ImageListExt;
+use crate::images::image_list::ImageListExt;
 use crate::project::owner::ProjectWithRuntime;
 use evanalyzer_cfg::core_types::{ObjectClass, ObjectId, SegmentationClass, ZProjection};
 use evanalyzer_cfg::settings::object_settings::{ObjectMetricSettings, TrackSettings};
@@ -242,7 +242,7 @@ impl ProjectWithRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::images::GlobalImageSettingsExt;
+    use crate::images::image_list::GlobalImageSettingsExt;
     use bitvec::prelude::*;
     use evanalyzer_cfg::settings::images_settings::{ImageEntry, SeriesSettings};
     use std::path::PathBuf;

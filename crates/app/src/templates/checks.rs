@@ -13,7 +13,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use crate::backend::LocalBackend;
+use crate::backend::Backend;
 use crate::jobs::{PreviewRequest, PreviewViewport, StartPreviewError};
 use crate::modules::checks::{Severity, check_project};
 use crate::modules::insights::resolved_commands;
@@ -41,10 +41,14 @@ pub struct TemplateCheck {
 
 /// Checks project template `template`; with `image`, also runs a preview
 /// of it on that image.
-pub fn check_project_template(template: &ProjectTemplate, image: Option<&Path>) -> TemplateCheck {
+pub fn check_project_template(
+    template: &ProjectTemplate,
+    image: Option<&Path>,
+    backend: &dyn Backend,
+) -> TemplateCheck {
     let mut project = ProjectWithRuntime::default();
     project.apply_project_template(template);
-    check_usable(project.settings, image)
+    check_usable(project.settings, image, backend)
 }
 
 /// Checks library module `template` (from file `library`): used twice in a
@@ -54,6 +58,7 @@ pub fn check_module_template(
     template: &ModuleTemplate,
     library: &str,
     image: Option<&Path>,
+    backend: &dyn Backend,
 ) -> TemplateCheck {
     let mut project = ProjectWithRuntime::default();
     let key = match insert_module_template(&mut project.settings, template, library) {
@@ -93,7 +98,7 @@ pub fn check_module_template(
         enabled: true,
         steps: vec![uses(1, &key), uses(2, &key), uses(3, &wrapper)],
     });
-    check_usable(project.settings, image)
+    check_usable(project.settings, image, backend)
 }
 
 /// Whether `path` is validated as templates: a template or module file,
@@ -106,7 +111,11 @@ pub fn is_template_path(path: &Path) -> bool {
 /// on) and prints a line per file - for the command line (`project
 /// validate`, the `check_templates` example in CI). Fails if one isn't
 /// usable.
-pub fn validate_templates(path: &Path, image: Option<&Path>) -> Result<(), InternalErrors> {
+pub fn validate_templates(
+    path: &Path,
+    image: Option<&Path>,
+    backend: &dyn Backend,
+) -> Result<(), InternalErrors> {
     if let Some(image) = image
         && !image.is_file()
     {
@@ -135,7 +144,7 @@ pub fn validate_templates(path: &Path, image: Option<&Path>) -> Result<(), Inter
     };
     let mut failed = 0;
     for path in &files {
-        let check = check_template_file(path, image);
+        let check = check_template_file(path, image, backend);
         let shown = path.strip_prefix(folder).unwrap_or(path).display();
         if check.problems.is_empty() {
             match &check.not_run {
@@ -160,7 +169,11 @@ pub fn validate_templates(path: &Path, image: Option<&Path>) -> Result<(), Inter
 }
 
 /// The check of one template file.
-pub fn check_template_file(path: &Path, image: Option<&Path>) -> TemplateCheck {
+pub fn check_template_file(
+    path: &Path,
+    image: Option<&Path>,
+    backend: &dyn Backend,
+) -> TemplateCheck {
     let unreadable = |e: String| TemplateCheck {
         problems: vec![e],
         not_run: None,
@@ -176,13 +189,13 @@ pub fn check_template_file(path: &Path, image: Option<&Path>) -> TemplateCheck {
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                check_module_template(&template, &library, image)
+                check_module_template(&template, &library, image, backend)
             }
             Err(e) => unreadable(format!("isn't a module: {e}")),
         }
     } else {
         match serde_json::from_str::<ProjectTemplate>(&json) {
-            Ok(template) => check_project_template(&template, image),
+            Ok(template) => check_project_template(&template, image, backend),
             Err(e) => unreadable(format!("isn't a project template: {e}")),
         }
     }
@@ -210,7 +223,11 @@ fn collect(folder: &Path, out: &mut Vec<PathBuf>) {
 }
 
 /// The checks of a project made from a template.
-fn check_usable(mut settings: ProjectSettings, image: Option<&Path>) -> TemplateCheck {
+fn check_usable(
+    mut settings: ProjectSettings,
+    image: Option<&Path>,
+    backend: &dyn Backend,
+) -> TemplateCheck {
     let mut check = TemplateCheck::default();
     check.problems.extend(
         check_project(&settings)
@@ -271,14 +288,14 @@ fn check_usable(mut settings: ProjectSettings, image: Option<&Path>) -> Template
         settings,
         ..Default::default()
     };
-    project.scan_image_folder_and_add(&LocalBackend::default());
+    project.scan_image_folder_and_add(backend);
     settings = project.settings;
     // An image with too few channels says nothing about the template.
     if let Err(e) = evanalyzer_core::check_pipeline_channels(&settings) {
         check.not_run = Some(format!("the image hasn't the channels it reads ({e})"));
         return check;
     }
-    let preview = crate::jobs::local::start_preview(PreviewRequest {
+    let preview = backend.start_preview(PreviewRequest {
         settings,
         project_path: dir.path().to_path_buf(),
         viewport: PreviewViewport {
@@ -357,6 +374,7 @@ impl Drop for CheckFolder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::LocalBackend;
 
     fn fixture_image() -> std::path::PathBuf {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -395,7 +413,12 @@ mod tests {
     #[test]
     fn a_module_with_a_threshold_is_usable_twice_and_nested() {
         let template = detection_module(serde_json::json!({"type": "BLUR", "kernelSize": 3}));
-        let check = check_module_template(&template, "ev.evamodule", Some(&fixture_image()));
+        let check = check_module_template(
+            &template,
+            "ev.evamodule",
+            Some(&fixture_image()),
+            &LocalBackend::default(),
+        );
         assert_eq!(check, TemplateCheck::default());
     }
 
@@ -413,7 +436,8 @@ mod tests {
         if let Some(PipelineCommand::Threshold(t)) = template.module.steps[0].command_mut() {
             t.id = "threshold_01".into();
         }
-        let check = check_module_template(&template, "ev.evamodule", None);
+        let check =
+            check_module_template(&template, "ev.evamodule", None, &LocalBackend::default());
         assert!(
             check.problems.iter().any(|p| p.contains("more than once")),
             "{check:?}"

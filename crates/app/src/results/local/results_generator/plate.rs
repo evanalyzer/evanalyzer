@@ -1127,38 +1127,6 @@ impl ResultsGenerator {
     }
 }
 
-/// The plate sizes `PlateSize::Auto` chooses from (the standard formats),
-/// smallest first - `best_matching_dimensions` relies on this order to find
-/// the smallest one that fits.
-pub(super) const AUTO_PLATE_SIZES: [PlateSize; 8] = [
-    PlateSize::Plate2x3,
-    PlateSize::Plate3x4,
-    PlateSize::Plate4x6,
-    PlateSize::Plate6x8,
-    PlateSize::Plate8x12,
-    PlateSize::Plate16x24,
-    PlateSize::Plate32x48,
-    PlateSize::Plate48x72,
-];
-
-/// The smallest standard plate size whose row/column count covers every well
-/// this query actually found (`max_row`/`max_col`, both 0-based), as
-/// `(rows, cols)`. Falls back to the largest known size if even that doesn't
-/// fit (a plate bigger than any standard format, or a grouping extracting
-/// something that isn't really a well id).
-pub(crate) fn best_matching_dimensions(
-    max_row: Option<usize>,
-    max_col: Option<usize>,
-) -> (usize, usize) {
-    let needed_rows = max_row.map_or(1, |row| row + 1);
-    let needed_cols = max_col.map_or(1, |col| col + 1);
-    AUTO_PLATE_SIZES
-        .into_iter()
-        .filter_map(PlateSize::dimensions)
-        .find(|(rows, cols)| *rows >= needed_rows && *cols >= needed_cols)
-        .unwrap_or((48, 72))
-}
-
 /// The `(rows, cols)` grid for a well whose highest image number is
 /// `max_idx`, for `WellSize` Auto: the smallest square-ish grid (as many or
 /// one more columns than rows) holding that many images.
@@ -1169,40 +1137,6 @@ pub(super) fn auto_well_size(max_idx: u32) -> WellSize {
         rows: n.div_ceil(cols),
         cols,
     }
-}
-
-/// Parses a well's row letters ("A", "B", ..., "Z", "AA", "AB", ...) into a
-/// 0-based row index, using the same bijective base-26 scheme spreadsheet
-/// column letters use. `None` if `letters` isn't purely alphabetic (e.g. the
-/// `grouping_regex` didn't actually match a well id).
-pub(crate) fn row_letter_to_index(letters: &str) -> Option<usize> {
-    if letters.is_empty() || !letters.chars().all(|c| c.is_ascii_alphabetic()) {
-        return None;
-    }
-    let mut index: usize = 0;
-    for c in letters.chars() {
-        let digit = (c.to_ascii_uppercase() as u8 - b'A') as usize + 1;
-        index = index * 26 + digit;
-    }
-    Some(index - 1)
-}
-
-/// Inverse of [`row_letter_to_index`].
-pub(crate) fn row_index_to_letter(index: usize) -> String {
-    let mut n = index + 1;
-    let mut letters = Vec::new();
-    while n > 0 {
-        let rem = (n - 1) % 26;
-        letters.push((b'A' + rem as u8) as char);
-        n = (n - 1) / 26;
-    }
-    letters.iter().rev().collect()
-}
-
-/// Parses a well's column number ("1", "2", ...) into a 0-based column
-/// index. `None` if `digits` isn't a positive integer.
-pub(crate) fn col_number_to_index(digits: &str) -> Option<usize> {
-    digits.parse::<usize>().ok()?.checked_sub(1)
 }
 
 /// Why an image behind a plate/well cell is marked: disabled by the user,

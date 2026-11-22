@@ -10,7 +10,6 @@
 // app/src/project_owner.rs
 
 use crate::backend::Backend;
-use crate::backend::LocalBackend;
 use crate::images::ImageMeta;
 use crate::images::ImageSource;
 use evanalyzer_cfg::{
@@ -193,11 +192,6 @@ pub struct ProjectOwner {
 }
 
 impl ProjectOwner {
-    /// An owner whose compute runs in this process.
-    pub fn new() -> Self {
-        Self::with_backend(Arc::new(LocalBackend::default()))
-    }
-
     /// An owner whose analysis/preview/training runs and image reads go to
     /// `backend` (e.g. a remote server).
     pub fn with_backend(backend: Arc<dyn Backend>) -> Self {
@@ -433,7 +427,13 @@ impl ProjectWithRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::images::ImageListExt;
+    use crate::backend::LocalBackend;
+
+    /// An owner whose compute runs in this process.
+    fn local_owner() -> ProjectOwner {
+        ProjectOwner::with_backend(Arc::new(LocalBackend::default()))
+    }
+    use crate::images::image_list::ImageListExt;
     use evanalyzer_cfg::settings::images_settings::{ImageEntry, SeriesSettings};
     use std::collections::BTreeMap;
     use std::path::Path;
@@ -464,7 +464,7 @@ mod tests {
 
     #[test]
     fn current_path_is_none_for_a_fresh_owner() {
-        let owner = ProjectOwner::new();
+        let owner = local_owner();
         assert_eq!(owner.current_path(), None);
     }
 
@@ -474,7 +474,7 @@ mod tests {
         // worker thread via `AppHandle` - a panic on any of them while
         // holding this lock must not cascade into every other holder
         // panicking too (see `lock_project_write`/`lock_project_read`).
-        let owner = ProjectOwner::new();
+        let owner = local_owner();
         let handle = owner.handle();
 
         // Poison the lock: panicking while a write guard is held marks it
@@ -501,7 +501,7 @@ mod tests {
 
     #[test]
     fn save_project_writes_json_and_records_current_path() {
-        let owner = ProjectOwner::new();
+        let owner = local_owner();
         let handle = owner.handle();
         handle.get_project_write().meta.name = "My Project".into();
 
@@ -521,12 +521,12 @@ mod tests {
         let path = dir.path().join("roundtrip.evaproj");
 
         // Write with one owner...
-        let writer = ProjectOwner::new();
+        let writer = local_owner();
         writer.handle().get_project_write().meta.name = "Round Trip".into();
         writer.save_project(&path).unwrap();
 
         // ...and read back with a fresh one, as a real app restart would.
-        let reader = ProjectOwner::new();
+        let reader = local_owner();
         reader.load_project(&path).expect("load should succeed");
 
         assert_eq!(reader.current_path(), Some(path));
@@ -535,7 +535,7 @@ mod tests {
 
     #[test]
     fn load_project_errors_for_a_missing_file() {
-        let owner = ProjectOwner::new();
+        let owner = local_owner();
         let missing = Path::new("/nonexistent/does-not-exist.evaproj").to_path_buf();
         assert!(owner.load_project(&missing).is_err());
         // A failed load must not clobber `current_path`.
@@ -544,7 +544,7 @@ mod tests {
 
     #[test]
     fn get_preview_objects_reflects_tmp_settings() {
-        let owner = ProjectOwner::new();
+        let owner = local_owner();
         let handle = owner.handle();
         {
             let mut project = handle.get_project_write();
@@ -563,7 +563,7 @@ mod tests {
 
     #[test]
     fn selected_object_prefers_the_series_object_over_a_same_id_preview_object() {
-        let owner = ProjectOwner::new();
+        let owner = local_owner();
         let path = seed_one_image(&owner, "img.tif");
         let handle = owner.handle();
         {
@@ -594,7 +594,7 @@ mod tests {
 
     #[test]
     fn selected_object_falls_back_to_a_preview_object_when_no_series_object_matches() {
-        let owner = ProjectOwner::new();
+        let owner = local_owner();
         let handle = owner.handle();
         {
             let mut project = handle.get_project_write();
@@ -617,7 +617,7 @@ mod tests {
 
     #[test]
     fn selected_object_is_none_when_nothing_is_selected() {
-        let owner = ProjectOwner::new();
+        let owner = local_owner();
         let handle = owner.handle();
         let project = handle.get_project();
         assert_eq!(project.get_selected_object_id(), None);

@@ -4470,7 +4470,7 @@ impl ResultsStateController {
                     BoxplotGroup::WellRow => 2,
                     _ => 3,
                 };
-                picked_images = evanalyzer_app::images::texts_in_group(&refs, &regex, part, label)
+                picked_images = evanalyzer_app::project::texts_in_group(&refs, &regex, part, label)
                     .into_iter()
                     .map(|i| images[i].rel_path.clone())
                     .collect();

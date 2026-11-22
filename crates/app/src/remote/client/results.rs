@@ -458,10 +458,10 @@ mod tests {
     use crate::backend::local::LocalBackend;
     use crate::backend::{Backend, ExportProgressFn, SystemInfo, TemplateFolders};
     use crate::files::*;
+    use crate::images::image_list::ImageListExt;
     use crate::images::*;
     use crate::jobs::*;
     use crate::project::ProjectWithRuntime;
-    use crate::project::images::ImageListExt;
     use crate::remote::{RemoteBackend, Worker};
     use crate::results::*;
     use crate::training::*;

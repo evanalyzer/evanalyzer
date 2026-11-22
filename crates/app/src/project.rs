@@ -19,9 +19,7 @@ pub mod classes;
 pub(crate) mod current_image;
 pub(crate) mod display;
 pub(crate) mod frontend;
-pub mod image_entry;
 pub(crate) mod image_folder;
-pub mod images;
 pub(crate) mod load_save;
 pub mod objects;
 pub(crate) mod owner;
@@ -43,16 +41,16 @@ pub use crate::annotations::geojson::{
     read_image_geojson,
 };
 pub use crate::annotations::measure::measure_on_source;
+pub use crate::images::ImageEntryExt;
+pub use crate::images::{GlobalImageSettingsExt, ImageListExt};
 pub use annotations::AnnotationScope;
 pub use class_ids::{ClassIdChange, change_class_id, free_class_ids, next_class_id};
 pub use classes::ClassificationExt;
 pub use current_image::{ConfigValueSource, DEFAULT_FRAME_INTERVAL_S};
-pub use image_entry::ImageEntryExt;
 pub use image_folder::{
     ImageSettingsExt, ProjectAction, SelectNewProjectRootAction, collect_images_at_root,
 };
-pub use images::{GlobalImageSettingsExt, ImageListExt};
 pub use load_save::{SaveProjectActions, load_project};
 pub use objects::{ObjectExt, ShownPlane};
-pub use plate_layout::PlateSettingsExt;
+pub use plate_layout::{PlateLayout, PlateSettingsExt, WellImages, plate_layout, texts_in_group};
 pub use results_images::{ResultsImageFinder, find_results_image, run_image_root};

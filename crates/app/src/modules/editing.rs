@@ -15,7 +15,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use crate::project::images::ImageListExt;
+use crate::images::image_list::ImageListExt;
 use chrono::Utc;
 use evanalyzer_cfg::{
     core_types::{

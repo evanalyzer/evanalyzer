@@ -11,8 +11,8 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use crate::project::image_entry::ImageEntryExt;
-use crate::project::images::ImageListExt;
+use crate::images::image_entry::ImageEntryExt;
+use crate::images::image_list::ImageListExt;
 use crate::training::TrainedClassifier;
 use evanalyzer_cfg::EVANALYZER_TRAINED_AI_MODELS;
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass, SegmentationClass};

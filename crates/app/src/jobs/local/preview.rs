@@ -9,7 +9,6 @@
 
 use super::spawn_job;
 use crate::jobs::{PreviewRequest, RunningJob, StartPreviewError};
-use crate::user::settings::ViewportMemorySettings;
 use evanalyzer_core::PreviewTileSettings;
 use log::{debug, error};
 
@@ -40,7 +39,7 @@ pub(crate) fn start_preview(request: PreviewRequest) -> Result<RunningJob, Start
         let max = request
             .max_visible_tiles
             .unwrap_or_else(|| {
-                ViewportMemorySettings::auto_preview_tiles(
+                evanalyzer_core::memory::viewer::preview_tiles(
                     crate::backend::local::system::cpu_ram_diagnostics().1,
                 )
             })

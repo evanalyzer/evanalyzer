@@ -7,6 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::results::plate_grouping::*;
 use crate::results::value_to_color;
 use crate::results::*;
 use duckdb::Connection;
@@ -18,27 +19,6 @@ use evanalyzer_cfg::{
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-
-/// The well-name patterns `Grouping::Auto` chooses from, in order of
-/// preference (the first wins a tie). Each captures 1 the well (`B03`), 2 its
-/// row (`B`), 3 its column (`03`) and 4 the image number in the well (`01`,
-/// empty for one image per well).
-pub(crate) const AUTO_GROUPING_PATTERNS: [&str; 4] = [
-    // A01_01.tif, B3-s2.tif, C12 f003.ome.tif
-    r"^(([A-Za-z]{1,2})([0-9]{1,3}))[_\- ]+[A-Za-z]*([0-9]+)\.[A-Za-z0-9.]+$",
-    // Exp1_B03_01.tif, plate 2 - Well A1 - field 3.tif
-    r"^.*[_\- ](([A-Za-z]{1,2})([0-9]{1,3}))[_\- ]+[A-Za-z]*([0-9]+)\.[A-Za-z0-9.]+$",
-    // A01.tif (one image per well)
-    r"^(([A-Za-z]{1,2})([0-9]{1,3}))()\.[A-Za-z0-9.]+$",
-    // Exp1_B03.tif (one image per well)
-    r"^.*[_\- ](([A-Za-z]{1,2})([0-9]{1,3}))()\.[A-Za-z0-9.]+$",
-];
-
-/// `Grouping::Folder`, on `image_rel_path` (`/` or `\` separated): the
-/// folder an image is in is its well, with a row and column when the folder
-/// is named like a well (`B03`); the image number is the last number in the
-/// file name.
-pub(crate) const FOLDER_GROUPING_REGEX: &str = r"^(?:.*[/\\])?(([A-Za-z]{1,2})([0-9]{1,3})|[^/\\]+)[/\\](?:[^/\\]*?([0-9]+))?[^/\\0-9]*\.[^/\\.]+$";
 
 /// How a query extracts the well of an image (see [`Grouping`]): a regex
 /// (already quote-escaped for a SQL string literal) on `column` of the
@@ -81,11 +61,8 @@ mod sql;
 mod tests;
 
 // What the views share, reachable here (and in `tests`) as before.
+pub(crate) use self::sql::class_display_label;
 use self::{list::*, sql::*};
-pub(crate) use self::{
-    plate::best_matching_dimensions, plate::col_number_to_index, plate::row_index_to_letter,
-    plate::row_letter_to_index, sql::class_display_label,
-};
 pub(super) use self::{
     sql::ImageSelection, sql::class_blocks, sql::class_filter_sql, sql::column_aggregate_expr,
     sql::objects_per_class_sql, sql::sql_int_array_literal, sql::sql_string_in_list,

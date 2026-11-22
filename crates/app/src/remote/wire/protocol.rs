@@ -847,7 +847,7 @@ mod tests {
             .trace_simple_type::<crate::results::TimeCourseLayout>()
             .unwrap();
         tracer
-            .trace_simple_type::<crate::user::settings::SpeedUnit>()
+            .trace_simple_type::<crate::results::SpeedUnit>()
             .unwrap();
         tracer
             .trace_simple_type::<crate::results::TrackHistory>()

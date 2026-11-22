@@ -721,7 +721,7 @@ impl TrackSummary {
 
     /// Its speed (VCL) in `unit` - `None` also for µm without a pixel size
     /// or frame interval.
-    pub fn speed_in(&self, unit: crate::user::settings::SpeedUnit) -> Option<f64> {
+    pub fn speed_in(&self, unit: SpeedUnit) -> Option<f64> {
         self.motion
             .in_units(TrackMotion::VCL, unit, self.um_per_px, self.s_per_frame)
     }
@@ -863,11 +863,11 @@ impl TrackMotion {
     pub fn in_units(
         &self,
         index: usize,
-        unit: crate::user::settings::SpeedUnit,
+        unit: SpeedUnit,
         um_per_px: Option<f64>,
         s_per_frame: Option<f64>,
     ) -> Option<f64> {
-        use crate::user::settings::SpeedUnit;
+        use SpeedUnit;
         let value = self.get(index)?;
         let um = matches!(unit, SpeedUnit::UmPerMin | SpeedUnit::UmPerS);
         let length = if um { um_per_px? } else { 1.0 };
@@ -897,7 +897,7 @@ pub struct TrackSummaryExport {
     pub no_edge: bool,
     /// The speed's unit - px/frame when µm can't be (no pixel size or
     /// frame interval).
-    pub speed_unit: crate::user::settings::SpeedUnit,
+    pub speed_unit: SpeedUnit,
 }
 
 impl Default for TrackSummaryExport {
@@ -907,7 +907,7 @@ impl Default for TrackSummaryExport {
             min_points: 1,
             from_start: false,
             no_edge: false,
-            speed_unit: crate::user::settings::SpeedUnit::UmPerMin,
+            speed_unit: SpeedUnit::UmPerMin,
         }
     }
 }
@@ -1570,4 +1570,14 @@ mod option_range_serde {
         let range = Option::<(u32, u32)>::deserialize(deserializer)?;
         Ok(range.map(|(start, end)| Range { start, end }))
     }
+}
+
+/// The unit a track's speed is shown in.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SpeedUnit {
+    #[default]
+    PxPerFrame,
+    UmPerMin,
+    UmPerS,
 }

@@ -8,6 +8,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::recent::{RecentProject, RecentServer};
+use crate::results::SpeedUnit;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -305,16 +306,6 @@ pub enum TrailMode {
     #[default]
     Frames,
     Whole,
-}
-
-/// The unit a track's speed is shown in.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum SpeedUnit {
-    #[default]
-    PxPerFrame,
-    UmPerMin,
-    UmPerS,
 }
 
 /// The colors of the GUI: light, dark, or a softer dark (`Dim`).

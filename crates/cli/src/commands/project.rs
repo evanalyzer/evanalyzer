@@ -107,7 +107,13 @@ pub fn run_validate(args: ValidateArgs, backend: &dyn Backend) -> Result<(), Int
                 "--set only changes a project (.evaproj), not templates".into(),
             ));
         }
-        return evanalyzer_app::modules::validate_templates(&args.project, args.image.as_deref());
+        // Always on this computer: the check copies its image into a
+        // temporary folder here (so also with `--remote`).
+        return evanalyzer_app::modules::validate_templates(
+            &args.project,
+            args.image.as_deref(),
+            &evanalyzer_app::backends::local::LocalBackend::default(),
+        );
     }
     if args.image.is_some() {
         return Err(InternalErrors::InvalidArgument(

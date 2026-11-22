@@ -29,9 +29,9 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::files::FileSystem;
+use crate::images::image_list::ImageListExt;
 use crate::project::annotations::same_shape;
 use crate::project::classes::ClassificationExt;
-use crate::project::images::ImageListExt;
 use crate::project::owner::ProjectWithRuntime;
 use bitvec::prelude::{BitVec, Lsb0};
 use evanalyzer_cfg::core_types::{ImagePlane, ObjectClass, ZProjection};

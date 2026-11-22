@@ -1128,7 +1128,7 @@ fn build_group_rows(
     let mut placed = vec![false; matching.len()];
     for part in parts {
         let part_paths: Vec<&std::path::Path> = part.iter().map(|&i| paths[i]).collect();
-        let layout = evanalyzer_app::images::plate_layout(&part_paths, plate);
+        let layout = evanalyzer_app::project::plate_layout(&part_paths, plate);
         for well in layout.wells {
             let entry = wells
                 .entry((well.row, well.col))

@@ -1,4 +1,6 @@
-//! # images_ext
+//! # image_list
+//!
+//! The project's image list and its settings for all images.
 //!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-10-27

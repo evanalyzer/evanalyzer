@@ -11,9 +11,9 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::images::image_entry::ImageEntryExt;
+use crate::images::image_list::ImageListExt;
 use crate::project::ProjectWithRuntime;
-use crate::project::image_entry::ImageEntryExt;
-use crate::project::images::ImageListExt;
 use crate::project::objects::ShownPlane;
 use crate::project::utils::get_relative_key;
 use evanalyzer_cfg::core_types::ZProjection;

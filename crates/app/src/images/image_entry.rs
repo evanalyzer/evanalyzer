@@ -1,4 +1,6 @@
-//! # image_entry_ext
+//! # image_entry
+//!
+//! A project image's settings: the series it is shown and analysed with.
 //!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-10-10

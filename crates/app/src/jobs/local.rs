@@ -31,9 +31,9 @@ pub(crate) use running_job::{join_job, spawn_job};
 mod tests {
     use super::*;
     use crate::backend::LocalBackend;
+    use crate::images::image_list::ImageListExt;
     use crate::jobs::{PreviewRequest, PreviewViewport, RunningJob};
     use crate::project::ProjectWithRuntime;
-    use crate::project::images::ImageListExt;
     use evanalyzer_cfg::core_types::InternalErrors;
     use evanalyzer_cfg::settings::project_settings::ProjectSettings;
     use evanalyzer_core::ProgressEvent;
