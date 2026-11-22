@@ -10,6 +10,7 @@
 //! - [`Theme`]: the colours and font - light or dark, as the app.
 //! - [`boxplot`]: a box per group.
 //! - [`histogram`]: how many values per bin.
+//! - [`scatter`]: a dot per object over two values.
 //!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-11-22
@@ -21,6 +22,7 @@
 mod axis;
 pub mod boxplot;
 pub mod histogram;
+pub mod scatter;
 mod svg;
 
 pub use axis::Scale;

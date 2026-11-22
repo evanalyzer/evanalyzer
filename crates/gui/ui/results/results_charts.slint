@@ -64,82 +64,42 @@ component HistogramChart inherits Rectangle {
 }
 
 component ScatterChart inherits Rectangle {
+    // Drawn by the chart module at the area's size and scheme.
+    function ask() {
+        ResultsState.chart-resized(self.width / 1px, self.height / 1px, Ink.scheme != InkScheme.light);
+    }
+    init => {
+        root.ask();
+    }
+    changed width => {
+        root.ask();
+    }
+    changed height => {
+        root.ask();
+    }
+
     if ResultsState.chart-error != "": ChartErrorOrEmpty { }
 
-    if ResultsState.chart-error == "": VerticalLayout {
-        padding: 24px;
-        spacing: 8px;
+    if ResultsState.chart-error == "" && ResultsState.chart-scatter-points.length == 0: Text {
+        text: "No data for the selected filters";
+        color: Ink.text-mute;
+        font-size: Ink.fs-body;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
 
-        Text {
-            text: ResultsState.chart-scatter-shown-count + " of " + ResultsState.chart-scatter-total-count + " objects plotted";
-            font-size: Ink.fs-secondary;
-            color: Ink.text-mute;
-        }
-
-        plot-area := Rectangle {
-            vertical-stretch: 1;
-            background: Ink.raised;
-            border-radius: 4px;
-            clip: true;
-
-            for pt in ResultsState.chart-scatter-points: Rectangle {
-                width: 5px;
-                height: 5px;
-                border-radius: 2.5px;
-                background: Ink.focus.with-alpha(0.65);
-                x: pt.x * (plot-area.width - self.width);
-                y: (1.0 - pt.y) * (plot-area.height - self.height);
-            }
-
-            // A click on a point: its object on its image.
-            TouchArea {
-                mouse-cursor: pointer;
-                clicked => {
-                    ResultsState.chart-scatter-clicked(
-                        (self.mouse-x - 2.5px) / max(1px, plot-area.width - 5px),
-                        1.0 - (self.mouse-y - 2.5px) / max(1px, plot-area.height - 5px),
-                        (plot-area.width - 5px) / 1px,
-                        (plot-area.height - 5px) / 1px);
-                }
-            }
-
-            if ResultsState.chart-scatter-points.length == 0: Text {
-                text: "No data for the selected filters";
-                color: Ink.text-mute;
-                font-size: Ink.fs-body;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-
-            Text {
-                x: 4px;
-                y: 2px;
-                text: ResultsState.chart-scatter-y-max-label;
-                font-size: Ink.fs-caption;
-                color: Ink.text-mute;
-            }
-            Text {
-                x: 4px;
-                y: parent.height - self.height - 2px;
-                text: ResultsState.chart-scatter-y-min-label;
-                font-size: Ink.fs-caption;
-                color: Ink.text-mute;
-            }
-        }
-
-        HorizontalLayout {
-            Text {
-                text: ResultsState.chart-scatter-x-min-label;
-                font-size: Ink.fs-caption;
-                color: Ink.text-mute;
-            }
-            Rectangle {
-                horizontal-stretch: 1;
-            }
-            Text {
-                text: ResultsState.chart-scatter-x-max-label;
-                font-size: Ink.fs-caption;
-                color: Ink.text-mute;
+    if ResultsState.chart-error == "" && ResultsState.chart-scatter-points.length > 0: Image {
+        width: parent.width;
+        height: parent.height;
+        source: ResultsState.chart-picture;
+        image-fit: fill;
+        accessible-role: image;
+        accessible-label: "Scatter of " + ResultsState.chart-column-summary + " and " + ResultsState.chart-y-column-summary;
+        // A click on a dot: its object on its image.
+        TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                ResultsState.chart-picture-clicked(self.mouse-x / 1px, self.mouse-y / 1px);
             }
         }
     }
@@ -898,8 +858,32 @@ component ChartsPanel inherits ViewPanel {
                     ResultsState.chart-display-changed();
                 }
             }
+            if ResultsState.chart-kind == ResultsChartKind2.scatter: InkSwitch {
+                text: "X on a log scale";
+                checked: ResultsState.chart-box-look.log-x;
+                toggled(on) => {
+                    ResultsState.chart-box-look.log-x = on;
+                    ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
+                }
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.scatter: InkSwitch {
+                text: "Y on a log scale";
+                checked: ResultsState.chart-box-look.log-y;
+                toggled(on) => {
+                    ResultsState.chart-box-look.log-y = on;
+                    ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
+                }
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.scatter: InkSwitch {
+                text: "Grid lines";
+                checked: ResultsState.chart-box-look.grid;
+                toggled(on) => {
+                    ResultsState.chart-box-look.grid = on;
+                    ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
+                }
+            }
             if ResultsState.chart-kind == ResultsChartKind2.scatter: InkHint {
-                text: "Click a point to see its object on its image.";
+                text: "Click a point to see its object on its image. A log scale needs values above 0.";
             }
             if ResultsState.chart-kind == ResultsChartKind2.over-time || ResultsState.chart-kind == ResultsChartKind2.profile: InkSegmented {
                 label: "Summary";

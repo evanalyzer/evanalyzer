@@ -354,6 +354,8 @@ export struct ChartHit {
 /// mean, n under the boxes, % of the first box (the control), min - max
 /// whiskers (else 1.5 × IQR), colours (0 per box, 1 one, 2 control grey).
 export struct ChartBoxLook {
+    log-x: bool,
+    log-y: bool,
     log: bool,
     grid: bool,
     dots: bool,
@@ -1073,6 +1075,8 @@ export global ResultsState {
     // look's colour).
     in property <[color]> chart-box-palette: [];
     callback chart-box-color-picked(string, int);
+    // A click in a drawn chart (px) - the scatter's nearest dot.
+    callback chart-picture-clicked(float, float);
     // The boxplot: a value per image (each image a dot), else per object.
     in-out property <bool> chart-per-image: false;
     // The histogram over every value (else the 1st to 99th percentile).

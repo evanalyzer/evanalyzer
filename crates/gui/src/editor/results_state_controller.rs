@@ -626,6 +626,8 @@ pub struct ResultsStateController {
     /// The boxplot's last boxes, the chart area and the charts' look - what
     /// `draw_chart` draws from.
     chart_data: Mutex<chart_draw::ChartData>,
+    /// Where the drawn chart's marks lie (the scatter's dots) - for clicks.
+    chart_marks: Mutex<Vec<evanalyzer_app::charts::Hit>>,
     chart_canvas: Mutex<chart_draw::ChartCanvas>,
     chart_look: Mutex<chart_draw::ChartLook>,
     /// The results' profile measurements (Charts › Profile, its export).
@@ -761,6 +763,7 @@ impl ResultsStateController {
             chart_column_filter: Mutex::new(String::new()),
             chart_value_y: Mutex::new(false),
             chart_data: Mutex::new(chart_draw::ChartData::None),
+            chart_marks: Mutex::new(Vec::new()),
             chart_canvas: Mutex::new(chart_draw::ChartCanvas::default()),
             chart_look: Mutex::new(chart_draw::ChartLook::default()),
             profile_columns: Mutex::new(Vec::new()),
@@ -4420,6 +4423,9 @@ impl ResultsStateController {
     }
 
     fn push_scatter_in_slint(&self, result: &ScatterResult) {
+        // Drawn by the chart module; the points below say whether there are
+        // any.
+        self.set_scatter(result.clone());
         let x_range = (result.x_max - result.x_min).max(f64::EPSILON);
         let y_range = (result.y_max - result.y_min).max(f64::EPSILON);
         let points: Vec<ChartScatterPoint> = result

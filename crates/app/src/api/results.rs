@@ -1330,7 +1330,7 @@ pub struct ScatterPoint {
 
 /// `points` may be a random sample of `total_object_count` rather than
 /// every one of them — see `ScatterFilter::max_points`.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ScatterResult {
     pub points: Vec<ScatterPoint>,
     /// The points' images (relative paths), each once.

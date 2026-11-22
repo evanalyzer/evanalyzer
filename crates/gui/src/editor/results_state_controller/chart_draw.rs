@@ -16,6 +16,7 @@ use super::*;
 use crate::ChartHit;
 use evanalyzer_app::charts::boxplot::{self, BoxSpec, BoxplotLook};
 use evanalyzer_app::charts::histogram::{self, HistogramLook, HistogramSpec};
+use evanalyzer_app::charts::scatter::{self, ScatterLook, ScatterSpec};
 use evanalyzer_app::charts::{Rgb, Theme};
 
 /// The chart area: its size (px) and whether the scheme is dark.
@@ -40,6 +41,8 @@ pub(super) fn look_to_slint(look: &ChartLook) -> crate::ChartBoxLook {
         relative: look.relative,
         min_max: look.min_max,
         colors: i32::from(look.colors),
+        log_x: look.log_x,
+        log_y: look.log_y,
     }
 }
 
@@ -176,12 +179,19 @@ pub(super) enum ChartData {
     None,
     Boxplot(Vec<BoxplotBox>),
     Histogram(HistogramResult),
+    Scatter(ScatterResult),
 }
 
 impl ResultsStateController {
     /// The boxplot's boxes came: kept and drawn.
     pub(super) fn set_boxplot_boxes(&self, boxes: Vec<BoxplotBox>) {
         *self.chart_data.lock().expect("Poisoned") = ChartData::Boxplot(boxes);
+        self.draw_chart();
+    }
+
+    /// The scatter's points came: kept and drawn.
+    pub(super) fn set_scatter(&self, scatter: ScatterResult) {
+        *self.chart_data.lock().expect("Poisoned") = ChartData::Scatter(scatter);
         self.draw_chart();
     }
 
@@ -204,7 +214,71 @@ impl ResultsStateController {
             ChartData::None => {}
             ChartData::Boxplot(boxes) => self.draw_boxplot(boxes, canvas, &theme),
             ChartData::Histogram(histogram) => self.draw_histogram(histogram, canvas, &theme),
+            ChartData::Scatter(scatter) => self.draw_scatter(scatter, canvas, &theme),
         }
+    }
+
+    /// The scatter: both values (µm), a dot per object - where they landed
+    /// kept for clicks.
+    fn draw_scatter(&self, scatter: &ScatterResult, canvas: ChartCanvas, theme: &Theme) {
+        let look = self.chart_look.lock().expect("Poisoned").clone();
+        let (x_label, y_label, class_color) = {
+            let classes = self.classes.lock().expect("Poisoned");
+            let chart = self.chart_filter.lock().expect("Poisoned");
+            let class_color = chart
+                .object_class
+                .and_then(|c| classes.iter().find(|k| k.global() == c))
+                .map_or(0, |k| k.color & 0x00ff_ffff);
+            (chart.column.display_label(&classes), chart.y_column.display_label(&classes), class_color)
+        };
+        let (fx, fy) = (unit_factor(&x_label), unit_factor(&y_label));
+        let spec = ScatterSpec {
+            points: scatter.points.iter().map(|p| (p.x * fx, p.y * fy)).collect(),
+            color: Rgb(if class_color == 0 { PALETTE[0] } else { class_color }),
+            total: scatter.total_object_count,
+        };
+        let drawing = scatter::draw(
+            &spec,
+            &ScatterLook {
+                x_title: super::coloc::picker_label(&x_label),
+                y_title: super::coloc::picker_label(&y_label),
+                log_x: look.log_x,
+                log_y: look.log_y,
+                grid: look.grid,
+            },
+            theme,
+            canvas.width,
+            canvas.height,
+        );
+        *self.chart_marks.lock().expect("Poisoned") = drawing.hits;
+        self.push_picture(drawing.svg, Vec::new(), Vec::new(), String::new());
+    }
+
+    /// A click in the scatter (px): the nearest dot within 8 px - its
+    /// object on its image.
+    fn scatter_clicked(&self, x: f64, y: f64) {
+        let Some(index) = scatter::nearest(&self.chart_marks.lock().expect("Poisoned"), x, y, 8.0) else {
+            return;
+        };
+        let target = match &*self.chart_data.lock().expect("Poisoned") {
+            ChartData::Scatter(scatter) => scatter.points.get(index).map(|point| {
+                (
+                    scatter.images.get(point.image as usize).cloned().unwrap_or_default(),
+                    point.bbox_px,
+                )
+            }),
+            _ => None,
+        };
+        let Some((rel_path, bbox_px)) = target else {
+            return;
+        };
+        self.image_list_controller
+            .open_image_and_highlight_object(&std::path::PathBuf::from(&rel_path), bbox_px, false);
+        let name = std::path::Path::new(&rel_path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or(rel_path);
+        self.peek(-1, format!("Point in {name}"), false);
     }
 
     /// The histogram: the value's axis (µm), the counts, linear or log.
@@ -381,6 +455,10 @@ impl ResultsStateController {
             }
         });
         let manager = self.clone();
+        state.on_chart_picture_clicked(move |x, y| {
+            manager.scatter_clicked(f64::from(x), f64::from(y));
+        });
+        let manager = self.clone();
         state.on_chart_box_color_picked(move |label, index| {
             {
                 let mut look = manager.chart_look.lock().expect("Poisoned");
@@ -409,6 +487,8 @@ impl ResultsStateController {
                 relative: look.relative,
                 min_max: look.min_max,
                 colors: u8::try_from(look.colors).unwrap_or(0),
+                log_x: look.log_x,
+                log_y: look.log_y,
                 box_colors,
             };
             manager.remember_view();
