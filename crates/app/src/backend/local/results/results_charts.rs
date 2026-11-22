@@ -491,34 +491,56 @@ impl ResultCharts {
                 counts: vec![0; bins],
                 min: 0.0,
                 max: 0.0,
+                below: 0,
+                above: 0,
+                data_min: 0.0,
+                data_max: 0.0,
             });
         };
 
         let bounds_sql = format!(
-            "SELECT MIN(v), MAX(v), COUNT(v) FROM (SELECT {value_expr} AS v FROM objects {where_clause})"
+            "SELECT MIN(v), MAX(v), COUNT(v), quantile_cont(v, 0.01), quantile_cont(v, 0.99) \
+             FROM (SELECT {value_expr} AS v FROM objects {where_clause})"
         );
-        let (min, max, count): (Option<f64>, Option<f64>, i64) = database
-            .connection()
-            .query_row(&bounds_sql, [], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-            })
-            .map_err(err)?;
+        #[allow(clippy::type_complexity)]
+        let (data_min, data_max, count, p1, p99): (Option<f64>, Option<f64>, i64, Option<f64>, Option<f64>) =
+            database
+                .connection()
+                .query_row(&bounds_sql, [], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+                })
+                .map_err(err)?;
+        // The 1st to 99th percentile - where far values would stretch the
+        // bins (the whole range over twice as wide); else every value.
+        let (min, max) = match (filter.full_range, p1, p99, data_min, data_max) {
+            (false, Some(p1), Some(p99), Some(lo), Some(hi)) if p99 > p1 && hi - lo > 2.0 * (p99 - p1) => {
+                (Some(p1), Some(p99))
+            }
+            _ => (data_min, data_max),
+        };
         let (Some(min), Some(max)) = (min, max) else {
             return Ok(HistogramResult {
                 bin_edges: (0..=bins).map(|i| i as f64).collect(),
                 counts: vec![0; bins],
                 min: 0.0,
                 max: 0.0,
+                below: 0,
+                above: 0,
+                data_min: 0.0,
+                data_max: 0.0,
             });
         };
 
         let mut counts = vec![0u64; bins];
+        let (mut below, mut above) = (0u64, 0u64);
         if max > min {
             // 0-based bucket index, clamped into `[0, bins-1]` so the
             // exact max value (which would otherwise floor to `bins`,
             // one past the end) lands in the last bin instead.
+            // Below the range: -1, above: `bins` (counted apart).
             let bucket_sql = format!(
-                "SELECT LEAST({bins} - 1, CAST(FLOOR({bins}::DOUBLE * (v - {min}) / ({max} - {min})) AS BIGINT)) AS bucket,\n\
+                "SELECT CASE WHEN v < {min} THEN -1 WHEN v > {max} THEN {bins} \
+                        ELSE LEAST({bins} - 1, CAST(FLOOR({bins}::DOUBLE * (v - {min}) / ({max} - {min})) AS BIGINT)) END AS bucket,\n\
                         COUNT(*) AS cnt\n\
                  FROM (SELECT {value_expr} AS v FROM objects {where_clause})\n\
                  WHERE v IS NOT NULL\n\
@@ -531,7 +553,11 @@ impl ResultCharts {
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(err)?;
             for (bucket, cnt) in buckets {
-                if let Some(slot) = usize::try_from(bucket).ok().and_then(|b| counts.get_mut(b)) {
+                if bucket < 0 {
+                    below = cnt as u64;
+                } else if bucket as usize >= bins {
+                    above = cnt as u64;
+                } else if let Some(slot) = usize::try_from(bucket).ok().and_then(|b| counts.get_mut(b)) {
                     *slot = cnt as u64;
                 }
             }
@@ -550,6 +576,10 @@ impl ResultCharts {
             counts,
             min,
             max,
+            below,
+            above,
+            data_min: data_min.unwrap_or(min),
+            data_max: data_max.unwrap_or(max),
         })
     }
 
@@ -1318,6 +1348,7 @@ mod tests {
                     object_classes: None,
                     column: Column::AreaSizePx,
                     bins: 3,
+                    full_range: false,
                 },
             )
             .expect("histogram");
@@ -1343,6 +1374,7 @@ mod tests {
                     object_classes: None,
                     column: Column::AreaSizePx,
                     bins: 5,
+                    full_range: true,
                 },
             )
             .expect("histogram");
@@ -1354,6 +1386,33 @@ mod tests {
         assert_eq!(result.bin_edges.len(), 6);
         assert_eq!(result.bin_edges[0], 0.0);
         assert_eq!(result.bin_edges[5], 90.0);
+    }
+
+    #[test]
+    fn a_histogram_spans_the_middle_98_percent_and_counts_the_far_values() {
+        // 1..=99 and one far value: the bins don't stretch to it.
+        let mut objects: Vec<ObjectSpec> = (1..=99)
+            .map(|i| ObjectSpec::new("img1.tif", "ClassA", 1, i))
+            .collect();
+        objects.push(ObjectSpec::new("img1.tif", "ClassA", 1, 100_000));
+        let generator = open(&objects);
+        let result = ResultCharts {}
+            .paint_histogram(
+                &generator,
+                &HistogramFilter {
+                    plane: plane(),
+                    images: None,
+                    object_classes: None,
+                    column: Column::AreaSizePx,
+                    bins: 10,
+                    full_range: false,
+                },
+            )
+            .expect("histogram");
+        assert!(result.max < 2000.0, "not up to the far value: {}", result.max);
+        assert_eq!(result.data_max, 100_000.0);
+        assert!(result.above >= 1);
+        assert_eq!(result.counts.iter().sum::<u64>() + result.below + result.above, 100);
     }
 
     #[test]
@@ -1369,6 +1428,7 @@ mod tests {
                     object_classes: None,
                     column: Column::AreaSizePx,
                     bins: 4,
+                    full_range: false,
                 },
             )
             .expect("histogram");
@@ -1390,6 +1450,7 @@ mod tests {
                     object_classes: None,
                     column: Column::AreaSizePx,
                     bins: 0,
+                    full_range: false,
                 },
             )
             .expect("histogram");
@@ -1413,6 +1474,7 @@ mod tests {
                     object_classes: None,
                     column: Column::AreaSizePx,
                     bins: 1,
+                    full_range: false,
                 },
             )
             .expect("histogram");
@@ -1440,6 +1502,7 @@ mod tests {
                     object_classes: None,
                     column: Column::AreaSizePx,
                     bins: 1,
+                    full_range: false,
                 },
             )
             .expect("histogram");
@@ -1873,6 +1936,7 @@ mod tests {
                     object_classes: filter_classes.clone(),
                     column: Column::AreaSizePx,
                     bins: 1,
+                    full_range: false,
                 },
             )
             .expect("histogram");
@@ -1917,6 +1981,7 @@ mod tests {
                     object_classes: None,
                     column: Column::AreaSizePx,
                     bins: 4,
+                    full_range: false,
                 },
             )
             .expect("histogram");

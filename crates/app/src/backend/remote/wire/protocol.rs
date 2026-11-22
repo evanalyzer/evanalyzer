@@ -79,7 +79,9 @@ use std::sync::Arc;
 // 51: `ColumnEntry::coloc_group`.
 // 52: `BoxplotFilter::per_image`, `BoxplotBox::image_values` / `image_count`.
 // 53: `BoxplotBox::mean` / `sd`.
-pub const PROTOCOL_VERSION: u32 = 53;
+// 54: `HistogramFilter::full_range`, `HistogramResult::below` / `above` /
+// `data_min` / `data_max`.
+pub const PROTOCOL_VERSION: u32 = 54;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 

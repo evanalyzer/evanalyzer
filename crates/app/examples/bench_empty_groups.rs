@@ -405,6 +405,7 @@ fn main() {
                         object_classes: Some(vec![ObjectClass::Global(4)]),
                         column: Column::AreaSizePx,
                         bins: 50,
+                        full_range: false,
                     })
                     .unwrap()
                     .counts

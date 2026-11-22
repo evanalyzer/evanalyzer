@@ -55,6 +55,18 @@ impl Scale {
         Self { min, max, log: false, step }
     }
 
+    /// A linear scale over exactly `lo..hi` (e.g. a histogram's bins), its
+    /// ticks the nice values inside.
+    pub fn exact(lo: f64, hi: f64, ticks: usize) -> Self {
+        let (lo, hi) = if hi > lo { (lo, hi) } else { (lo - 0.5, lo + 0.5) };
+        Self {
+            min: lo,
+            max: hi,
+            log: false,
+            step: nice_step((hi - lo) / ticks.max(1) as f64),
+        }
+    }
+
     /// Where `value` lies, 0 at `min`, 1 at `max` (outside: beyond).
     pub fn position(&self, value: f64) -> f64 {
         if self.log {
@@ -84,11 +96,13 @@ impl Scale {
             return ticks.into_iter().map(|v| (v, format_number(v))).collect();
         }
         let step = self.step;
-        let count = ((self.max - self.min) / step).round() as i64;
+        // The multiples of `step` from `min` to `max`.
+        let first = (self.min / step - 1e-9).ceil() as i64;
+        let last = (self.max / step + 1e-9).floor() as i64;
         let decimals = step_decimals(step);
-        (0..=count)
+        (first..=last)
             .map(|i| {
-                let v = self.min + i as f64 * step;
+                let v = i as f64 * step;
                 // No "-0" and no 0.30000000000000004.
                 let v = (v / step).round() * step;
                 let v = if v.abs() < step * 1e-9 { 0.0 } else { v };
@@ -150,6 +164,14 @@ mod tests {
         let labels: Vec<String> = scale.ticks(4).into_iter().map(|t| t.1).collect();
         assert_eq!(labels, ["0.5", "0.6", "0.7", "0.8", "0.9", "1.0"]);
         assert!(labels.iter().all(|l| !l.contains("000000")), "{labels:?}");
+    }
+
+    #[test]
+    fn an_exact_scale_keeps_its_ends_and_ticks_inside() {
+        let scale = Scale::exact(37.0, 331.0, 5);
+        assert_eq!((scale.min, scale.max), (37.0, 331.0));
+        let ticks: Vec<f64> = scale.ticks(5).into_iter().map(|t| t.0).collect();
+        assert_eq!(ticks, [100.0, 200.0, 300.0]);
     }
 
     #[test]

@@ -155,6 +155,7 @@ fn open_sequence(backend: &LocalBackend, path: &PathBuf) -> (Arc<dyn ResultsSour
             object_classes: None,
             column: chart_column,
             bins: 24,
+            full_range: false,
         })
         .unwrap()
     });

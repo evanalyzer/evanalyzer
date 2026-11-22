@@ -15,6 +15,7 @@
 use super::*;
 use crate::ChartHit;
 use evanalyzer_app::charts::boxplot::{self, BoxSpec, BoxplotLook};
+use evanalyzer_app::charts::histogram::{self, HistogramLook, HistogramSpec};
 use evanalyzer_app::charts::{Rgb, Theme};
 
 /// The chart area: its size (px) and whether the scheme is dark.
@@ -167,19 +168,84 @@ fn box_numbers(spec: &BoxSpec, look: &ChartLook) -> Vec<(String, String)> {
     lines
 }
 
+/// The data of the chart shown - what `draw_chart` draws from (again at a
+/// new size or look).
+#[derive(Default)]
+pub(super) enum ChartData {
+    #[default]
+    None,
+    Boxplot(Vec<BoxplotBox>),
+    Histogram(HistogramResult),
+}
+
 impl ResultsStateController {
     /// The boxplot's boxes came: kept and drawn.
     pub(super) fn set_boxplot_boxes(&self, boxes: Vec<BoxplotBox>) {
-        *self.chart_boxes.lock().expect("Poisoned") = boxes;
+        *self.chart_data.lock().expect("Poisoned") = ChartData::Boxplot(boxes);
         self.draw_chart();
     }
 
-    /// The chart drawn at the area's size and scheme, its marks pushed.
+    /// The histogram's bins came: kept and drawn.
+    pub(super) fn set_histogram(&self, histogram: HistogramResult) {
+        *self.chart_data.lock().expect("Poisoned") = ChartData::Histogram(histogram);
+        self.draw_chart();
+    }
+
+    /// The chart shown, drawn at the area's size and scheme, its marks
+    /// pushed.
     pub(super) fn draw_chart(&self) {
         let canvas = *self.chart_canvas.lock().expect("Poisoned");
         if canvas.width < 1.0 || canvas.height < 1.0 {
             return;
         }
+        let theme = if canvas.dark { Theme::dark() } else { Theme::light() };
+        let data = self.chart_data.lock().expect("Poisoned");
+        match &*data {
+            ChartData::None => {}
+            ChartData::Boxplot(boxes) => self.draw_boxplot(boxes, canvas, &theme),
+            ChartData::Histogram(histogram) => self.draw_histogram(histogram, canvas, &theme),
+        }
+    }
+
+    /// The histogram: the value's axis (µm), the counts, linear or log.
+    fn draw_histogram(&self, histogram: &HistogramResult, canvas: ChartCanvas, theme: &Theme) {
+        let look = self.chart_look.lock().expect("Poisoned").clone();
+        let (label, x_title, log_counts, class_color) = {
+            let classes = self.classes.lock().expect("Poisoned");
+            let chart = self.chart_filter.lock().expect("Poisoned");
+            let class_color = chart
+                .object_class
+                .and_then(|c| classes.iter().find(|k| k.global() == c))
+                .map_or(0, |k| k.color & 0x00ff_ffff);
+            (
+                chart.column.display_label(&classes),
+                super::coloc::picker_label(&chart.column.display_label(&classes)),
+                chart.log_counts,
+                class_color,
+            )
+        };
+        let factor = unit_factor(&label);
+        let spec = HistogramSpec {
+            edges: histogram.bin_edges.iter().map(|e| e * factor).collect(),
+            counts: histogram.counts.clone(),
+            color: Rgb(if class_color == 0 { PALETTE[0] } else { class_color }),
+            below: histogram.below,
+            above: histogram.above,
+            data_min: histogram.data_min * factor,
+            data_max: histogram.data_max * factor,
+        };
+        let drawing = histogram::draw(
+            &spec,
+            &HistogramLook { x_title, y_title: "Objects".into(), log_counts, grid: look.grid },
+            theme,
+            canvas.width,
+            canvas.height,
+        );
+        self.push_picture(drawing.svg, Vec::new(), Vec::new(), String::new());
+    }
+
+    /// The boxplot: a box per group, the look's options.
+    fn draw_boxplot(&self, boxes: &[BoxplotBox], canvas: ChartCanvas, theme: &Theme) {
         let look = self.chart_look.lock().expect("Poisoned").clone();
         let (label, title) = {
             let classes = self.classes.lock().expect("Poisoned");
@@ -192,15 +258,13 @@ impl ResultsStateController {
         let mut factor = unit_factor(&label);
         let mut title = title;
         // In % of the control: the first box's median is 100.
-        if look.relative {
-            let boxes = self.chart_boxes.lock().expect("Poisoned");
-            if let Some(first) = boxes.first().filter(|b| b.median * factor != 0.0) {
-                title = format!("% of control ({})", first.label);
-                factor = 100.0 / first.median;
-            }
+        if look.relative
+            && let Some(first) = boxes.first().filter(|b| b.median * factor != 0.0)
+        {
+            title = format!("% of control ({})", first.label);
+            factor = 100.0 / first.median;
         }
-        let specs = box_specs(&self.chart_boxes.lock().expect("Poisoned"), factor, &look);
-        let theme = if canvas.dark { Theme::dark() } else { Theme::light() };
+        let specs = box_specs(boxes, factor, &look);
         let drawing = boxplot::draw(
             &specs,
             &BoxplotLook {
@@ -212,7 +276,7 @@ impl ResultsStateController {
                 show_n: look.show_n,
                 min_max: look.min_max,
             },
-            &theme,
+            theme,
             canvas.width,
             canvas.height,
         );
@@ -241,6 +305,11 @@ impl ResultsStateController {
             })
             .collect();
         let tsv = stats_tsv(&specs);
+        self.push_picture(svg, hits, stat_rows, tsv);
+    }
+
+    /// A drawn chart to the view: the picture, its marks, the numbers.
+    fn push_picture(&self, svg: String, hits: Vec<HitRow>, stat_rows: Vec<(u32, Vec<String>)>, tsv: String) {
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             let Some(ui) = ui_weak.upgrade() else {

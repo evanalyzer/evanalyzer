@@ -29,58 +29,37 @@ component ChartErrorOrEmpty inherits Text {
 }
 
 component HistogramChart inherits Rectangle {
+    // Drawn by the chart module at the area's size and scheme.
+    function ask() {
+        ResultsState.chart-resized(self.width / 1px, self.height / 1px, Ink.scheme != InkScheme.light);
+    }
+    init => {
+        root.ask();
+    }
+    changed width => {
+        root.ask();
+    }
+    changed height => {
+        root.ask();
+    }
+
     if ResultsState.chart-error != "": ChartErrorOrEmpty { }
 
-    if ResultsState.chart-error == "": VerticalLayout {
-        padding: 24px;
-        spacing: 8px;
+    if ResultsState.chart-error == "" && ResultsState.chart-histogram-bins.length == 0: Text {
+        text: "No data for the selected filters";
+        color: Ink.text-mute;
+        font-size: Ink.fs-body;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
 
-        Text {
-            text: ResultsState.chart-histogram-object-count + " objects";
-            font-size: Ink.fs-secondary;
-            color: Ink.text-mute;
-        }
-
-        bars := HorizontalLayout {
-            vertical-stretch: 1;
-            spacing: 2px;
-
-            for bin in ResultsState.chart-histogram-bins: Rectangle {
-                horizontal-stretch: 1;
-
-                Rectangle {
-                    y: parent.height - self.height;
-                    width: parent.width;
-                    height: parent.height * bin;
-                    background: Ink.focus;
-                    border-radius: 2px;
-                }
-            }
-
-            if ResultsState.chart-histogram-bins.length == 0: Text {
-                text: "No data for the selected filters";
-                color: Ink.text-mute;
-                font-size: Ink.fs-body;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-        }
-
-        HorizontalLayout {
-            Text {
-                text: ResultsState.chart-histogram-min-label;
-                font-size: Ink.fs-caption;
-                color: Ink.text-mute;
-            }
-            Rectangle {
-                horizontal-stretch: 1;
-            }
-            Text {
-                text: ResultsState.chart-histogram-max-label;
-                font-size: Ink.fs-caption;
-                color: Ink.text-mute;
-            }
-        }
+    if ResultsState.chart-error == "" && ResultsState.chart-histogram-bins.length > 0: Image {
+        width: parent.width;
+        height: parent.height;
+        source: ResultsState.chart-picture;
+        image-fit: fill;
+        accessible-role: image;
+        accessible-label: "Histogram of " + ResultsState.chart-column-summary;
     }
 }
 
@@ -888,6 +867,27 @@ component ChartsPanel inherits ViewPanel {
                     ResultsState.chart-log-counts = on;
                     ResultsState.chart-display-changed();
                 }
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.histogram: InkSwitch {
+                text: "Grid lines";
+                checked: ResultsState.chart-box-look.grid;
+                toggled(on) => {
+                    ResultsState.chart-box-look.grid = on;
+                    ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
+                }
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.histogram: InkSwitch {
+                text: "Whole range";
+                checked: ResultsState.chart-full-range;
+                toggled(on) => {
+                    ResultsState.chart-full-range = on;
+                    ResultsState.chart-display-changed();
+                }
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.histogram: InkHint {
+                text: ResultsState.chart-full-range
+                    ? "The bins span every value."
+                    : "The bins span the 1st to 99th percentile; the values beyond are counted at the edges.";
             }
             if ResultsState.chart-kind == ResultsChartKind2.scatter: InkSegmented {
                 label: "Points drawn";

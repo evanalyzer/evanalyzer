@@ -1075,6 +1075,8 @@ export global ResultsState {
     callback chart-box-color-picked(string, int);
     // The boxplot: a value per image (each image a dot), else per object.
     in-out property <bool> chart-per-image: false;
+    // The histogram over every value (else the 1st to 99th percentile).
+    in-out property <bool> chart-full-range: false;
     callback chart-per-image-changed(bool);
 
     // -- Over time: a line per class / image / well / track (0..3), mean ±

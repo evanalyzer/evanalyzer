@@ -558,6 +558,11 @@ pub struct HistogramFilter {
     pub column: Column,
     /// Number of equal-width bins to bucket `column`'s values into.
     pub bins: usize,
+    /// The bins over every value - else over the 1st to 99th percentile,
+    /// the values beyond counted apart (a few far values would squash the
+    /// rest into one bin).
+    #[serde(default)]
+    pub full_range: bool,
 }
 
 /// How the time course is exported (`ResultExport::with_time_course`); the
@@ -1294,12 +1299,22 @@ pub enum BoxplotGroup {
 /// One equal-width-binned histogram, ready for the GUI to draw straight
 /// from `bin_edges`/`counts` — `bin_edges` has `counts.len() + 1` entries
 /// (edge `i` / edge `i+1` bound bin `i`).
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct HistogramResult {
     pub bin_edges: Vec<f64>,
     pub counts: Vec<u64>,
     pub min: f64,
     pub max: f64,
+    /// The values below and above the bins (not `full_range`), and the
+    /// smallest and largest of all.
+    #[serde(default)]
+    pub below: u64,
+    #[serde(default)]
+    pub above: u64,
+    #[serde(default)]
+    pub data_min: f64,
+    #[serde(default)]
+    pub data_max: f64,
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize)]

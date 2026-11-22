@@ -1,5 +1,5 @@
 {
-  "protocol_version": 53,
+  "protocol_version": 54,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -809,6 +809,9 @@
         },
         {
           "bins": "U64"
+        },
+        {
+          "full_range": "BOOL"
         }
       ]
     },
@@ -829,6 +832,18 @@
         },
         {
           "max": "F64"
+        },
+        {
+          "below": "U64"
+        },
+        {
+          "above": "U64"
+        },
+        {
+          "data_min": "F64"
+        },
+        {
+          "data_max": "F64"
         }
       ]
     },

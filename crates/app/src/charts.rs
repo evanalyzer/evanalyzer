@@ -9,6 +9,7 @@
 //! - [`Scale`]: linear or log axis, nice ticks.
 //! - [`Theme`]: the colours and font - light or dark, as the app.
 //! - [`boxplot`]: a box per group.
+//! - [`histogram`]: how many values per bin.
 //!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-11-22
@@ -19,6 +20,7 @@
 
 mod axis;
 pub mod boxplot;
+pub mod histogram;
 mod svg;
 
 pub use axis::Scale;

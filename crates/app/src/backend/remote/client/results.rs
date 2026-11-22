@@ -536,6 +536,7 @@ mod tests {
             object_classes: None,
             column: Column::AreaSizePx,
             bins: 8,
+            full_range: false,
         }
     }
 

@@ -244,6 +244,7 @@ fn main() {
                 object_classes: None,
                 column: column.clone(),
                 bins: 50,
+                full_range: false,
             };
             report(
                 &name,

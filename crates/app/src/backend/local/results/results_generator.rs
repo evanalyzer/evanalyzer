@@ -10405,6 +10405,7 @@ mod tests {
                     object_classes: None,
                     column: q,
                     bins: 2,
+                    full_range: false,
                 },
             )
             .unwrap();
@@ -10502,6 +10503,7 @@ mod tests {
                     object_classes: None,
                     column: median,
                     bins: 2,
+                    full_range: false,
                 },
             )
             .unwrap();

@@ -429,6 +429,7 @@ impl ResultsStateController {
             chart.per_image = view.per_image;
             chart.bins = view.bins.clamp(5, 200);
             chart.log_counts = view.log_counts;
+            chart.full_range = view.full_range;
             chart.max_points = scatter_points_limit(view.points);
             chart.time_lines = view.time_lines;
             chart.time_median = view.time_median;
@@ -535,6 +536,7 @@ impl ResultsStateController {
                 box_look: self.chart_look.lock().expect("Poisoned").clone(),
                 bins: filter.bins,
                 log_counts: filter.log_counts,
+                full_range: filter.full_range,
                 points: points_index(filter.max_points),
                 time_lines: filter.time_lines,
                 time_median: filter.time_median,
@@ -1064,6 +1066,7 @@ impl ResultsStateController {
             state.set_chart_box_look(box_look);
             state.set_chart_bins(chart.bins as i32);
             state.set_chart_log_counts(chart.log_counts);
+            state.set_chart_full_range(chart.full_range);
             state.set_chart_points_index(points_index(chart.max_points));
             state.set_chart_time_lines(time_lines_index(chart.time_lines));
             state.set_chart_time_summary(chart.time_median as i32);

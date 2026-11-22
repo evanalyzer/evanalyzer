@@ -326,6 +326,8 @@ pub struct ChartView {
     pub box_look: BoxLook,
     pub bins: usize,
     pub log_counts: bool,
+    /// The histogram over every value (else the 1st to 99th percentile).
+    pub full_range: bool,
     /// The scatter's points picker (0..3, see `scatter_points_limit`).
     pub points: i32,
     pub time_lines: TimeCourseLines,
@@ -354,6 +356,7 @@ impl Default for ChartView {
             box_look: BoxLook::default(),
             bins: DEFAULT_HISTOGRAM_BINS,
             log_counts: false,
+            full_range: false,
             points: 1,
             time_lines: TimeCourseLines::Class,
             time_median: false,

@@ -287,9 +287,11 @@ struct ChartFilter {
     /// per image (each image a dot), else per object.
     pub group_by: BoxplotGroup,
     pub per_image: bool,
-    /// Histogram: its bins, its counts on a log scale.
+    /// Histogram: its bins, its counts on a log scale, over every value
+    /// (else the 1st to 99th percentile).
     pub bins: usize,
     pub log_counts: bool,
+    pub full_range: bool,
     /// Scatter: at most this many points drawn (`None`: all).
     pub max_points: Option<usize>,
     /// Over time: a line per class / image / well / track; median + IQR
@@ -321,6 +323,7 @@ impl Default for ChartFilter {
             per_image: false,
             bins: CHART_HISTOGRAM_BINS,
             log_counts: false,
+            full_range: false,
             max_points: Some(CHART_SCATTER_MAX_POINTS),
             time_lines: TimeCourseLines::Class,
             time_median: false,
@@ -622,7 +625,7 @@ pub struct ResultsStateController {
     chart_value_y: Mutex<bool>,
     /// The boxplot's last boxes, the chart area and the charts' look - what
     /// `draw_chart` draws from.
-    chart_boxes: Mutex<Vec<BoxplotBox>>,
+    chart_data: Mutex<chart_draw::ChartData>,
     chart_canvas: Mutex<chart_draw::ChartCanvas>,
     chart_look: Mutex<chart_draw::ChartLook>,
     /// The results' profile measurements (Charts › Profile, its export).
@@ -757,7 +760,7 @@ impl ResultsStateController {
             matrix_column_filter: Mutex::new(String::new()),
             chart_column_filter: Mutex::new(String::new()),
             chart_value_y: Mutex::new(false),
-            chart_boxes: Mutex::new(Vec::new()),
+            chart_data: Mutex::new(chart_draw::ChartData::None),
             chart_canvas: Mutex::new(chart_draw::ChartCanvas::default()),
             chart_look: Mutex::new(chart_draw::ChartLook::default()),
             profile_columns: Mutex::new(Vec::new()),
@@ -2123,6 +2126,7 @@ impl ResultsStateController {
                         let mut filter = manager.chart_filter.lock().expect("Poisened");
                         filter.bins = state.get_chart_bins().clamp(5, 200) as usize;
                         filter.log_counts = state.get_chart_log_counts();
+                        filter.full_range = state.get_chart_full_range();
                         filter.max_points = scatter_points_limit(state.get_chart_points_index());
                     }
                     manager.refresh_charts();
@@ -3614,6 +3618,7 @@ impl ResultsStateController {
                     object_classes,
                     column: chart_filter.column,
                     bins: chart_filter.bins.max(1),
+                    full_range: chart_filter.full_range,
                 }) {
                     Ok(histogram) => {
                         self.push_histogram_in_slint(&histogram, chart_filter.log_counts)
@@ -4386,6 +4391,8 @@ impl ResultsStateController {
     }
 
     fn push_histogram_in_slint(&self, result: &HistogramResult, log_counts: bool) {
+        // Drawn by the chart module; the bins below say whether there are any.
+        self.set_histogram(result.clone());
         let max_count = result.counts.iter().copied().max().unwrap_or(0).max(1);
         let bins: Vec<f32> = result
             .counts
