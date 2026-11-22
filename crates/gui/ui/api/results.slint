@@ -394,6 +394,9 @@ export global ResultsState {
     // The image shown ("Well C3 · D3_03.vsi"), its name (the filmstrip's
     // accent), the selected object of how many ("n / total").
     in-out property <string> split-title;
+    // The image shown isn't among the project's (its path in the results;
+    // empty: it is): said over the viewer, which still has another one.
+    in-out property <string> split-missing;
     in-out property <string> split-image-key;
     in-out property <int> split-pos: 0;
     in-out property <int> split-total: 0;

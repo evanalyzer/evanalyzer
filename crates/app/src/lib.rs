@@ -225,6 +225,7 @@ pub mod project {
     pub use crate::workspace::extensions::project_ext::SelectNewProjectRootAction;
     pub use crate::workspace::extensions::project_ext::collect_images_at_root;
     pub use crate::workspace::extensions::project_ext::load_project;
+    pub use crate::workspace::extensions::project_ext::run_image_root;
 }
 
 pub mod exporter {

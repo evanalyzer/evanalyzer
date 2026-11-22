@@ -25,7 +25,7 @@ import { MeasurementsPanel } from "../editor/measurements_panel.slint";
 import { MeasurementsState } from "../api/measurements.slint";
 import { AnnotateBar } from "annotate_bar.slint";
 import { ResultsView } from "../results/results_view.slint";
-import { SplitDivider, SplitFilmstrip, SplitHint, SplitImageHead, SplitSelection, SplitTracksBar } from "../results/results_split.slint";
+import { SplitDivider, SplitFilmstrip, SplitHint, SplitImageHead, SplitMissing, SplitSelection, SplitTracksBar } from "../results/results_split.slint";
 import { ResultsPeek } from "results_peek.slint";
 import { SeriesChooser } from "series_chooser.slint";
 import { ImageMetaData } from "../api/image_meta.slint";
@@ -194,6 +194,9 @@ export component Workspace inherits Rectangle {
         width: root.pane-w;
         height: root.pane-h - root.strip-h;
         clip: true;
+        // The image isn't among the project's: said, over the viewer's
+        // other image.
+        if ResultsState.split-missing != "": SplitMissing { }
         if ResultsState.split-sel.active: SplitSelection { }
         SplitImageHead {
             x: 10px;
@@ -206,7 +209,7 @@ export component Workspace inherits Rectangle {
             y: 10px + 36px + 8px;
         }
         // Above the bar at the bottom of the image (40 px, 10 px from the edge).
-        SplitHint {
+        if ResultsState.split-missing == "": SplitHint {
             x: 10px;
             y: parent.height - self.height - 10px - 40px - 8px;
         }

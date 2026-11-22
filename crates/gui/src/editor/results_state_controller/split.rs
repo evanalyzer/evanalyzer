@@ -567,10 +567,19 @@ impl ResultsStateController {
         // Not in the viewer yet: opened, at the object when following.
         // The series it is shown in (its own choice, else the project's):
         // the card's channel names are that series'.
+        // The project's image (its folder may have changed since the run);
+        // none: said on the image pane, nothing of another image shown.
+        let project_image = self.project_image(&rel_path);
+        self.split_set_missing(match project_image {
+            Some(_) => String::new(),
+            None => rel_path.clone(),
+        });
         let (absolute, series) = {
             use evanalyzer_app::project::{ImageEntryExt, ProjectExt};
             let project = self._app_state.get_project();
-            let absolute = project.get_image_absolute_path_from_relative(&PathBuf::from(&rel_path));
+            let absolute = project_image
+                .as_ref()
+                .and_then(|image| project.get_image_absolute_path_from_relative(image));
             let series = absolute
                 .as_ref()
                 .and_then(|path| project.find_image(path))
@@ -590,8 +599,10 @@ impl ResultsStateController {
                 (Some(path), Some(bbox)) if follow => Some((path.clone(), bbox.map(|v| v as f32))),
                 _ => None,
             };
-            self.image_list_controller
-                .open_new_image_from_rel_path(&PathBuf::from(&rel_path));
+            if let Some(image) = &project_image {
+                self.image_list_controller
+                    .open_new_image_from_rel_path(image);
+            }
         }
 
         let plane = {
@@ -691,9 +702,26 @@ impl ResultsStateController {
     /// The viewer shows the image `rel_path` (of the analysis).
     fn split_in_viewer(&self, rel_path: &str) -> bool {
         use evanalyzer_app::project::ProjectExt;
+        let Some(image) = self.project_image(rel_path) else {
+            return false;
+        };
         let project = self._app_state.get_project();
-        let absolute = project.get_image_absolute_path_from_relative(&PathBuf::from(rel_path));
+        let absolute = project.get_image_absolute_path_from_relative(&image);
         absolute.is_some() && project.tmp_settings.current_image == absolute
+    }
+
+    /// The image of the results shown that the project doesn't have
+    /// (`results_rel`; empty: it has it): its message covers the viewer's
+    /// image (another one).
+    fn split_set_missing(&self, results_rel: String) {
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.global::<ResultsState>()
+                    .set_split_missing(results_rel.into());
+            }
+        })
+        .ok();
     }
 
     fn split_follow(&self) -> bool {
@@ -1375,6 +1403,12 @@ impl ResultsStateController {
         if missing.is_empty() {
             return;
         }
+        // Each image where the project has it (its folder may have
+        // changed since the run): none, no thumbnail.
+        let images: HashMap<String, PathBuf> = missing
+            .iter()
+            .filter_map(|rel| Some((rel.clone(), self.project_image(rel)?)))
+            .collect();
         let (colors, series, root) = {
             use evanalyzer_app::project::ProjectExt;
             let project = self._app_state.get_project();
@@ -1390,9 +1424,9 @@ impl ResultsStateController {
         let manager = self.clone();
         std::thread::spawn(move || {
             for rel in missing {
-                let Some(buffer) =
-                    make_thumb(&manager._app_state, &root.join(&rel), series, &colors)
-                else {
+                let Some(buffer) = images.get(&rel).and_then(|image| {
+                    make_thumb(&manager._app_state, &root.join(image), series, &colors)
+                }) else {
                     continue;
                 };
                 let wanted = {

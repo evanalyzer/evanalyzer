@@ -436,11 +436,12 @@ impl ResultsStateController {
         let Some((rel_path, bbox_px)) = target else {
             return;
         };
-        self.image_list_controller.open_image_and_highlight_object(
-            &std::path::PathBuf::from(&rel_path),
-            bbox_px,
-            false,
-        );
+        let Some(image) = self.project_image(&rel_path) else {
+            self.image_not_in_project(&rel_path);
+            return;
+        };
+        self.image_list_controller
+            .open_image_and_highlight_object(&image, bbox_px, false);
         let name = std::path::Path::new(&rel_path)
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())

@@ -657,6 +657,10 @@ pub struct ResultsStateController {
     // refreshes that well's fields instead of the (hidden) plate grid. See
     // `refresh_active_matrix_view`.
     current_well: Mutex<Option<String>>,
+    /// The image folder the open results' run analysed (its project copy):
+    /// their images are found in the project from it, also when the
+    /// project's image folder changed since.
+    run_image_root: Mutex<Option<PathBuf>>,
     // Same idea one level further down: the image (by `image_rel_path`)
     // currently drilled into, if any, so a toolbar control change while at
     // the Object level refreshes that image's heatmap.
@@ -776,6 +780,7 @@ impl ResultsStateController {
             well_cells: Mutex::new(HashMap::new()),
             image_heatmap_cells: Mutex::new(HashMap::new()),
             current_well: Mutex::new(None),
+            run_image_root: Mutex::new(None),
             current_image: Mutex::new(None),
             list_row_locations: Mutex::new(Vec::new()),
             list_row_ids: Mutex::new(Vec::new()),
@@ -1366,9 +1371,13 @@ impl ResultsStateController {
                     let Some((rel_path, bbox_px)) = hit else {
                         return;
                     };
+                    let Some(image) = manager.project_image(&rel_path) else {
+                        manager.image_not_in_project(&rel_path);
+                        return;
+                    };
                     manager
                         .image_list_controller
-                        .open_image_and_highlight_object(&PathBuf::from(&rel_path), bbox_px, false);
+                        .open_image_and_highlight_object(&image, bbox_px, false);
                     let name = std::path::Path::new(&rel_path)
                         .file_name()
                         .map(|n| n.to_string_lossy().into_owned())
@@ -1395,7 +1404,10 @@ impl ResultsStateController {
                     }
                     // An object row: marked on its image; an image row: the
                     // image.
-                    let rel_path = PathBuf::from(rel_path);
+                    let Some(rel_path) = manager.project_image(&rel_path) else {
+                        manager.image_not_in_project(&rel_path);
+                        return;
+                    };
                     match bbox_px {
                         Some(bbox_px) => manager
                             .image_list_controller
@@ -2095,9 +2107,13 @@ impl ResultsStateController {
                         warn!("Unrecognized heatmap tile key: {key}");
                         return;
                     };
+                    let Some(image) = manager.project_image(&rel_path) else {
+                        manager.image_not_in_project(&rel_path);
+                        return;
+                    };
                     manager
                         .image_list_controller
-                        .open_image_and_highlight_object(&PathBuf::from(rel_path), bbox_px, true);
+                        .open_image_and_highlight_object(&image, bbox_px, true);
                     manager.peek(-1, format!("Tile {key}"), false);
                 });
             ui.global::<ResultsState>()
@@ -2959,6 +2975,38 @@ impl ResultsStateController {
         });
     }
 
+    /// The project's image (its path in the project) the results name
+    /// `results_rel` - found also when the project's image folder changed
+    /// since the run.
+    pub(super) fn project_image(&self, results_rel: &str) -> Option<PathBuf> {
+        use evanalyzer_app::project::ProjectExt;
+        let run_root = self.run_image_root.lock().expect("Poisoned").clone();
+        self._app_state
+            .get_project()
+            .find_results_image(Path::new(results_rel), run_root.as_deref())
+    }
+
+    /// An image of the results the project doesn't have: said, instead of
+    /// marking the object on another image.
+    pub(super) fn image_not_in_project(&self, results_rel: &str) {
+        let message = format!(
+            "{results_rel} is not among the project's images. Its folder may have moved: \
+             select the folder the images are in now (Images › folder)."
+        );
+        let ui = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui.upgrade() {
+                let warning = ui.global::<crate::WarningState>();
+                warning.set_info(false);
+                warning.set_title("Image not in the project".into());
+                warning.set_message(message.into());
+                ui.global::<crate::GlobalAppState>()
+                    .set_active_dialog(crate::DialogType::Warning);
+            }
+        })
+        .ok();
+    }
+
     fn peek(&self, row: i32, label: String, can_step: bool) {
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
@@ -3078,6 +3126,7 @@ impl ResultsStateController {
 
     fn close_database_now(&self) {
         *self.result_generator.lock().expect("Poisoned") = None;
+        *self.run_image_root.lock().expect("Poisoned") = None;
         *self.view_unavailable.lock().expect("Poisoned") = None;
         // Another project (or none): its views.
         self.push_views_in_slint();
@@ -3131,6 +3180,7 @@ impl ResultsStateController {
             state.set_peek_label("".into());
             state.set_peek_can_step(false);
             state.set_split_title("".into());
+            state.set_split_missing("".into());
             state.set_split_image_key("".into());
             state.set_split_pos(0);
             state.set_split_total(0);
@@ -3152,6 +3202,11 @@ impl ResultsStateController {
         let db = self._app_state.backend().open_results(&path);
         match db {
             Ok(results) => {
+                *self.run_image_root.lock().expect("Poisoned") =
+                    evanalyzer_app::project::run_image_root(
+                        self._app_state.backend().files(),
+                        &path,
+                    );
                 // Nothing written into the view before it's applied.
                 *self.view_unavailable.lock().expect("Poisoned") = None;
                 *self.export_populated.lock().expect("Poisened") = false;
@@ -9275,6 +9330,28 @@ pub(crate) mod tests {
         let rows = controller.list_row_locations.lock().unwrap().len();
         assert!(rows > 1, "{rows} rows");
 
+        // Not among the project's images: said - not marked on another.
+        state.invoke_list_row_clicked(1);
+        drain_ui_queue();
+        assert!(!state.get_peek());
+        assert_eq!(
+            ui.global::<crate::GlobalAppState>().get_active_dialog(),
+            crate::DialogType::Warning
+        );
+
+        // The project's images.
+        {
+            use evanalyzer_cfg::settings::images_settings::ImageEntry;
+            let locations = controller.list_row_locations.lock().unwrap().clone();
+            let mut project = controller._app_state.get_project_write();
+            project.images.root = Some(PathBuf::from("/data/images"));
+            for (rel_path, _) in locations {
+                project
+                    .images
+                    .list
+                    .insert(PathBuf::from(&rel_path), ImageEntry::default());
+            }
+        }
         state.invoke_list_row_clicked(1);
         drain_ui_queue();
 
@@ -12463,6 +12540,42 @@ pub(crate) mod tests {
         }
         ui.global::<ResultsState>().set_split(true);
         (ui, controller)
+    }
+
+    /// The project's image folder changed since the run: its images are
+    /// found from the run's; one the project lacks is said, not shown.
+    #[test]
+    fn split_finds_an_image_of_a_moved_folder_and_says_a_missing_one() {
+        let (ui, controller) = split_controller();
+        let state = ui.global::<ResultsState>();
+        {
+            // The run analysed /data/images/run1; the project is on /data.
+            let mut project = controller._app_state.get_project_write();
+            project.images.root = Some(PathBuf::from("/data"));
+            let list = std::mem::take(&mut project.images.list);
+            for (path, entry) in list.0.iter() {
+                if path != Path::new("A2_01.tif") {
+                    project
+                        .images
+                        .list
+                        .insert(Path::new("images/run1").join(path), entry.as_ref().clone());
+                }
+            }
+        }
+        *controller.run_image_root.lock().unwrap() = Some(PathBuf::from("/data/images/run1"));
+        assert_eq!(
+            controller.project_image("A1_01.tif"),
+            Some(PathBuf::from("images/run1/A1_01.tif"))
+        );
+
+        controller.split_show_image_named("A2_01.tif");
+        drain_ui_queue();
+        assert_eq!(state.get_split_missing(), "A2_01.tif", "not in the project");
+        assert!(controller.viewport().results_overlay().is_none());
+
+        controller.split_show_image_named("A1_01.tif");
+        drain_ui_queue();
+        assert_eq!(state.get_split_missing(), "", "found");
     }
 
     #[test]

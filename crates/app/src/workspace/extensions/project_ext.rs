@@ -240,6 +240,12 @@ pub trait ProjectExt {
     fn get_object_classes(&self) -> &Vec<Class>;
     fn get_image_absolute_path_from_relative(&self, path: &Path) -> Option<PathBuf>;
 
+    /// This project's image (its path in the list) that a results file
+    /// names `results_rel` - relative to `run_root`, the image folder the
+    /// analysis ran on (its run's project copy), which may not be this
+    /// project's any more. See [`find_results_image`].
+    fn find_results_image(&self, results_rel: &Path, run_root: Option<&Path>) -> Option<PathBuf>;
+
     fn change_images_root(&mut self, new_root: &PathBuf);
 
     fn select_new_images_root_with_check(
@@ -1265,6 +1271,15 @@ impl ProjectExt for ProjectWithRuntime {
         self.classification = ClassificationSettings::new();
     }
 
+    fn find_results_image(&self, results_rel: &Path, run_root: Option<&Path>) -> Option<PathBuf> {
+        find_results_image(
+            &self.images.list,
+            self.images.root.as_deref(),
+            results_rel,
+            run_root,
+        )
+    }
+
     fn get_image_absolute_path_from_relative(&self, path: &Path) -> Option<PathBuf> {
         // Check if the path exists in our list
         if self.images.list.contains_key(path) {
@@ -2001,6 +2016,73 @@ fn is_supported_image_path(path: &Path, formats: &[String]) -> bool {
         .unwrap_or(false)
 }
 
+/// The image of `list` (paths relative to `root`) a results file names
+/// `results_rel` (relative to `run_root`, the image folder of its run):
+/// 1. the same file, when it lies in `root`: the image folder moved up or
+///    down since the run;
+/// 2. the same path: the folder itself moved (or the run's is unknown);
+/// 3. the image whose path ends the same way the longest (at least the
+///    file name), when only one does: the folder was moved elsewhere.
+///
+/// The first two are lookups; only an image found by neither is searched
+/// for in the list.
+pub fn find_results_image(
+    list: &evanalyzer_cfg::settings::images_settings::ImageList,
+    root: Option<&Path>,
+    results_rel: &Path,
+    run_root: Option<&Path>,
+) -> Option<PathBuf> {
+    if let (Some(run_root), Some(root)) = (run_root, root)
+        && let Ok(rel) = run_root.join(results_rel).strip_prefix(root)
+        && list.0.contains_key(rel)
+    {
+        return Some(rel.to_path_buf());
+    }
+    if list.0.contains_key(results_rel) {
+        return Some(results_rel.to_path_buf());
+    }
+    let wanted: Vec<_> = results_rel.components().rev().collect();
+    let mut best: Option<&PathBuf> = None;
+    let (mut best_len, mut ties) = (0, 0);
+    for path in list.0.keys() {
+        let len = path
+            .components()
+            .rev()
+            .zip(&wanted)
+            .take_while(|(a, b)| a == *b)
+            .count();
+        if len == 0 || len < best_len {
+            continue;
+        }
+        if len > best_len {
+            (best, best_len, ties) = (Some(path), len, 1);
+        } else {
+            ties += 1;
+        }
+    }
+    best.filter(|_| ties == 1).cloned()
+}
+
+/// The image folder the run of the results `results_db` analysed: from the
+/// copy of the project each run keeps beside its results
+/// (`<name>.evaproj` next to `<name>.evadb`). None without one (or
+/// without a folder in it).
+pub fn run_image_root(files: &dyn FileSystem, results_db: &Path) -> Option<PathBuf> {
+    // Only the folder is read of the copy (all else is skipped).
+    #[derive(serde::Deserialize)]
+    struct Run {
+        images: RunImages,
+    }
+    #[derive(serde::Deserialize)]
+    struct RunImages {
+        root: Option<PathBuf>,
+    }
+    let data = files
+        .read_file(&results_db.with_extension("evaproj"))
+        .ok()?;
+    serde_json::from_slice::<Run>(&data).ok()?.images.root
+}
+
 /// Reads a project file through `files` (the backend's - the server's in
 /// remote mode).
 pub fn load_project(
@@ -2688,6 +2770,76 @@ mod tests {
         assert_eq!(
             project.get_image_absolute_path_from_relative(Path::new("unknown.tif")),
             None
+        );
+    }
+
+    #[test]
+    fn the_run_image_root_is_read_from_the_runs_project_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("plate.evadb");
+        assert_eq!(run_image_root(&fs(), &db), None, "no copy");
+        std::fs::write(
+            dir.path().join("plate.evaproj"),
+            r#"{"schemaVersion": 4, "images": {"root": "/data/run", "list": {}}, "pipelines": []}"#,
+        )
+        .unwrap();
+        assert_eq!(run_image_root(&fs(), &db), Some(PathBuf::from("/data/run")));
+    }
+
+    #[test]
+    fn a_results_image_is_found_although_the_image_folder_changed() {
+        use evanalyzer_cfg::settings::images_settings::{ImageEntry, ImageList};
+        let list = |paths: &[&str]| {
+            ImageList(std::sync::Arc::new(
+                paths
+                    .iter()
+                    .map(|p| (PathBuf::from(p), std::sync::Arc::new(ImageEntry::default())))
+                    .collect(),
+            ))
+        };
+        let find = |list: &ImageList, root: &str, rel: &str, run: Option<&str>| {
+            find_results_image(
+                list,
+                Some(Path::new(root)),
+                Path::new(rel),
+                run.map(Path::new),
+            )
+        };
+        let images = list(&["a.tif", "b.tif"]);
+        // Analysed from the parent folder, the project now on `CMEVs`.
+        assert_eq!(
+            find(&images, "/d/CMEVs", "CMEVs/a.tif", Some("/d")),
+            Some(PathBuf::from("a.tif"))
+        );
+        // The same folder: the path as it is.
+        assert_eq!(
+            find(&images, "/d", "b.tif", Some("/d")),
+            Some(PathBuf::from("b.tif"))
+        );
+        // Analysed on a subfolder, the project now on the parent.
+        let parent = list(&["CMEVs/a.tif", "Control/a.tif"]);
+        assert_eq!(
+            find(&parent, "/d", "a.tif", Some("/d/Control")),
+            Some(PathBuf::from("Control/a.tif"))
+        );
+        // Moved elsewhere: the longest same ending - unless two share it.
+        assert_eq!(
+            find(&parent, "/new", "Control/a.tif", Some("/old")),
+            Some(PathBuf::from("Control/a.tif"))
+        );
+        assert_eq!(
+            find(&parent, "/new", "Plate1/Control/a.tif", Some("/old")),
+            Some(PathBuf::from("Control/a.tif"))
+        );
+        assert_eq!(
+            find(&parent, "/new", "a.tif", Some("/old")),
+            None,
+            "which a.tif?"
+        );
+        assert_eq!(
+            find(&parent, "/new", "c.tif", None),
+            None,
+            "not in the project"
         );
     }
 
