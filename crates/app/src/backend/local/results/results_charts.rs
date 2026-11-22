@@ -305,7 +305,7 @@ impl ResultCharts {
                    ON p.g IS NOT DISTINCT FROM b.g AND p.image_rel_path = b.image_rel_path"
             )
         } else {
-            "SELECT g, image_rel_path, AVG(v) AS v, COUNT(*) AS n FROM src GROUP BY g, image_rel_path".to_string()
+            "SELECT g, image_rel_path, AVG(v) AS v, COUNT(v) AS n FROM src GROUP BY g, image_rel_path".to_string()
         };
         let sql = format!(
             "WITH src AS ({source}),\n\
@@ -1239,6 +1239,17 @@ mod tests {
         let mut a_means = means.boxes[0].image_values.clone();
         a_means.sort_by(f64::total_cmp);
         assert_eq!(a_means, vec![20.0, 50.0]);
+        assert_eq!(means.boxes[0].object_count, 3);
+        // An object without the value adds to no mean and to no count.
+        generator
+            .connection()
+            .execute("UPDATE objects SET area_px = NULL WHERE area_px = 30", [])
+            .unwrap();
+        let means = boxplot(Column::AreaSizePx);
+        let a = &means.boxes[0];
+        let mut a_means = a.image_values.clone();
+        a_means.sort_by(f64::total_cmp);
+        assert_eq!((a_means, a.object_count), (vec![10.0, 50.0], 2));
         // A disabled (or failed, or not analysed) image is no image with
         // 0 objects: as the plate, it has no count at all.
         generator
