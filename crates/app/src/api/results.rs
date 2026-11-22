@@ -1320,7 +1320,7 @@ pub struct ScatterResult {
 
 /// One class's box: min/Q1/median/Q3/max plus any Tukey outliers (values
 /// beyond 1.5x the interquartile range from Q1/Q3).
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct BoxplotBox {
     pub label: String,
     pub color: u32,
@@ -1329,6 +1329,12 @@ pub struct BoxplotBox {
     pub median: f64,
     pub q3: f64,
     pub max: f64,
+    /// The furthest values within 1.5x the IQR of Q1 and Q3 - where the
+    /// whiskers end (the values beyond are `outliers`).
+    #[serde(default)]
+    pub whisker_low: f64,
+    #[serde(default)]
+    pub whisker_high: f64,
     pub outliers: Vec<f64>,
     pub object_count: usize,
 }

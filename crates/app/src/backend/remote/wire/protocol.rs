@@ -74,7 +74,9 @@ use std::sync::Arc;
 // 47: image reviews - `ImageEntry::review` in the project (an older server
 // would analyse a left-out image into the numbers), the results'
 // `ImageEntry` note/marker/disabled_by and `ResultsQuery::ChangeImageReview`.
-pub const PROTOCOL_VERSION: u32 = 49;
+// 50: `BoxplotBox::whisker_low` / `whisker_high` (postcard: the boxes of an
+// older side would be misread).
+pub const PROTOCOL_VERSION: u32 = 50;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 

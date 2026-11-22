@@ -7,6 +7,7 @@
 // `ResultsGenerator::get_histogram`/`get_scatter`/`get_boxplot` and pushes
 // into `ResultsState.chart-*`) in the stretch area below.
 import { ResultsChartKind2, ResultsState } from "../api/results.slint";
+import { InkScheme } from "../ink/palette.slint";
 import { InkSegmented, InkHint, InkNumberField, InkSwitch, InkButton, InkButtonKind } from "../ink/ink.slint";
 import { ColocCountRow, SettingsGroup } from "results_common.slint";
 import { ComboBox } from "../ink/std_compat.slint";
@@ -166,6 +167,20 @@ component ScatterChart inherits Rectangle {
 }
 
 component BoxplotChart inherits Rectangle {
+    // The drawing follows the area's size and the scheme.
+    function ask() {
+        ResultsState.chart-resized(self.width / 1px, self.height / 1px, Ink.scheme != InkScheme.light);
+    }
+    init => {
+        root.ask();
+    }
+    changed width => {
+        root.ask();
+    }
+    changed height => {
+        root.ask();
+    }
+
     if ResultsState.chart-error != "": ChartErrorOrEmpty { }
 
     if ResultsState.chart-error == "" && ResultsState.chart-boxplot-boxes.length == 0: Text {
@@ -176,87 +191,33 @@ component BoxplotChart inherits Rectangle {
         vertical-alignment: center;
     }
 
-    // A box per class can easily be more than fit the panel at once (a
-    // database can register dozens of classes) — a plain `ScrollView`
-    // (not `ListView`) is fine here since every box is always instantiated
-    // (no virtualization needed at this scale), so its own auto-inferred
-    // scrollable width just works.
-    if ResultsState.chart-error == "" && ResultsState.chart-boxplot-boxes.length > 0: ScrollView {
-        HorizontalLayout {
-            padding: 24px;
-            spacing: 16px;
-
-            // A click on a box: its objects in the List.
-            for box in ResultsState.chart-boxplot-boxes: Rectangle {
-                width: 90px;
-                border-radius: Ink.radius-md;
-                background: box-ta.has-hover ? Ink.hover : transparent;
-                box-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        ResultsState.chart-box-clicked(box.label);
-                    }
-                }
-            VerticalLayout {
-                spacing: 4px;
-
-                plot := Rectangle {
-                    vertical-stretch: 1;
-
-                    // whisker: min -> max
-                    Rectangle {
-                        x: (parent.width - self.width) / 2;
-                        width: 1.5px;
-                        y: parent.height * (1.0 - box.max);
-                        height: max(0px, parent.height * (box.max - box.min));
-                        background: box.color;
-                    }
-
-                    // box: Q1 -> Q3
-                    Rectangle {
-                        x: parent.width * 0.2;
-                        width: parent.width * 0.6;
-                        y: parent.height * (1.0 - box.q3);
-                        height: max(1px, parent.height * (box.q3 - box.q1));
-                        background: box.color.with-alpha(0.35);
-                        border-width: 1.5px;
-                        border-color: box.color;
-                        border-radius: 2px;
-                    }
-
-                    // median line
-                    Rectangle {
-                        x: parent.width * 0.2;
-                        width: parent.width * 0.6;
-                        y: parent.height * (1.0 - box.median) - 1px;
-                        height: 2px;
-                        background: box.color;
-                    }
-
-                    for outlier in box.outliers: Rectangle {
-                        width: 4px;
-                        height: 4px;
-                        border-radius: 2px;
-                        background: box.color;
-                        x: (parent.width - self.width) / 2;
-                        y: parent.height * (1.0 - outlier) - self.height / 2;
-                    }
-                }
-
-                Text {
-                    text: box.label;
-                    font-size: Ink.fs-caption;
-                    color: Ink.text-mute;
-                    horizontal-alignment: center;
-                    overflow: elide;
-                }
-                Text {
-                    text: box.object-count + " objects";
-                    font-size: Ink.fs-caption;
-                    color: Ink.text-mute;
-                    horizontal-alignment: center;
-                }
+    if ResultsState.chart-error == "" && ResultsState.chart-boxplot-boxes.length > 0: Rectangle {
+        Image {
+            width: parent.width;
+            height: parent.height;
+            source: ResultsState.chart-picture;
+            image-fit: fill;
+            accessible-role: image;
+            accessible-label: "Boxplot of " + ResultsState.chart-column-summary;
+        }
+        // A click on a box: its objects in the List.
+        for hit in ResultsState.chart-hits: Rectangle {
+            x: hit.x * 1px;
+            y: hit.y * 1px;
+            width: hit.width * 1px;
+            height: hit.height * 1px;
+            background: box-ta.has-hover ? Ink.hover.with-alpha(0.35) : transparent;
+            border-radius: Ink.radius-sm;
+            accessible-role: button;
+            accessible-label: hit.label;
+            accessible-action-default => {
+                ResultsState.chart-box-clicked(hit.label);
             }
+            box-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    ResultsState.chart-box-clicked(hit.label);
+                }
             }
         }
     }
@@ -475,7 +436,7 @@ component ChartsPanel inherits ViewPanel {
         && !(root.kind == ResultsChartKind2.over-time && ResultsState.chart-time-lines == 0)
         && !(root.kind == ResultsChartKind2.profile && ResultsState.chart-profile-lines == 0);
     // The parts this kind has.
-    parts: root.kind == ResultsChartKind2.boxplot ? ["Value", "Groups"]
+    parts: root.kind == ResultsChartKind2.boxplot ? ["Value", "Groups", "Look"]
         : root.kind == ResultsChartKind2.histogram || root.kind == ResultsChartKind2.scatter ? ["Value", "Class", "Look"]
         : root.has-class ? ["Value", "Class", "Groups", "Look"] : ["Value", "Groups", "Look"];
     part: ResultsState.chart-panel-part;
@@ -566,7 +527,29 @@ component ChartsPanel inherits ViewPanel {
         }
     }
 
-    if root.current == "Look": VerticalLayout {
+    if root.current == "Look" && root.kind == ResultsChartKind2.boxplot: VerticalLayout {
+        spacing: 12px;
+        InkSwitch {
+            text: "Log scale";
+            checked: ResultsState.chart-box-log;
+            toggled(on) => {
+                ResultsState.chart-box-log = on;
+                ResultsState.chart-look-changed(ResultsState.chart-box-log, ResultsState.chart-grid);
+            }
+        }
+        InkSwitch {
+            text: "Grid lines";
+            checked: ResultsState.chart-grid;
+            toggled(on) => {
+                ResultsState.chart-grid = on;
+                ResultsState.chart-look-changed(ResultsState.chart-box-log, ResultsState.chart-grid);
+            }
+        }
+        InkHint {
+            text: "Whiskers reach the furthest values within 1.5 × IQR; the values beyond are dots. Far values that would squash the boxes are counted at the axis' edge.";
+        }
+    }
+    if root.current == "Look" && root.kind != ResultsChartKind2.boxplot: VerticalLayout {
         spacing: 12px;
             if ResultsState.chart-kind == ResultsChartKind2.histogram: HorizontalLayout {
                 spacing: 8px;

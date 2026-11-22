@@ -1,5 +1,5 @@
 {
-  "protocol_version": 49,
+  "protocol_version": 50,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -48,6 +48,12 @@
         },
         {
           "max": "F64"
+        },
+        {
+          "whisker_low": "F64"
+        },
+        {
+          "whisker_high": "F64"
         },
         {
           "outliers": {

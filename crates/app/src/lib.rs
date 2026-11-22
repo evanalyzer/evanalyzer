@@ -16,6 +16,9 @@ mod api;
 mod backend;
 mod workspace;
 
+pub mod charts;
+pub mod number_format;
+
 pub mod prelude {
     pub use super::workspace::extensions::*;
 }

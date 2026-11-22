@@ -12,6 +12,7 @@ use crate::editor::viewport_controller::ViewportController;
 use crate::helper::delayed_indicator::DelayedIndicator;
 use crate::helper::number_format::{NO_VALUE, format_number};
 
+mod chart_draw;
 mod coloc;
 mod column_panel;
 mod paths;
@@ -616,6 +617,11 @@ pub struct ResultsStateController {
     /// (else X / the value).
     chart_column_filter: Mutex<String>,
     chart_value_y: Mutex<bool>,
+    /// The boxplot's last boxes, the chart area and the charts' look - what
+    /// `draw_chart` draws from.
+    chart_boxes: Mutex<Vec<BoxplotBox>>,
+    chart_canvas: Mutex<chart_draw::ChartCanvas>,
+    chart_look: Mutex<chart_draw::ChartLook>,
     /// The results' profile measurements (Charts › Profile, its export).
     profile_columns: Mutex<Vec<MeasurementColumn>>,
     /// Charts › Profile's selected object's circles on the split view.
@@ -748,6 +754,9 @@ impl ResultsStateController {
             matrix_column_filter: Mutex::new(String::new()),
             chart_column_filter: Mutex::new(String::new()),
             chart_value_y: Mutex::new(false),
+            chart_boxes: Mutex::new(Vec::new()),
+            chart_canvas: Mutex::new(chart_draw::ChartCanvas::default()),
+            chart_look: Mutex::new(chart_draw::ChartLook::default()),
             profile_columns: Mutex::new(Vec::new()),
             profile_rings: Mutex::new(None),
             profile_pos: Mutex::new((0, 0)),
@@ -790,6 +799,7 @@ impl ResultsStateController {
             self.attach_views_callbacks(&ui);
             self.attach_coloc_callbacks(&ui);
             self.attach_column_panel_callbacks(&ui);
+            self.attach_chart_draw_callbacks(&ui);
             self.attach_tracks_callbacks(&ui);
             self.attach_tracks_all_callbacks(&ui);
             self.attach_paths_callbacks(&ui);
@@ -4427,6 +4437,9 @@ impl ResultsStateController {
     }
 
     fn push_boxplot_in_slint(&self, boxes: &[BoxplotBox]) {
+        // Drawn by the chart module; the boxes below say whether there are
+        // any (and serve the tests).
+        self.set_boxplot_boxes(boxes.to_vec());
         // Every box normalized against the combined min/max across *all*
         // boxes, so they stay comparable to each other on one shared axis
         // rather than each box silently rescaling to its own range.

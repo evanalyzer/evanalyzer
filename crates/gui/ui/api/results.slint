@@ -326,6 +326,16 @@ export struct ChartBoxplotBox {
     object-count: int,
 }
 
+/// A mark of a drawn chart a click names (its rectangle in the chart's
+/// px, e.g. a box and its label).
+export struct ChartHit {
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+    label: string,
+}
+
 export global ResultsState {
     // -- Split with image (board Z) --
     // Results left, the image right (asked for - see `split-offered`).
@@ -1007,6 +1017,16 @@ export global ResultsState {
     // normalized the same way, rendered as individual dots above/below the
     // whiskers.
     in-out property <[ChartBoxplotBox]> chart-boxplot-boxes: [];
+    // The chart drawn by the app's chart module (an SVG, the same as an
+    // export) and where its marks lie; `chart-resized` asks for it at the
+    // chart area's size and scheme.
+    in-out property <image> chart-picture;
+    in-out property <[ChartHit]> chart-hits: [];
+    callback chart-resized(float, float, bool);
+    // The boxplot's look: a log axis, grid lines.
+    in-out property <bool> chart-box-log: false;
+    in-out property <bool> chart-grid: true;
+    callback chart-look-changed(bool, bool);
 
     // -- Over time: a line per class / image / well / track (0..3), mean ±
     // SD or median + IQR (summary 0 / 1), relative to the first time point,

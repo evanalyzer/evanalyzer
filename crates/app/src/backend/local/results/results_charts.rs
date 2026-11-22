@@ -98,7 +98,9 @@ impl ResultCharts {
              SELECT s.class_id, s.min_v, s.q1, s.med, s.q3, s.max_v, s.n,\n\
                     LIST(f.v) FILTER (\n\
                         WHERE f.v < s.q1 - 1.5 * (s.q3 - s.q1) OR f.v > s.q3 + 1.5 * (s.q3 - s.q1)\n\
-                    ) AS outliers\n\
+                    ) AS outliers,\n\
+                    MIN(f.v) FILTER (WHERE f.v >= s.q1 - 1.5 * (s.q3 - s.q1)) AS w_lo,\n\
+                    MAX(f.v) FILTER (WHERE f.v <= s.q3 + 1.5 * (s.q3 - s.q1)) AS w_hi\n\
              FROM stats s\n\
              JOIN filtered f ON f.class_id = s.class_id\n\
              GROUP BY s.class_id, s.min_v, s.q1, s.med, s.q3, s.max_v, s.n\n\
@@ -107,7 +109,7 @@ impl ResultCharts {
 
         let mut stmt = database.connection().prepare(&sql).map_err(err)?;
         #[allow(clippy::type_complexity)]
-        let rows: Vec<(u32, f64, f64, f64, f64, f64, i64, Value)> = stmt
+        let rows: Vec<(u32, f64, f64, f64, f64, f64, i64, Value, Option<f64>, Option<f64>)> = stmt
             .query_map([], |row| {
                 Ok((
                     row.get(0)?,
@@ -118,6 +120,8 @@ impl ResultCharts {
                     row.get(5)?,
                     row.get(6)?,
                     row.get(7)?,
+                    row.get(8)?,
+                    row.get(9)?,
                 ))
             })
             .map_err(err)?
@@ -126,7 +130,7 @@ impl ResultCharts {
 
         let boxes = rows
             .into_iter()
-            .map(|(class_id, min_v, q1, median, q3, max_v, n, outliers)| {
+            .map(|(class_id, min_v, q1, median, q3, max_v, n, outliers, w_lo, w_hi)| {
                 let object_class = ObjectClass::Global(class_id);
                 let color = classes
                     .iter()
@@ -141,6 +145,8 @@ impl ResultCharts {
                     median,
                     q3,
                     max: max_v,
+                    whisker_low: w_lo.unwrap_or(min_v),
+                    whisker_high: w_hi.unwrap_or(max_v),
                     outliers: extract_f64_list(outliers),
                     object_count: n as usize,
                 }
@@ -209,7 +215,9 @@ impl ResultCharts {
              SELECT s.g, s.min_v, s.q1, s.med, s.q3, s.max_v, s.n,\n\
                     LIST(f.v) FILTER (\n\
                         WHERE f.v < s.q1 - 1.5 * (s.q3 - s.q1) OR f.v > s.q3 + 1.5 * (s.q3 - s.q1)\n\
-                    ) AS outliers\n\
+                    ) AS outliers,\n\
+                    MIN(f.v) FILTER (WHERE f.v >= s.q1 - 1.5 * (s.q3 - s.q1)) AS w_lo,\n\
+                    MAX(f.v) FILTER (WHERE f.v <= s.q3 + 1.5 * (s.q3 - s.q1)) AS w_hi\n\
              FROM stats s\n\
              JOIN filtered f ON f.g = s.g\n\
              GROUP BY s.g, s.min_v, s.q1, s.med, s.q3, s.max_v, s.n\n\
@@ -218,7 +226,7 @@ impl ResultCharts {
         );
         let mut stmt = database.connection().prepare(&sql).map_err(err)?;
         #[allow(clippy::type_complexity)]
-        let rows: Vec<(String, f64, f64, f64, f64, f64, i64, Value)> = stmt
+        let rows: Vec<(String, f64, f64, f64, f64, f64, i64, Value, Option<f64>, Option<f64>)> = stmt
             .query_map([], |row| {
                 Ok((
                     row.get(0)?,
@@ -229,6 +237,8 @@ impl ResultCharts {
                     row.get(5)?,
                     row.get(6)?,
                     row.get(7)?,
+                    row.get(8)?,
+                    row.get(9)?,
                 ))
             })
             .map_err(err)?
@@ -238,7 +248,7 @@ impl ResultCharts {
             boxes: rows
                 .into_iter()
                 .map(
-                    |(label, min_v, q1, median, q3, max_v, n, outliers)| BoxplotBox {
+                    |(label, min_v, q1, median, q3, max_v, n, outliers, w_lo, w_hi)| BoxplotBox {
                         label,
                         color: 0,
                         min: min_v,
@@ -246,6 +256,8 @@ impl ResultCharts {
                         median,
                         q3,
                         max: max_v,
+                        whisker_low: w_lo.unwrap_or(min_v),
+                        whisker_high: w_hi.unwrap_or(max_v),
                         outliers: extract_f64_list(outliers),
                         object_count: n as usize,
                     },
@@ -840,6 +852,10 @@ mod tests {
         assert_eq!(b.q3, 40.0);
         assert_eq!(b.max, 1000.0);
         assert_eq!(b.outliers, vec![1000.0]);
+        // The whiskers end at the furthest values within the bounds: not at
+        // the outlier, so they don't draw it twice.
+        assert_eq!(b.whisker_low, 10.0);
+        assert_eq!(b.whisker_high, 40.0);
     }
 
     #[test]
