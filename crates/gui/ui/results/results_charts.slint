@@ -476,7 +476,7 @@ component ChartsPanel inherits ViewPanel {
         intensity-stats: ResultsState.list-intensity-stats;
         intensity-cells: ResultsState.chart-intensity-cells;
         has-coloc: ResultsState.list-coloc-partner-items.length > 0;
-        coloc-kinds: ResultsState.chart-coloc-kinds;
+        coloc-groups: ResultsState.chart-coloc-groups;
         filter-edited(text) => {
             ResultsState.chart-columns-filter = text;
             ResultsState.chart-columns-filter-changed(text);

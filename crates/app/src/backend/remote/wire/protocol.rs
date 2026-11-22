@@ -76,7 +76,8 @@ use std::sync::Arc;
 // `ImageEntry` note/marker/disabled_by and `ResultsQuery::ChangeImageReview`.
 // 50: `BoxplotBox::whisker_low` / `whisker_high` (postcard: the boxes of an
 // older side would be misread).
-pub const PROTOCOL_VERSION: u32 = 50;
+// 51: `ColumnEntry::coloc_group`.
+pub const PROTOCOL_VERSION: u32 = 51;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 

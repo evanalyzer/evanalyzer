@@ -41,7 +41,7 @@ component ListPanel inherits ViewPanel {
             intensity-stats: ResultsState.list-intensity-stats;
             intensity-cells: ResultsState.list-intensity-cells;
             has-coloc: ResultsState.list-coloc-partner-items.length > 0;
-            coloc-kinds: ResultsState.list-coloc-kinds;
+            coloc-groups: ResultsState.list-coloc-groups;
             filter-edited(text) => {
                 ResultsState.list-columns-filter = text;
                 ResultsState.list-columns-filter-changed(text);

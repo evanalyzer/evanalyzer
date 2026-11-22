@@ -5875,6 +5875,7 @@ impl ResultsStateController {
                 display_name: column.display_label(&classes),
                 key: column.clone(),
                 group: group.into(),
+                coloc_group: 0,
             });
         }
         let column_items_vec = column_items(&dialog_columns, &classes, |key| columns.contains(key));
@@ -11988,6 +11989,7 @@ pub(crate) mod tests {
             display_name: pearson.display_label(&[]),
             key: pearson.clone(),
             group: "Measurements".into(),
+            coloc_group: 0,
         }];
         let key = pearson.as_key(&[]);
         assert_eq!(column_for_key(&key, &[], &available), Some(pearson));

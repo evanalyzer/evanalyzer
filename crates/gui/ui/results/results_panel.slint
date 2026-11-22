@@ -9,7 +9,7 @@
 // coloc builder; a list to pick one item from.
 
 import { Ink, InkIcons, InkHint, InkCheckList, InkOptionCard, InkSearchField, InkSwitch, InkTipZone, MultiSelectItem } from "../ink/ink.slint";
-import { ColumnSection, ColumnPreset, ColocColumnItem, ColocKind, IntensityCell, ResultsState } from "../api/results.slint";
+import { ColumnSection, ColumnPreset, ColocColumnItem, ColocGroup, ColocKind, IntensityCell, ResultsState } from "../api/results.slint";
 import { CheckBox, LineEdit } from "../ink/std_compat.slint";
 
 /// A head over a part of the panel: a foldable caption, All / None - the
@@ -569,9 +569,11 @@ component StepLabel inherits HorizontalLayout {
 component ColocBuilder inherits VerticalLayout {
     in property <bool> single;
     in property <bool> grouped;
-    in property <[ColocKind]> kinds;
+    in property <[ColocGroup]> groups;
     callback picked(string, bool);
     callback select(string, bool);
+    // A group's block folded (false) or opened.
+    callback toggled(string, bool);
     spacing: 10px;
 
     PartHead {
@@ -647,32 +649,92 @@ component ColocBuilder inherits VerticalLayout {
                 number: "3";
                 text: root.single ? "The column" : "Columns for";
             }
-            if root.kinds.length == 0: InkHint {
+            if root.groups.length == 0: InkHint {
                 text: "Pick a partner class above.";
             }
-            for kind in root.kinds: VerticalLayout {
-                spacing: 2px;
-                PartHead {
-                    title: root.single ? kind.title : kind.title + " · " + kind.count;
-                    foldable: false;
-                    all-none: !root.single;
-                    select-all => {
-                        root.select(kind.group, true);
+            // A block per coloc group - a Colocalize step's classes: their
+            // combinations only (design canvas "Results rework", ColocGroups A).
+            for block in root.groups: Rectangle {
+                border-radius: Ink.radius-md;
+                border-width: block.name != "" ? 1px : 0px;
+                border-color: Ink.border-soft;
+                background: block.name != "" ? Ink.raised : transparent;
+                VerticalLayout {
+                    padding: block.name != "" ? 8px : 0px;
+                    spacing: 4px;
+                    if block.name != "": Rectangle {
+                        height: 22px;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Rectangle {
+                                width: 12px;
+                                Image {
+                                    source: block.open ? InkIcons.caret-down : InkIcons.caret-right;
+                                    width: 10px;
+                                    height: 10px;
+                                    colorize: Ink.text-mute;
+                                }
+                            }
+                            Text {
+                                horizontal-stretch: 1;
+                                min-width: 0px;
+                                text: block.name;
+                                font-size: Ink.fs-body;
+                                font-weight: 600;
+                                color: Ink.text;
+                                overflow: elide;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                text: block.classes;
+                                font-size: Ink.fs-caption;
+                                font-family: Ink.font-mono;
+                                color: Ink.text-dim;
+                                vertical-alignment: center;
+                            }
+                        }
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            accessible-role: button;
+                            accessible-label: block.name;
+                            accessible-expandable: true;
+                            accessible-expanded: block.open;
+                            accessible-action-default => {
+                                root.toggled(block.key, !block.open);
+                            }
+                            clicked => {
+                                root.toggled(block.key, !block.open);
+                            }
+                        }
                     }
-                    select-none => {
-                        root.select(kind.group, false);
-                    }
-                }
-                InkHint {
-                    text: kind.description;
-                }
-                for item in kind.items: PickRow {
-                    text: item.name;
-                    note: item.glyph;
-                    on: item.selected;
-                    single: root.single;
-                    clicked => {
-                        root.picked(item.key, root.single || !item.selected);
+                    if block.open: VerticalLayout {
+                        spacing: 6px;
+                        for kind in block.kinds: VerticalLayout {
+                            spacing: 2px;
+                            PartHead {
+                                title: root.single ? kind.title : kind.title + " · " + kind.count;
+                                foldable: false;
+                                all-none: !root.single;
+                                select-all => {
+                                    root.select(kind.group, true);
+                                }
+                                select-none => {
+                                    root.select(kind.group, false);
+                                }
+                            }
+                            if block.name == "" || kind.title == "EACH CLASS": InkHint {
+                                text: kind.description;
+                            }
+                            for item in kind.items: PickRow {
+                                text: item.name;
+                                note: item.glyph;
+                                on: item.selected;
+                                single: root.single;
+                                clicked => {
+                                    root.picked(item.key, root.single || !item.selected);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -685,7 +747,10 @@ component ColocBuilder inherits VerticalLayout {
                 }
             }
             InkHint {
-                text: "● overlaps · ○ must not · · either - per class in this order: " + ResultsState.list-coloc-partner-order + ". \"Exactly\" columns add up to the count. One row per overlapping pair: List, a row per Coloc pair.";
+                text: (root.groups.length > 0 && root.groups[0].name != ""
+                    ? "● overlaps · ○ must not · · either - per class in the order of its group's head. Combinations only within a group: a Colocalize step's classes."
+                    : "● overlaps · ○ must not · · either - per class in this order: " + ResultsState.list-coloc-partner-order + ".")
+                    + " \"Exactly\" columns add up to the count. One row per overlapping pair: List, a row per Coloc pair.";
             }
         }
     }
@@ -707,7 +772,7 @@ export component ColumnPicker inherits VerticalLayout {
     in property <[string]> intensity-stats;
     in property <[IntensityCell]> intensity-cells;
     in property <bool> has-coloc;
-    in property <[ColocKind]> coloc-kinds;
+    in property <[ColocGroup]> coloc-groups;
     callback filter-edited(string);
     // A column on (true) or off - `single`: always on, the others off.
     callback picked(string, bool);
@@ -782,12 +847,15 @@ export component ColumnPicker inherits VerticalLayout {
     if root.has-coloc: ColocBuilder {
         single: root.single;
         grouped: root.grouped;
-        kinds: root.coloc-kinds;
+        groups: root.coloc-groups;
         picked(key, on) => {
             root.picked(key, on);
         }
         select(group, on) => {
             root.section-select(group, on);
+        }
+        toggled(key, open) => {
+            root.section-toggled(key, open);
         }
     }
 }

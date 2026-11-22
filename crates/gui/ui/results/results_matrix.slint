@@ -552,7 +552,7 @@ component PlatePanel inherits ViewPanel {
         intensity-stats: ResultsState.list-intensity-stats;
         intensity-cells: ResultsState.matrix-intensity-cells;
         has-coloc: ResultsState.list-coloc-partner-items.length > 0;
-        coloc-kinds: ResultsState.matrix-coloc-kinds;
+        coloc-groups: ResultsState.matrix-coloc-groups;
         filter-edited(text) => {
             ResultsState.matrix-columns-filter = text;
             ResultsState.matrix-columns-filter-changed(text);

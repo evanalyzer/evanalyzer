@@ -51,7 +51,9 @@ pub(super) struct GroupingSql {
 pub struct ResultsGenerator {
     database: evanalyzer_core::ResultsConnection,
     classes_cache: RefCell<Option<Vec<Class>>>,
-    coloc_classes_cache: RefCell<Option<Vec<Vec<ObjectClass>>>>,
+    /// The partner class sets objects have, and the coloc groups
+    /// (`get_coloc_class_sets`, `get_coloc_groups`) - read once.
+    coloc_classes_cache: RefCell<Option<(Vec<Vec<ObjectClass>>, Vec<Vec<ObjectClass>>)>>,
     /// See `classes_with_objects`.
     classes_with_objects_cache: RefCell<Option<Vec<u32>>>,
     /// The pattern `Grouping::Auto` picked for this database's images.
@@ -3279,42 +3281,74 @@ impl ResultsGenerator {
     /// recorded can't change without re-exporting (i.e. opening a
     /// different database).
     pub fn get_coloc_class_sets(&self) -> Result<Vec<Vec<ObjectClass>>, InternalErrors> {
+        Ok(self.coloc_sets_and_groups()?.0)
+    }
+
+    /// The coloc groups: the classes one Colocalize step looked at, each
+    /// group sorted, the groups by their first class. Read from the objects:
+    /// an object's partners are only ever of its own step's classes, so
+    /// joining every partner class with the object's classes - those that
+    /// are partners somewhere, not e.g. a marker class it also has - splits
+    /// them into the groups.
+    pub fn get_coloc_groups(&self) -> Result<Vec<Vec<ObjectClass>>, InternalErrors> {
+        Ok(self.coloc_sets_and_groups()?.1)
+    }
+
+    /// `get_coloc_class_sets` and `get_coloc_groups` from one scan of the
+    /// objects with partners. Cached after the first call for this opened
+    /// database (see `coloc_classes_cache`), same reasoning as
+    /// `get_object_classes`: what was recorded can't change without opening
+    /// a different database.
+    #[allow(clippy::type_complexity)]
+    fn coloc_sets_and_groups(
+        &self,
+    ) -> Result<(Vec<Vec<ObjectClass>>, Vec<Vec<ObjectClass>>), InternalErrors> {
         if let Some(cached) = self.coloc_classes_cache.borrow().as_ref() {
             return Ok(cached.clone());
         }
 
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        // The objects' own classes (only partners join the groups without).
+        let own = if self.has_object_column("object_class_id")? {
+            "CAST(list_sort(object_class_id) AS VARCHAR)"
+        } else {
+            "'[]'"
+        };
         let mut stmt = self
             .database
-            .prepare(
-                "SELECT DISTINCT CAST(list_sort(map_keys(coloc_partner_ids)) AS VARCHAR) \
+            .prepare(&format!(
+                "SELECT DISTINCT {own}, \
+                        CAST(list_sort(map_keys(coloc_partner_ids)) AS VARCHAR) \
                  FROM objects \
-                 WHERE cardinality(coloc_partner_ids) > 0",
-            )
+                 WHERE cardinality(coloc_partner_ids) > 0"
+            ))
             .map_err(err)?;
-        let lists: Vec<String> = stmt
-            .query_map([], |row| row.get::<_, String>(0))
+        let rows: Vec<(String, String)> = stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
 
         // "[2, 3]" - a class key per entry (-1, no class, isn't a column).
-        let mut sets: Vec<Vec<ObjectClass>> = lists
+        let parse = |list: &str| -> Vec<ObjectClass> {
+            list.trim_matches(|c| c == '[' || c == ']')
+                .split(',')
+                .filter_map(|key| key.trim().parse::<u32>().ok())
+                .map(ObjectClass::Global)
+                .collect()
+        };
+        let pairs: Vec<(Vec<ObjectClass>, Vec<ObjectClass>)> = rows
             .iter()
-            .map(|list| {
-                list.trim_matches(|c| c == '[' || c == ']')
-                    .split(',')
-                    .filter_map(|key| key.trim().parse::<u32>().ok())
-                    .map(ObjectClass::Global)
-                    .collect::<Vec<_>>()
-            })
-            .filter(|set| !set.is_empty())
+            .map(|(own, partners)| (parse(own), parse(partners)))
+            .filter(|(_, partners)| !partners.is_empty())
             .collect();
+        let mut sets: Vec<Vec<ObjectClass>> = pairs.iter().map(|(_, set)| set.clone()).collect();
         sets.sort();
         sets.dedup();
+        let groups = coloc_groups_of(&pairs);
 
-        *self.coloc_classes_cache.borrow_mut() = Some(sets.clone());
-        Ok(sets)
+        *self.coloc_classes_cache.borrow_mut() = Some((sets.clone(), groups.clone()));
+        Ok((sets, groups))
     }
 
     pub fn get_available_columns(&self) -> Result<Vec<ColumnEntry>, InternalErrors> {
@@ -3323,6 +3357,7 @@ impl ResultsGenerator {
             display_name: key.display_label(&classes),
             key,
             group: group.into(),
+            coloc_group: 0,
         };
         let mut ret = vec![
             entry(Column::ObjectId, "General"),
@@ -3357,8 +3392,14 @@ impl ResultsGenerator {
         // somewhere in this database, rather than a single shared "total
         // across every class" column.
         let coloc_classes = self.get_object_classes_with_at_least_coloc()?;
+        let groups = self.get_coloc_groups()?;
         for class_id in &coloc_classes {
-            ret.push(entry(Column::ColocCount(*class_id), "Coloc"));
+            let mut column = entry(Column::ColocCount(*class_id), "Coloc");
+            column.coloc_group = groups
+                .iter()
+                .position(|group| group.contains(class_id))
+                .map_or(0, |i| i as u32 + 1);
+            ret.push(column);
         }
         // The combinations that occur: "Coloc with exactly" each set of
         // partner classes found, among all of them - the GUI makes its
@@ -5425,8 +5466,71 @@ fn push_object_list_conditions(
     }
 }
 
+/// The coloc groups of objects' `(own classes, partner classes)`: every
+/// partner class joined with the others of its set and with the object's
+/// own classes that are partners somewhere. Each group sorted, the groups
+/// by their first class.
+fn coloc_groups_of(pairs: &[(Vec<ObjectClass>, Vec<ObjectClass>)]) -> Vec<Vec<ObjectClass>> {
+    let mut partner_classes: Vec<ObjectClass> =
+        pairs.iter().flat_map(|(_, set)| set.iter().copied()).collect();
+    partner_classes.sort();
+    partner_classes.dedup();
+    // A small union-find over the partner classes.
+    let mut parent: Vec<usize> = (0..partner_classes.len()).collect();
+    fn root(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    let index = |class: &ObjectClass| partner_classes.binary_search(class).ok();
+    for (own, set) in pairs {
+        let members: Vec<usize> = set
+            .iter()
+            .chain(own.iter())
+            .filter_map(&index)
+            .collect();
+        if let Some(first) = members.first() {
+            for other in &members[1..] {
+                let (a, b) = (root(&mut parent, *first), root(&mut parent, *other));
+                parent[a.max(b)] = a.min(b);
+            }
+        }
+    }
+    let mut groups: Vec<Vec<ObjectClass>> = Vec::new();
+    let mut group_of_root: std::collections::HashMap<usize, usize> = Default::default();
+    for (i, class) in partner_classes.iter().enumerate() {
+        let r = root(&mut parent, i);
+        let g = *group_of_root.entry(r).or_insert_with(|| {
+            groups.push(Vec::new());
+            groups.len() - 1
+        });
+        groups[g].push(*class);
+    }
+    groups
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn coloc_groups_are_the_classes_partnered_together() {
+        let c = |n: u32| ObjectClass::Global(n);
+        // In-cell spots 4, 5, 6 overlap among themselves, outside spots 7,
+        // 8, 9 among themselves; 20 is a marker class the in-cell and the
+        // outside spots both carry - not a partner, so it joins nothing.
+        let pairs = vec![
+            (vec![c(4), c(20)], vec![c(5)]),
+            (vec![c(5)], vec![c(4), c(6)]),
+            (vec![c(7), c(20)], vec![c(8), c(9)]),
+            (vec![c(9)], vec![c(7)]),
+        ];
+        assert_eq!(
+            coloc_groups_of(&pairs),
+            vec![vec![c(4), c(5), c(6)], vec![c(7), c(8), c(9)]]
+        );
+    }
+
     use super::*;
 
     /// Performance of the List view, normal vs. transposed, on a large

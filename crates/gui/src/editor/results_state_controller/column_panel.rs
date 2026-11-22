@@ -101,7 +101,7 @@ struct SinglePicker {
     cells: Vec<IntensityCell>,
     intensity_title: String,
     intensity_open: bool,
-    kinds: Vec<ColocKindUi>,
+    kinds: Vec<ColocGroupUi>,
 }
 
 /// A starting set: its key, name, what it holds and its columns.
@@ -227,7 +227,7 @@ pub(super) fn coloc_glyph(column: &Column, partners: &[ObjectClass]) -> String {
 
 /// A kind of coloc columns, made off the UI thread (a model isn't `Send`).
 pub(super) struct ColocKindUi {
-    group: &'static str,
+    group: String,
     title: &'static str,
     description: &'static str,
     count: String,
@@ -246,55 +246,168 @@ impl ColocKindUi {
     }
 }
 
-/// The coloc columns offered, by kind (each class, at least, exactly) -
-/// those the search `filter` (lower case) matches; kinds without columns
-/// left out.
-pub(super) fn coloc_kinds(
+/// Between a kind's section group and its coloc block in a kind's `group`
+/// key ("Coloc · at least\u{1}2") - what All / None of a block's kind tick.
+pub(super) const BLOCK_SEPARATOR: char = '\u{1}';
+
+/// The classes a coloc column is about (empty: "with no class").
+pub(super) fn coloc_with(column: &Column) -> Option<Vec<ObjectClass>> {
+    match column {
+        Column::ColocCount(class) => Some(vec![*class]),
+        Column::Coloc(c) => Some(c.with.clone()),
+        _ => None,
+    }
+}
+
+/// A coloc group's block of the builder, made off the UI thread.
+pub(super) struct ColocGroupUi {
+    key: String,
+    name: String,
+    classes: String,
+    open: bool,
+    kinds: Vec<ColocKindUi>,
+}
+
+impl ColocGroupUi {
+    pub(super) fn into_slint(self) -> crate::ColocGroup {
+        crate::ColocGroup {
+            key: self.key.into(),
+            name: self.name.into(),
+            classes: self.classes.into(),
+            open: self.open,
+            kinds: ModelRc::from(Rc::new(VecModel::from(
+                self.kinds.into_iter().map(ColocKindUi::into_slint).collect::<Vec<_>>(),
+            ))),
+        }
+    }
+}
+
+/// A group's name: what its classes share after their "@" ("in-cell-spots"),
+/// else "Group `number`"; and the classes' own parts ("ch1 · ch2 · ch3").
+fn block_names(block: &[ObjectClass], classes: &[Class], number: usize) -> (String, String) {
+    let names: Vec<String> = block
+        .iter()
+        .map(|class| {
+            classes
+                .iter()
+                .find(|c| c.global() == *class)
+                .map(|c| c.name.clone())
+                .unwrap_or_else(|| format!("class {}", class.to_u32().unwrap_or_default()))
+        })
+        .collect();
+    let parts: Vec<Option<(&str, &str)>> = names.iter().map(|name| name.split_once('@')).collect();
+    match parts.first() {
+        Some(Some((_, shared)))
+            if !shared.is_empty() && parts.iter().all(|p| p.is_some_and(|(_, rest)| rest == *shared)) =>
+        {
+            let heads: Vec<&str> = parts.iter().filter_map(|p| p.map(|(head, _)| head)).collect();
+            (shared.to_string(), heads.join(" · "))
+        }
+        _ => (format!("Group {number}"), names.join(" · ")),
+    }
+}
+
+/// The coloc columns offered as the builder shows them: a block per coloc
+/// group (`groups`), in it by kind (each class, at least, exactly) the
+/// columns of that group's classes with marks over them; "with no class"
+/// in a block of its own. Those the search `filter` (lower case) matches;
+/// empty kinds and blocks left out. With one group its block has no name.
+pub(super) fn coloc_group_blocks(
     available: &[ColumnEntry],
+    groups: &[Vec<ObjectClass>],
     selected: &[Column],
     settings: &ColocSettings,
     classes: &[Class],
+    open: &HashMap<String, bool>,
     filter: &str,
-) -> Vec<ColocKindUi> {
-    [
-        (COLOC_GROUP, "EACH CLASS", "One column per partner class."),
-        (
-            COLOC_AT_LEAST_GROUP,
-            "AT LEAST",
-            "Overlaps all of these classes, maybe more.",
-        ),
-        (
-            COLOC_EXACTLY_GROUP,
-            "EXACTLY",
-            "These classes and no other - the columns add up to the count.",
-        ),
-    ]
-    .into_iter()
-    .filter_map(|(group, title, description)| {
-        let items: Vec<ColocColumnItem> = available
-            .iter()
-            .filter(|entry| entry.group == group && is_coloc_column(&entry.key))
-            .filter(|entry| filter.is_empty() || entry.display_name.to_lowercase().contains(filter))
-            .map(|entry| ColocColumnItem {
-                key: entry.key.as_key(classes).into(),
-                name: entry.display_name.as_str().into(),
-                glyph: coloc_glyph(&entry.key, &settings.partners).into(),
-                selected: selected.contains(&entry.key),
+) -> Vec<ColocGroupUi> {
+    let kinds_of = |block: Option<(usize, &[ObjectClass])>| -> Vec<ColocKindUi> {
+        // "With no class" with several groups: marks over every class would
+        // say little - none.
+        let marked: Vec<ObjectClass> = match block {
+            Some((_, block)) => settings.partners.iter().copied().filter(|c| block.contains(c)).collect(),
+            None if groups.len() > 1 => Vec::new(),
+            None => settings.partners.clone(),
+        };
+        [
+            (COLOC_GROUP, "EACH CLASS", "One column per partner class."),
+            (COLOC_AT_LEAST_GROUP, "AT LEAST", "Overlaps all of these classes, maybe more."),
+            (
+                COLOC_EXACTLY_GROUP,
+                "EXACTLY",
+                "These classes and no other of the group - the columns add up to the count.",
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(group, title, description)| {
+            let items: Vec<ColocColumnItem> = available
+                .iter()
+                .filter(|entry| entry.group == group && is_coloc_column(&entry.key))
+                .filter(|entry| {
+                    let with = coloc_with(&entry.key).unwrap_or_default();
+                    match block {
+                        Some((_, block)) => !with.is_empty() && with.iter().all(|c| block.contains(c)),
+                        None => with.is_empty(),
+                    }
+                })
+                .filter(|entry| filter.is_empty() || entry.display_name.to_lowercase().contains(filter))
+                .map(|entry| ColocColumnItem {
+                    key: entry.key.as_key(classes).into(),
+                    name: entry.display_name.as_str().into(),
+                    glyph: coloc_glyph(&entry.key, &marked).into(),
+                    selected: selected.contains(&entry.key),
+                })
+                .collect();
+            if items.is_empty() {
+                return None;
+            }
+            let chosen = items.iter().filter(|item| item.selected).count();
+            let key = match block {
+                Some((number, _)) => format!("{group}{BLOCK_SEPARATOR}{number}"),
+                None => group.to_string(),
+            };
+            Some(ColocKindUi {
+                group: key,
+                title,
+                description,
+                count: format!("{chosen} of {}", items.len()),
+                items,
             })
-            .collect();
-        if items.is_empty() {
-            return None;
-        }
-        let chosen = items.iter().filter(|item| item.selected).count();
-        Some(ColocKindUi {
-            group,
-            title,
-            description,
-            count: format!("{chosen} of {}", items.len()),
-            items,
         })
-    })
-    .collect()
+        .collect()
+    };
+    let named = groups.len() > 1;
+    let mut blocks: Vec<ColocGroupUi> = groups
+        .iter()
+        .enumerate()
+        .filter_map(|(i, block)| {
+            let kinds = kinds_of(Some((i + 1, block)));
+            if kinds.is_empty() {
+                return None;
+            }
+            let key = format!("coloc group {}", i + 1);
+            let any_chosen = kinds.iter().any(|k| k.items.iter().any(|item| item.selected));
+            let (name, members) = block_names(block, classes, i + 1);
+            Some(ColocGroupUi {
+                open: !filter.is_empty() || open.get(&key).copied().unwrap_or(i == 0 || any_chosen),
+                key,
+                name: if named { name } else { String::new() },
+                classes: if named { members } else { String::new() },
+                kinds,
+            })
+        })
+        .collect();
+    let none = kinds_of(None);
+    if !none.is_empty() {
+        blocks.push(ColocGroupUi {
+            key: "coloc none".into(),
+            name: String::new(),
+            classes: String::new(),
+            open: true,
+            kinds: none,
+        });
+    }
+    blocks
 }
 
 impl ResultsStateController {
@@ -384,7 +497,15 @@ impl ResultsStateController {
                 .map(|section| section.title.clone())
                 .unwrap_or_default(),
             intensity_open: intensity_section.is_some_and(|section| section.open),
-            kinds: coloc_kinds(available, selected, &settings, &classes, &filter),
+            kinds: coloc_group_blocks(
+                available,
+                &super::coloc::coloc_groups(&self.raw_columns.lock().expect("Poisoned")),
+                selected,
+                &settings,
+                &classes,
+                &open,
+                &filter,
+            ),
             sections,
             cells,
         }
@@ -422,8 +543,8 @@ impl ResultsStateController {
             state.set_matrix_intensity_cells(model_of(picker.cells));
             state.set_matrix_intensity_title(picker.intensity_title.into());
             state.set_matrix_intensity_open(picker.intensity_open);
-            state.set_matrix_coloc_kinds(model_of(
-                picker.kinds.into_iter().map(ColocKindUi::into_slint).collect(),
+            state.set_matrix_coloc_groups(model_of(
+                picker.kinds.into_iter().map(ColocGroupUi::into_slint).collect(),
             ));
         })
         .ok();
@@ -459,8 +580,8 @@ impl ResultsStateController {
             state.set_chart_intensity_cells(model_of(picker.cells));
             state.set_chart_intensity_title(picker.intensity_title.into());
             state.set_chart_intensity_open(picker.intensity_open);
-            state.set_chart_coloc_kinds(model_of(
-                picker.kinds.into_iter().map(ColocKindUi::into_slint).collect(),
+            state.set_chart_coloc_groups(model_of(
+                picker.kinds.into_iter().map(ColocGroupUi::into_slint).collect(),
             ));
         })
         .ok();
@@ -612,6 +733,7 @@ mod tests {
             display_name: format!("{key:?}"),
             group: group.into(),
             key,
+            coloc_group: 0,
         }
     }
 
@@ -645,6 +767,27 @@ mod tests {
         let row = INTENSITY_VALUES.len();
         assert!(cells[row].selected);
         assert!(!cells[row + 1].key.is_empty() && !cells[row + 1].selected);
+    }
+
+    #[test]
+    fn a_group_is_named_by_what_its_classes_share_else_numbered() {
+        let class = |id: u32, name: &str| Class { id, name: name.into(), ..Class::default() };
+        let classes = vec![
+            class(4, "ch1@in-cell-spots"),
+            class(5, "ch2@in-cell-spots"),
+            class(7, "spot1"),
+            class(8, "spot2"),
+        ];
+        let g = ObjectClass::Global;
+        assert_eq!(
+            block_names(&[g(4), g(5)], &classes, 1),
+            ("in-cell-spots".to_string(), "ch1 · ch2".to_string())
+        );
+        // No "@": numbered, the classes in full.
+        assert_eq!(
+            block_names(&[g(7), g(8)], &classes, 2),
+            ("Group 2".to_string(), "spot1 · spot2".to_string())
+        );
     }
 
     #[test]

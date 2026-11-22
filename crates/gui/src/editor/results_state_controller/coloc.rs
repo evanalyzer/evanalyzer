@@ -69,6 +69,31 @@ pub(super) fn coloc_classes(raw: &[ColumnEntry]) -> Vec<ObjectClass> {
         .collect()
 }
 
+/// The coloc groups (`ColumnEntry::coloc_group`): the partner classes of
+/// one Colocalize step each, in the results' order - classes without a
+/// group together last.
+pub(super) fn coloc_groups(raw: &[ColumnEntry]) -> Vec<Vec<ObjectClass>> {
+    let mut numbered: Vec<(u32, ObjectClass)> = raw
+        .iter()
+        .filter_map(|entry| match entry.key {
+            Column::ColocCount(class) => Some((
+                if entry.coloc_group == 0 { u32::MAX } else { entry.coloc_group },
+                class,
+            )),
+            _ => None,
+        })
+        .collect();
+    numbered.sort_by_key(|(group, _)| *group);
+    let mut groups: Vec<(u32, Vec<ObjectClass>)> = Vec::new();
+    for (group, class) in numbered {
+        match groups.last_mut() {
+            Some((last, classes)) if *last == group => classes.push(class),
+            _ => groups.push((group, vec![class])),
+        }
+    }
+    groups.into_iter().map(|(_, classes)| classes).collect()
+}
+
 /// The sets of partner classes objects have (the results' "with exactly"
 /// columns among all classes).
 pub(super) fn coloc_sets(raw: &[ColumnEntry]) -> Vec<Vec<ObjectClass>> {
@@ -130,8 +155,15 @@ pub(super) fn coloc_columns(raw: &[ColumnEntry], settings: &ColocSettings) -> Ve
         .collect();
     occurring.sort();
     occurring.dedup();
-    let only_occurring =
-        settings.only_occurring || partners.len() > MAX_CLASSES_FOR_ALL_COMBINATIONS;
+    // Combinations only within a group: an object's partners are only ever
+    // of its own Colocalize step's classes.
+    let groups: Vec<Vec<ObjectClass>> = coloc_groups(raw)
+        .into_iter()
+        .map(|group| group.into_iter().filter(|c| partners.contains(c)).collect::<Vec<_>>())
+        .filter(|group| !group.is_empty())
+        .collect();
+    let only_occurring = settings.only_occurring
+        || groups.iter().any(|group| group.len() > MAX_CLASSES_FOR_ALL_COMBINATIONS);
     let combinations: Vec<Vec<ObjectClass>> = if only_occurring {
         // Every part of a set that occurs occurs "at least".
         let mut found: Vec<Vec<ObjectClass>> =
@@ -140,7 +172,10 @@ pub(super) fn coloc_columns(raw: &[ColumnEntry], settings: &ColocSettings) -> Ve
         found.dedup();
         found
     } else {
-        subsets(partners)
+        let mut all: Vec<Vec<ObjectClass>> = groups.iter().flat_map(|group| subsets(group)).collect();
+        all.sort_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
+        all.dedup();
+        all
     };
 
     let mut columns: Vec<Column> = partners
@@ -208,6 +243,7 @@ pub(super) fn offered_columns(
         display_name: key.display_label(classes),
         group: coloc_group(&key).to_string(),
         key,
+        coloc_group: 0,
     };
     let mut offered = Vec::with_capacity(raw.len() + coloc.len());
     let mut coloc = Some(coloc);
@@ -488,8 +524,15 @@ impl ResultsStateController {
             .map(|section| section.title.clone())
             .unwrap_or_default();
         let intensity_open = intensity_section.is_some_and(|section| section.open);
-        let coloc_kinds =
-            super::column_panel::coloc_kinds(&available, &selected, &settings, &classes, &filter);
+        let coloc_kinds = super::column_panel::coloc_group_blocks(
+            &available,
+            &coloc_groups(&raw),
+            &selected,
+            &settings,
+            &classes,
+            &open,
+            &filter,
+        );
 
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
@@ -521,8 +564,8 @@ impl ResultsStateController {
             state.set_list_intensity_cells(model_of(intensity_cells));
             state.set_list_intensity_title(intensity_title.into());
             state.set_list_intensity_open(intensity_open);
-            state.set_list_coloc_kinds(model_of(
-                coloc_kinds.into_iter().map(super::column_panel::ColocKindUi::into_slint).collect(),
+            state.set_list_coloc_groups(model_of(
+                coloc_kinds.into_iter().map(super::column_panel::ColocGroupUi::into_slint).collect(),
             ));
         })
         .ok();
@@ -596,12 +639,29 @@ impl ResultsStateController {
     /// (`group`) - those the search shows.
     fn select_column_section(self: &Arc<Self>, group: &str, selected: bool) {
         let filter = self.column_filter.lock().expect("Poisoned").to_lowercase();
+        // A coloc block's kind: only that group's columns.
+        let (group, block) = match group.split_once(super::column_panel::BLOCK_SEPARATOR) {
+            Some((group, number)) => {
+                let groups = coloc_groups(&self.raw_columns.lock().expect("Poisoned"));
+                let block = number
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|n| groups.get(n.wrapping_sub(1)).cloned());
+                (group, block)
+            }
+            None => (group, None),
+        };
         let in_section: Vec<Column> = self
             .available_columns
             .lock()
             .expect("Poisoned")
             .iter()
             .filter(|entry| entry.group == group)
+            .filter(|entry| match &block {
+                Some(block) => super::column_panel::coloc_with(&entry.key)
+                    .is_some_and(|with| !with.is_empty() && with.iter().all(|c| block.contains(c))),
+                None => true,
+            })
             .filter(|entry| {
                 filter.is_empty() || entry.display_name.to_lowercase().contains(&filter)
             })
@@ -688,6 +748,42 @@ impl ResultsStateController {
 mod tests {
     use super::*;
 
+    #[test]
+    fn combinations_are_made_within_a_coloc_group_only() {
+        let entry = |key: Column, group: u32| ColumnEntry {
+            display_name: String::new(),
+            group: "Coloc".into(),
+            key,
+            coloc_group: group,
+        };
+        let [a, b, c] = [2, 3, 4].map(ObjectClass::Global);
+        // In-cell 2 and 3 one group, 4 another.
+        let raw = vec![
+            entry(Column::ColocCount(a), 1),
+            entry(Column::ColocCount(b), 1),
+            entry(Column::ColocCount(c), 2),
+        ];
+        assert_eq!(coloc_groups(&raw), vec![vec![a, b], vec![c]]);
+        let settings = ColocSettings {
+            partners: vec![a, b, c],
+            count_partners: false,
+            only_occurring: false,
+        };
+        let columns = coloc_columns(&raw, &settings);
+        let withs: Vec<Vec<ObjectClass>> = columns
+            .iter()
+            .filter_map(|column| match column {
+                Column::Coloc(cc) => Some(cc.with.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(withs.contains(&vec![a, b]), "within the group");
+        assert!(
+            !withs.iter().any(|w| w.contains(&c) && w.len() > 1),
+            "no mix of the groups: {withs:?}"
+        );
+    }
+
     fn class(n: u32) -> ObjectClass {
         ObjectClass::Global(n)
     }
@@ -698,6 +794,7 @@ mod tests {
             display_name: String::new(),
             group: "Coloc".into(),
             key,
+            coloc_group: 0,
         };
         let all = vec![class(2), class(3), class(4)];
         let mut raw = vec![entry(Column::AreaSizePx)];
@@ -856,11 +953,11 @@ mod tests {
         );
         assert_eq!(
             at_least(&[2, 3], false).display_label(&classes),
-            "Coloc at least class 2, class 3"
+            "Coloc at least class 2 + class 3"
         );
         assert_eq!(
             exactly(&[2, 3], &[2, 3, 4]).display_label(&classes),
-            "Coloc exactly class 2, class 3"
+            "Coloc exactly class 2 + class 3"
         );
         assert_eq!(
             exactly(&[], &[2, 3]).display_label(&classes),

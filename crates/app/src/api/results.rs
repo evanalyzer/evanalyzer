@@ -489,6 +489,11 @@ pub struct ColumnEntry {
     pub display_name: String,
     pub key: Column,
     pub group: String,
+    /// A coloc class's group (1, 2, ...; 0 none): the classes one
+    /// Colocalize step looked at - an object's partners are only ever of
+    /// its own group, so combinations are made within a group.
+    #[serde(default)]
+    pub coloc_group: u32,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

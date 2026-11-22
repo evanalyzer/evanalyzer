@@ -1,5 +1,5 @@
 {
-  "protocol_version": 50,
+  "protocol_version": 51,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -541,6 +541,9 @@
         },
         {
           "group": "STR"
+        },
+        {
+          "coloc_group": "U32"
         }
       ]
     },

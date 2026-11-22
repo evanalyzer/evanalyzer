@@ -53,6 +53,18 @@ export struct ColocKind {
     items: [ColocColumnItem],
 }
 
+/// A coloc group's block in the builder: the classes one Colocalize step
+/// looked at (`name` "in-cell-spots", `classes` "ch1 · ch2 · ch3"; both
+/// empty: no head - one group only, or "with no class") and its kinds.
+export struct ColocGroup {
+    key: string,
+    name: string,
+    classes: string,
+    open: bool,
+    kinds: [ColocKind],
+}
+
+
 // Tracks: only with tracked objects - one image's tracks, beside it.
 export enum ResultsRailMode { list, matrix, charts, tracks, paths, trees }
 
@@ -599,7 +611,7 @@ export global ResultsState {
     in-out property <[ColumnSection]> list-coloc-sections: [];
     // The same columns for the panel's coloc builder, with their glyphs;
     // `list-coloc-glyph-head`: the partner classes' initials over them.
-    in-out property <[ColocKind]> list-coloc-kinds: [];
+    in-out property <[ColocGroup]> list-coloc-groups: [];
     // The panel's starting sets and the intensity grid (`list-intensity-
     // cells`: a row per channel, `list-intensity-stats` values each).
     in-out property <[ColumnPreset]> list-column-presets: [];
@@ -784,7 +796,7 @@ export global ResultsState {
     in-out property <[IntensityCell]> matrix-intensity-cells: [];
     in-out property <string> matrix-intensity-title: "";
     in-out property <bool> matrix-intensity-open: false;
-    in-out property <[ColocKind]> matrix-coloc-kinds: [];
+    in-out property <[ColocGroup]> matrix-coloc-groups: [];
     callback matrix-value-picked(string);
     // The Charts' value picker in the panel: one column - scatter's X
     // (`chart-value-slot` 0) or Y (1).
@@ -794,7 +806,7 @@ export global ResultsState {
     in-out property <[IntensityCell]> chart-intensity-cells: [];
     in-out property <string> chart-intensity-title: "";
     in-out property <bool> chart-intensity-open: false;
-    in-out property <[ColocKind]> chart-coloc-kinds: [];
+    in-out property <[ColocGroup]> chart-coloc-groups: [];
     callback chart-value-picked(string);
     callback chart-value-slot-changed(int);
     callback chart-columns-filter-changed(string);
