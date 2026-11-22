@@ -8,6 +8,7 @@
 //!
 //! - [`Scale`]: linear or log axis, nice ticks.
 //! - [`Theme`]: the colours and font - light or dark, as the app.
+//! - [`bar`]: a group's mean with its error bar.
 //! - [`boxplot`]: a box per group.
 //! - [`histogram`]: how many values per bin.
 //! - [`lines`]: values over time or a profile's positions.
@@ -21,6 +22,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 mod axis;
+pub mod bar;
 pub mod boxplot;
 pub mod histogram;
 pub mod lines;

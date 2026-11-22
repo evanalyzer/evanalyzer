@@ -271,6 +271,8 @@ enum ChartKind {
     OverTime,
     /// A profile measurement over its position (e.g. the Sholl profile).
     Profile,
+    /// A group's mean with its error bar (the boxplot's data).
+    Bar,
 }
 
 #[derive(Clone)]
@@ -2113,6 +2115,7 @@ impl ResultsStateController {
                         ResultsChartKind2::Boxplot => ChartKind::Boxplot,
                         ResultsChartKind2::OverTime => ChartKind::OverTime,
                         ResultsChartKind2::Profile => ChartKind::Profile,
+                        ResultsChartKind2::Bar => ChartKind::Bar,
                     };
                     manager.chart_filter.lock().expect("Poisened").kind = kind;
                     manager.refresh_charts();
@@ -3642,7 +3645,7 @@ impl ResultsStateController {
                     Err(err) => self.push_chart_error(err.to_string()),
                 }
             }
-            ChartKind::Boxplot => {
+            ChartKind::Boxplot | ChartKind::Bar => {
                 match db.boxplot(&BoxplotFilter {
                     plane,
                     images: None,
@@ -3657,7 +3660,13 @@ impl ResultsStateController {
                     grouping: self.current_grouping(),
                     per_image: chart_filter.per_image,
                 }) {
-                    Ok(boxplot) => self.push_boxplot_in_slint(&boxplot.boxes),
+                    Ok(boxplot) => {
+                        self.push_boxplot_in_slint(&boxplot.boxes);
+                        // Bars: the same groups, drawn as bars.
+                        if chart_filter.kind == ChartKind::Bar {
+                            self.set_bars(boxplot.boxes);
+                        }
+                    }
                     Err(err) => self.push_chart_error(err.to_string()),
                 }
             }

@@ -14,6 +14,7 @@
 
 use super::*;
 use crate::ChartHit;
+use evanalyzer_app::charts::bar::{self, BarLook, BarSpec, ErrorBar};
 use evanalyzer_app::charts::boxplot::{self, BoxSpec, BoxplotLook};
 use evanalyzer_app::charts::histogram::{self, HistogramLook, HistogramSpec};
 use evanalyzer_app::charts::scatter::{self, ScatterLook, ScatterSpec};
@@ -42,6 +43,7 @@ pub(super) fn look_to_slint(look: &ChartLook) -> crate::ChartBoxLook {
         relative: look.relative,
         min_max: look.min_max,
         colors: i32::from(look.colors),
+        error: i32::from(look.error),
         log_x: look.log_x,
         log_y: look.log_y,
     }
@@ -179,6 +181,8 @@ pub(super) enum ChartData {
     #[default]
     None,
     Boxplot(Vec<BoxplotBox>),
+    /// The boxplot's groups as bars.
+    Bars(Vec<BoxplotBox>),
     Histogram(HistogramResult),
     Scatter(ScatterResult),
     /// Over time, a profile: ready in shown units.
@@ -204,6 +208,12 @@ impl ResultsStateController {
         self.draw_chart();
     }
 
+    /// The bars' groups came (the boxplot's data): kept and drawn.
+    pub(super) fn set_bars(&self, boxes: Vec<BoxplotBox>) {
+        *self.chart_data.lock().expect("Poisoned") = ChartData::Bars(boxes);
+        self.draw_chart();
+    }
+
     /// The histogram's bins came: kept and drawn.
     pub(super) fn set_histogram(&self, histogram: HistogramResult) {
         *self.chart_data.lock().expect("Poisoned") = ChartData::Histogram(histogram);
@@ -222,6 +232,7 @@ impl ResultsStateController {
         match &*data {
             ChartData::None => {}
             ChartData::Boxplot(boxes) => self.draw_boxplot(boxes, canvas, &theme),
+            ChartData::Bars(boxes) => self.draw_bars(boxes, canvas, &theme),
             ChartData::Histogram(histogram) => self.draw_histogram(histogram, canvas, &theme),
             ChartData::Scatter(scatter) => self.draw_scatter(scatter, canvas, &theme),
             ChartData::Lines(spec) => {
@@ -330,6 +341,79 @@ impl ResultsStateController {
             canvas.height,
         );
         self.push_picture(drawing.svg, Vec::new(), Vec::new(), String::new());
+    }
+
+    /// The bars: a group's mean and error bar, its dots - the boxplot's
+    /// tooltip and numbers.
+    fn draw_bars(&self, boxes: &[BoxplotBox], canvas: ChartCanvas, theme: &Theme) {
+        let look = self.chart_look.lock().expect("Poisoned").clone();
+        let (label, mut title) = {
+            let classes = self.classes.lock().expect("Poisoned");
+            let chart = self.chart_filter.lock().expect("Poisoned");
+            (
+                chart.column.display_label(&classes),
+                super::column_panel::chart_value_label(&chart.column, chart.per_image, &classes),
+            )
+        };
+        let mut factor = unit_factor(&label);
+        // In % of the control: the first bar's mean is 100.
+        if look.relative
+            && let Some(first) = boxes.first().filter(|b| b.mean * factor != 0.0)
+        {
+            title = format!("% of control ({})", first.label);
+            factor = 100.0 / first.mean;
+        }
+        let error = match look.error {
+            1 => ErrorBar::Sem,
+            2 => ErrorBar::Ci95,
+            _ => ErrorBar::Sd,
+        };
+        let specs = box_specs(boxes, factor, &look);
+        let bars: Vec<BarSpec> = specs
+            .iter()
+            .map(|spec| BarSpec {
+                label: spec.label.clone(),
+                color: spec.color,
+                mean: spec.mean,
+                sd: spec.sd,
+                count: spec.count,
+                points: spec.points.clone(),
+                count_noun: spec.count_noun.clone(),
+            })
+            .collect();
+        let drawing = bar::draw(
+            &bars,
+            &BarLook {
+                y_title: format!("{title} · mean ± {}", error.name()),
+                error,
+                grid: look.grid,
+                dots: look.dots,
+                show_n: look.show_n,
+            },
+            theme,
+            canvas.width,
+            canvas.height,
+        );
+        let hits: Vec<HitRow> = drawing
+            .hits
+            .iter()
+            .map(|hit| {
+                let spec = &specs[hit.index];
+                let mut numbers = box_numbers(spec, &look);
+                let half = error.half(spec.sd, spec.count);
+                numbers.insert(0, (format!("Mean ± {}", error.name()), format!("{} ± {}", format_number(spec.mean), format_number(half))));
+                (hit.x as f32, hit.y as f32, hit.width as f32, hit.height as f32, spec.label.clone(), numbers)
+            })
+            .collect();
+        let stat_rows: Vec<(u32, Vec<String>)> = specs
+            .iter()
+            .map(|spec| {
+                let mut cells = vec![spec.label.clone()];
+                cells.extend(box_stats(spec).iter().map(|v| format_number(*v)));
+                (spec.color.0, cells)
+            })
+            .collect();
+        self.push_picture(drawing.svg, hits, stat_rows, stats_tsv(&specs));
     }
 
     /// The boxplot: a box per group, the look's options.
@@ -501,6 +585,7 @@ impl ResultsStateController {
                 relative: look.relative,
                 min_max: look.min_max,
                 colors: u8::try_from(look.colors).unwrap_or(0),
+                error: u8::try_from(look.error).unwrap_or(0),
                 log_x: look.log_x,
                 log_y: look.log_y,
                 box_colors,

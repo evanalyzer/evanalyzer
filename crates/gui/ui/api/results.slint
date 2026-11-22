@@ -72,7 +72,7 @@ export enum ResultsRailMode { list, matrix, charts, tracks, paths, trees }
 // object (single image + detected objects).
 export enum MatrixLevel { plate, well, object }
 
-export enum ResultsChartKind2 { histogram, scatter, boxplot, over-time, profile }
+export enum ResultsChartKind2 { histogram, scatter, boxplot, over-time, profile, bar }
 
 // One of the project's results views (the bar's tabs).
 export struct ResultsViewTab {
@@ -354,6 +354,8 @@ export struct ChartHit {
 /// mean, n under the boxes, % of the first box (the control), min - max
 /// whiskers (else 1.5 × IQR), colours (0 per box, 1 one, 2 control grey).
 export struct ChartBoxLook {
+    // The bars' error bar: 0 SD, 1 SEM, 2 95 % CI.
+    error: int,
     log-x: bool,
     log-y: bool,
     log: bool,

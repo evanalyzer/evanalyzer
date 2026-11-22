@@ -570,7 +570,7 @@ impl ResultsStateController {
         // A boxplot per image offers the objects' count too.
         let per_image = {
             let chart = self.chart_filter.lock().expect("Poisoned");
-            chart.per_image && chart.kind == ChartKind::Boxplot
+            chart.per_image && matches!(chart.kind, ChartKind::Boxplot | ChartKind::Bar)
         };
         let available: Vec<ColumnEntry> = self
             .available_columns

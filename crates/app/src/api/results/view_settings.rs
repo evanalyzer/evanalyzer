@@ -290,6 +290,8 @@ pub struct BoxLook {
     pub relative: bool,
     pub min_max: bool,
     pub colors: u8,
+    /// The bars' error bar: 0 ± SD, 1 ± SEM, 2 the 95 % CI.
+    pub error: u8,
     /// The scatter's axes on a log scale.
     pub log_x: bool,
     pub log_y: bool,
@@ -309,6 +311,7 @@ impl Default for BoxLook {
             relative: false,
             min_max: false,
             colors: 0,
+            error: 0,
             log_x: false,
             log_y: false,
             box_colors: Default::default(),

@@ -500,11 +500,13 @@ component OverTimeChart inherits Rectangle {
 /// choice; X and Y for a scatter), Class, Groups (a box / a line per), Look.
 component ChartsPanel inherits ViewPanel {
     property <ResultsChartKind2> kind: ResultsState.chart-kind;
-    property <bool> has-class: root.kind != ResultsChartKind2.boxplot
+    // A box or a bar per group.
+    property <bool> grouped: root.kind == ResultsChartKind2.boxplot || root.kind == ResultsChartKind2.bar;
+    property <bool> has-class: !root.grouped
         && !(root.kind == ResultsChartKind2.over-time && ResultsState.chart-time-lines == 0)
         && !(root.kind == ResultsChartKind2.profile && ResultsState.chart-profile-lines == 0);
     // The parts this kind has.
-    parts: root.kind == ResultsChartKind2.boxplot ? (ResultsState.chart-group == 0 ? ["Value", "Groups", "Look"] : ["Value", "Class", "Groups", "Look"])
+    parts: root.grouped ? (ResultsState.chart-group == 0 ? ["Value", "Groups", "Look"] : ["Value", "Class", "Groups", "Look"])
         : root.kind == ResultsChartKind2.histogram || root.kind == ResultsChartKind2.scatter ? ["Value", "Class", "Look"]
         : root.has-class ? ["Value", "Class", "Groups", "Look"] : ["Value", "Groups", "Look"];
     part: ResultsState.chart-panel-part;
@@ -570,10 +572,10 @@ component ChartsPanel inherits ViewPanel {
         }
     }
 
-    if root.current == "Groups" && root.kind == ResultsChartKind2.boxplot: VerticalLayout {
+    if root.current == "Groups" && root.grouped: VerticalLayout {
         spacing: 12px;
         IndexChoiceList {
-            title: "A BOX PER";
+            title: root.kind == ResultsChartKind2.bar ? "A BAR PER" : "A BOX PER";
             model: ["Class", "Image", "Well", "Plate row", "Plate column"];
             current: ResultsState.chart-group;
             picked(i) => {
@@ -613,9 +615,18 @@ component ChartsPanel inherits ViewPanel {
         }
     }
 
-    if root.current == "Look" && root.kind == ResultsChartKind2.boxplot: VerticalLayout {
+    if root.current == "Look" && root.grouped: VerticalLayout {
         spacing: 12px;
-        InkSwitch {
+        if root.kind == ResultsChartKind2.bar: IndexChoiceList {
+            title: "ERROR BAR";
+            model: ["± SD", "± SEM", "95 % CI (Student's t)"];
+            current: ResultsState.chart-box-look.error;
+            picked(i) => {
+                ResultsState.chart-box-look.error = i;
+                ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
+            }
+        }
+        if root.kind == ResultsChartKind2.boxplot: InkSwitch {
             text: "Log scale";
             checked: ResultsState.chart-box-look.log;
             toggled(on) => {
@@ -639,7 +650,7 @@ component ChartsPanel inherits ViewPanel {
                 ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
             }
         }
-        InkSwitch {
+        if root.kind == ResultsChartKind2.boxplot: InkSwitch {
             text: "Mean (◇)";
             checked: ResultsState.chart-box-look.mean;
             toggled(on) => {
@@ -648,7 +659,7 @@ component ChartsPanel inherits ViewPanel {
             }
         }
         InkSwitch {
-            text: "n under each box";
+            text: root.kind == ResultsChartKind2.bar ? "n under each bar" : "n under each box";
             checked: ResultsState.chart-box-look.show-n;
             toggled(on) => {
                 ResultsState.chart-box-look.show-n = on;
@@ -656,14 +667,14 @@ component ChartsPanel inherits ViewPanel {
             }
         }
         InkSwitch {
-            text: "% of control (the first box)";
+            text: root.kind == ResultsChartKind2.bar ? "% of control (the first bar)" : "% of control (the first box)";
             checked: ResultsState.chart-box-look.relative;
             toggled(on) => {
                 ResultsState.chart-box-look.relative = on;
                 ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
             }
         }
-        IndexChoiceList {
+        if root.kind == ResultsChartKind2.boxplot: IndexChoiceList {
             title: "WHISKERS";
             model: ["To 1.5 × IQR - the values beyond as dots", "Min - max"];
             current: ResultsState.chart-box-look.min-max ? 1 : 0;
@@ -674,7 +685,7 @@ component ChartsPanel inherits ViewPanel {
         }
         IndexChoiceList {
             title: "COLOURS";
-            model: ["A colour per box", "One colour", "Control dark, the others grey"];
+            model: ["A colour per group", "One colour", "Control dark, the others grey"];
             current: ResultsState.chart-box-look.colors;
             picked(i) => {
                 ResultsState.chart-box-look.colors = i;
@@ -682,10 +693,12 @@ component ChartsPanel inherits ViewPanel {
             }
         }
         InkHint {
-            text: "Far values that would squash the boxes are counted at the axis' edge. Saved with the view; the export draws the same.";
+            text: root.kind == ResultsChartKind2.boxplot
+                ? "Far values that would squash the boxes are counted at the axis' edge. Saved with the view; the export draws the same."
+                : "Saved with the view; the export draws the same.";
         }
     }
-    if root.current == "Look" && root.kind != ResultsChartKind2.boxplot: VerticalLayout {
+    if root.current == "Look" && !root.grouped: VerticalLayout {
         spacing: 12px;
             if ResultsState.chart-kind == ResultsChartKind2.histogram: HorizontalLayout {
                 spacing: 8px;
@@ -857,7 +870,8 @@ component ChartsPanel inherits ViewPanel {
 /// panel on their part.
 component ChartsBar inherits ViewBar {
     property <ResultsChartKind2> kind: ResultsState.chart-kind;
-    property <bool> has-class: root.kind != ResultsChartKind2.boxplot
+    property <bool> grouped: root.kind == ResultsChartKind2.boxplot || root.kind == ResultsChartKind2.bar;
+    property <bool> has-class: !root.grouped
         && !(root.kind == ResultsChartKind2.over-time && ResultsState.chart-time-lines == 0)
         && !(root.kind == ResultsChartKind2.profile && ResultsState.chart-profile-lines == 0);
 
@@ -879,12 +893,12 @@ component ChartsBar inherits ViewBar {
         InkSegmented {
             horizontal-stretch: 0;
             label: "Chart";
-            model: ResultsState.has-profiles ? ["Histogram", "Boxplot", "Scatter", "Over time", "Profile"] : ["Histogram", "Boxplot", "Scatter", "Over time"];
-            selected: root.kind == ResultsChartKind2.boxplot ? 1 : root.kind == ResultsChartKind2.scatter ? 2
-                : root.kind == ResultsChartKind2.over-time ? 3 : root.kind == ResultsChartKind2.profile ? 4 : 0;
+            model: ResultsState.has-profiles ? ["Histogram", "Boxplot", "Bar", "Scatter", "Over time", "Profile"] : ["Histogram", "Boxplot", "Bar", "Scatter", "Over time"];
+            selected: root.kind == ResultsChartKind2.boxplot ? 1 : root.kind == ResultsChartKind2.bar ? 2 : root.kind == ResultsChartKind2.scatter ? 3
+                : root.kind == ResultsChartKind2.over-time ? 4 : root.kind == ResultsChartKind2.profile ? 5 : 0;
             picked(i) => {
-                ResultsState.chart-kind = i == 1 ? ResultsChartKind2.boxplot : i == 2 ? ResultsChartKind2.scatter
-                    : i == 3 ? ResultsChartKind2.over-time : i == 4 ? ResultsChartKind2.profile : ResultsChartKind2.histogram;
+                ResultsState.chart-kind = i == 1 ? ResultsChartKind2.boxplot : i == 2 ? ResultsChartKind2.bar : i == 3 ? ResultsChartKind2.scatter
+                    : i == 4 ? ResultsChartKind2.over-time : i == 5 ? ResultsChartKind2.profile : ResultsChartKind2.histogram;
                 ResultsState.chart-kind-selected(ResultsState.chart-kind);
                 // Only a scatter has a Y to pick.
                 if ResultsState.chart-kind != ResultsChartKind2.scatter && ResultsState.chart-value-slot != 0 {
@@ -899,6 +913,7 @@ component ChartsBar inherits ViewBar {
         vertical-alignment: center;
         horizontal-stretch: 0;
         text: root.kind == ResultsChartKind2.boxplot ? "Click a box for its numbers · double-click: its objects in the List"
+            : root.kind == ResultsChartKind2.bar ? "Click a bar for its numbers · double-click: its objects in the List"
             : root.kind == ResultsChartKind2.scatter ? "Click a point to see its object on its image." : "";
     }
 }
@@ -938,10 +953,11 @@ export component ResultsChartsView inherits Rectangle {
                 if ResultsState.chart-kind == ResultsChartKind2.scatter: ScatterChart {
                     vertical-stretch: 1;
                 }
-                if ResultsState.chart-kind == ResultsChartKind2.boxplot: BoxplotChart {
+                // Boxes and bars: the same picture, tooltip and numbers.
+                if ResultsState.chart-kind == ResultsChartKind2.boxplot || ResultsState.chart-kind == ResultsChartKind2.bar: BoxplotChart {
                     vertical-stretch: 1;
                 }
-                if ResultsState.chart-kind == ResultsChartKind2.boxplot && ResultsState.chart-error == ""
+                if (ResultsState.chart-kind == ResultsChartKind2.boxplot || ResultsState.chart-kind == ResultsChartKind2.bar) && ResultsState.chart-error == ""
                     && ResultsState.chart-boxplot-boxes.length > 0: BoxStats { }
                 // One chart for both: lines over a position (time or radius).
                 if ResultsState.chart-kind == ResultsChartKind2.over-time || ResultsState.chart-kind == ResultsChartKind2.profile: OverTimeChart {

@@ -113,6 +113,7 @@ fn chart_kind_key(kind: ChartKind) -> &'static str {
         ChartKind::Boxplot => "boxplot",
         ChartKind::OverTime => "overTime",
         ChartKind::Profile => "profile",
+        ChartKind::Bar => "bar",
     }
 }
 
@@ -122,6 +123,7 @@ fn chart_kind_of_key(key: &str) -> ChartKind {
         "boxplot" => ChartKind::Boxplot,
         "overTime" => ChartKind::OverTime,
         "profile" => ChartKind::Profile,
+        "bar" => ChartKind::Bar,
         _ => ChartKind::Histogram,
     }
 }
@@ -1043,6 +1045,7 @@ impl ResultsStateController {
                 ChartKind::Boxplot => ResultsChartKind2::Boxplot,
                 ChartKind::OverTime => ResultsChartKind2::OverTime,
                 ChartKind::Profile => ResultsChartKind2::Profile,
+                ChartKind::Bar => ResultsChartKind2::Bar,
             });
             state.set_chart_profile_names(profile_names(&profile_list));
             state.set_chart_profile_index(profile_shown);
