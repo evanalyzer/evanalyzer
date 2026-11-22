@@ -7,7 +7,10 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use evanalyzer_cfg::settings::images_settings::{ImageEntry, ImageList};
+use evanalyzer_cfg::settings::images_settings::{
+    ChannelSettings, GlobalImageSettings, ImageEntry, ImageList, PixelSizeSettings, TStackSettings,
+    ZStackSettings,
+};
 use indexmap::{Equivalent, IndexMap};
 use std::hash::Hash;
 use std::path::PathBuf;
@@ -187,6 +190,86 @@ impl ImageListExt for ImageList {
                 .map(|(path, entry)| (path, Arc::new(entry)))
                 .collect(),
         ))
+    }
+}
+
+/// The image settings for all images of the project (each image may set
+/// its own): planes, frames, pixel size, selected channel, wavelengths.
+pub trait GlobalImageSettingsExt {
+    /// Sets the global Z-stack settings.
+    fn set_global_z_stack(&mut self, z_stack: &ZStackSettings);
+    /// Sets the global T-stack settings.
+    fn set_global_t_stack(&mut self, t_stack: &TStackSettings);
+    /// Sets the global pixel size settings.
+    ///
+    /// `pz`: `None` if the z spacing is unknown.
+    fn set_global_pixel_size_settings(&mut self, px: f32, py: f32, pz: Option<f32>);
+    /// Resets the global pixel size settings.
+    fn reset_global_pixel_size_settings(&mut self);
+    /// Sets the global selected channel index.
+    fn set_global_selected_channel(&mut self, selected_channel: &i32);
+    fn set_global_emission_wavel_length(&mut self, channel_id: i32, emission_wave_length: f32);
+    fn reset_global_emission_wavel_length(&mut self, channel_id: i32);
+}
+
+impl GlobalImageSettingsExt for GlobalImageSettings {
+    /// Sets the global Z-stack settings.
+    fn set_global_z_stack(&mut self, z_stack: &ZStackSettings) {
+        self.z_stack = Some(z_stack.clone());
+    }
+
+    /// Sets the global T-stack settings.
+    fn set_global_t_stack(&mut self, t_stack: &TStackSettings) {
+        self.t_stack = Some(t_stack.clone());
+    }
+
+    /// Sets the global pixel size settings.
+    ///
+    /// `pz`: `None` if the z spacing is unknown.
+    fn set_global_pixel_size_settings(&mut self, px: f32, py: f32, pz: Option<f32>) {
+        self.pixel_sizes = Some(PixelSizeSettings {
+            x: px,
+            y: py,
+            z: pz,
+        });
+    }
+
+    /// Resets the global pixel size settings.
+    fn reset_global_pixel_size_settings(&mut self) {
+        self.pixel_sizes = None;
+    }
+
+    /// Sets the global selected channel index.
+    fn set_global_selected_channel(&mut self, selected_channel: &i32) {
+        self.selected_channel = Some(*selected_channel);
+    }
+
+    fn set_global_emission_wavel_length(&mut self, channel_id: i32, emission_wave_length: f32) {
+        let channel_arc = self
+            .channels
+            .entry(channel_id)
+            .or_insert_with(|| ChannelSettings {
+                name: "".into(),
+                emission_wave_length: None,
+                visible: None,
+                histogram: None,
+            });
+
+        channel_arc.emission_wave_length = Some(emission_wave_length);
+    }
+
+    fn reset_global_emission_wavel_length(&mut self, channel_id: i32) {
+        let channel_arc = self
+            .channels
+            .entry(channel_id)
+            .or_insert_with(|| ChannelSettings {
+                name: "".into(),
+                emission_wave_length: None,
+                visible: None,
+                histogram: None,
+            });
+
+        channel_arc.emission_wave_length = None;
     }
 }
 

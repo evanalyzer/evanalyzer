@@ -30,7 +30,6 @@ use evanalyzer_app::images::TileRequest;
 use evanalyzer_app::preview::PreviewRequest;
 use evanalyzer_app::preview::PreviewViewport;
 use evanalyzer_app::project::ImageListExt;
-use evanalyzer_app::project::ProjectExt;
 use evanalyzer_app::project::ProjectWithRuntime;
 use evanalyzer_cfg::core_types::{
     ImageTile, InternalErrors, ObjectClass, TrainingProgressEvent, ZProjection,

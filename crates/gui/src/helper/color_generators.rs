@@ -7,7 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use evanalyzer_app::project::ProjectExt;
+use evanalyzer_app::project::ClassificationExt;
 use evanalyzer_app::project::ProjectWithRuntime;
 use evanalyzer_cfg::core_types::ObjectClass;
 use slint::Color;
@@ -48,7 +48,7 @@ fn color_from_class(
     transparency: u8,
     object_class: &ObjectClass,
 ) -> Color {
-    let color = match project.get_class_from_id(object_class) {
+    let color = match project.classification.get_class_from_id(object_class) {
         Some(class) => class.color,
         None => 0xff0000, // Not found
     };

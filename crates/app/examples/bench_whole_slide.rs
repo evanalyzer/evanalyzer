@@ -41,7 +41,7 @@
 use evanalyzer_app::analysis::AnalysisRequest;
 use evanalyzer_app::backends::Backend;
 use evanalyzer_app::backends::local::LocalBackend;
-use evanalyzer_app::project::{ImageListExt, ProjectExt, ProjectWithRuntime};
+use evanalyzer_app::project::{ImageListExt, ProjectWithRuntime};
 use evanalyzer_cfg::core_types::{
     ImageAddress, ImageChannelIdx, MemoryId, ObjectClass, PipelineId, SegmentationClass, SizeUnits,
     StepId,

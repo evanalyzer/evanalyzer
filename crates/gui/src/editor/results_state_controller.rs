@@ -2979,7 +2979,6 @@ impl ResultsStateController {
     /// `results_rel` - found also when the project's image folder changed
     /// since the run.
     pub(super) fn project_image(&self, results_rel: &str) -> Option<PathBuf> {
-        use evanalyzer_app::project::ProjectExt;
         let run_root = self.run_image_root.lock().expect("Poisoned").clone();
         self._app_state
             .get_project()
@@ -6225,7 +6224,6 @@ impl ResultsStateController {
     /// series, the channels' colors and how the viewer shows the images
     /// (the database knows only the objects), and the dialog's choices.
     fn drawn_images(&self, state: &ExportDialogState) -> evanalyzer_app::results::DrawnImages {
-        use evanalyzer_app::project::ProjectExt;
         use evanalyzer_app::results::{DrawBrightness, DrawStyle};
         let results_images: Vec<String> = self
             .images

@@ -462,7 +462,6 @@ mod tests {
     use crate::jobs::*;
     use crate::project::ProjectWithRuntime;
     use crate::project::images::ImageListExt;
-    use crate::project::project_ext::ProjectExt;
     use crate::remote::{RemoteBackend, Worker};
     use crate::results::*;
     use crate::training::*;

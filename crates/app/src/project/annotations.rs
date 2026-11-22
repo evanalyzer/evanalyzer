@@ -17,7 +17,6 @@
 
 use crate::project::images::ImageListExt;
 use crate::project::owner::ProjectWithRuntime;
-use crate::project::project_ext::ProjectExt;
 use evanalyzer_cfg::core_types::{ObjectClass, ObjectId, SegmentationClass, ZProjection};
 use evanalyzer_cfg::settings::object_settings::{ObjectMetricSettings, TrackSettings};
 
@@ -271,6 +270,7 @@ impl AnnotationsExt for ProjectWithRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::project::images::GlobalImageSettingsExt;
     use bitvec::prelude::*;
     use evanalyzer_cfg::settings::images_settings::{ImageEntry, SeriesSettings};
     use std::path::PathBuf;
@@ -356,7 +356,7 @@ mod tests {
         assert_eq!(copy.z_projection, ZProjection::None);
 
         // The same shape found on a projection is another annotation.
-        project.set_global_z_stack(&ZStackSettings {
+        project.images.settings.set_global_z_stack(&ZStackSettings {
             z_projection: ZStackHandling::MaxIntensity,
             z_range: None,
         });

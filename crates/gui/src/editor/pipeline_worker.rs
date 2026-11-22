@@ -23,7 +23,6 @@ use evanalyzer_app::analysis::ProgressEvent;
 use evanalyzer_app::preview::PreviewRequest;
 use evanalyzer_app::preview::PreviewViewport;
 use evanalyzer_app::preview::StartPreviewError;
-use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::core_types::{InternalErrors, PipelineId, StepId};
 use evanalyzer_cfg::settings::pipeline_settings::StepContent;
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
@@ -841,7 +840,7 @@ mod tests {
     use crate::editor::test_support::{fixture_image_path, test_ui_window};
     use crate::helper::ui_thread::drain_ui_queue;
     use evanalyzer_app::backends::local::LocalBackend;
-    use evanalyzer_app::project::{ProjectExt, ProjectWithRuntime};
+    use evanalyzer_app::project::ProjectWithRuntime;
 
     struct Fixture {
         ui: AppWindow,

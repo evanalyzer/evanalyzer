@@ -34,7 +34,6 @@ mod tests {
     use crate::jobs::{PreviewRequest, PreviewViewport, RunningJob};
     use crate::project::ProjectWithRuntime;
     use crate::project::images::ImageListExt;
-    use crate::project::project_ext::ProjectExt;
     use evanalyzer_cfg::core_types::InternalErrors;
     use evanalyzer_cfg::settings::project_settings::ProjectSettings;
     use evanalyzer_core::ProgressEvent;

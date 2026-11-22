@@ -575,7 +575,7 @@ impl ResultsStateController {
             None => rel_path.clone(),
         });
         let (absolute, series) = {
-            use evanalyzer_app::project::{ImageEntryExt, ProjectExt};
+            use evanalyzer_app::project::ImageEntryExt;
             let project = self._app_state.get_project();
             let absolute = project_image
                 .as_ref()
@@ -701,7 +701,6 @@ impl ResultsStateController {
 
     /// The viewer shows the image `rel_path` (of the analysis).
     fn split_in_viewer(&self, rel_path: &str) -> bool {
-        use evanalyzer_app::project::ProjectExt;
         let Some(image) = self.project_image(rel_path) else {
             return false;
         };
@@ -1416,7 +1415,6 @@ impl ResultsStateController {
             .filter_map(|rel| Some((rel.clone(), self.project_image(rel)?)))
             .collect();
         let (colors, series, root) = {
-            use evanalyzer_app::project::ProjectExt;
             let project = self._app_state.get_project();
             (
                 project

@@ -11,8 +11,9 @@ use crate::UiState;
 use crate::editor::viewport_controller::ViewportController;
 use crate::helper::color_generators::{color_from_hex, get_colors_from_class};
 use crate::{AppWindow, ObjectItemDataSlint, ObjectListState};
+use evanalyzer_app::project::ClassificationExt;
 use evanalyzer_app::project::ProjectWithRuntime;
-use evanalyzer_app::project::{AnnotationsExt, ObjectExt, ProjectExt};
+use evanalyzer_app::project::{AnnotationsExt, ObjectExt};
 use evanalyzer_cfg::core_types::{ObjectId, SegmentationClass, max_gray_value};
 use evanalyzer_cfg::settings::images_settings::PixelSizeSettings;
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
@@ -502,6 +503,7 @@ impl ObjectTerm {
             }
             ObjectTerm::Text(text) => object.object_class.iter().any(|class| {
                 project
+                    .classification
                     .get_class_from_id(class)
                     .is_some_and(|c| c.name.to_lowercase().contains(text.as_str()))
             }),
@@ -611,6 +613,7 @@ fn coloc_text(object: &ObjectMetricSettings, project: &ProjectWithRuntime) -> St
         .filter(|(_, partners)| !partners.is_empty())
         .map(|(class, partners)| {
             let name = project
+                .classification
                 .get_class_from_id(class)
                 .map(|c| c.name.clone())
                 .unwrap_or_else(|| format!("Class {}", class.to_i32()));
@@ -626,6 +629,7 @@ fn class_name(
     project: &ProjectWithRuntime,
 ) -> String {
     project
+        .classification
         .get_class_from_id(class)
         .map(|c| c.name.clone())
         .unwrap_or_else(|| format!("Class {}", class.to_i32()))
@@ -683,7 +687,7 @@ fn object_rust_to_object_slint(
     let mut display_name = String::new();
 
     for class in &object.object_class {
-        let (class_name, class_color) = match project.get_class_from_id(class) {
+        let (class_name, class_color) = match project.classification.get_class_from_id(class) {
             Some(class_data) => (class_data.name.clone(), color_from_hex(class_data.color)),
             _ => ("Unclassified".to_string(), color_from_hex(0xff0000)),
         };
@@ -752,6 +756,7 @@ fn object_rust_to_object_slint(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use evanalyzer_app::project::GlobalImageSettingsExt;
     use evanalyzer_cfg::core_types::ObjectClass;
     use evanalyzer_cfg::settings::object_settings::IntensitySettings;
     use indexmap::IndexMap;
@@ -1103,7 +1108,7 @@ mod tests {
             volume.z_stack = 2;
             volume.dimensionality = ImageDimensionality::Volume { depth: 2 };
             project.add_object(&volume);
-            project.set_global_z_stack(&ZStackSettings {
+            project.images.settings.set_global_z_stack(&ZStackSettings {
                 z_projection: ZStackHandling::Volume3d,
                 z_range: Some(z..=z),
             });

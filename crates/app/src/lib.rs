@@ -43,7 +43,6 @@ pub mod prelude {
     pub use crate::project::image_entry as image_entry_ext;
     pub use crate::project::images as images_ext;
     pub use crate::project::objects as object_ext;
-    pub use crate::project::project_ext;
     pub use crate::project::utils;
 }
 

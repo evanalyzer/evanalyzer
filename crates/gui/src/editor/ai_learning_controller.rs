@@ -22,7 +22,6 @@ use evanalyzer_app::ai_learning::PixelTrainingParams;
 use evanalyzer_app::ai_learning::TrainingRequest;
 use evanalyzer_app::project::ImageEntryExt;
 use evanalyzer_app::project::ImageListExt;
-use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::core_types::TrainingProgressEvent;
 use evanalyzer_cfg::settings::ai_learning_object_settings::{
@@ -1846,7 +1845,6 @@ mod tests {
     use crate::editor::test_support::{
         project_with_one_image, test_ui_state_with_project, test_ui_window,
     };
-    use evanalyzer_app::project::ProjectExt;
     use evanalyzer_cfg::core_types::ObjectId;
     use evanalyzer_cfg::settings::classification_settings::Class;
 

@@ -16,13 +16,20 @@ pub mod annotations;
 pub(crate) mod cite;
 pub(crate) mod class_ids;
 pub mod classes;
+pub(crate) mod current_image;
+pub(crate) mod display;
 pub(crate) mod frontend;
 pub mod image_entry;
+pub(crate) mod image_folder;
 pub mod images;
+pub(crate) mod load_save;
 pub mod objects;
 pub(crate) mod owner;
+pub(crate) mod pipelines;
 pub(crate) mod plate_layout;
-pub mod project_ext;
+pub(crate) mod results_images;
+#[cfg(test)]
+mod tests;
 pub mod utils;
 
 pub use frontend::Frontend;
@@ -38,10 +45,11 @@ pub use crate::annotations::geojson::{
 pub use crate::annotations::measure::measure_on_source;
 pub use annotations::{AnnotationScope, AnnotationsExt};
 pub use class_ids::{ClassIdChange, change_class_id, free_class_ids, next_class_id};
+pub use classes::ClassificationExt;
+pub use current_image::{ConfigValueSource, DEFAULT_FRAME_INTERVAL_S};
 pub use image_entry::ImageEntryExt;
-pub use images::ImageListExt;
+pub use image_folder::{ProjectAction, SelectNewProjectRootAction, collect_images_at_root};
+pub use images::{GlobalImageSettingsExt, ImageListExt};
+pub use load_save::{SaveProjectActions, load_project};
 pub use objects::{ObjectExt, ShownPlane};
-pub use project_ext::{
-    ConfigValueSource, ProjectExt, ResultsImageFinder, SaveProjectActions,
-    SelectNewProjectRootAction, collect_images_at_root, load_project, run_image_root,
-};
+pub use results_images::{ResultsImageFinder, find_results_image, run_image_root};

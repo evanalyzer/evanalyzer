@@ -143,7 +143,7 @@ pub(crate) fn start_training(
 }
 
 /// `project.images.list` is keyed by path *relative* to `project.images.root`
-/// (see `ProjectExt::add_image_to_list`) - not directly openable. Every
+/// (see `ProjectWithRuntime::add_image_to_list`) - not directly openable. Every
 /// labeled image found here is joined against `images.root` before being
 /// handed to the job, which is the one thing that actually reads the file;
 /// forgetting this join silently fails every `ImageReader::new` call (each

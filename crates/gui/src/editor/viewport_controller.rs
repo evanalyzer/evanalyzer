@@ -23,7 +23,7 @@ use crate::helper::size_formater::{BYTES_PER_MB, format_bytes};
 use crate::{AppWindow, HistogramData, HistogramState, PipelinesPanelState, RetainedTile, UiState};
 use evanalyzer_app::global::ViewportMemorySettings;
 use evanalyzer_app::images::ImageContainer;
-use evanalyzer_app::project::{ObjectExt, ProjectExt};
+use evanalyzer_app::project::ObjectExt;
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::images_settings::HistogramSettings;
 use slint::{Color, ComponentHandle, Model, VecModel};
@@ -2080,8 +2080,8 @@ impl ViewportController {
 /// unclassified while unclassified objects are hidden, nor when every one of
 /// its classes is hidden. Shared by the redraw and by click picking, so an
 /// object that isn't drawn can never be picked either.
-pub(crate) fn is_object_drawn<P: ProjectExt + ?Sized>(
-    project: &P,
+pub(crate) fn is_object_drawn(
+    project: &evanalyzer_app::project::ProjectWithRuntime,
     hide_unclassified: bool,
     classes: &std::collections::BTreeSet<ObjectClass>,
 ) -> bool {

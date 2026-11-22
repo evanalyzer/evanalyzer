@@ -18,7 +18,7 @@ use crate::{
     ViewportState as ViewportSlintState, WarningState,
 };
 use evanalyzer_app::global::{PerformanceSettings, ViewportMemorySettings};
-use evanalyzer_app::project::ProjectExt;
+use evanalyzer_app::project::GlobalImageSettingsExt;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::images_settings::{
     TStackHandling, TStackSettings, ZStackHandling, ZStackSettings,
@@ -817,7 +817,7 @@ impl ViewportImageController {
 
         project.set_global_preferences(&allowed);
 
-        project.set_global_z_stack(&ZStackSettings {
+        project.images.settings.set_global_z_stack(&ZStackSettings {
             z_projection: z_projection,
             z_range: z_range,
         });
@@ -829,7 +829,7 @@ impl ViewportImageController {
             .t_stack
             .as_ref()
             .and_then(|t| t.frame_interval);
-        project.set_global_t_stack(&TStackSettings {
+        project.images.settings.set_global_t_stack(&TStackSettings {
             playback_speed: playback_speed as f32,
             t_stack,
             stack_handling: TStackHandling::AllStacks,
@@ -950,7 +950,10 @@ impl ViewportImageController {
     pub fn update_active_channel_in_project(&self, selected_channel: &i32) {
         {
             let mut project = self.app_state.get_project_write();
-            project.set_global_selected_channel(selected_channel);
+            project
+                .images
+                .settings
+                .set_global_selected_channel(selected_channel);
         } // write lock dropped before sync_histogram_settings_to_slint acquires read lock
         self.histogram_controller.sync_histogram_settings_to_slint();
         self.viewport_controller
@@ -1053,7 +1056,7 @@ impl ViewportImageController {
 /// the slice for one slice only (the others read every slice or project
 /// them) and the frame.
 fn analyzed_plane(
-    project: &impl ProjectExt,
+    project: &evanalyzer_app::project::ProjectWithRuntime,
 ) -> (
     Option<ZStackHandling>,
     Option<std::ops::RangeInclusive<i32>>,

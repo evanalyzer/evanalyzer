@@ -20,10 +20,11 @@ use crate::{
     AnnotationClassRow, AnnotationState, AppWindow, DialogType, FileRequest, GlobalAppState,
     ImportClassRow, WarningState,
 };
+use evanalyzer_app::project::ClassificationExt;
 use evanalyzer_app::project::ImageListExt;
 use evanalyzer_app::project::{
     AnnotationScope, AnnotationsExt, ClassTarget, ImportReport, PendingImport, PipelineObjects,
-    ProjectExt, ProjectWithRuntime, apply_import, default_class_target, export_image_geojson,
+    ProjectWithRuntime, apply_import, default_class_target, export_image_geojson,
     image_annotation_classes, measure_on_source, measure_pending, read_image_geojson,
 };
 use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
@@ -812,7 +813,7 @@ fn class_rows(
     classes
         .iter()
         .map(|(class, count)| {
-            let (name, color) = match project.get_class_from_id(class) {
+            let (name, color) = match project.classification.get_class_from_id(class) {
                 Some(c) if *class != ObjectClass::Unset => {
                     (c.name.clone(), color_from_hex(c.color))
                 }

@@ -7,6 +7,11 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::project::ProjectWithRuntime;
+use bitvec::vec::BitVec;
+use evanalyzer_cfg::core_types::{ObjectId, SegmentationClass};
+use evanalyzer_cfg::object_class_set_from_u32;
+
 use bitvec::{order::Lsb0, slice::BitSlice};
 use evanalyzer_cfg::{
     core_types::{ImageDimensionality, ObjectClass},
@@ -105,6 +110,146 @@ impl ObjectExt for ObjectMetricSettings {
 
     fn remove_all_object_classes(&mut self) {
         self.object_class.clear();
+    }
+}
+
+impl ProjectWithRuntime {
+    /// Adds an object class to a specific object by its ID.
+    ///
+    /// This method finds the object with the given ID in the currently selected image series
+    /// and adds the specified object class to it.
+    ///
+    /// # Arguments
+    /// * `id` - The ObjectId of the object to modify
+    /// * `object_class` - The ObjectClass to add to the object
+    pub fn add_class_to_object(&mut self, id: ObjectId, object_class: ObjectClass) {
+        if let Some(series) = self.get_selected_image_series_mut() {
+            if let Some(object) = series.objects.iter_mut().find(|object| object.id == id) {
+                object.add_object_class(object_class);
+            }
+        }
+    }
+
+    /// Removes all classes from the object and adds this single one
+    ///
+    /// This method finds the object with the given ID in the currently selected image series
+    /// and adds the specified object class to it.
+    ///
+    /// # Arguments
+    /// * `id` - The ObjectId of the object to modify
+    /// * `object_class` - The ObjectClass to add to the object
+    pub fn replace_classes_of_object(&mut self, id: ObjectId, object_class: ObjectClass) {
+        if let Some(series) = self.get_selected_image_series_mut() {
+            if let Some(object) = series.objects.iter_mut().find(|object| object.id == id) {
+                object.remove_all_object_classes();
+                object.add_object_class(object_class);
+            }
+        }
+    }
+
+    /// Removes an object class from a specific object by its ID.
+    ///
+    /// This method finds the object with the given ID in the currently selected image series
+    /// and removes the specified object class from it.
+    ///
+    /// # Arguments
+    /// * `id` - The ObjectId of the object to modify
+    /// * `object_class` - The ObjectClass to remove from the object
+    pub fn remove_class_from_object(&mut self, id: ObjectId, object_class: &ObjectClass) {
+        if let Some(series) = self.get_selected_image_series_mut() {
+            if let Some(object) = series.objects.iter_mut().find(|object| object.id == id) {
+                object.remove_object_class(object_class);
+            }
+        }
+    }
+
+    pub fn add_object(&mut self, object: &ObjectMetricSettings) {
+        if let Some(series) = self.get_selected_image_series_mut() {
+            series.objects.push(object.clone());
+        }
+    }
+
+    pub fn get_objects(&self) -> Option<&[ObjectMetricSettings]> {
+        self.get_selected_image_series()
+            .map(|series| series.objects.as_slice())
+    }
+
+    pub fn delete_object(&mut self, id: ObjectId) {
+        if let Some(series) = self.get_selected_image_series_mut() {
+            series.objects.retain(|object| object.id != id);
+        }
+    }
+
+    pub fn get_reference_object(&self) -> Option<Vec<ObjectMetricSettings>> {
+        let mut objects = Vec::new();
+
+        // Helper to generate a circular object
+        let create_circle_object = |id: u128, x_start: usize, y_start: usize| {
+            let width = 5;
+            let height = 5;
+            let radius = 2.0f32;
+            let center = 2i32;
+
+            // BitVec stores bits efficiently. Lsb0 maps index 0 to the first bit.
+            let mut mask_data = BitVec::<u64, Lsb0>::repeat(false, width * height);
+
+            for y in 0..height {
+                for x in 0..width {
+                    if (x as i32 - center).pow(2) + (y as i32 - center).pow(2)
+                        <= radius.powi(2) as i32
+                    {
+                        // Direct indexing! No manual bit arithmetic needed.
+                        mask_data.set(y * width + x, true);
+                    }
+                }
+            }
+            ObjectMetricSettings {
+                id: ObjectId(id),
+                bbox: [
+                    x_start as u32,
+                    y_start as u32,
+                    (x_start + width) as u32,
+                    (y_start + height) as u32,
+                ],
+                mask_data: mask_data,
+                segmentation_class: SegmentationClass(1),
+                object_class: object_class_set_from_u32!(1),
+                area: 31415,
+                ..Default::default()
+            }
+        };
+
+        let num_elements = 30000;
+        let elements_per_row = 150;
+        let spacing = 2048 / elements_per_row;
+        for i in 0..num_elements {
+            // Calculate which row and which column the current index belongs to
+            let row = i / elements_per_row;
+            let col = i % elements_per_row;
+
+            // Distribute evenly by multiplying index by the calculated spacing
+            let x = ((col * spacing) + (spacing / 2)) as usize;
+            let y = ((row * spacing) + (spacing / 2)) as usize;
+
+            objects.push(create_circle_object(i + 1, x, y));
+        }
+        Some(objects)
+    }
+
+    pub fn count_objects_for_class(&self, class_id: &ObjectClass) -> usize {
+        let manual = self
+            .get_objects()
+            .unwrap_or_default()
+            .iter()
+            .filter(|r| r.object_class.contains(class_id))
+            .count();
+        let preview = self
+            .tmp_settings
+            .preview_objects
+            .iter()
+            .filter(|r| r.object_class.contains(class_id))
+            .count();
+        manual + preview
     }
 }
 

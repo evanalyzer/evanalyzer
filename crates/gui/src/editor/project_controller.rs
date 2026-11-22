@@ -30,7 +30,6 @@ use crate::editor::start_page_controller as start_page;
 use crate::editor::template_controller::TemplateController;
 use evanalyzer_app::backends::Backend;
 use evanalyzer_app::exporter::cite_project;
-use evanalyzer_app::project::ProjectExt;
 use evanalyzer_app::project::SaveProjectActions;
 use evanalyzer_app::templates::load_project_template_from_file;
 use evanalyzer_app::templates::load_project_templates;

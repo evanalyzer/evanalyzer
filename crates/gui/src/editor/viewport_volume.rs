@@ -27,7 +27,6 @@ use crate::editor::viewport_worker::{
     ViewportWorker, channel_ctx, channel_display_color, prepare_image_channels_for_slint,
 };
 use evanalyzer_app::images::{ImageInfo, ImageSource, TileRequest};
-use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::core_types::{ImageTile, InternalErrors, ZProjection};
 use log::{debug, warn};
 use rayon::prelude::*;
@@ -549,6 +548,7 @@ mod tests {
     use evanalyzer_app::images::{
         ImageChannel, ImageContainer, ImageMeta, ManagedImage, PyramidInfo,
     };
+    use evanalyzer_app::project::GlobalImageSettingsExt;
     use evanalyzer_cfg::core_types::ImageDimensionality;
     use kornia_image::{Image, ImageSize};
     use std::collections::BTreeMap;
@@ -1294,6 +1294,8 @@ mod tests {
         let aniso = w.kept.as_ref().unwrap().aniso;
         w.app_state
             .get_project_write()
+            .images
+            .settings
             .set_global_pixel_size_settings(0.5, 0.5, Some(4.0));
         w.render();
         let v = w.kept.as_ref().unwrap();
@@ -1318,6 +1320,8 @@ mod tests {
         let mut w = window_on(project_with_fixture_image(), false);
         w.app_state
             .get_project_write()
+            .images
+            .settings
             .set_global_pixel_size_settings(0.5, 0.5, None);
         w.render();
         assert!(!w.view().get_volume_z_known());

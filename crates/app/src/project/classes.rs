@@ -7,6 +7,11 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::project::ProjectWithRuntime;
+use crate::project::image_entry::ImageEntryExt;
+use crate::project::images::ImageListExt;
+use crate::project::utils::{channel_colors, class_name_of_channel, rgb_to_u32};
+
 use evanalyzer_cfg::{
     core_types::{InternalErrors, ObjectClass},
     settings::classification_settings::{Class, ClassificationSettings},
@@ -63,6 +68,12 @@ pub trait ClassificationExt {
     /// # Returns
     /// The copy's id; `None` for the background or an unknown id.
     fn duplicate_class(&mut self, class_id: ObjectClass) -> Option<ObjectClass>;
+
+    /// The class with the global id `id`.
+    fn get_class_from_id(&self, id: &ObjectClass) -> Option<&Class>;
+
+    /// Removes every class.
+    fn delete_all_classes(&mut self);
 }
 
 impl ClassificationExt for ClassificationSettings {
@@ -135,6 +146,130 @@ impl ClassificationExt for ClassificationSettings {
             return;
         }
         self.classes_mut().retain(|c| c.global() != class_id);
+    }
+
+    fn get_class_from_id(&self, id: &ObjectClass) -> Option<&Class> {
+        self.classes().iter().find(|c| c.global() == *id)
+    }
+
+    fn delete_all_classes(&mut self) {
+        *self = ClassificationSettings::new();
+    }
+}
+
+impl ProjectWithRuntime {
+    pub fn auto_add_classes_based_on_image_meta(&mut self) {
+        // Collect channel data first to avoid holding Deref borrows while mutating.
+        let classes: Vec<Class> = {
+            // The selected image, or the first one of the project if none is selected.
+            let image = self
+                .get_current_image_settings()
+                .or_else(|| self.settings.images.list.values().next());
+            image
+                .and_then(|image| {
+                    image
+                        .series
+                        .get(&image.active_series(&self.images.settings))
+                })
+                .map(|series_data| {
+                    // A global wavelength set by the user wins over the image's own,
+                    // so the class gets the colour the viewer shows for the channel -
+                    // and channels without one get distinct default colours.
+                    let wave_lengths: Vec<(i32, f32)> = series_data
+                        .channels
+                        .iter()
+                        .map(|(channel_id, ch)| {
+                            let wave_length = self
+                                .images
+                                .settings
+                                .channels
+                                .get(channel_id)
+                                .and_then(|channel| channel.emission_wave_length)
+                                .or(ch.emission_wave_length)
+                                .unwrap_or(0.0);
+                            (*channel_id, wave_length)
+                        })
+                        .collect();
+                    let colors = channel_colors(&wave_lengths);
+                    series_data
+                        .channels
+                        .iter()
+                        .map(|(channel_id, ch)| Class {
+                            id: 0, // `add_class` gives it the next free one
+                            color: rgb_to_u32(colors[channel_id]),
+                            name: class_name_of_channel(&ch.name, *channel_id),
+                            notes: "".into(),
+                            results: Default::default(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        for class in classes {
+            self.classification.add_class(class);
+        }
+    }
+
+    pub fn set_selected_object_class(&mut self, object_class: ObjectClass) {
+        self.tmp_settings.selected_object_class = object_class;
+    }
+
+    pub fn get_selected_object_class(&self) -> ObjectClass {
+        self.tmp_settings.selected_object_class.clone()
+    }
+
+    /// Gives class `from` the id `to` with every reference to it (see
+    /// [`change_class_id`](crate::project::class_ids::change_class_id)),
+    /// and the editor's state too: the selected class, hidden classes.
+    pub fn change_class_id(
+        &mut self,
+        from: u32,
+        to: u32,
+    ) -> Result<crate::project::class_ids::ClassIdChange, InternalErrors> {
+        let change = crate::project::class_ids::change_class_id(&mut self.settings, from, to)?;
+        let (old, new) = (ObjectClass::Global(from), ObjectClass::Global(to));
+        let tmp = &mut self.tmp_settings;
+        if tmp.selected_object_class == old {
+            tmp.selected_object_class = new;
+        }
+        if tmp.hidden_classes.remove(&old) {
+            tmp.hidden_classes.insert(new);
+        }
+        if let Some(focus) = &mut tmp.pipeline_focus
+            && focus.visible_classes.remove(&old)
+        {
+            focus.visible_classes.insert(new);
+        }
+        Ok(change)
+    }
+
+    pub fn toggle_class_visibility(&mut self, class_id: ObjectClass) {
+        if let Some(focus) = &mut self.tmp_settings.pipeline_focus {
+            if !focus.visible_classes.remove(&class_id) {
+                focus.visible_classes.insert(class_id);
+            }
+            return;
+        }
+        if self.tmp_settings.hidden_classes.contains(&class_id) {
+            self.tmp_settings.hidden_classes.remove(&class_id);
+        } else {
+            self.tmp_settings.hidden_classes.insert(class_id);
+        }
+    }
+
+    pub fn is_class_visible(&self, class_id: &ObjectClass) -> bool {
+        match &self.tmp_settings.pipeline_focus {
+            Some(focus) => focus.visible_classes.contains(class_id),
+            None => !self.tmp_settings.hidden_classes.contains(class_id),
+        }
+    }
+
+    pub fn toggle_hide_unclassified_objects(&mut self) {
+        self.tmp_settings.hide_unclassified_objects = !self.tmp_settings.hide_unclassified_objects;
+    }
+
+    pub fn hide_unclassified_objects(&self) -> bool {
+        self.tmp_settings.hide_unclassified_objects
     }
 }
 

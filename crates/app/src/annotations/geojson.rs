@@ -33,7 +33,6 @@ use crate::project::annotations::same_shape;
 use crate::project::classes::ClassificationExt;
 use crate::project::images::ImageListExt;
 use crate::project::owner::ProjectWithRuntime;
-use crate::project::project_ext::ProjectExt;
 use bitvec::prelude::{BitVec, Lsb0};
 use evanalyzer_cfg::core_types::{ImagePlane, ObjectClass, ZProjection};
 use evanalyzer_cfg::settings::classification_settings::Class;
@@ -305,7 +304,7 @@ fn feature(
     let mut classes: Vec<&Class> = object
         .object_class
         .iter()
-        .filter_map(|c| project.get_class_from_id(c))
+        .filter_map(|c| project.classification.get_class_from_id(c))
         .collect();
     classes.sort_by_key(|c| c.id);
     let mut properties = json!({

@@ -14,7 +14,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::{CardFact, CardIntensityRow, CardStepGroup, ObjectCardSlint};
-use evanalyzer_app::project::{ProjectExt, ProjectWithRuntime};
+use evanalyzer_app::project::ProjectWithRuntime;
 use evanalyzer_cfg::core_types::{
     MeasurementUnit, MeasurementValues, PipelineMeasurements, max_gray_value,
 };

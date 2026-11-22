@@ -13,7 +13,7 @@
 //! - "Show all" in the banner leaves the focus for this session.
 //!
 //! The focus itself is a runtime overlay in the project (see
-//! `ProjectExt::focus_pipeline`): the user's own visibility settings are never
+//! `ProjectWithRuntime::focus_pipeline`): the user's own visibility settings are never
 //! changed by it, so leaving the focus brings them back exactly.
 //!
 //! **Author:** Joachim Danmayr
@@ -28,7 +28,6 @@ use crate::editor::classification_controller::ClassificationController;
 use crate::editor::image_meta_controller::ImageMetaController;
 use crate::editor::viewport_controller::ViewportController;
 use crate::{AppWindow, PipelineFocusState, PipelinesPanelState};
-use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::core_types::PipelineId;
 use log::warn;
 use slint::ComponentHandle;

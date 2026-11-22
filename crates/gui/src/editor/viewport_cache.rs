@@ -20,7 +20,6 @@ use evanalyzer_app::images::ManagedImage;
 use evanalyzer_app::images::Point2d;
 use evanalyzer_app::images::PyramidInfo;
 use evanalyzer_app::images::TileRequest;
-use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::core_types::ImageDimensionality;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::core_types::{ImageTile, ZProjection};
@@ -2618,7 +2617,6 @@ mod tests {
     /// - for every plane.
     #[test]
     fn an_image_without_a_pyramid_gets_the_overview_it_got_when_read_alone() {
-        use evanalyzer_app::project::ProjectExt;
         let app_state = crate::editor::test_support::test_ui_state_with_project(
             crate::editor::test_support::project_with_fixture_image(),
         );

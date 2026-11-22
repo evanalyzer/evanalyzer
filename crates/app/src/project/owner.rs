@@ -13,7 +13,6 @@ use crate::backend::Backend;
 use crate::backend::LocalBackend;
 use crate::images::ImageMeta;
 use crate::images::ImageSource;
-use crate::project::project_ext::ProjectExt;
 use evanalyzer_cfg::{
     core_types::{InternalErrors, ObjectClass, ObjectId, PipelineId},
     settings::{object_settings::ObjectMetricSettings, project_settings::ProjectSettings},
@@ -89,7 +88,7 @@ pub struct ProjectTmpSettings {
     pub current_image: Option<PathBuf>,
     /// The z-planes and frames of that image (its selected series), once
     /// its metadata was read - the shown plane never lies beyond them (see
-    /// `ProjectExt::get_shown_plane`).
+    /// `ProjectWithRuntime::get_shown_plane`).
     pub current_image_planes: Option<(i32, i32)>,
     pub selected_object_class: ObjectClass,
 
@@ -220,7 +219,7 @@ impl ProjectOwner {
 
     /// Loads a project from disk replacing the current project.
     pub fn load_project(&self, path: &PathBuf) -> Result<(), InternalErrors> {
-        let project = crate::project::project_ext::load_project(self.backend.get().files(), path)?;
+        let project = crate::project::load_project(self.backend.get().files(), path)?;
         *lock_project_write(&self.project) = project;
         *self.current_path.lock().unwrap() = Some(path.clone());
         Ok(())
@@ -290,7 +289,7 @@ impl AppHandle {
 
     /// Loads a project from disk replacing the current project.
     pub fn load_project(&self, path: &PathBuf) -> Result<(), InternalErrors> {
-        let project = crate::project::project_ext::load_project(self.backend().files(), path)?;
+        let project = crate::project::load_project(self.backend().files(), path)?;
         *lock_project_write(&self.project) = project;
         Ok(())
     }
@@ -440,7 +439,7 @@ mod tests {
     use std::path::Path;
 
     /// Adds a single image (one series, no channels) to `owner`'s project and
-    /// selects it, mirroring what `ProjectExt::add_image_to_list` +
+    /// selects it, mirroring what `ProjectWithRuntime::add_image_to_list` +
     /// `set_current_image_path` would do for a real scanned image - built by
     /// hand here since that needs a real `ImageMeta` from actually reading a
     /// file off disk.
