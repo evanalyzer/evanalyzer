@@ -610,6 +610,8 @@ pub struct ResultsStateController {
     column_sections_open: Mutex<HashMap<String, bool>>,
     /// The sidebar's column search.
     column_filter: Mutex<String>,
+    /// The Plate's value picker's search (lower case not yet).
+    matrix_column_filter: Mutex<String>,
     /// The results' profile measurements (Charts › Profile, its export).
     profile_columns: Mutex<Vec<MeasurementColumn>>,
     /// Charts › Profile's selected object's circles on the split view.
@@ -739,6 +741,7 @@ impl ResultsStateController {
             coloc_settings: Mutex::new(coloc::ColocSettings::default()),
             column_sections_open: Mutex::new(HashMap::new()),
             column_filter: Mutex::new(String::new()),
+            matrix_column_filter: Mutex::new(String::new()),
             profile_columns: Mutex::new(Vec::new()),
             profile_rings: Mutex::new(None),
             profile_pos: Mutex::new((0, 0)),
@@ -5051,6 +5054,7 @@ impl ResultsStateController {
     /// `refresh_active_matrix_view` for a known `level` - callable off the
     /// UI thread.
     fn refresh_matrix_view_at(&self, level: MatrixLevel) {
+        self.push_matrix_picker();
         if level == MatrixLevel::Object {
             if let Some(image_rel_path) = self.current_image.lock().expect("Poisned").clone() {
                 self.update_image_heatmap_view(&image_rel_path);

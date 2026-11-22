@@ -1,0 +1,643 @@
+// Copyright 2026 Joachim Danmayr.
+// Licensed under the PolyForm Noncommercial License 1.0.0.
+
+// results/results_panel.slint — the parts of the views' left panel (design
+// canvas "Results rework", ColumnPanel E and PanelViews): the column picker
+// every view shares - ticks where a view shows many columns (List), one
+// choice where it draws one value (Plate, Charts) - with its search, the
+// starting sets, the groups, intensity as a channels × values grid and the
+// coloc builder; a list to pick one item from.
+
+import { Ink, InkIcons, InkHint, InkCheckList, InkOptionCard, InkSearchField, InkSwitch, MultiSelectItem } from "../ink/ink.slint";
+import { ColumnSection, ColumnPreset, ColocColumnItem, ColocKind, IntensityCell, ResultsState } from "../api/results.slint";
+
+/// A head over a part of the panel: a foldable caption, All / None - the
+/// look of `InkCheckList`'s.
+export component PartHead inherits HorizontalLayout {
+    in property <string> title;
+    in property <bool> open;
+    in property <bool> foldable: true;
+    in property <bool> all-none: true;
+    callback toggled;
+    callback select-all;
+    callback select-none;
+    spacing: 8px;
+    if root.foldable: Rectangle {
+        width: 12px;
+        Image {
+            source: root.open ? InkIcons.caret-down : InkIcons.caret-right;
+            width: 10px;
+            height: 10px;
+            colorize: Ink.text-mute;
+        }
+    }
+    Text {
+        horizontal-stretch: 1;
+        min-width: 0px;
+        overflow: elide;
+        text: root.title;
+        font-size: Ink.fs-caption;
+        font-weight: 600;
+        letter-spacing: 0.6px;
+        color: head-ta.has-hover && root.foldable ? Ink.text : Ink.text-mute;
+        vertical-alignment: center;
+        accessible-role: button;
+        accessible-enabled: root.foldable;
+        accessible-label: root.title;
+        accessible-action-default => {
+            root.toggled();
+        }
+        head-ta := TouchArea {
+            enabled: root.foldable;
+            mouse-cursor: root.foldable ? pointer : default;
+            clicked => {
+                root.toggled();
+            }
+        }
+    }
+    if root.all-none: Text {
+        text: "All";
+        font-size: Ink.fs-secondary;
+        color: all-ta.has-hover ? Ink.text : Ink.focus;
+        all-ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.select-all();
+            }
+        }
+    }
+    if root.all-none: Text {
+        text: "None";
+        font-size: Ink.fs-secondary;
+        color: none-ta.has-hover ? Ink.text : Ink.focus;
+        none-ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.select-none();
+            }
+        }
+    }
+}
+
+/// The mark before a row: a tick box, or a radio dot (`single`).
+component Mark inherits Rectangle {
+    in property <bool> on;
+    in property <bool> single;
+    width: 13px;
+    height: 13px;
+    border-radius: root.single ? 6.5px : Ink.radius-xs;
+    border-width: root.on && !root.single ? 0px : root.on ? 4px : 1px;
+    border-color: root.on ? Ink.primary : Ink.text-faint;
+    background: root.on && !root.single ? Ink.primary : Ink.field;
+    if root.on && !root.single: Image {
+        source: InkIcons.check;
+        width: 9px;
+        colorize: Ink.on-primary;
+    }
+}
+
+/// A row to tick or pick: mark, name, something after it (`note`).
+component PickRow inherits Rectangle {
+    in property <string> text;
+    in property <string> note;
+    in property <bool> on;
+    in property <bool> single;
+    in property <color> swatch: transparent;
+    callback clicked;
+    height: 24px;
+    background: ta.has-hover ? Ink.hover : transparent;
+    border-radius: Ink.radius-xs;
+    accessible-role: checkbox;
+    accessible-label: root.text;
+    accessible-checked: root.on;
+    accessible-action-default => {
+        root.clicked();
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+    HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 6px;
+        spacing: 7px;
+        VerticalLayout {
+            alignment: center;
+            Mark {
+                on: root.on;
+                single: root.single;
+            }
+        }
+        if root.swatch != transparent: VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 9px;
+                height: 9px;
+                border-radius: 2px;
+                background: root.swatch;
+            }
+        }
+        Text {
+            horizontal-stretch: 1;
+            min-width: 0px;
+            text: root.text;
+            font-size: Ink.fs-secondary;
+            color: Ink.text;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        if root.note != "": Text {
+            text: root.note;
+            font-size: Ink.fs-secondary;
+            font-family: Ink.font-mono;
+            letter-spacing: 1px;
+            color: Ink.text-dim;
+            vertical-alignment: center;
+        }
+    }
+}
+
+/// One item of `items` to pick (a class, an aggregate): radio rows - the
+/// one named `chosen` (its value) marked.
+export component ChoiceList inherits VerticalLayout {
+    in property <string> title;
+    in property <[MultiSelectItem]> items;
+    in property <string> chosen;
+    callback picked(string, string);
+    spacing: 4px;
+    if root.title != "": PartHead {
+        title: root.title;
+        foldable: false;
+        all-none: false;
+    }
+    Rectangle {
+        border-radius: Ink.radius-sm;
+        border-width: 1px;
+        border-color: Ink.border-soft;
+        VerticalLayout {
+            padding: 2px;
+            for item in root.items: PickRow {
+                text: item.value;
+                on: item.value == root.chosen;
+                single: true;
+                swatch: item.color.alpha > 0 ? item.color : transparent;
+                clicked => {
+                    root.picked(item.key, item.value);
+                }
+            }
+        }
+    }
+}
+
+/// A group of the picker: its columns to tick or pick, foldable.
+component SectionList inherits VerticalLayout {
+    in property <ColumnSection> section;
+    in property <bool> single;
+    callback toggled(bool);
+    callback picked(string, bool);
+    callback select(bool);
+    spacing: 4px;
+    PartHead {
+        title: root.section.title;
+        open: root.section.open;
+        all-none: !root.single;
+        toggled => {
+            root.toggled(!root.section.open);
+        }
+        select-all => {
+            root.select(true);
+        }
+        select-none => {
+            root.select(false);
+        }
+    }
+    if root.section.open: Rectangle {
+        border-radius: Ink.radius-sm;
+        border-width: 1px;
+        border-color: Ink.border-soft;
+        VerticalLayout {
+            padding: 2px;
+            for item in root.section.items: PickRow {
+                text: item.value;
+                on: item.selected;
+                single: root.single;
+                clicked => {
+                    root.picked(item.key, root.single || !item.selected);
+                }
+            }
+        }
+    }
+}
+
+/// A starting set of columns: its name, what it holds; ringed while
+/// exactly its columns are shown.
+component PresetCard inherits Rectangle {
+    in property <ColumnPreset> preset;
+    callback picked;
+    horizontal-stretch: 1;
+    min-width: 0px;
+    // The row's cards share the tallest one's height.
+    min-height: card-text.preferred-height;
+    border-radius: Ink.radius-md;
+    border-width: root.preset.active ? 1.5px : 1px;
+    border-color: root.preset.active ? Ink.focus : ta.has-hover ? Ink.text-faint : Ink.border;
+    background: root.preset.active ? Ink.selection-row : ta.has-hover ? Ink.hover : Ink.panel;
+    accessible-role: button;
+    accessible-label: root.preset.title;
+    accessible-description: root.preset.description;
+    accessible-action-default => {
+        root.picked();
+    }
+    card-text := VerticalLayout {
+        padding: 8px;
+        spacing: 2px;
+        alignment: start;
+        Text {
+            text: root.preset.title;
+            font-size: Ink.fs-secondary;
+            font-weight: 600;
+            color: Ink.text;
+            overflow: elide;
+        }
+        Text {
+            text: root.preset.description;
+            font-size: Ink.fs-caption;
+            color: Ink.text-dim;
+            wrap: word-wrap;
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.picked();
+        }
+    }
+}
+
+/// Intensity as a grid: a row per channel, a column per value - a cell
+/// ticks (or picks, `single`) one column; with ticks a channel or a value
+/// ticks its whole row or column.
+component IntensityGrid inherits VerticalLayout {
+    in property <bool> single;
+    in property <string> title;
+    in property <bool> open;
+    in property <[string]> channels;
+    in property <[string]> stats;
+    in property <[IntensityCell]> cells;
+    callback toggled(bool);
+    callback select(bool);
+    callback picked(string, bool);
+    callback line(bool, int);
+    property <int> n: root.stats.length;
+    property <length> label-w: 64px;
+    property <length> cell-w: 30px;
+    property <length> cell-h: 24px;
+    spacing: 4px;
+
+    PartHead {
+        title: root.title;
+        open: root.open;
+        all-none: !root.single;
+        toggled => {
+            root.toggled(!root.open);
+        }
+        select-all => {
+            root.select(true);
+        }
+        select-none => {
+            root.select(false);
+        }
+    }
+
+    if root.open: VerticalLayout {
+        spacing: 3px;
+        HorizontalLayout {
+            spacing: 3px;
+            alignment: start;
+            Rectangle {
+                width: root.label-w;
+            }
+            for stat[j] in root.stats: Rectangle {
+                width: root.cell-w;
+                height: 18px;
+                Text {
+                    text: stat;
+                    font-size: Ink.fs-caption;
+                    font-weight: 600;
+                    color: stat-ta.has-hover && !root.single ? Ink.text : Ink.text-mute;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                stat-ta := TouchArea {
+                    enabled: !root.single;
+                    mouse-cursor: root.single ? default : pointer;
+                    clicked => {
+                        root.line(false, j);
+                    }
+                }
+            }
+        }
+        for channel[i] in root.channels: HorizontalLayout {
+            spacing: 3px;
+            alignment: start;
+            Rectangle {
+                width: root.label-w;
+                height: root.cell-h;
+                Text {
+                    width: 100%;
+                    text: channel;
+                    font-size: Ink.fs-secondary;
+                    color: row-ta.has-hover && !root.single ? Ink.text : Ink.text-dim;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                row-ta := TouchArea {
+                    enabled: !root.single;
+                    mouse-cursor: root.single ? default : pointer;
+                    clicked => {
+                        root.line(true, i);
+                    }
+                }
+            }
+            for stat[j] in root.stats: cell-box := Rectangle {
+                property <IntensityCell> cell: root.cells[i * root.n + j];
+                width: root.cell-w;
+                height: root.cell-h;
+                border-radius: root.single ? root.cell-h / 2 : Ink.radius-xs;
+                border-width: self.cell.selected ? 0px : 1px;
+                border-color: cell-ta.has-hover ? Ink.text-faint : Ink.border;
+                background: self.cell.key == "" ? transparent : self.cell.selected ? Ink.primary : cell-ta.has-hover ? Ink.hover : Ink.field;
+                accessible-role: checkbox;
+                accessible-label: stat + " " + channel;
+                accessible-checked: self.cell.selected;
+                if cell-box.cell.selected: Image {
+                    source: InkIcons.check;
+                    width: 10px;
+                    colorize: Ink.on-primary;
+                }
+                cell-ta := TouchArea {
+                    enabled: cell-box.cell.key != "";
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.picked(cell-box.cell.key, root.single || !cell-box.cell.selected);
+                    }
+                }
+            }
+        }
+        InkHint {
+            text: root.single ? "A click on a cell picks that value." : "A click on a channel or a value ticks its whole row or column.";
+        }
+    }
+}
+
+/// A numbered step of the coloc builder ("1  Overlap with").
+component StepLabel inherits HorizontalLayout {
+    in property <string> number;
+    in property <string> text;
+    spacing: 6px;
+    Text {
+        text: root.number;
+        font-size: Ink.fs-secondary;
+        font-weight: 700;
+        color: Ink.text;
+    }
+    Text {
+        horizontal-stretch: 1;
+        text: root.text;
+        font-size: Ink.fs-secondary;
+        color: Ink.text-dim;
+        wrap: word-wrap;
+    }
+}
+
+/// The coloc columns in three steps (design canvas "Results rework",
+/// ColumnPanel): the partner classes, what a cell counts, which columns -
+/// each kind with its columns and the marks of what they need. The first
+/// two are the results' coloc settings, the same in every view.
+component ColocBuilder inherits VerticalLayout {
+    in property <bool> single;
+    in property <bool> grouped;
+    in property <[ColocKind]> kinds;
+    callback picked(string, bool);
+    callback select(string, bool);
+    spacing: 10px;
+
+    PartHead {
+        title: root.single ? "COLOC" : ResultsState.list-coloc-title;
+        open: ResultsState.list-coloc-open;
+        all-none: false;
+        toggled => {
+            ResultsState.list-coloc-open = !ResultsState.list-coloc-open;
+            ResultsState.list-coloc-toggled(ResultsState.list-coloc-open);
+        }
+    }
+
+    if ResultsState.list-coloc-open: VerticalLayout {
+        padding-left: 20px;
+        spacing: 12px;
+
+        VerticalLayout {
+            spacing: 4px;
+            StepLabel {
+                number: "1";
+                text: "Overlap with";
+            }
+            InkCheckList {
+                title: "PARTNER CLASSES · " + ResultsState.list-coloc-partner-summary;
+                items <=> ResultsState.list-coloc-partner-items;
+                list-height: self.items.length * 24px + 4px;
+                item-selected(key, value, selected) => {
+                    ResultsState.list-coloc-partner-toggled(key);
+                }
+                select-all => {
+                    ResultsState.list-coloc-partners-all(true);
+                }
+                select-none => {
+                    ResultsState.list-coloc-partners-all(false);
+                }
+            }
+        }
+
+        VerticalLayout {
+            spacing: 6px;
+            StepLabel {
+                number: "2";
+                text: "Each cell counts";
+            }
+            HorizontalLayout {
+                spacing: 6px;
+                InkOptionCard {
+                    horizontal-stretch: 1;
+                    title: root.grouped ? "Objects that overlap" : "Yes / no";
+                    description: root.grouped ? "How many objects overlap" : "1 if the object overlaps, else 0";
+                    checked: ResultsState.list-coloc-count == 0;
+                    picked => {
+                        ResultsState.list-coloc-count = 0;
+                        ResultsState.list-coloc-count-picked(0);
+                    }
+                }
+                InkOptionCard {
+                    horizontal-stretch: 1;
+                    title: root.grouped ? "Partner objects" : "How many partners";
+                    description: root.grouped ? "How many partners lie on them" : "How many partners the object overlaps";
+                    checked: ResultsState.list-coloc-count == 1;
+                    picked => {
+                        ResultsState.list-coloc-count = 1;
+                        ResultsState.list-coloc-count-picked(1);
+                    }
+                }
+            }
+        }
+
+        VerticalLayout {
+            spacing: 6px;
+            StepLabel {
+                number: "3";
+                text: root.single ? "The column" : "Columns for";
+            }
+            if root.kinds.length == 0: InkHint {
+                text: "Pick a partner class above.";
+            }
+            for kind in root.kinds: VerticalLayout {
+                spacing: 2px;
+                PartHead {
+                    title: root.single ? kind.title : kind.title + " · " + kind.count;
+                    foldable: false;
+                    all-none: !root.single;
+                    select-all => {
+                        root.select(kind.group, true);
+                    }
+                    select-none => {
+                        root.select(kind.group, false);
+                    }
+                }
+                InkHint {
+                    text: kind.description;
+                }
+                for item in kind.items: PickRow {
+                    text: item.name;
+                    note: item.glyph;
+                    on: item.selected;
+                    single: root.single;
+                    clicked => {
+                        root.picked(item.key, root.single || !item.selected);
+                    }
+                }
+            }
+            InkSwitch {
+                text: "Only combinations some object has";
+                checked: ResultsState.list-coloc-only-occurring;
+                toggled(on) => {
+                    ResultsState.list-coloc-only-occurring = on;
+                    ResultsState.list-coloc-only-occurring-changed(on);
+                }
+            }
+            InkHint {
+                text: "● overlaps · ○ must not · · either - per class in this order: " + ResultsState.list-coloc-partner-order + ". \"Exactly\" columns add up to the count. One row per overlapping pair: List, a row per Coloc pair.";
+            }
+        }
+    }
+}
+
+/// The column picker: search, starting sets, the groups (intensity as a
+/// grid), the coloc builder. `single`: one column is the value (Plate,
+/// Charts) - radio marks, no All / None, no starting sets.
+export component ColumnPicker inherits VerticalLayout {
+    in property <bool> single;
+    in property <bool> grouped;
+    in property <string> filter;
+    in property <string> placeholder: "Find a column - area, mean, coloc…";
+    in property <[ColumnPreset]> presets;
+    in property <[ColumnSection]> sections;
+    in property <string> intensity-title;
+    in property <bool> intensity-open;
+    in property <[string]> intensity-channels;
+    in property <[string]> intensity-stats;
+    in property <[IntensityCell]> intensity-cells;
+    in property <bool> has-coloc;
+    in property <[ColocKind]> coloc-kinds;
+    callback filter-edited(string);
+    // A column on (true) or off - `single`: always on, the others off.
+    callback picked(string, bool);
+    callback section-toggled(string, bool);
+    callback section-select(string, bool);
+    // A row (channel, true) or column (value) of the intensity grid.
+    callback intensity-line(bool, int);
+    callback preset(string);
+    spacing: 12px;
+
+    InkSearchField {
+        text: root.filter;
+        placeholder: root.placeholder;
+        edited(text) => {
+            root.filter-edited(text);
+        }
+    }
+    if root.filter == "" && root.presets.length > 0: VerticalLayout {
+        spacing: 6px;
+        Text {
+            text: "START FROM";
+            font-size: Ink.fs-caption;
+            font-weight: 600;
+            letter-spacing: 0.6px;
+            color: Ink.text-mute;
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            for preset in root.presets: PresetCard {
+                preset: preset;
+                picked => {
+                    root.preset(preset.key);
+                }
+            }
+        }
+    }
+    for section in root.sections: VerticalLayout {
+        if section.group == "intensity" && root.filter == "": IntensityGrid {
+            single: root.single;
+            title: root.intensity-title;
+            open: root.intensity-open;
+            channels: root.intensity-channels;
+            stats: root.intensity-stats;
+            cells: root.intensity-cells;
+            toggled(open) => {
+                root.section-toggled("intensity", open);
+            }
+            select(on) => {
+                root.section-select("intensity", on);
+            }
+            picked(key, on) => {
+                root.picked(key, on);
+            }
+            line(by-channel, index) => {
+                root.intensity-line(by-channel, index);
+            }
+        }
+        if section.group != "intensity" || root.filter != "": SectionList {
+            section: section;
+            single: root.single;
+            toggled(open) => {
+                root.section-toggled(section.group, open);
+            }
+            select(on) => {
+                root.section-select(section.group, on);
+            }
+            picked(key, on) => {
+                root.picked(key, on);
+            }
+        }
+    }
+    if root.has-coloc: ColocBuilder {
+        single: root.single;
+        grouped: root.grouped;
+        kinds: root.coloc-kinds;
+        picked(key, on) => {
+            root.picked(key, on);
+        }
+        select(group, on) => {
+            root.section-select(group, on);
+        }
+    }
+}

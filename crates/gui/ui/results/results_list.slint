@@ -12,438 +12,7 @@ import { Ink } from "../ink/palette.slint";
 
 import { InkCheckList, InkMultiSelect, InkSearchField, InkSegmented, InkSwitch, InkTipSide, InkTipZone, InkMenuItem } from "../ink/ink.slint";
 import { ViewBar, BarChip, BarLabel, BarSpacer, BarCount, BarMore, ViewPanel } from "results_view_bar.slint";
-
-/// A section of the column picker: its columns' checklist, foldable.
-component ColumnSectionList inherits InkCheckList {
-    in property <ColumnSection> section;
-    title: root.section.title;
-    items: root.section.items;
-    open: root.section.open;
-    collapsible: true;
-    // Whole: the panel scrolls, not each list.
-    list-height: self.items.length * 24px + 4px;
-    toggled(open) => {
-        ResultsState.list-columns-section-toggled(root.section.group, open);
-    }
-    item-selected(key, value, selected) => {
-        ResultsState.list-columns-item-selected(key, selected);
-    }
-    select-all => {
-        ResultsState.list-columns-section-select(root.section.group, true);
-    }
-    select-none => {
-        ResultsState.list-columns-section-select(root.section.group, false);
-    }
-}
-
-/// A head over a part of the panel: foldable caption, All / None - the
-/// look of `InkCheckList`'s.
-component PartHead inherits HorizontalLayout {
-    in property <string> title;
-    in property <bool> open;
-    in property <bool> all-none: true;
-    callback toggled;
-    callback select-all;
-    callback select-none;
-    spacing: 8px;
-    Rectangle {
-        width: 12px;
-        Image {
-            source: root.open ? InkIcons.caret-down : InkIcons.caret-right;
-            width: 10px;
-            height: 10px;
-            colorize: Ink.text-mute;
-        }
-    }
-    Text {
-        horizontal-stretch: 1;
-        min-width: 0px;
-        overflow: elide;
-        text: root.title;
-        font-size: Ink.fs-caption;
-        font-weight: 600;
-        letter-spacing: 0.6px;
-        color: head-ta.has-hover ? Ink.text : Ink.text-mute;
-        vertical-alignment: center;
-        accessible-role: button;
-        accessible-label: root.title;
-        accessible-expandable: true;
-        accessible-expanded: root.open;
-        accessible-action-default => {
-            root.toggled();
-        }
-        head-ta := TouchArea {
-            mouse-cursor: pointer;
-            clicked => {
-                root.toggled();
-            }
-        }
-    }
-    if root.all-none: Text {
-        text: "All";
-        font-size: Ink.fs-secondary;
-        color: all-ta.has-hover ? Ink.text : Ink.focus;
-        all-ta := TouchArea {
-            mouse-cursor: pointer;
-            clicked => {
-                root.select-all();
-            }
-        }
-    }
-    if root.all-none: Text {
-        text: "None";
-        font-size: Ink.fs-secondary;
-        color: none-ta.has-hover ? Ink.text : Ink.focus;
-        none-ta := TouchArea {
-            mouse-cursor: pointer;
-            clicked => {
-                root.select-none();
-            }
-        }
-    }
-}
-
-/// A starting set of columns: its name, what it holds; ringed while
-/// exactly its columns are shown.
-component PresetCard inherits Rectangle {
-    in property <ColumnPreset> preset;
-    horizontal-stretch: 1;
-    min-width: 0px;
-    // The row's cards share the tallest one's height.
-    min-height: card-text.preferred-height;
-    border-radius: Ink.radius-md;
-    border-width: root.preset.active ? 1.5px : 1px;
-    border-color: root.preset.active ? Ink.focus : ta.has-hover ? Ink.text-faint : Ink.border;
-    background: root.preset.active ? Ink.selection-row : ta.has-hover ? Ink.hover : Ink.panel;
-    accessible-role: button;
-    accessible-label: root.preset.title;
-    accessible-description: root.preset.description;
-    accessible-action-default => {
-        ResultsState.list-columns-preset(root.preset.key);
-    }
-    card-text := VerticalLayout {
-        padding: 8px;
-        spacing: 2px;
-        alignment: start;
-        Text {
-            text: root.preset.title;
-            font-size: Ink.fs-secondary;
-            font-weight: 600;
-            color: Ink.text;
-            overflow: elide;
-        }
-        Text {
-            text: root.preset.description;
-            font-size: Ink.fs-caption;
-            color: Ink.text-dim;
-            wrap: word-wrap;
-        }
-    }
-    ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => {
-            ResultsState.list-columns-preset(root.preset.key);
-        }
-    }
-}
-
-/// Intensity as a grid: a row per channel, a column per value - a cell
-/// ticks one column, a channel or a value its whole row or column.
-component IntensityGrid inherits VerticalLayout {
-    property <int> n: ResultsState.list-intensity-stats.length;
-    property <length> label-w: 64px;
-    property <length> cell-w: 30px;
-    property <length> cell-h: 24px;
-    spacing: 4px;
-
-    PartHead {
-        title: ResultsState.list-intensity-title;
-        open: ResultsState.list-intensity-open;
-        toggled => {
-            ResultsState.list-intensity-open = !ResultsState.list-intensity-open;
-            ResultsState.list-columns-section-toggled("intensity", ResultsState.list-intensity-open);
-        }
-        select-all => {
-            ResultsState.list-columns-section-select("intensity", true);
-        }
-        select-none => {
-            ResultsState.list-columns-section-select("intensity", false);
-        }
-    }
-
-    if ResultsState.list-intensity-open: VerticalLayout {
-        spacing: 3px;
-        HorizontalLayout {
-            spacing: 3px;
-            alignment: start;
-            Rectangle {
-                width: root.label-w;
-            }
-            for stat[j] in ResultsState.list-intensity-stats: Rectangle {
-                width: root.cell-w;
-                height: 18px;
-                Text {
-                    text: stat;
-                    font-size: Ink.fs-caption;
-                    font-weight: 600;
-                    color: stat-ta.has-hover ? Ink.text : Ink.text-mute;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-                stat-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        ResultsState.list-intensity-column(j);
-                    }
-                }
-            }
-        }
-        for channel[i] in ResultsState.list-intensity-channels: HorizontalLayout {
-            spacing: 3px;
-            alignment: start;
-            Rectangle {
-                width: root.label-w;
-                height: root.cell-h;
-                Text {
-                    width: 100%;
-                    text: channel;
-                    font-size: Ink.fs-secondary;
-                    color: row-ta.has-hover ? Ink.text : Ink.text-dim;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
-                row-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        ResultsState.list-intensity-row(i);
-                    }
-                }
-            }
-            for stat[j] in ResultsState.list-intensity-stats: cell-box := Rectangle {
-                property <IntensityCell> cell: ResultsState.list-intensity-cells[i * root.n + j];
-                width: root.cell-w;
-                height: root.cell-h;
-                border-radius: Ink.radius-xs;
-                border-width: self.cell.selected ? 0px : 1px;
-                border-color: cell-ta.has-hover ? Ink.text-faint : Ink.border;
-                background: self.cell.key == "" ? transparent : self.cell.selected ? Ink.primary : cell-ta.has-hover ? Ink.hover : Ink.field;
-                accessible-role: checkbox;
-                accessible-label: stat + " " + channel;
-                accessible-checked: self.cell.selected;
-                if cell-box.cell.selected: Image {
-                    source: InkIcons.check;
-                    width: 10px;
-                    colorize: Ink.on-primary;
-                }
-                cell-ta := TouchArea {
-                    enabled: cell-box.cell.key != "";
-                    mouse-cursor: pointer;
-                    clicked => {
-                        ResultsState.list-columns-item-selected(cell-box.cell.key, !cell-box.cell.selected);
-                    }
-                }
-            }
-        }
-        InkHint {
-            text: "A click on a channel or a value ticks its whole row or column.";
-        }
-    }
-}
-
-/// A coloc column of the builder: tick, name, what it needs per class.
-component ColocColumnRow inherits Rectangle {
-    in property <ColocColumnItem> item;
-    height: 24px;
-    background: ta.has-hover ? Ink.hover : transparent;
-    border-radius: Ink.radius-xs;
-    accessible-role: checkbox;
-    accessible-label: root.item.name;
-    accessible-checked: root.item.selected;
-    accessible-action-default => {
-        ResultsState.list-columns-item-selected(root.item.key, !root.item.selected);
-    }
-    ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => {
-            ResultsState.list-columns-item-selected(root.item.key, !root.item.selected);
-        }
-    }
-    HorizontalLayout {
-        padding-left: 6px;
-        padding-right: 6px;
-        spacing: 7px;
-        VerticalLayout {
-            alignment: center;
-            Rectangle {
-                width: 13px;
-                height: 13px;
-                border-radius: Ink.radius-xs;
-                border-width: root.item.selected ? 0px : 1px;
-                border-color: Ink.text-faint;
-                background: root.item.selected ? Ink.primary : Ink.field;
-                if root.item.selected: Image {
-                    source: InkIcons.check;
-                    width: 9px;
-                    colorize: Ink.on-primary;
-                }
-            }
-        }
-        Text {
-            horizontal-stretch: 1;
-            min-width: 0px;
-            text: root.item.name;
-            font-size: Ink.fs-secondary;
-            color: Ink.text;
-            vertical-alignment: center;
-            overflow: elide;
-        }
-        Text {
-            text: root.item.glyph;
-            font-size: Ink.fs-secondary;
-            font-family: Ink.font-mono;
-            letter-spacing: 1px;
-            color: Ink.text-dim;
-            vertical-alignment: center;
-        }
-    }
-}
-
-/// A numbered step of the coloc builder ("1  Overlap with").
-component StepLabel inherits HorizontalLayout {
-    in property <string> number;
-    in property <string> text;
-    spacing: 6px;
-    Text {
-        text: root.number;
-        font-size: Ink.fs-secondary;
-        font-weight: 700;
-        color: Ink.text;
-    }
-    Text {
-        horizontal-stretch: 1;
-        text: root.text;
-        font-size: Ink.fs-secondary;
-        color: Ink.text-dim;
-        wrap: word-wrap;
-    }
-}
-
-/// The coloc columns in three steps (design canvas "Results rework",
-/// ColumnPanel): the partner classes, what a cell counts, which columns -
-/// each kind with its columns and the marks of what they need.
-component ColocBuilder inherits VerticalLayout {
-    in property <bool> grouped;
-    spacing: 10px;
-
-    PartHead {
-        title: ResultsState.list-coloc-title;
-        open: ResultsState.list-coloc-open;
-        all-none: false;
-        toggled => {
-            ResultsState.list-coloc-open = !ResultsState.list-coloc-open;
-            ResultsState.list-coloc-toggled(ResultsState.list-coloc-open);
-        }
-    }
-
-    if ResultsState.list-coloc-open: VerticalLayout {
-        padding-left: 20px;
-        spacing: 12px;
-
-        VerticalLayout {
-            spacing: 4px;
-            StepLabel {
-                number: "1";
-                text: "Overlap with";
-            }
-            InkCheckList {
-                title: "PARTNER CLASSES · " + ResultsState.list-coloc-partner-summary;
-                items <=> ResultsState.list-coloc-partner-items;
-                list-height: self.items.length * 24px + 4px;
-                item-selected(key, value, selected) => {
-                    ResultsState.list-coloc-partner-toggled(key);
-                }
-                select-all => {
-                    ResultsState.list-coloc-partners-all(true);
-                }
-                select-none => {
-                    ResultsState.list-coloc-partners-all(false);
-                }
-            }
-        }
-
-        VerticalLayout {
-            spacing: 6px;
-            StepLabel {
-                number: "2";
-                text: "Each cell counts";
-            }
-            HorizontalLayout {
-                spacing: 6px;
-                InkOptionCard {
-                    horizontal-stretch: 1;
-                    title: root.grouped ? "Objects that overlap" : "Yes / no";
-                    description: root.grouped ? "How many objects of the row overlap" : "1 if the object overlaps, else 0";
-                    checked: ResultsState.list-coloc-count == 0;
-                    picked => {
-                        ResultsState.list-coloc-count = 0;
-                        ResultsState.list-coloc-count-picked(0);
-                    }
-                }
-                InkOptionCard {
-                    horizontal-stretch: 1;
-                    title: root.grouped ? "Partner objects" : "How many partners";
-                    description: root.grouped ? "How many partners lie on them" : "How many partners the object overlaps";
-                    checked: ResultsState.list-coloc-count == 1;
-                    picked => {
-                        ResultsState.list-coloc-count = 1;
-                        ResultsState.list-coloc-count-picked(1);
-                    }
-                }
-            }
-        }
-
-        VerticalLayout {
-            spacing: 6px;
-            StepLabel {
-                number: "3";
-                text: "Columns for";
-            }
-            if ResultsState.list-coloc-kinds.length == 0: InkHint {
-                text: "Pick a partner class above.";
-            }
-            for kind in ResultsState.list-coloc-kinds: VerticalLayout {
-                spacing: 2px;
-                PartHead {
-                    title: kind.title + " · " + kind.count;
-                    open: true;
-                    select-all => {
-                        ResultsState.list-columns-section-select(kind.group, true);
-                    }
-                    select-none => {
-                        ResultsState.list-columns-section-select(kind.group, false);
-                    }
-                }
-                InkHint {
-                    text: kind.description;
-                }
-                for item in kind.items: ColocColumnRow {
-                    item: item;
-                }
-            }
-            InkSwitch {
-                text: "Only combinations some object has";
-                checked: ResultsState.list-coloc-only-occurring;
-                toggled(on) => {
-                    ResultsState.list-coloc-only-occurring = on;
-                    ResultsState.list-coloc-only-occurring-changed(on);
-                }
-            }
-            InkHint {
-                text: "● overlaps · ○ must not · · either - per class in this order: " + ResultsState.list-coloc-partner-order + ". \"Exactly\" columns add up to the count. One row per overlapping pair: A row per → Coloc pairs.";
-            }
-        }
-    }
-}
+import { ColumnPicker } from "results_panel.slint";
 
 /// The List's left panel (design canvas "Results rework", ColumnPanel E
 /// with PanelNav D): the part the bar's chip names - Columns, Images,
@@ -455,38 +24,44 @@ component ListPanel inherits ViewPanel {
 
     if root.part == "Columns": VerticalLayout {
         spacing: 12px;
-        InkSearchField {
-            text: ResultsState.list-columns-filter;
-            placeholder: "Find a column - area, mean, coloc…";
-            edited(text) => {
+        ColumnPicker {
+            grouped: root.grouped;
+            filter: ResultsState.list-columns-filter;
+            presets: ResultsState.list-column-presets;
+            sections: ResultsState.list-column-sections;
+            intensity-title: ResultsState.list-intensity-title;
+            intensity-open: ResultsState.list-intensity-open;
+            intensity-channels: ResultsState.list-intensity-channels;
+            intensity-stats: ResultsState.list-intensity-stats;
+            intensity-cells: ResultsState.list-intensity-cells;
+            has-coloc: ResultsState.list-coloc-partner-items.length > 0;
+            coloc-kinds: ResultsState.list-coloc-kinds;
+            filter-edited(text) => {
                 ResultsState.list-columns-filter = text;
                 ResultsState.list-columns-filter-changed(text);
             }
-        }
-        if ResultsState.list-columns-filter == "" && ResultsState.list-column-presets.length > 0: VerticalLayout {
-            spacing: 6px;
-            Text {
-                text: "START FROM";
-                font-size: Ink.fs-caption;
-                font-weight: 600;
-                letter-spacing: 0.6px;
-                color: Ink.text-mute;
+            picked(key, on) => {
+                ResultsState.list-columns-item-selected(key, on);
             }
-            HorizontalLayout {
-                spacing: 6px;
-                for preset in ResultsState.list-column-presets: PresetCard {
-                    preset: preset;
+            section-toggled(group, open) => {
+                if group == "intensity" {
+                    ResultsState.list-intensity-open = open;
+                }
+                ResultsState.list-columns-section-toggled(group, open);
+            }
+            section-select(group, on) => {
+                ResultsState.list-columns-section-select(group, on);
+            }
+            intensity-line(by-channel, index) => {
+                if by-channel {
+                    ResultsState.list-intensity-row(index);
+                } else {
+                    ResultsState.list-intensity-column(index);
                 }
             }
-        }
-        for section in ResultsState.list-column-sections: VerticalLayout {
-            if section.group == "intensity" && ResultsState.list-columns-filter == "": IntensityGrid { }
-            if section.group != "intensity" || ResultsState.list-columns-filter != "": ColumnSectionList {
-                section: section;
+            preset(key) => {
+                ResultsState.list-columns-preset(key);
             }
-        }
-        if ResultsState.list-coloc-partner-items.length > 0: ColocBuilder {
-            grouped: root.grouped;
         }
         if ResultsState.list-children-items.length > 0: InkCheckList {
             title: "CHILDREN · " + ResultsState.list-children-summary;

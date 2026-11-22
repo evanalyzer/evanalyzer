@@ -13,6 +13,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::coloc::{
+    model_of, picker_label,
     COLOC_AT_LEAST_GROUP, COLOC_EXACTLY_GROUP, COLOC_GROUP, ColocSettings, coloc_classes,
     is_coloc_column,
 };
@@ -349,8 +350,118 @@ impl ResultsStateController {
         self.refresh_list();
     }
 
+    /// The Plate's value picker: the List's groups, intensity grid and coloc
+    /// kinds with the Plate's one column chosen - the columns a Plate can
+    /// show (not an object's identity).
+    pub(super) fn push_matrix_picker(&self) {
+        let available: Vec<ColumnEntry> = self
+            .available_columns
+            .lock()
+            .expect("Poisoned")
+            .iter()
+            .filter(|entry| is_matrix_column(&entry.key))
+            .cloned()
+            .collect();
+        let classes = self.classes.lock().expect("Poisoned").clone();
+        let selected: Vec<Column> = self
+            .matrix_filter
+            .lock()
+            .expect("Poisoned")
+            .as_ref()
+            .map(|filter| vec![filter.column.clone()])
+            .unwrap_or_default();
+        let settings = self.coloc_settings.lock().expect("Poisoned").clone();
+        let open = self.column_sections_open.lock().expect("Poisoned").clone();
+        let filter = self.matrix_column_filter.lock().expect("Poisoned").to_lowercase();
+
+        let (sections, _, _, _) =
+            super::coloc::picker_sections(&available, &selected, &classes, &open, &filter, true);
+        let (channels, cells) = intensity_grid(&available, &selected, &classes);
+        let intensity_section = sections.iter().find(|section| section.group == "intensity");
+        let intensity_title = intensity_section
+            .map(|section| section.title.clone())
+            .unwrap_or_default();
+        let intensity_open = intensity_section.is_some_and(|section| section.open);
+        let kinds = coloc_kinds(&available, &selected, &settings, &classes, &filter);
+
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let state = ui.global::<ResultsState>();
+            state.set_matrix_column_sections(model_of(
+                sections.into_iter().map(super::coloc::SectionUi::into_slint).collect(),
+            ));
+            state.set_matrix_intensity_channels(model_of(
+                channels.into_iter().map(SharedString::from).collect(),
+            ));
+            state.set_matrix_intensity_cells(model_of(cells));
+            state.set_matrix_intensity_title(intensity_title.into());
+            state.set_matrix_intensity_open(intensity_open);
+            state.set_matrix_coloc_kinds(model_of(
+                kinds.into_iter().map(ColocKindUi::into_slint).collect(),
+            ));
+        })
+        .ok();
+    }
+
+    /// The Plate shows column `key` (its picker's).
+    fn pick_matrix_column(self: &Arc<Self>, key: &str) {
+        let classes = self.classes.lock().expect("Poisoned").clone();
+        let Some(column) = self.column_for_key(key, &classes) else {
+            warn!("Unknown matrix column key picked: {key}");
+            return;
+        };
+        let label = picker_label(&column.display_label(&classes));
+        self.update_matrix_filter(|filter| filter.column = column);
+        self.push_matrix_picker();
+        let ui_weak = self.ui.clone();
+        let manager = self.clone();
+        let key = key.to_string();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let state = ui.global::<ResultsState>();
+            state.set_matrix_column_summary(label.into());
+            // Split view's dropdown follows.
+            let items = state.get_matrix_column_items();
+            for i in 0..items.row_count() {
+                if let Some(mut item) = items.row_data(i) {
+                    let on = item.key.as_str() == key;
+                    if item.selected != on {
+                        item.selected = on;
+                        items.set_row_data(i, item);
+                    }
+                }
+            }
+            let level = state.get_matrix_level();
+            manager.apply_matrix_aggregate_enabled(&ui, level);
+            manager.refresh_active_matrix_view();
+            manager.split_value_column_changed();
+        })
+        .ok();
+    }
+
     pub(super) fn attach_column_panel_callbacks(self: &Arc<Self>, ui: &AppWindow) {
         let state = ui.global::<ResultsState>();
+        let manager = self.clone();
+        state.on_matrix_value_picked(move |key| manager.pick_matrix_column(key.as_str()));
+        let manager = self.clone();
+        state.on_matrix_columns_filter_changed(move |text| {
+            *manager.matrix_column_filter.lock().expect("Poisoned") = text.to_string();
+            manager.push_matrix_picker();
+        });
+        let manager = self.clone();
+        state.on_matrix_columns_section_toggled(move |group, open| {
+            manager
+                .column_sections_open
+                .lock()
+                .expect("Poisoned")
+                .insert(group.to_string(), open);
+            manager.push_matrix_picker();
+        });
         let manager = self.clone();
         state.on_list_columns_preset(move |key| manager.apply_column_preset(key.as_str()));
         let manager = self.clone();

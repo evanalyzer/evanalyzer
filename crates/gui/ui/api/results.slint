@@ -755,6 +755,18 @@ export global ResultsState {
     // The panel: a starting set; a whole channel (row) or value (column) of
     // the intensity grid on or off.
     callback list-columns-preset(string);
+    // The Plate's value picker in the panel: the List's parts with one
+    // column chosen (`matrix-value-picked`), its own search.
+    in-out property <string> matrix-columns-filter: "";
+    in-out property <[ColumnSection]> matrix-column-sections: [];
+    in-out property <[string]> matrix-intensity-channels: [];
+    in-out property <[IntensityCell]> matrix-intensity-cells: [];
+    in-out property <string> matrix-intensity-title: "";
+    in-out property <bool> matrix-intensity-open: false;
+    in-out property <[ColocKind]> matrix-coloc-kinds: [];
+    callback matrix-value-picked(string);
+    callback matrix-columns-filter-changed(string);
+    callback matrix-columns-section-toggled(string, bool);
     callback list-intensity-row(int);
     callback list-intensity-column(int);
     callback list-columns-section-toggled(string, bool);

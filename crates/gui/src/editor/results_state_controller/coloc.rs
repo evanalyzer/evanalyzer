@@ -259,7 +259,7 @@ pub(super) fn picker_label(name: &str) -> String {
 }
 
 /// A model of `items` for a Slint property.
-fn model_of<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
+pub(super) fn model_of<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
     ModelRc::from(Rc::new(VecModel::from(items)))
 }
 
@@ -267,15 +267,15 @@ fn model_of<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
 const COLOC_BOX: &str = "coloc box";
 
 /// A section of the sidebar's column picker, made off the UI thread.
-struct SectionUi {
-    group: String,
-    title: String,
-    open: bool,
-    items: Vec<MultiSelectItem>,
+pub(super) struct SectionUi {
+    pub group: String,
+    pub title: String,
+    pub open: bool,
+    pub items: Vec<MultiSelectItem>,
 }
 
 impl SectionUi {
-    fn into_slint(self) -> ColumnSection {
+    pub(super) fn into_slint(self) -> ColumnSection {
         ColumnSection {
             group: self.group.into(),
             title: self.title.into(),
@@ -283,6 +283,95 @@ impl SectionUi {
             items: ModelRc::from(Rc::new(VecModel::from(self.items))),
         }
     }
+}
+
+/// The column picker's groups, in the columns' order - the coloc columns
+/// apart (each class, at least, exactly), the children's and the parents'
+/// columns left out (their own lists) - those the search `filter` (lower
+/// case) matches; the coloc box's title and whether it is open. `single`:
+/// one column is chosen (Plate, Charts) - titles without counts.
+pub(super) fn picker_sections(
+    available: &[ColumnEntry],
+    selected: &[Column],
+    classes: &[Class],
+    open: &HashMap<String, bool>,
+    filter: &str,
+    single: bool,
+) -> (Vec<SectionUi>, Vec<SectionUi>, String, bool) {
+    let mut sections: Vec<SectionUi> = Vec::new();
+    let mut coloc: Vec<SectionUi> = [COLOC_GROUP, COLOC_AT_LEAST_GROUP, COLOC_EXACTLY_GROUP]
+        .into_iter()
+        .map(|group| SectionUi {
+            group: group.to_string(),
+            title: String::new(),
+            open: true,
+            items: Vec::new(),
+        })
+        .collect();
+    for entry in available {
+        if matches!(entry.key, Column::Children(_) | Column::Parent(_)) {
+            continue;
+        }
+        // nm as µm, as the table shows them.
+        let label = picker_label(&entry.display_name);
+        if !filter.is_empty() && !label.to_lowercase().contains(filter) {
+            continue;
+        }
+        let item = MultiSelectItem {
+            key: entry.key.as_key(classes).into(),
+            value: label.into(),
+            color: Color::default(),
+            group: entry.group.as_str().into(),
+            selected: selected.contains(&entry.key),
+        };
+        let target = if is_coloc_column(&entry.key) {
+            coloc.iter_mut().find(|section| section.group == entry.group)
+        } else {
+            sections.iter_mut().find(|section| section.group == entry.group)
+        };
+        match target {
+            Some(section) => section.items.push(item),
+            None => sections.push(SectionUi {
+                group: entry.group.clone(),
+                title: String::new(),
+                open: true,
+                items: vec![item],
+            }),
+        }
+    }
+    // Open while searching, else as folded by hand - or while one of its
+    // columns is chosen.
+    let is_open = |section: &SectionUi| {
+        !filter.is_empty()
+            || open
+                .get(&section.group)
+                .copied()
+                .unwrap_or_else(|| section.items.iter().any(|item| item.selected))
+    };
+    let title = |name: &str, items: &[MultiSelectItem]| {
+        if single {
+            name.to_uppercase()
+        } else {
+            section_title(name, items)
+        }
+    };
+    for section in &mut sections {
+        section.title = title(&section.group, &section.items);
+        section.open = is_open(section);
+    }
+    let coloc_items: Vec<MultiSelectItem> =
+        coloc.iter().flat_map(|s| s.items.iter().cloned()).collect();
+    let coloc_title = title("Coloc", &coloc_items);
+    let coloc_open = !filter.is_empty() || open.get(COLOC_BOX).copied().unwrap_or(true);
+    for (section, name) in coloc
+        .iter_mut()
+        .zip(["With each class", "With at least", "With exactly"])
+    {
+        section.title = title(name, &section.items);
+        section.open = !filter.is_empty() || open.get(&section.group).copied().unwrap_or(true);
+    }
+    coloc.retain(|section| !section.items.is_empty());
+    (sections, coloc, coloc_title, coloc_open)
 }
 
 /// "SHAPE · 1 of 12".
@@ -350,83 +439,8 @@ impl ResultsStateController {
         let summary = chip_summary(selected.len(), items.len());
         let groups = column_groups(&available);
 
-        // The sections, in the columns' order - the children's and the
-        // parents' columns have their own lists.
-        let mut sections: Vec<SectionUi> = Vec::new();
-        let mut coloc: Vec<SectionUi> = [
-            (COLOC_GROUP, "With each class"),
-            (COLOC_AT_LEAST_GROUP, "With at least"),
-            (COLOC_EXACTLY_GROUP, "With exactly"),
-        ]
-        .into_iter()
-        .map(|(group, _)| SectionUi {
-            group: group.to_string(),
-            title: String::new(),
-            open: true,
-            items: Vec::new(),
-        })
-        .collect();
-        for entry in &available {
-            if matches!(entry.key, Column::Children(_) | Column::Parent(_)) {
-                continue;
-            }
-            // nm as µm, as the table shows them.
-            let label = picker_label(&entry.display_name);
-            if !filter.is_empty() && !label.to_lowercase().contains(&filter) {
-                continue;
-            }
-            let item = MultiSelectItem {
-                key: entry.key.as_key(&classes).into(),
-                value: label.into(),
-                color: Color::default(),
-                group: entry.group.as_str().into(),
-                selected: selected.contains(&entry.key),
-            };
-            let target = if is_coloc_column(&entry.key) {
-                coloc
-                    .iter_mut()
-                    .find(|section| section.group == entry.group)
-            } else {
-                sections
-                    .iter_mut()
-                    .find(|section| section.group == entry.group)
-            };
-            match target {
-                Some(section) => section.items.push(item),
-                None => sections.push(SectionUi {
-                    group: entry.group.clone(),
-                    title: String::new(),
-                    open: true,
-                    items: vec![item],
-                }),
-            }
-        }
-        // Open while searching, else as folded by hand - or while one of
-        // its columns is chosen.
-        let is_open = |section: &SectionUi| {
-            !filter.is_empty()
-                || open
-                    .get(&section.group)
-                    .copied()
-                    .unwrap_or_else(|| section.items.iter().any(|item| item.selected))
-        };
-        for section in &mut sections {
-            section.title = section_title(&section.group, &section.items);
-            section.open = is_open(section);
-        }
-        let coloc_items: Vec<MultiSelectItem> =
-            coloc.iter().flat_map(|s| s.items.iter().cloned()).collect();
-        let coloc_title = section_title("Coloc", &coloc_items);
-        let coloc_open = !filter.is_empty() || open.get(COLOC_BOX).copied().unwrap_or(true);
-        for (section, name) in
-            coloc
-                .iter_mut()
-                .zip(["With each class", "With at least", "With exactly"])
-        {
-            section.title = section_title(name, &section.items);
-            section.open = !filter.is_empty() || open.get(&section.group).copied().unwrap_or(true);
-        }
-        coloc.retain(|section| !section.items.is_empty());
+        let (sections, coloc, coloc_title, coloc_open) =
+            picker_sections(&available, &selected, &classes, &open, &filter, false);
 
         let partner_items: Vec<MultiSelectItem> = coloc_classes(&raw)
             .into_iter()
@@ -512,6 +526,8 @@ impl ResultsStateController {
             ));
         })
         .ok();
+        // The Plate's picker offers the same columns.
+        self.push_matrix_picker();
     }
 
     /// The coloc settings changed (`change`): the chosen coloc columns of
