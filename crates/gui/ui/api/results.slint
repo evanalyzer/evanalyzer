@@ -364,6 +364,12 @@ export struct ChartBoxLook {
     colors: int,
 }
 
+/// A row of the boxplot's numbers.
+export struct ChartStatRow {
+    color: color,
+    cells: [string],
+}
+
 export global ResultsState {
     // -- Split with image (board Z) --
     // Results left, the image right (asked for - see `split-offered`).
@@ -1056,6 +1062,13 @@ export global ResultsState {
     // The boxplot's look (saved with the view).
     in-out property <ChartBoxLook> chart-box-look: { grid: true, dots: true, show-n: true };
     callback chart-box-look-changed(ChartBoxLook);
+    // The boxplot's numbers under it: a row per box (its colour, its
+    // cells), the heads, and the same as tab-separated text to copy (full
+    // precision, "." decimals); folded or open.
+    in-out property <[string]> chart-stats-head: [];
+    in-out property <[ChartStatRow]> chart-stats-rows: [];
+    in-out property <string> chart-stats-tsv: "";
+    in-out property <bool> chart-stats-open: true;
     // The boxplot: a value per image (each image a dot), else per object.
     in-out property <bool> chart-per-image: false;
     callback chart-per-image-changed(bool);

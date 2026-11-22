@@ -15,7 +15,7 @@ import { ComboBox } from "../ink/std_compat.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Ink } from "../ink/palette.slint";
 
-import { InkMultiSelect } from "../ink/ink.slint";
+import { InkMultiSelect, InkIcons } from "../ink/ink.slint";
 import { ViewBar, BarChip, BarLabel, BarSpacer, BarFolded, ViewPanel } from "results_view_bar.slint";
 import { ColumnPicker, ChoiceList, IndexChoiceList } from "results_panel.slint";
 
@@ -163,6 +163,136 @@ component ScatterChart inherits Rectangle {
                 color: Ink.text-mute;
             }
         }
+    }
+}
+
+/// The boxplot's numbers under it (design canvas "Results rework",
+/// ChartBox): a row per box, foldable, copied as a table.
+component BoxStats inherits Rectangle {
+    property <length> name-w: 180px;
+    property <length> cell-w: 84px;
+    background: Ink.panel;
+    height: stats-body.preferred-height;
+    Rectangle {
+        y: 0;
+        height: 1px;
+        background: Ink.border-soft;
+    }
+    stats-body := VerticalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        padding-top: 6px;
+        padding-bottom: 6px;
+        spacing: 4px;
+        HorizontalLayout {
+            spacing: 8px;
+            height: 22px;
+            Rectangle {
+                width: 12px;
+                Image {
+                    source: ResultsState.chart-stats-open ? InkIcons.caret-down : InkIcons.caret-right;
+                    width: 10px;
+                    height: 10px;
+                    colorize: Ink.text-mute;
+                }
+            }
+            Text {
+                text: "NUMBERS";
+                font-size: Ink.fs-caption;
+                font-weight: 600;
+                letter-spacing: 0.6px;
+                color: fold-ta.has-hover ? Ink.text : Ink.text-mute;
+                vertical-alignment: center;
+                fold-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    accessible-role: button;
+                    accessible-label: "Numbers";
+                    accessible-expandable: true;
+                    accessible-expanded: ResultsState.chart-stats-open;
+                    clicked => {
+                        ResultsState.chart-stats-open = !ResultsState.chart-stats-open;
+                    }
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: root.copied ? "Copied" : "Copy table";
+                font-size: Ink.fs-secondary;
+                color: copy-ta.has-hover ? Ink.text : Ink.focus;
+                vertical-alignment: center;
+                copy-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    accessible-role: button;
+                    accessible-label: "Copy the table";
+                    clicked => {
+                        clipboard.text = ResultsState.chart-stats-tsv;
+                        clipboard.select-all();
+                        clipboard.copy();
+                        clipboard.clear-selection();
+                        root.copied = true;
+                    }
+                }
+            }
+        }
+        if ResultsState.chart-stats-open: HorizontalLayout {
+            spacing: 0px;
+            alignment: start;
+            for head[i] in ResultsState.chart-stats-head: Text {
+                width: i == 0 ? root.name-w : root.cell-w;
+                text: head;
+                font-size: Ink.fs-caption;
+                font-weight: 600;
+                color: Ink.text-dim;
+                horizontal-alignment: i == 0 ? left : right;
+            }
+        }
+        if ResultsState.chart-stats-open: ScrollView {
+            height: min(ResultsState.chart-stats-rows.length * 22px, 132px);
+            VerticalLayout {
+                alignment: start;
+                for row in ResultsState.chart-stats-rows: HorizontalLayout {
+                    height: 22px;
+                    spacing: 0px;
+                    alignment: start;
+                    for cell[i] in row.cells: HorizontalLayout {
+                        width: i == 0 ? root.name-w : root.cell-w;
+                        spacing: 6px;
+                        if i == 0: VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 8px;
+                                height: 8px;
+                                border-radius: 2px;
+                                background: row.color;
+                            }
+                        }
+                        Text {
+                            horizontal-stretch: 1;
+                            text: cell;
+                            font-size: Ink.fs-secondary;
+                            font-family: i == 0 ? Ink.font-sans : Ink.font-mono;
+                            color: Ink.text;
+                            horizontal-alignment: i == 0 ? left : right;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    property <bool> copied: false;
+    property <string> tsv: ResultsState.chart-stats-tsv;
+    changed tsv => {
+        root.copied = false;
+    }
+    clipboard := TextInput {
+        visible: false;
+        width: 0px;
+        height: 0px;
+        read-only: true;
     }
 }
 
@@ -894,6 +1024,8 @@ export component ResultsChartsView inherits Rectangle {
                 if ResultsState.chart-kind == ResultsChartKind2.boxplot: BoxplotChart {
                     vertical-stretch: 1;
                 }
+                if ResultsState.chart-kind == ResultsChartKind2.boxplot && ResultsState.chart-error == ""
+                    && ResultsState.chart-boxplot-boxes.length > 0: BoxStats { }
                 // One chart for both: lines over a position (time or radius).
                 if ResultsState.chart-kind == ResultsChartKind2.over-time || ResultsState.chart-kind == ResultsChartKind2.profile: OverTimeChart {
                     vertical-stretch: 1;

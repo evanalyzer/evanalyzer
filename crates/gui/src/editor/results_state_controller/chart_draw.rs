@@ -102,6 +102,37 @@ fn box_specs(boxes: &[BoxplotBox], factor: f64, colors: u8) -> Vec<BoxSpec> {
         .collect()
 }
 
+/// A box's click area made off the UI thread: x, y, width, height, its
+/// name, its numbers.
+type HitRow = (f32, f32, f32, f32, String, Vec<(String, String)>);
+
+/// The numbers table's heads.
+const STAT_HEADS: [&str; 8] = ["Box", "n", "Median", "Q1", "Q3", "Mean", "SD", "SEM"];
+
+/// The numbers of a box as drawn: n, median, Q1, Q3, mean, SD, SEM.
+fn box_stats(spec: &BoxSpec) -> [f64; 7] {
+    let n = spec.count as f64;
+    let sem = if n > 0.0 { spec.sd / n.sqrt() } else { f64::NAN };
+    [n, spec.median, spec.q1, spec.q3, spec.mean, spec.sd, sem]
+}
+
+/// The numbers table as tab-separated text: the heads, a row per box -
+/// full precision, "." decimals (for a spreadsheet).
+fn stats_tsv(specs: &[BoxSpec]) -> String {
+    let mut out = STAT_HEADS.join("\t");
+    for spec in specs {
+        out.push('\n');
+        out.push_str(&spec.label.replace(['\t', '\n'], " "));
+        for value in box_stats(spec) {
+            out.push('\t');
+            if value.is_finite() {
+                out.push_str(&value.to_string());
+            }
+        }
+    }
+    out
+}
+
 /// A box's numbers for its tooltip, as drawn (unit, % of control).
 fn box_numbers(spec: &BoxSpec, look: &ChartLook) -> Vec<(String, String)> {
     let f = |v: f64| format_number(v);
@@ -175,7 +206,7 @@ impl ResultsStateController {
             canvas.width,
             canvas.height,
         );
-        let hits: Vec<(f32, f32, f32, f32, String, Vec<(String, String)>)> = drawing
+        let hits: Vec<HitRow> = drawing
             .hits
             .iter()
             .map(|hit| {
@@ -191,6 +222,15 @@ impl ResultsStateController {
             })
             .collect();
         let svg = drawing.svg;
+        let stat_rows: Vec<(u32, Vec<String>)> = specs
+            .iter()
+            .map(|spec| {
+                let mut cells = vec![spec.label.clone()];
+                cells.extend(box_stats(spec).iter().map(|v| format_number(*v)));
+                (spec.color.0, cells)
+            })
+            .collect();
+        let tsv = stats_tsv(&specs);
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             let Some(ui) = ui_weak.upgrade() else {
@@ -221,6 +261,20 @@ impl ResultsStateController {
                 })
                 .collect();
             state.set_chart_hits(ModelRc::from(Rc::new(VecModel::from(hits))));
+            state.set_chart_stats_head(ModelRc::from(Rc::new(VecModel::from(
+                STAT_HEADS.iter().map(|h| slint::SharedString::from(*h)).collect::<Vec<_>>(),
+            ))));
+            let rows: Vec<crate::ChartStatRow> = stat_rows
+                .into_iter()
+                .map(|(color, cells)| crate::ChartStatRow {
+                    color: bg_color_to_slint(color),
+                    cells: ModelRc::from(Rc::new(VecModel::from(
+                        cells.into_iter().map(slint::SharedString::from).collect::<Vec<_>>(),
+                    ))),
+                })
+                .collect();
+            state.set_chart_stats_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
+            state.set_chart_stats_tsv(tsv.into());
         })
         .ok();
     }
@@ -295,6 +349,32 @@ mod tests {
         let min_max = ChartLook { min_max: true, ..ChartLook::default() };
         let lines = box_numbers(&spec, &min_max);
         assert!(lines.iter().any(|(l, v)| l == "Min – max" && v == "1 – 9"));
+    }
+
+    #[test]
+    fn the_numbers_copy_as_tab_separated_text_at_full_precision() {
+        let spec = BoxSpec {
+            label: "A1".into(),
+            color: Rgb(0),
+            min: 1.0,
+            q1: 2.0,
+            median: 3.125,
+            q3: 4.0,
+            max: 9.0,
+            mean: 3.5,
+            sd: 2.0,
+            objects: 120,
+            whisker_low: 1.0,
+            whisker_high: 6.0,
+            outliers: Vec::new(),
+            count: 16,
+            points: Vec::new(),
+            count_noun: " images".into(),
+        };
+        let tsv = stats_tsv(&[spec]);
+        let lines: Vec<&str> = tsv.lines().collect();
+        assert_eq!(lines[0], "Box\tn\tMedian\tQ1\tQ3\tMean\tSD\tSEM");
+        assert_eq!(lines[1], "A1\t16\t3.125\t2\t4\t3.5\t2\t0.5");
     }
 
     #[test]
