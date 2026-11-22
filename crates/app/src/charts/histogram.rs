@@ -65,7 +65,12 @@ pub fn draw(
     let max_count = spec.counts.iter().copied().max().unwrap_or(0).max(1) as f64;
     let y_ticks_wanted = ((bottom - top) / 56.0).round().clamp(2.0, 10.0) as usize;
     let y_scale = if look.log_counts {
-        Scale::nice(1.0, max_count, y_ticks_wanted, true)
+        // The axis starts below 1 (at ½, under its first tick): a bin with
+        // a single value still has a bar.
+        Scale {
+            min: 0.5,
+            ..Scale::nice(1.0, max_count, y_ticks_wanted, true)
+        }
     } else {
         Scale::nice(0.0, max_count, y_ticks_wanted, false)
     };
@@ -260,5 +265,33 @@ mod tests {
             300.0,
         );
         assert!(drawing.svg.contains(">1000<") && drawing.svg.contains(">10<"));
+    }
+
+    #[test]
+    fn a_bin_with_one_value_has_a_bar_on_a_log_axis() {
+        let mut log = look();
+        log.log_counts = true;
+        let drawing = draw(
+            &spec(vec![1, 0, 40], 0, 0),
+            &log,
+            &Theme::light(),
+            500.0,
+            300.0,
+        );
+        let heights: Vec<f64> = drawing
+            .svg
+            .split("<rect ")
+            .skip(1)
+            .filter(|rect| rect.contains("fill-opacity=\"0.85\""))
+            .map(|rect| {
+                let at = rect.find("height=\"").unwrap() + 8;
+                rect[at..at + rect[at..].find('"').unwrap()]
+                    .parse()
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(heights.len(), 2, "the bins with values: {heights:?}");
+        assert!(heights[0] > 5.0 && heights[0] < heights[1], "{heights:?}");
+        assert!(drawing.svg.contains(">1<"), "the first tick stays 1");
     }
 }
