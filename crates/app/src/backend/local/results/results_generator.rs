@@ -360,9 +360,35 @@ impl ResultsGenerator {
         if held == 0 {
             return Ok(None);
         }
+        let limit = filter.page.limit.max(1);
+        // Sorted by a column: pages start at row offsets (`sort_offset`) -
+        // the starts of the pages before its row under the same order.
+        if let Some(sort) = &filter.sort
+            && let Some(expr) = object_sort_expr(sort)
+        {
+            let direction = if sort.descending { "DESC" } else { "ASC" };
+            let row: Option<i64> = self
+                .database
+                .query_row(
+                    &format!(
+                        "SELECT rn FROM (SELECT object_id, row_number() OVER \
+                         (ORDER BY ({expr}) {direction} NULLS LAST, object_id) - 1 AS rn \
+                         FROM objects WHERE {where_clause}) WHERE object_id = '{id}'::UUID"
+                    ),
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(err)?;
+            let Some(row) = row else {
+                return Ok(None);
+            };
+            let pages_before = row as usize / limit as usize;
+            return Ok(Some(
+                (1..=pages_before).map(|page| (page * limit as usize).to_string()).collect(),
+            ));
+        }
         // Every `limit`-th object before it: the last of each page before
         // its own (the next page starts after it). Only the id is read.
-        let limit = filter.page.limit.max(1);
         let sql = format!(
             "SELECT object_id::VARCHAR FROM \
              (SELECT object_id, row_number() OVER (ORDER BY object_id) AS rn FROM objects \
@@ -9612,6 +9638,35 @@ mod tests {
         };
         assert_eq!(all(false), [10.0, 20.0, 30.0, 40.0, 50.0]);
         assert_eq!(all(true), [50.0, 40.0, 30.0, 20.0, 10.0]);
+
+        // Finding an object (a click on the image): the pages before it as
+        // row offsets, under the same order - area 40 is row 3 ascending
+        // (page 2 of 2 rows), row 1 descending (page 1).
+        let starts = |descending| {
+            generator
+                .object_list_page_starts(
+                    &ListFilter {
+                        plane: plane(),
+                        images: None,
+                        object_classes: None,
+                        columns: vec![Column::AreaSizePx],
+                        with_coloc_details: false,
+                        related_to: None,
+                        page: Pagination { limit: 2, after: None },
+                        transpond_table: false,
+                        sort: Some(SortBy {
+                            column: Column::AreaSizePx,
+                            aggregation: None,
+                            descending,
+                        }),
+                    },
+                    "00000000-0000-0000-0000-000000000004",
+                )
+                .unwrap()
+        };
+        assert_eq!(starts(false), Some(vec!["2".to_string()]));
+        assert_eq!(starts(true), Some(Vec::new()));
+        assert!(page(Some("2".to_string()), false).contains(&40.0));
     }
 
     /// Grouped rows sorted by a statistic - per image and per well.
