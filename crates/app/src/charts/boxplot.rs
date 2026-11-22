@@ -94,10 +94,19 @@ const TURNED_CHARS: usize = 14;
 const MAX_DOTS: usize = 200;
 
 /// The boxplot of `boxes` as a `width` × `height` drawing.
-pub fn draw(boxes: &[BoxSpec], look: &BoxplotLook, theme: &Theme, width: f64, height: f64) -> Drawing {
+pub fn draw(
+    boxes: &[BoxSpec],
+    look: &BoxplotLook,
+    theme: &Theme,
+    width: f64,
+    height: f64,
+) -> Drawing {
     let mut svg = Svg::new(width, height, theme);
     if boxes.is_empty() || width < 80.0 || height < 80.0 {
-        return Drawing { svg: svg.finish(), hits: Vec::new() };
+        return Drawing {
+            svg: svg.finish(),
+            hits: Vec::new(),
+        };
     }
     let font = theme.font_size;
     // Min - max whiskers: they reach every value, none is far.
@@ -133,7 +142,13 @@ pub fn draw(boxes: &[BoxSpec], look: &BoxplotLook, theme: &Theme, width: f64, he
         .flat_map(|b| b.outliers.iter().copied())
         .fold(whisker_hi, f64::max);
     let log = look.log && all_lo > 0.0;
-    let span = |lo: f64, hi: f64| if log { hi.log10() - lo.log10() } else { hi - lo };
+    let span = |lo: f64, hi: f64| {
+        if log {
+            hi.log10() - lo.log10()
+        } else {
+            hi - lo
+        }
+    };
     let whisker_span = span(whisker_lo, whisker_hi).max(f64::EPSILON);
     let (lo, hi) = if span(all_lo, all_hi) <= whisker_span * MAX_STRETCH {
         (all_lo, all_hi)
@@ -152,7 +167,13 @@ pub fn draw(boxes: &[BoxSpec], look: &BoxplotLook, theme: &Theme, width: f64, he
     let turned = widest_name > slot_guess - 6.0;
     let turned_names: Vec<String> = boxes
         .iter()
-        .map(|b| fit(&b.label, theme.font_size * 0.58 * TURNED_CHARS as f64, theme))
+        .map(|b| {
+            fit(
+                &b.label,
+                theme.font_size * 0.58 * TURNED_CHARS as f64,
+                theme,
+            )
+        })
         .collect();
     let below = if turned {
         let longest = turned_names
@@ -186,11 +207,24 @@ pub fn draw(boxes: &[BoxSpec], look: &BoxplotLook, theme: &Theme, width: f64, he
             svg.line(left, y, right, y, theme.grid, 1.0);
         }
         svg.line(left - 4.0, y, left, y, theme.axis, 1.0);
-        svg.text(left - 7.0, y + font * 0.35, label, theme.text_dim, Anchor::End, None, false);
+        svg.text(
+            left - 7.0,
+            y + font * 0.35,
+            label,
+            theme.text_dim,
+            Anchor::End,
+            None,
+            false,
+        );
     }
     svg.line(left, top, left, bottom, theme.axis, 1.0);
     svg.line(left, bottom, right, bottom, theme.axis, 1.0);
-    svg.text_vertical(8.0 + font * 0.5, (top + bottom) / 2.0, &look.y_title, theme.text_dim);
+    svg.text_vertical(
+        8.0 + font * 0.5,
+        (top + bottom) / 2.0,
+        &look.y_title,
+        theme.text_dim,
+    );
 
     // The boxes.
     let slot = plot_w / boxes.len() as f64;
@@ -205,8 +239,22 @@ pub fn draw(boxes: &[BoxSpec], look: &BoxplotLook, theme: &Theme, width: f64, he
         // Whiskers with caps.
         svg.line(cx, y_hi, cx, y_q3, b.color, 1.2);
         svg.line(cx, y_q1, cx, y_lo, b.color, 1.2);
-        svg.line(cx - box_w * 0.25, y_hi, cx + box_w * 0.25, y_hi, b.color, 1.2);
-        svg.line(cx - box_w * 0.25, y_lo, cx + box_w * 0.25, y_lo, b.color, 1.2);
+        svg.line(
+            cx - box_w * 0.25,
+            y_hi,
+            cx + box_w * 0.25,
+            y_hi,
+            b.color,
+            1.2,
+        );
+        svg.line(
+            cx - box_w * 0.25,
+            y_lo,
+            cx + box_w * 0.25,
+            y_lo,
+            b.color,
+            1.2,
+        );
         // Q1 to Q3, the median across.
         svg.rect(
             cx - box_w / 2.0,
@@ -218,12 +266,23 @@ pub fn draw(boxes: &[BoxSpec], look: &BoxplotLook, theme: &Theme, width: f64, he
             Some((b.color, 1.5)),
             2.0,
         );
-        svg.line(cx - box_w / 2.0, y_med, cx + box_w / 2.0, y_med, b.color, 2.5);
+        svg.line(
+            cx - box_w / 2.0,
+            y_med,
+            cx + box_w / 2.0,
+            y_med,
+            b.color,
+            2.5,
+        );
 
         // The dots - every point, or else the far values (at most MAX_DOTS,
         // an even sample with the extremes) - or at an edge their number.
         let (mut above, mut below) = (0usize, 0usize);
-        let dots = if b.points.is_empty() || !look.dots { &b.outliers } else { &b.points };
+        let dots = if b.points.is_empty() || !look.dots {
+            &b.outliers
+        } else {
+            &b.points
+        };
         let inside: Vec<f64> = dots
             .iter()
             .copied()
@@ -244,16 +303,48 @@ pub fn draw(boxes: &[BoxSpec], look: &BoxplotLook, theme: &Theme, width: f64, he
             // points the far ones darker.
             let jitter = ((k as f64 * 0.618_034).fract() - 0.5) * box_w * spread;
             let far = all_points && (v < b.whisker_low || v > b.whisker_high);
-            let (color, opacity) = if far { (theme.text, 0.85) } else { (b.color, 0.55) };
+            let (color, opacity) = if far {
+                (theme.text, 0.85)
+            } else {
+                (b.color, 0.55)
+            };
             svg.circle(cx + jitter, y_of(v), 2.6, color, opacity);
         }
         if above > 0 {
-            svg.polygon(&[(cx - 4.0, top + 6.0), (cx + 4.0, top + 6.0), (cx, top)], b.color, 0.9);
-            svg.text(cx + 7.0, top + 7.0, &format_number(above as f64), theme.text_dim, Anchor::Start, None, false);
+            svg.polygon(
+                &[(cx - 4.0, top + 6.0), (cx + 4.0, top + 6.0), (cx, top)],
+                b.color,
+                0.9,
+            );
+            svg.text(
+                cx + 7.0,
+                top + 7.0,
+                &format_number(above as f64),
+                theme.text_dim,
+                Anchor::Start,
+                None,
+                false,
+            );
         }
         if below > 0 {
-            svg.polygon(&[(cx - 4.0, bottom - 6.0), (cx + 4.0, bottom - 6.0), (cx, bottom)], b.color, 0.9);
-            svg.text(cx + 7.0, bottom - 1.0, &format_number(below as f64), theme.text_dim, Anchor::Start, None, false);
+            svg.polygon(
+                &[
+                    (cx - 4.0, bottom - 6.0),
+                    (cx + 4.0, bottom - 6.0),
+                    (cx, bottom),
+                ],
+                b.color,
+                0.9,
+            );
+            svg.text(
+                cx + 7.0,
+                bottom - 1.0,
+                &format_number(below as f64),
+                theme.text_dim,
+                Anchor::Start,
+                None,
+                false,
+            );
         }
 
         // The mean: a ◇ on the box.
@@ -261,26 +352,61 @@ pub fn draw(boxes: &[BoxSpec], look: &BoxplotLook, theme: &Theme, width: f64, he
             let y = y_of(b.mean);
             if (top..=bottom).contains(&y) {
                 let r = 4.5;
-                svg.polygon(&[(cx, y - r), (cx + r, y), (cx, y + r), (cx - r, y)], theme.text, 0.85);
+                svg.polygon(
+                    &[(cx, y - r), (cx + r, y), (cx, y + r), (cx - r, y)],
+                    theme.text,
+                    0.85,
+                );
             }
         }
 
         // Its name and how many, shortened to its slot - or turned.
         if turned {
-            svg.text_turned(cx + font * 0.3, bottom + 10.0, &turned_names[i], theme.text, -50.0);
+            svg.text_turned(
+                cx + font * 0.3,
+                bottom + 10.0,
+                &turned_names[i],
+                theme.text,
+                -50.0,
+            );
         } else {
             let name = fit(&b.label, slot - 6.0, theme);
-            svg.text(cx, bottom + font + 6.0, &name, theme.text, Anchor::Middle, None, false);
+            svg.text(
+                cx,
+                bottom + font + 6.0,
+                &name,
+                theme.text,
+                Anchor::Middle,
+                None,
+                false,
+            );
             if look.show_n {
                 let count = count_label(b.count, &b.count_noun, slot - 6.0, theme);
-                svg.text(cx, bottom + font * 2.0 + 10.0, &count, theme.text_dim, Anchor::Middle, None, false);
+                svg.text(
+                    cx,
+                    bottom + font * 2.0 + 10.0,
+                    &count,
+                    theme.text_dim,
+                    Anchor::Middle,
+                    None,
+                    false,
+                );
             }
         }
 
-        hits.push(Hit { index: i, x: cx - slot / 2.0, y: top, width: slot, height: bottom - top });
+        hits.push(Hit {
+            index: i,
+            x: cx - slot / 2.0,
+            y: top,
+            width: slot,
+            height: bottom - top,
+        });
     }
 
-    Drawing { svg: svg.finish(), hits }
+    Drawing {
+        svg: svg.finish(),
+        hits,
+    }
 }
 
 /// At most `max` of `values`, evenly picked with the smallest and the
@@ -335,7 +461,15 @@ fn fit(text: &str, width: f64, theme: &Theme) -> String {
 mod tests {
     use super::*;
 
-    fn spec(label: &str, q1: f64, median: f64, q3: f64, lo: f64, hi: f64, outliers: Vec<f64>) -> BoxSpec {
+    fn spec(
+        label: &str,
+        q1: f64,
+        median: f64,
+        q3: f64,
+        lo: f64,
+        hi: f64,
+        outliers: Vec<f64>,
+    ) -> BoxSpec {
         BoxSpec {
             label: label.into(),
             color: Rgb(0x2a6bdf),
@@ -380,7 +514,10 @@ mod tests {
         let drawing = draw(&boxes, &look(), &Theme::light(), 400.0, 300.0);
         // The axis ends near the whiskers, not at 6000.
         assert!(!drawing.svg.contains(">6000<") && !drawing.svg.contains(">6 000<"));
-        assert!(drawing.svg.contains("<polygon"), "a mark for the values above");
+        assert!(
+            drawing.svg.contains("<polygon"),
+            "a mark for the values above"
+        );
         assert!(drawing.svg.contains(">2</text>"), "their number");
     }
 
@@ -412,7 +549,10 @@ mod tests {
         assert_eq!(drawing.svg.matches("<circle").count(), 6);
         let dark = format!("<circle cx=\"");
         assert!(drawing.svg.contains(&dark));
-        assert!(drawing.svg.contains(&format!("fill=\"{}\" fill-opacity=\"0.85\"", Theme::light().text.hex())));
+        assert!(drawing.svg.contains(&format!(
+            "fill=\"{}\" fill-opacity=\"0.85\"",
+            Theme::light().text.hex()
+        )));
     }
 
     #[test]
@@ -431,11 +571,23 @@ mod tests {
         // No dots: only the far value.
         let mut no_dots = look();
         no_dots.dots = false;
-        assert_eq!(draw(&boxes, &no_dots, &theme, 400.0, 300.0).svg.matches("<circle").count(), 1);
+        assert_eq!(
+            draw(&boxes, &no_dots, &theme, 400.0, 300.0)
+                .svg
+                .matches("<circle")
+                .count(),
+            1
+        );
         // Min - max whiskers: nothing is far, no dots without the points.
         let mut min_max = no_dots.clone();
         min_max.min_max = true;
-        assert_eq!(draw(&boxes, &min_max, &theme, 400.0, 300.0).svg.matches("<circle").count(), 0);
+        assert_eq!(
+            draw(&boxes, &min_max, &theme, 400.0, 300.0)
+                .svg
+                .matches("<circle")
+                .count(),
+            0
+        );
     }
 
     #[test]
@@ -446,7 +598,10 @@ mod tests {
         let drawing = draw(&boxes, &look(), &Theme::light(), 800.0, 400.0);
         assert!(drawing.svg.contains("rotate(-50)"));
         assert!(drawing.svg.contains(">well A59<"), "every name drawn");
-        assert!(!drawing.svg.contains("n = "), "no counts under turned names");
+        assert!(
+            !drawing.svg.contains("n = "),
+            "no counts under turned names"
+        );
     }
 
     #[test]

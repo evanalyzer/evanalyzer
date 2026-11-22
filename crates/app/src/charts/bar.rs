@@ -57,7 +57,8 @@ fn t_975(df: usize) -> f64 {
         _ => {
             let z: f64 = 1.959_964;
             let d = df as f64;
-            z + (z.powi(3) + z) / (4.0 * d) + (5.0 * z.powi(5) + 16.0 * z.powi(3) + 3.0 * z) / (96.0 * d * d)
+            z + (z.powi(3) + z) / (4.0 * d)
+                + (5.0 * z.powi(5) + 16.0 * z.powi(3) + 3.0 * z) / (96.0 * d * d)
         }
     }
 }
@@ -93,15 +94,28 @@ const MAX_DOTS: usize = 300;
 pub fn draw(bars: &[BarSpec], look: &BarLook, theme: &Theme, width: f64, height: f64) -> Drawing {
     let mut svg = Svg::new(width, height, theme);
     if bars.is_empty() || width < 80.0 || height < 80.0 {
-        return Drawing { svg: svg.finish(), hits: Vec::new() };
+        return Drawing {
+            svg: svg.finish(),
+            hits: Vec::new(),
+        };
     }
     let font = theme.font_size;
     let top = 16.0;
     let slot_guess = (width - 80.0) / bars.len() as f64;
-    let turned = bars.iter().map(|b| theme.text_width(&b.label)).fold(0.0, f64::max) > slot_guess - 6.0;
-    let names: Vec<String> = bars.iter().map(|b| b.label.chars().take(14).collect()).collect();
+    let turned = bars
+        .iter()
+        .map(|b| theme.text_width(&b.label))
+        .fold(0.0, f64::max)
+        > slot_guess - 6.0;
+    let names: Vec<String> = bars
+        .iter()
+        .map(|b| b.label.chars().take(14).collect())
+        .collect();
     let below = if turned {
-        let longest = names.iter().map(|n| theme.text_width(n)).fold(0.0, f64::max);
+        let longest = names
+            .iter()
+            .map(|n| theme.text_width(n))
+            .fold(0.0, f64::max);
         (longest * 0.77 + font + 12.0).min(height * 0.4)
     } else if look.show_n {
         font * 2.0 + 18.0
@@ -111,7 +125,10 @@ pub fn draw(bars: &[BarSpec], look: &BarLook, theme: &Theme, width: f64, height:
     let bottom = height - below;
 
     // From 0 (or below it) up to the highest mean + error or dot.
-    let halves: Vec<f64> = bars.iter().map(|b| look.error.half(b.sd, b.count)).collect();
+    let halves: Vec<f64> = bars
+        .iter()
+        .map(|b| look.error.half(b.sd, b.count))
+        .collect();
     let mut lo: f64 = 0.0;
     let mut hi: f64 = 0.0;
     for (b, half) in bars.iter().zip(&halves) {
@@ -128,7 +145,10 @@ pub fn draw(bars: &[BarSpec], look: &BarLook, theme: &Theme, width: f64, height:
     let wanted = ((bottom - top) / 56.0).round().clamp(2.0, 10.0) as usize;
     let scale = Scale::nice(lo, hi, wanted, false);
     let ticks = scale.ticks(wanted);
-    let label_w = ticks.iter().map(|(_, l)| theme.text_width(l)).fold(0.0, f64::max);
+    let label_w = ticks
+        .iter()
+        .map(|(_, l)| theme.text_width(l))
+        .fold(0.0, f64::max);
     let left = 8.0 + font + 10.0 + label_w + 8.0;
     let right = width - 12.0;
     let y_of = |v: f64| bottom - scale.position(v) * (bottom - top);
@@ -138,12 +158,25 @@ pub fn draw(bars: &[BarSpec], look: &BarLook, theme: &Theme, width: f64, height:
             svg.line(left, y, right, y, theme.grid, 1.0);
         }
         svg.line(left - 4.0, y, left, y, theme.axis, 1.0);
-        svg.text(left - 7.0, y + font * 0.35, label, theme.text_dim, Anchor::End, None, false);
+        svg.text(
+            left - 7.0,
+            y + font * 0.35,
+            label,
+            theme.text_dim,
+            Anchor::End,
+            None,
+            false,
+        );
     }
     let zero = y_of(0.0);
     svg.line(left, top, left, bottom, theme.axis, 1.0);
     svg.line(left, zero, right, zero, theme.axis, 1.0);
-    svg.text_vertical(8.0 + font * 0.5, (top + bottom) / 2.0, &look.y_title, theme.text_dim);
+    svg.text_vertical(
+        8.0 + font * 0.5,
+        (top + bottom) / 2.0,
+        &look.y_title,
+        theme.text_dim,
+    );
 
     let slot = (right - left) / bars.len() as f64;
     let bar_w = (slot * 0.55).clamp(6.0, 90.0);
@@ -151,7 +184,16 @@ pub fn draw(bars: &[BarSpec], look: &BarLook, theme: &Theme, width: f64, height:
     for (i, (b, half)) in bars.iter().zip(&halves).enumerate() {
         let cx = left + slot * (i as f64 + 0.5);
         let y = y_of(b.mean);
-        svg.rect(cx - bar_w / 2.0, y.min(zero), bar_w, (zero - y).abs(), b.color, 0.22, Some((b.color, 1.5)), 2.0);
+        svg.rect(
+            cx - bar_w / 2.0,
+            y.min(zero),
+            bar_w,
+            (zero - y).abs(),
+            b.color,
+            0.22,
+            Some((b.color, 1.5)),
+            2.0,
+        );
         if look.dots && !b.points.is_empty() {
             let step = (b.points.len() as f64 / MAX_DOTS as f64).max(1.0);
             let mut k: f64 = 0.0;
@@ -165,22 +207,61 @@ pub fn draw(bars: &[BarSpec], look: &BarLook, theme: &Theme, width: f64, height:
         if half.is_finite() && *half > 0.0 {
             let (ya, yb) = (y_of(b.mean + half), y_of(b.mean - half));
             svg.line(cx, ya, cx, yb, theme.text, 1.5);
-            svg.line(cx - bar_w * 0.18, ya, cx + bar_w * 0.18, ya, theme.text, 1.5);
-            svg.line(cx - bar_w * 0.18, yb, cx + bar_w * 0.18, yb, theme.text, 1.5);
+            svg.line(
+                cx - bar_w * 0.18,
+                ya,
+                cx + bar_w * 0.18,
+                ya,
+                theme.text,
+                1.5,
+            );
+            svg.line(
+                cx - bar_w * 0.18,
+                yb,
+                cx + bar_w * 0.18,
+                yb,
+                theme.text,
+                1.5,
+            );
         }
         if turned {
             svg.text_turned(cx + font * 0.3, bottom + 10.0, &names[i], theme.text, -50.0);
         } else {
             let name: String = b.label.clone();
-            svg.text(cx, bottom + font + 6.0, &name, theme.text, Anchor::Middle, None, false);
+            svg.text(
+                cx,
+                bottom + font + 6.0,
+                &name,
+                theme.text,
+                Anchor::Middle,
+                None,
+                false,
+            );
             if look.show_n {
                 let n = format!("n = {}{}", format_number(b.count as f64), b.count_noun);
-                svg.text(cx, bottom + font * 2.0 + 10.0, &n, theme.text_dim, Anchor::Middle, None, false);
+                svg.text(
+                    cx,
+                    bottom + font * 2.0 + 10.0,
+                    &n,
+                    theme.text_dim,
+                    Anchor::Middle,
+                    None,
+                    false,
+                );
             }
         }
-        hits.push(Hit { index: i, x: cx - slot / 2.0, y: top, width: slot, height: bottom - top });
+        hits.push(Hit {
+            index: i,
+            x: cx - slot / 2.0,
+            y: top,
+            width: slot,
+            height: bottom - top,
+        });
     }
-    Drawing { svg: svg.finish(), hits }
+    Drawing {
+        svg: svg.finish(),
+        hits,
+    }
 }
 
 #[cfg(test)]
@@ -188,7 +269,15 @@ mod tests {
     use super::*;
 
     fn bar(label: &str, mean: f64, points: Vec<f64>) -> BarSpec {
-        BarSpec { label: label.into(), color: Rgb(0x2a6bdf), mean, sd: 4.0, count: 16, points, count_noun: " images".into() }
+        BarSpec {
+            label: label.into(),
+            color: Rgb(0x2a6bdf),
+            mean,
+            sd: 4.0,
+            count: 16,
+            points,
+            count_noun: " images".into(),
+        }
     }
 
     #[test]
@@ -202,8 +291,17 @@ mod tests {
 
     #[test]
     fn every_bar_is_a_mark_with_its_dots_and_error_bar() {
-        let look = BarLook { y_title: "Objects per image".into(), error: ErrorBar::Sem, grid: true, dots: true, show_n: true };
-        let bars = [bar("Control", 41.0, vec![38.0, 41.0, 44.0]), bar("1 µM", 52.0, vec![50.0, 54.0])];
+        let look = BarLook {
+            y_title: "Objects per image".into(),
+            error: ErrorBar::Sem,
+            grid: true,
+            dots: true,
+            show_n: true,
+        };
+        let bars = [
+            bar("Control", 41.0, vec![38.0, 41.0, 44.0]),
+            bar("1 µM", 52.0, vec![50.0, 54.0]),
+        ];
         let drawing = draw(&bars, &look, &Theme::light(), 600.0, 400.0);
         assert_eq!(drawing.hits.len(), 2);
         assert_eq!(drawing.svg.matches("<circle").count(), 5);

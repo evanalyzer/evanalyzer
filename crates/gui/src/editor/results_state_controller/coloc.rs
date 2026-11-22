@@ -77,7 +77,11 @@ pub(super) fn coloc_groups(raw: &[ColumnEntry]) -> Vec<Vec<ObjectClass>> {
         .iter()
         .filter_map(|entry| match entry.key {
             Column::ColocCount(class) => Some((
-                if entry.coloc_group == 0 { u32::MAX } else { entry.coloc_group },
+                if entry.coloc_group == 0 {
+                    u32::MAX
+                } else {
+                    entry.coloc_group
+                },
                 class,
             )),
             _ => None,
@@ -159,11 +163,18 @@ pub(super) fn coloc_columns(raw: &[ColumnEntry], settings: &ColocSettings) -> Ve
     // of its own Colocalize step's classes.
     let groups: Vec<Vec<ObjectClass>> = coloc_groups(raw)
         .into_iter()
-        .map(|group| group.into_iter().filter(|c| partners.contains(c)).collect::<Vec<_>>())
+        .map(|group| {
+            group
+                .into_iter()
+                .filter(|c| partners.contains(c))
+                .collect::<Vec<_>>()
+        })
         .filter(|group| !group.is_empty())
         .collect();
     let only_occurring = settings.only_occurring
-        || groups.iter().any(|group| group.len() > MAX_CLASSES_FOR_ALL_COMBINATIONS);
+        || groups
+            .iter()
+            .any(|group| group.len() > MAX_CLASSES_FOR_ALL_COMBINATIONS);
     let combinations: Vec<Vec<ObjectClass>> = if only_occurring {
         // Every part of a set that occurs occurs "at least".
         let mut found: Vec<Vec<ObjectClass>> =
@@ -172,7 +183,8 @@ pub(super) fn coloc_columns(raw: &[ColumnEntry], settings: &ColocSettings) -> Ve
         found.dedup();
         found
     } else {
-        let mut all: Vec<Vec<ObjectClass>> = groups.iter().flat_map(|group| subsets(group)).collect();
+        let mut all: Vec<Vec<ObjectClass>> =
+            groups.iter().flat_map(|group| subsets(group)).collect();
         all.sort_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
         all.dedup();
         all
@@ -361,9 +373,13 @@ pub(super) fn picker_sections(
             selected: selected.contains(&entry.key),
         };
         let target = if is_coloc_column(&entry.key) {
-            coloc.iter_mut().find(|section| section.group == entry.group)
+            coloc
+                .iter_mut()
+                .find(|section| section.group == entry.group)
         } else {
-            sections.iter_mut().find(|section| section.group == entry.group)
+            sections
+                .iter_mut()
+                .find(|section| section.group == entry.group)
         };
         match target {
             Some(section) => section.items.push(item),
@@ -399,9 +415,10 @@ pub(super) fn picker_sections(
         coloc.iter().flat_map(|s| s.items.iter().cloned()).collect();
     let coloc_title = title("Coloc", &coloc_items);
     let coloc_open = !filter.is_empty() || open.get(COLOC_BOX).copied().unwrap_or(true);
-    for (section, name) in coloc
-        .iter_mut()
-        .zip(["With each class", "With at least", "With exactly"])
+    for (section, name) in
+        coloc
+            .iter_mut()
+            .zip(["With each class", "With at least", "With exactly"])
     {
         section.title = title(name, &section.items);
         section.open = !filter.is_empty() || open.get(&section.group).copied().unwrap_or(true);
@@ -515,8 +532,10 @@ impl ResultsStateController {
 
         // The panel's parts: the starting sets, the intensity grid, the coloc
         // columns by kind.
-        let presets =
-            super::column_panel::preset_cards(&super::column_panel::presets(&available, &raw), &selected);
+        let presets = super::column_panel::preset_cards(
+            &super::column_panel::presets(&available, &raw),
+            &selected,
+        );
         let (intensity_channels, intensity_cells) =
             super::column_panel::intensity_grid(&available, &selected, &classes);
         let intensity_section = sections.iter().find(|section| section.group == "intensity");
@@ -558,14 +577,20 @@ impl ResultsStateController {
             state.set_list_coloc_only_occurring(only_occurring);
             state.set_list_column_presets(model_of(presets));
             state.set_list_intensity_channels(model_of(
-                intensity_channels.into_iter().map(slint::SharedString::from).collect(),
+                intensity_channels
+                    .into_iter()
+                    .map(slint::SharedString::from)
+                    .collect(),
             ));
             state.set_list_intensity_stats(model_of(super::column_panel::intensity_heads()));
             state.set_list_intensity_cells(model_of(intensity_cells));
             state.set_list_intensity_title(intensity_title.into());
             state.set_list_intensity_open(intensity_open);
             state.set_list_coloc_groups(model_of(
-                coloc_kinds.into_iter().map(super::column_panel::ColocGroupUi::into_slint).collect(),
+                coloc_kinds
+                    .into_iter()
+                    .map(super::column_panel::ColocGroupUi::into_slint)
+                    .collect(),
             ));
         })
         .ok();

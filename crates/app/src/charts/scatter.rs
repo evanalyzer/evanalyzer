@@ -37,10 +37,19 @@ pub struct ScatterLook {
 
 /// The scatter of `spec` as a `width` × `height` drawing - a mark per dot
 /// (its centre, size 0), in `spec.points`' order.
-pub fn draw(spec: &ScatterSpec, look: &ScatterLook, theme: &Theme, width: f64, height: f64) -> Drawing {
+pub fn draw(
+    spec: &ScatterSpec,
+    look: &ScatterLook,
+    theme: &Theme,
+    width: f64,
+    height: f64,
+) -> Drawing {
     let mut svg = Svg::new(width, height, theme);
     if spec.points.is_empty() || width < 80.0 || height < 80.0 {
-        return Drawing { svg: svg.finish(), hits: Vec::new() };
+        return Drawing {
+            svg: svg.finish(),
+            hits: Vec::new(),
+        };
     }
     let font = theme.font_size;
     let top = 16.0 + font + 6.0;
@@ -51,7 +60,9 @@ pub fn draw(spec: &ScatterSpec, look: &ScatterLook, theme: &Theme, width: f64, h
             .iter()
             .map(pick)
             .filter(|v| v.is_finite())
-            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v), hi.max(v)))
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
+                (lo.min(v), hi.max(v))
+            })
     };
     let (x_lo, x_hi) = range(|p| p.0);
     let (y_lo, y_hi) = range(|p| p.1);
@@ -75,7 +86,15 @@ pub fn draw(spec: &ScatterSpec, look: &ScatterLook, theme: &Theme, width: f64, h
             svg.line(left, y, right, y, theme.grid, 1.0);
         }
         svg.line(left - 4.0, y, left, y, theme.axis, 1.0);
-        svg.text(left - 7.0, y + font * 0.35, label, theme.text_dim, Anchor::End, None, false);
+        svg.text(
+            left - 7.0,
+            y + font * 0.35,
+            label,
+            theme.text_dim,
+            Anchor::End,
+            None,
+            false,
+        );
     }
     for (value, label) in x_scale.ticks(x_wanted) {
         let x = x_of(value);
@@ -83,12 +102,33 @@ pub fn draw(spec: &ScatterSpec, look: &ScatterLook, theme: &Theme, width: f64, h
             svg.line(x, top, x, bottom, theme.grid, 1.0);
         }
         svg.line(x, bottom, x, bottom + 4.0, theme.axis, 1.0);
-        svg.text(x, bottom + font + 6.0, &label, theme.text_dim, Anchor::Middle, None, false);
+        svg.text(
+            x,
+            bottom + font + 6.0,
+            &label,
+            theme.text_dim,
+            Anchor::Middle,
+            None,
+            false,
+        );
     }
     svg.line(left, top, left, bottom, theme.axis, 1.0);
     svg.line(left, bottom, right, bottom, theme.axis, 1.0);
-    svg.text_vertical(8.0 + font * 0.5, (top + bottom) / 2.0, &look.y_title, theme.text_dim);
-    svg.text((left + right) / 2.0, height - 6.0, &look.x_title, theme.text_dim, Anchor::Middle, None, false);
+    svg.text_vertical(
+        8.0 + font * 0.5,
+        (top + bottom) / 2.0,
+        &look.y_title,
+        theme.text_dim,
+    );
+    svg.text(
+        (left + right) / 2.0,
+        height - 6.0,
+        &look.x_title,
+        theme.text_dim,
+        Anchor::Middle,
+        None,
+        false,
+    );
     let shown = if spec.total > spec.points.len() {
         format!(
             "{} of {} objects drawn (an even sample)",
@@ -98,7 +138,15 @@ pub fn draw(spec: &ScatterSpec, look: &ScatterLook, theme: &Theme, width: f64, h
     } else {
         format!("{} objects", format_number(spec.points.len() as f64))
     };
-    svg.text(left, 16.0, &shown, theme.text_dim, Anchor::Start, None, false);
+    svg.text(
+        left,
+        16.0,
+        &shown,
+        theme.text_dim,
+        Anchor::Start,
+        None,
+        false,
+    );
 
     let mut hits = Vec::with_capacity(spec.points.len());
     for (i, (x, y)) in spec.points.iter().enumerate() {
@@ -107,9 +155,18 @@ pub fn draw(spec: &ScatterSpec, look: &ScatterLook, theme: &Theme, width: f64, h
         }
         let (px, py) = (x_of(*x), y_of(*y));
         svg.circle(px, py, 2.4, spec.color, 0.5);
-        hits.push(Hit { index: i, x: px, y: py, width: 0.0, height: 0.0 });
+        hits.push(Hit {
+            index: i,
+            x: px,
+            y: py,
+            width: 0.0,
+            height: 0.0,
+        });
     }
-    Drawing { svg: svg.finish(), hits }
+    Drawing {
+        svg: svg.finish(),
+        hits,
+    }
 }
 
 /// The mark nearest to `(x, y)` within `radius` (its index in the points).
@@ -126,18 +183,35 @@ mod tests {
     use super::*;
 
     fn look() -> ScatterLook {
-        ScatterLook { x_title: "Area µm²".into(), y_title: "Circularity".into(), log_x: false, log_y: false, grid: true }
+        ScatterLook {
+            x_title: "Area µm²".into(),
+            y_title: "Circularity".into(),
+            log_x: false,
+            log_y: false,
+            grid: true,
+        }
     }
 
     #[test]
     fn every_dot_is_a_mark_and_a_click_names_the_nearest() {
-        let spec = ScatterSpec { points: vec![(1.0, 1.0), (5.0, 2.0), (9.0, 9.0)], color: Rgb(0x2a6bdf), total: 10 };
+        let spec = ScatterSpec {
+            points: vec![(1.0, 1.0), (5.0, 2.0), (9.0, 9.0)],
+            color: Rgb(0x2a6bdf),
+            total: 10,
+        };
         let drawing = draw(&spec, &look(), &Theme::light(), 500.0, 400.0);
         assert_eq!(drawing.hits.len(), 3);
         assert_eq!(drawing.svg.matches("<circle").count(), 3);
         assert!(drawing.svg.contains("3 of 10 objects drawn"));
         let second = drawing.hits[1];
-        assert_eq!(nearest(&drawing.hits, second.x + 3.0, second.y - 2.0, 8.0), Some(1));
-        assert_eq!(nearest(&drawing.hits, second.x + 30.0, second.y, 8.0), None, "too far");
+        assert_eq!(
+            nearest(&drawing.hits, second.x + 3.0, second.y - 2.0, 8.0),
+            Some(1)
+        );
+        assert_eq!(
+            nearest(&drawing.hits, second.x + 30.0, second.y, 8.0),
+            None,
+            "too far"
+        );
     }
 }

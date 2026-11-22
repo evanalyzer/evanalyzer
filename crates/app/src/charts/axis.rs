@@ -30,7 +30,12 @@ impl Scale {
     pub fn nice(lo: f64, hi: f64, ticks: usize, log: bool) -> Self {
         let (mut lo, mut hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
         if !lo.is_finite() || !hi.is_finite() {
-            return Self { min: 0.0, max: 1.0, log: false, step: 0.25 };
+            return Self {
+                min: 0.0,
+                max: 1.0,
+                log: false,
+                step: 0.25,
+            };
         }
         if log && lo > 0.0 {
             let min = 10f64.powf(lo.log10().floor());
@@ -38,7 +43,12 @@ impl Scale {
             if max <= min {
                 max = min * 10.0;
             }
-            return Self { min, max, log: true, step: 0.0 };
+            return Self {
+                min,
+                max,
+                log: true,
+                step: 0.0,
+            };
         }
         if hi - lo < f64::EPSILON * hi.abs().max(1.0) {
             let pad = if lo == 0.0 { 1.0 } else { lo.abs() * 0.1 };
@@ -52,13 +62,22 @@ impl Scale {
         if lo >= 0.0 && min > 0.0 && min <= (max - min) * 0.5 {
             min = 0.0;
         }
-        Self { min, max, log: false, step }
+        Self {
+            min,
+            max,
+            log: false,
+            step,
+        }
     }
 
     /// A linear scale over exactly `lo..hi` (e.g. a histogram's bins), its
     /// ticks the nice values inside.
     pub fn exact(lo: f64, hi: f64, ticks: usize) -> Self {
-        let (lo, hi) = if hi > lo { (lo, hi) } else { (lo - 0.5, lo + 0.5) };
+        let (lo, hi) = if hi > lo {
+            (lo, hi)
+        } else {
+            (lo - 0.5, lo + 0.5)
+        };
         Self {
             min: lo,
             max: hi,

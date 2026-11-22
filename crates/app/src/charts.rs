@@ -24,8 +24,8 @@
 
 mod axis;
 pub mod bar;
-pub mod export;
 pub mod boxplot;
+pub mod export;
 pub mod histogram;
 pub mod lines;
 pub mod scatter;

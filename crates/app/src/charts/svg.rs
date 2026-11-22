@@ -112,7 +112,14 @@ impl Svg {
     }
 
     /// A line through `points`; `dash`: dashed.
-    pub fn polyline(&mut self, points: &[(f64, f64)], color: Rgb, width: f64, opacity: f64, dash: bool) {
+    pub fn polyline(
+        &mut self,
+        points: &[(f64, f64)],
+        color: Rgb,
+        width: f64,
+        opacity: f64,
+        dash: bool,
+    ) {
         if points.len() < 2 {
             return;
         }
@@ -127,7 +134,11 @@ impl Svg {
             color.hex(),
             n(width),
             n(opacity),
-            if dash { r#" stroke-dasharray="4 3""# } else { "" }
+            if dash {
+                r#" stroke-dasharray="4 3""#
+            } else {
+                ""
+            }
         );
     }
 
@@ -216,7 +227,11 @@ fn n(value: f64) -> String {
     let rounded = (value * 100.0).round() / 100.0;
     let text = format!("{rounded:.2}");
     let text = text.trim_end_matches('0').trim_end_matches('.');
-    if text == "-0" { "0".to_string() } else { text.to_string() }
+    if text == "-0" {
+        "0".to_string()
+    } else {
+        text.to_string()
+    }
 }
 
 /// `text` safe in an attribute or element.

@@ -3324,7 +3324,9 @@ impl ResultsGenerator {
             ))
             .map_err(err)?;
         let rows: Vec<(String, String)> = stmt
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
@@ -4519,10 +4521,12 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
         },
         // A coloc of the object's own class wasn't measured (a class isn't
         // colocalized with itself): no value, not 0.
-        Column::ColocCount(class) if is_own_class(object, std::slice::from_ref(class), classes) => Cell {
-            value: CellValue::Empty,
-            ..no_bg
-        },
+        Column::ColocCount(class) if is_own_class(object, std::slice::from_ref(class), classes) => {
+            Cell {
+                value: CellValue::Empty,
+                ..no_bg
+            }
+        }
         Column::Coloc(c) if is_own_class(object, &c.with, classes) => Cell {
             value: CellValue::Empty,
             ..no_bg
@@ -4796,7 +4800,10 @@ pub(super) fn column_aggregate_expr(column: &Column) -> Result<String, InternalE
             .to_string(),
         Column::ColocCount(class) => unless_own_class(
             std::slice::from_ref(class),
-            format!("COALESCE(len(coloc_partner_ids[{}]), 0)", coloc_class_key(*class)),
+            format!(
+                "COALESCE(len(coloc_partner_ids[{}]), 0)",
+                coloc_class_key(*class)
+            ),
         ),
         Column::Coloc(c) => unless_own_class(&c.with, coloc_value_expr(c)),
         // Gray values, like the list view; NULL (left out of every
@@ -5516,8 +5523,10 @@ fn push_object_list_conditions(
 /// own classes that are partners somewhere. Each group sorted, the groups
 /// by their first class.
 fn coloc_groups_of(pairs: &[(Vec<ObjectClass>, Vec<ObjectClass>)]) -> Vec<Vec<ObjectClass>> {
-    let mut partner_classes: Vec<ObjectClass> =
-        pairs.iter().flat_map(|(_, set)| set.iter().copied()).collect();
+    let mut partner_classes: Vec<ObjectClass> = pairs
+        .iter()
+        .flat_map(|(_, set)| set.iter().copied())
+        .collect();
     partner_classes.sort();
     partner_classes.dedup();
     // A small union-find over the partner classes.
@@ -5531,11 +5540,7 @@ fn coloc_groups_of(pairs: &[(Vec<ObjectClass>, Vec<ObjectClass>)]) -> Vec<Vec<Ob
     }
     let index = |class: &ObjectClass| partner_classes.binary_search(class).ok();
     for (own, set) in pairs {
-        let members: Vec<usize> = set
-            .iter()
-            .chain(own.iter())
-            .filter_map(&index)
-            .collect();
+        let members: Vec<usize> = set.iter().chain(own.iter()).filter_map(&index).collect();
         if let Some(first) = members.first() {
             for other in &members[1..] {
                 let (a, b) = (root(&mut parent, *first), root(&mut parent, *other));

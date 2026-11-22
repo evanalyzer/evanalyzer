@@ -17,8 +17,8 @@ use crate::ChartHit;
 use evanalyzer_app::charts::bar::{self, BarLook, BarSpec, ErrorBar};
 use evanalyzer_app::charts::boxplot::{self, BoxSpec, BoxplotLook};
 use evanalyzer_app::charts::histogram::{self, HistogramLook, HistogramSpec};
-use evanalyzer_app::charts::scatter::{self, ScatterLook, ScatterSpec};
 pub(super) use evanalyzer_app::charts::lines::{self, LineSeries, LinesSpec};
+use evanalyzer_app::charts::scatter::{self, ScatterLook, ScatterSpec};
 use evanalyzer_app::charts::{Rgb, Theme};
 
 /// The chart area: its size (px) and whether the scheme is dark.
@@ -112,9 +112,17 @@ fn box_specs(boxes: &[BoxplotBox], factor: f64, look: &ChartLook) -> Vec<BoxSpec
             whisker_high: b.whisker_high * factor,
             outliers: b.outliers.iter().map(|v| v * factor).collect(),
             // Per image: its images' values, each a dot.
-            count: if b.image_count > 0 { b.image_count } else { b.object_count },
+            count: if b.image_count > 0 {
+                b.image_count
+            } else {
+                b.object_count
+            },
             points: b.image_values.iter().map(|v| v * factor).collect(),
-            count_noun: if b.image_count > 0 { " images".into() } else { String::new() },
+            count_noun: if b.image_count > 0 {
+                " images".into()
+            } else {
+                String::new()
+            },
         })
         .collect()
 }
@@ -129,7 +137,11 @@ const STAT_HEADS: [&str; 8] = ["Box", "n", "Median", "Q1", "Q3", "Mean", "SD", "
 /// The numbers of a box as drawn: n, median, Q1, Q3, mean, SD, SEM.
 fn box_stats(spec: &BoxSpec) -> [f64; 7] {
     let n = spec.count as f64;
-    let sem = if n > 0.0 { spec.sd / n.sqrt() } else { f64::NAN };
+    let sem = if n > 0.0 {
+        spec.sd / n.sqrt()
+    } else {
+        f64::NAN
+    };
     [n, spec.median, spec.q1, spec.q3, spec.mean, spec.sd, sem]
 }
 
@@ -161,9 +173,15 @@ fn box_numbers(spec: &BoxSpec, look: &ChartLook) -> Vec<(String, String)> {
     let sd = spec.sd;
     let mut lines = vec![
         ("Median".to_string(), f(spec.median)),
-        ("Q1 – Q3".to_string(), format!("{} – {}", f(spec.q1), f(spec.q3))),
+        (
+            "Q1 – Q3".to_string(),
+            format!("{} – {}", f(spec.q1), f(spec.q3)),
+        ),
         (whiskers.to_string(), format!("{} – {}", f(low), f(high))),
-        ("Mean ± SD".to_string(), format!("{} ± {}", f(spec.mean), f(sd))),
+        (
+            "Mean ± SD".to_string(),
+            format!("{} ± {}", f(spec.mean), f(sd)),
+        ),
     ];
     if spec.count_noun.is_empty() {
         lines.push(("Objects".to_string(), f(spec.count as f64)));
@@ -187,7 +205,13 @@ pub(super) struct Rendered {
 impl Rendered {
     /// Only a picture.
     fn picture(svg: String) -> Self {
-        Self { svg, hits: Vec::new(), stat_rows: Vec::new(), tsv: String::new(), marks: Vec::new() }
+        Self {
+            svg,
+            hits: Vec::new(),
+            stat_rows: Vec::new(),
+            tsv: String::new(),
+            marks: Vec::new(),
+        }
     }
 }
 
@@ -244,18 +268,31 @@ impl ResultsStateController {
         if canvas.width < 1.0 || canvas.height < 1.0 {
             return;
         }
-        let theme = if canvas.dark { Theme::dark() } else { Theme::light() };
+        let theme = if canvas.dark {
+            Theme::dark()
+        } else {
+            Theme::light()
+        };
         let Some(rendered) = self.render_chart(canvas.width, canvas.height, &theme) else {
             return;
         };
         *self.chart_marks.lock().expect("Poisoned") = rendered.marks;
-        self.push_picture(rendered.svg, rendered.hits, rendered.stat_rows, rendered.tsv);
+        self.push_picture(
+            rendered.svg,
+            rendered.hits,
+            rendered.stat_rows,
+            rendered.tsv,
+        );
     }
 
     /// The chart shown, drawn `width` × `height` in `theme` (the screen's,
     /// or an export's).
     pub(super) fn render_chart(&self, width: f64, height: f64, theme: &Theme) -> Option<Rendered> {
-        let canvas = ChartCanvas { width, height, dark: false };
+        let canvas = ChartCanvas {
+            width,
+            height,
+            dark: false,
+        };
         let data = self.chart_data.lock().expect("Poisoned");
         Some(match &*data {
             ChartData::None => return None,
@@ -273,7 +310,12 @@ impl ResultsStateController {
 
     /// The scatter: both values (µm), a dot per object - where they landed
     /// kept for clicks.
-    fn draw_scatter(&self, scatter: &ScatterResult, canvas: ChartCanvas, theme: &Theme) -> Rendered {
+    fn draw_scatter(
+        &self,
+        scatter: &ScatterResult,
+        canvas: ChartCanvas,
+        theme: &Theme,
+    ) -> Rendered {
         let look = self.chart_look.lock().expect("Poisoned").clone();
         let (x_label, y_label, class_color) = {
             let classes = self.classes.lock().expect("Poisoned");
@@ -282,12 +324,24 @@ impl ResultsStateController {
                 .object_class
                 .and_then(|c| classes.iter().find(|k| k.global() == c))
                 .map_or(0, |k| k.color & 0x00ff_ffff);
-            (chart.column.display_label(&classes), chart.y_column.display_label(&classes), class_color)
+            (
+                chart.column.display_label(&classes),
+                chart.y_column.display_label(&classes),
+                class_color,
+            )
         };
         let (fx, fy) = (unit_factor(&x_label), unit_factor(&y_label));
         let spec = ScatterSpec {
-            points: scatter.points.iter().map(|p| (p.x * fx, p.y * fy)).collect(),
-            color: Rgb(if class_color == 0 { PALETTE[0] } else { class_color }),
+            points: scatter
+                .points
+                .iter()
+                .map(|p| (p.x * fx, p.y * fy))
+                .collect(),
+            color: Rgb(if class_color == 0 {
+                PALETTE[0]
+            } else {
+                class_color
+            }),
             total: scatter.total_object_count,
         };
         let drawing = scatter::draw(
@@ -303,19 +357,27 @@ impl ResultsStateController {
             canvas.width,
             canvas.height,
         );
-        Rendered { marks: drawing.hits, ..Rendered::picture(drawing.svg) }
+        Rendered {
+            marks: drawing.hits,
+            ..Rendered::picture(drawing.svg)
+        }
     }
 
     /// A click in the scatter (px): the nearest dot within 8 px - its
     /// object on its image.
     fn scatter_clicked(&self, x: f64, y: f64) {
-        let Some(index) = scatter::nearest(&self.chart_marks.lock().expect("Poisoned"), x, y, 8.0) else {
+        let Some(index) = scatter::nearest(&self.chart_marks.lock().expect("Poisoned"), x, y, 8.0)
+        else {
             return;
         };
         let target = match &*self.chart_data.lock().expect("Poisoned") {
             ChartData::Scatter(scatter) => scatter.points.get(index).map(|point| {
                 (
-                    scatter.images.get(point.image as usize).cloned().unwrap_or_default(),
+                    scatter
+                        .images
+                        .get(point.image as usize)
+                        .cloned()
+                        .unwrap_or_default(),
                     point.bbox_px,
                 )
             }),
@@ -324,8 +386,11 @@ impl ResultsStateController {
         let Some((rel_path, bbox_px)) = target else {
             return;
         };
-        self.image_list_controller
-            .open_image_and_highlight_object(&std::path::PathBuf::from(&rel_path), bbox_px, false);
+        self.image_list_controller.open_image_and_highlight_object(
+            &std::path::PathBuf::from(&rel_path),
+            bbox_px,
+            false,
+        );
         let name = std::path::Path::new(&rel_path)
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -334,7 +399,12 @@ impl ResultsStateController {
     }
 
     /// The histogram: the value's axis (µm), the counts, linear or log.
-    fn draw_histogram(&self, histogram: &HistogramResult, canvas: ChartCanvas, theme: &Theme) -> Rendered {
+    fn draw_histogram(
+        &self,
+        histogram: &HistogramResult,
+        canvas: ChartCanvas,
+        theme: &Theme,
+    ) -> Rendered {
         let look = self.chart_look.lock().expect("Poisoned").clone();
         let (label, x_title, log_counts, class_color) = {
             let classes = self.classes.lock().expect("Poisoned");
@@ -354,7 +424,11 @@ impl ResultsStateController {
         let spec = HistogramSpec {
             edges: histogram.bin_edges.iter().map(|e| e * factor).collect(),
             counts: histogram.counts.clone(),
-            color: Rgb(if class_color == 0 { PALETTE[0] } else { class_color }),
+            color: Rgb(if class_color == 0 {
+                PALETTE[0]
+            } else {
+                class_color
+            }),
             below: histogram.below,
             above: histogram.above,
             data_min: histogram.data_min * factor,
@@ -362,7 +436,12 @@ impl ResultsStateController {
         };
         let drawing = histogram::draw(
             &spec,
-            &HistogramLook { x_title, y_title: "Objects".into(), log_counts, grid: look.grid },
+            &HistogramLook {
+                x_title,
+                y_title: "Objects".into(),
+                log_counts,
+                grid: look.grid,
+            },
             theme,
             canvas.width,
             canvas.height,
@@ -428,8 +507,21 @@ impl ResultsStateController {
                 let spec = &specs[hit.index];
                 let mut numbers = box_numbers(spec, &look);
                 let half = error.half(spec.sd, spec.count);
-                numbers.insert(0, (format!("Mean ± {}", error.name()), format!("{} ± {}", format_number(spec.mean), format_number(half))));
-                (hit.x as f32, hit.y as f32, hit.width as f32, hit.height as f32, spec.label.clone(), numbers)
+                numbers.insert(
+                    0,
+                    (
+                        format!("Mean ± {}", error.name()),
+                        format!("{} ± {}", format_number(spec.mean), format_number(half)),
+                    ),
+                );
+                (
+                    hit.x as f32,
+                    hit.y as f32,
+                    hit.width as f32,
+                    hit.height as f32,
+                    spec.label.clone(),
+                    numbers,
+                )
             })
             .collect();
         let stat_rows: Vec<(u32, Vec<String>)> = specs
@@ -440,7 +532,13 @@ impl ResultsStateController {
                 (spec.color.0, cells)
             })
             .collect();
-        Rendered { svg: drawing.svg, hits, stat_rows, tsv: stats_tsv(&specs), marks: Vec::new() }
+        Rendered {
+            svg: drawing.svg,
+            hits,
+            stat_rows,
+            tsv: stats_tsv(&specs),
+            marks: Vec::new(),
+        }
     }
 
     /// The boxplot: a box per group, the look's options.
@@ -504,11 +602,23 @@ impl ResultsStateController {
             })
             .collect();
         let tsv = stats_tsv(&specs);
-        Rendered { svg, hits, stat_rows, tsv, marks: Vec::new() }
+        Rendered {
+            svg,
+            hits,
+            stat_rows,
+            tsv,
+            marks: Vec::new(),
+        }
     }
 
     /// A drawn chart to the view: the picture, its marks, the numbers.
-    fn push_picture(&self, svg: String, hits: Vec<HitRow>, stat_rows: Vec<(u32, Vec<String>)>, tsv: String) {
+    fn push_picture(
+        &self,
+        svg: String,
+        hits: Vec<HitRow>,
+        stat_rows: Vec<(u32, Vec<String>)>,
+        tsv: String,
+    ) {
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             let Some(ui) = ui_weak.upgrade() else {
@@ -540,14 +650,20 @@ impl ResultsStateController {
                 .collect();
             state.set_chart_hits(ModelRc::from(Rc::new(VecModel::from(hits))));
             state.set_chart_stats_head(ModelRc::from(Rc::new(VecModel::from(
-                STAT_HEADS.iter().map(|h| slint::SharedString::from(*h)).collect::<Vec<_>>(),
+                STAT_HEADS
+                    .iter()
+                    .map(|h| slint::SharedString::from(*h))
+                    .collect::<Vec<_>>(),
             ))));
             let rows: Vec<crate::ChartStatRow> = stat_rows
                 .into_iter()
                 .map(|(color, cells)| crate::ChartStatRow {
                     color: bg_color_to_slint(color),
                     cells: ModelRc::from(Rc::new(VecModel::from(
-                        cells.into_iter().map(slint::SharedString::from).collect::<Vec<_>>(),
+                        cells
+                            .into_iter()
+                            .map(slint::SharedString::from)
+                            .collect::<Vec<_>>(),
                     ))),
                 })
                 .collect();
@@ -560,7 +676,10 @@ impl ResultsStateController {
     pub(super) fn attach_chart_draw_callbacks(self: &Arc<Self>, ui: &AppWindow) {
         let state = ui.global::<ResultsState>();
         state.set_chart_box_palette(ModelRc::from(Rc::new(VecModel::from(
-            PICKABLE.iter().map(|c| bg_color_to_slint(*c)).collect::<Vec<_>>(),
+            PICKABLE
+                .iter()
+                .map(|c| bg_color_to_slint(*c))
+                .collect::<Vec<_>>(),
         ))));
         let manager = self.clone();
         state.on_chart_resized(move |width, height, dark| {
@@ -602,7 +721,12 @@ impl ResultsStateController {
         });
         let manager = self.clone();
         state.on_chart_box_look_changed(move |look| {
-            let box_colors = manager.chart_look.lock().expect("Poisoned").box_colors.clone();
+            let box_colors = manager
+                .chart_look
+                .lock()
+                .expect("Poisoned")
+                .box_colors
+                .clone();
             *manager.chart_look.lock().expect("Poisoned") = ChartLook {
                 log: look.log,
                 grid: look.grid,
@@ -648,12 +772,20 @@ mod tests {
             count_noun: " images".into(),
         };
         let lines = box_numbers(&spec, &ChartLook::default());
-        let get = |label: &str| lines.iter().find(|(l, _)| l == label).map(|(_, v)| v.clone());
+        let get = |label: &str| {
+            lines
+                .iter()
+                .find(|(l, _)| l == label)
+                .map(|(_, v)| v.clone())
+        };
         assert_eq!(get("Median").as_deref(), Some("3"));
         assert_eq!(get("Whiskers (1.5 IQR)").as_deref(), Some("1 – 6"));
         assert_eq!(get("Images").as_deref(), Some("16"));
         assert_eq!(get("Objects").as_deref(), Some("120"));
-        let min_max = ChartLook { min_max: true, ..ChartLook::default() };
+        let min_max = ChartLook {
+            min_max: true,
+            ..ChartLook::default()
+        };
         let lines = box_numbers(&spec, &min_max);
         assert!(lines.iter().any(|(l, v)| l == "Min – max" && v == "1 – 9"));
     }
@@ -687,7 +819,11 @@ mod tests {
     #[test]
     fn the_colours_follow_the_look() {
         assert_eq!(box_color(3, 0, 0), Rgb(PALETTE[3]));
-        assert_eq!(box_color(3, 0x123456, 0), Rgb(0x123456), "a class keeps its colour");
+        assert_eq!(
+            box_color(3, 0x123456, 0),
+            Rgb(0x123456),
+            "a class keeps its colour"
+        );
         assert_eq!(box_color(3, 0x123456, 1), Rgb(PALETTE[0]));
         assert_eq!(box_color(0, 0, 2), Rgb(0x52525b), "the control dark");
         assert_eq!(box_color(1, 0, 2), Rgb(0xa1a1aa));
@@ -718,9 +854,17 @@ mod tests {
         let specs = box_specs(&boxes, 1e-6, &ChartLook::default());
         let mut picked = ChartLook::default();
         picked.box_colors.insert("a".into(), 0x123456);
-        assert_eq!(box_specs(&boxes, 1.0, &picked)[0].color, Rgb(0x123456), "a picked colour wins");
+        assert_eq!(
+            box_specs(&boxes, 1.0, &picked)[0].color,
+            Rgb(0x123456),
+            "a picked colour wins"
+        );
         assert_eq!(specs[0].median, 3.0);
         assert_eq!(specs[0].outliers, [9.0]);
-        assert_eq!(specs[0].color, Rgb(PALETTE[0]), "no class colour: the palette's");
+        assert_eq!(
+            specs[0].color,
+            Rgb(PALETTE[0]),
+            "no class colour: the palette's"
+        );
     }
 }

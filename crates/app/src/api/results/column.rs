@@ -210,14 +210,22 @@ fn classes_from_key_part(part: &str) -> Option<Vec<ObjectClass>> {
 /// what follows their "@" (the classes of one Colocalize step usually do),
 /// else "A + B".
 fn classes_label(with: &[ObjectClass], classes: &[Class]) -> String {
-    let names: Vec<String> = with.iter().map(|class| class_label(class, classes)).collect();
+    let names: Vec<String> = with
+        .iter()
+        .map(|class| class_label(class, classes))
+        .collect();
     let split: Vec<Option<(&str, &str)>> = names.iter().map(|name| name.split_once('@')).collect();
     if names.len() >= 2
         && let Some(Some((_, shared))) = split.first()
         && !shared.is_empty()
-        && split.iter().all(|part| part.is_some_and(|(_, rest)| rest == *shared))
+        && split
+            .iter()
+            .all(|part| part.is_some_and(|(_, rest)| rest == *shared))
     {
-        let heads: Vec<&str> = split.iter().filter_map(|part| part.map(|(head, _)| head)).collect();
+        let heads: Vec<&str> = split
+            .iter()
+            .filter_map(|part| part.map(|(head, _)| head))
+            .collect();
         return format!("{} · {shared}", heads.join(" + "));
     }
     names.join(" + ")
@@ -660,13 +668,25 @@ impl Column {
 mod tests {
     #[test]
     fn a_combination_names_what_its_classes_share_once() {
-        let class = |id: u32, name: &str| {
-            Class { id, name: name.into(), ..Class::default() }
+        let class = |id: u32, name: &str| Class {
+            id,
+            name: name.into(),
+            ..Class::default()
         };
-        let classes = vec![class(4, "ch1@in-cell-spots"), class(5, "ch2@in-cell-spots"), class(9, "dapi")];
+        let classes = vec![
+            class(4, "ch1@in-cell-spots"),
+            class(5, "ch2@in-cell-spots"),
+            class(9, "dapi"),
+        ];
         let g = evanalyzer_cfg::core_types::ObjectClass::Global;
-        assert_eq!(classes_label(&[g(4), g(5)], &classes), "ch1 + ch2 · in-cell-spots");
-        assert_eq!(classes_label(&[g(4), g(9)], &classes), "ch1@in-cell-spots + dapi");
+        assert_eq!(
+            classes_label(&[g(4), g(5)], &classes),
+            "ch1 + ch2 · in-cell-spots"
+        );
+        assert_eq!(
+            classes_label(&[g(4), g(9)], &classes),
+            "ch1@in-cell-spots + dapi"
+        );
     }
 
     use super::*;

@@ -48,10 +48,20 @@ pub struct LinesSpec {
 
 /// The lines of `spec` as a `width` × `height` drawing (`grid`: grid
 /// lines; `highlight`: the selected curve's colour).
-pub fn draw(spec: &LinesSpec, grid: bool, highlight: Rgb, theme: &Theme, width: f64, height: f64) -> Drawing {
+pub fn draw(
+    spec: &LinesSpec,
+    grid: bool,
+    highlight: Rgb,
+    theme: &Theme,
+    width: f64,
+    height: f64,
+) -> Drawing {
     let mut svg = Svg::new(width, height, theme);
     if spec.series.is_empty() || width < 80.0 || height < 80.0 {
-        return Drawing { svg: svg.finish(), hits: Vec::new() };
+        return Drawing {
+            svg: svg.finish(),
+            hits: Vec::new(),
+        };
     }
     let font = theme.font_size;
     // The legend on top: as many names as fit on a line.
@@ -74,7 +84,9 @@ pub fn draw(spec: &LinesSpec, grid: bool, highlight: Rgb, theme: &Theme, width: 
         .iter()
         .flat_map(|s| s.points.iter().map(|p| p.0))
         .chain(spec.highlight.iter().map(|p| p.0));
-    let (x_lo, x_hi) = xs.fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v), hi.max(v)));
+    let (x_lo, x_hi) = xs.fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
+        (lo.min(v), hi.max(v))
+    });
     let ys = spec
         .series
         .iter()
@@ -82,9 +94,14 @@ pub fn draw(spec: &LinesSpec, grid: bool, highlight: Rgb, theme: &Theme, width: 
         .chain(spec.faint.iter().flat_map(|f| f.iter().map(|p| p.1)))
         .flatten()
         .chain(spec.highlight.iter().map(|p| p.1));
-    let (mut y_lo, y_hi) = ys.fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v), hi.max(v)));
+    let (mut y_lo, y_hi) = ys.fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
+        (lo.min(v), hi.max(v))
+    });
     if !x_lo.is_finite() || !y_lo.is_finite() {
-        return Drawing { svg: svg.finish(), hits: Vec::new() };
+        return Drawing {
+            svg: svg.finish(),
+            hits: Vec::new(),
+        };
     }
     if spec.from_zero {
         y_lo = y_lo.min(0.0);
@@ -109,7 +126,15 @@ pub fn draw(spec: &LinesSpec, grid: bool, highlight: Rgb, theme: &Theme, width: 
             svg.line(left, y, right, y, theme.grid, 1.0);
         }
         svg.line(left - 4.0, y, left, y, theme.axis, 1.0);
-        svg.text(left - 7.0, y + font * 0.35, label, theme.text_dim, Anchor::End, None, false);
+        svg.text(
+            left - 7.0,
+            y + font * 0.35,
+            label,
+            theme.text_dim,
+            Anchor::End,
+            None,
+            false,
+        );
     }
     for (value, label) in x_scale.ticks(x_wanted) {
         let x = x_of(value);
@@ -117,7 +142,15 @@ pub fn draw(spec: &LinesSpec, grid: bool, highlight: Rgb, theme: &Theme, width: 
             svg.line(x, top, x, bottom, theme.grid, 1.0);
         }
         svg.line(x, bottom, x, bottom + 4.0, theme.axis, 1.0);
-        svg.text(x, bottom + font + 6.0, &label, theme.text_dim, Anchor::Middle, None, false);
+        svg.text(
+            x,
+            bottom + font + 6.0,
+            &label,
+            theme.text_dim,
+            Anchor::Middle,
+            None,
+            false,
+        );
     }
 
     // Behind: the faint lines; then each series' band and line.
@@ -137,7 +170,12 @@ pub fn draw(spec: &LinesSpec, grid: bool, highlight: Rgb, theme: &Theme, width: 
             outline.extend(band.iter().rev().map(|(x, lo, _)| (*x, *lo)));
             svg.polygon(&outline, series.color, 0.16);
         }
-        for run in runs(series.points.iter().map(|(x, c, _, _)| c.map(|c| (x_of(*x), y_of(c))))) {
+        for run in runs(
+            series
+                .points
+                .iter()
+                .map(|(x, c, _, _)| c.map(|c| (x_of(*x), y_of(c)))),
+        ) {
             match run.as_slice() {
                 // A value between gaps: a dot.
                 [(x, y)] => svg.circle(*x, *y, 2.5, series.color, 1.0),
@@ -148,26 +186,70 @@ pub fn draw(spec: &LinesSpec, grid: bool, highlight: Rgb, theme: &Theme, width: 
     if let Some((position, label)) = &spec.marker {
         let x = x_of(*position);
         svg.polyline(&[(x, top), (x, bottom)], highlight, 1.0, 0.7, true);
-        svg.text(left + 8.0, top + font + 2.0, label, highlight, Anchor::Start, None, false);
+        svg.text(
+            left + 8.0,
+            top + font + 2.0,
+            label,
+            highlight,
+            Anchor::Start,
+            None,
+            false,
+        );
     }
     if spec.highlight.len() >= 2 {
-        let curve: Vec<(f64, f64)> = spec.highlight.iter().map(|(x, y)| (x_of(*x), y_of(*y))).collect();
+        let curve: Vec<(f64, f64)> = spec
+            .highlight
+            .iter()
+            .map(|(x, y)| (x_of(*x), y_of(*y)))
+            .collect();
         svg.polyline(&curve, highlight, 2.5, 1.0, false);
     }
 
     svg.line(left, top, left, bottom, theme.axis, 1.0);
     svg.line(left, bottom, right, bottom, theme.axis, 1.0);
-    svg.text_vertical(8.0 + font * 0.5, (top + bottom) / 2.0, &spec.y_title, theme.text_dim);
-    svg.text((left + right) / 2.0, height - 6.0, &spec.x_title, theme.text_dim, Anchor::Middle, None, false);
+    svg.text_vertical(
+        8.0 + font * 0.5,
+        (top + bottom) / 2.0,
+        &spec.y_title,
+        theme.text_dim,
+    );
+    svg.text(
+        (left + right) / 2.0,
+        height - 6.0,
+        &spec.x_title,
+        theme.text_dim,
+        Anchor::Middle,
+        None,
+        false,
+    );
     for (offset, series) in legend {
         let x = left + offset;
         svg.rect(x, 16.0 - 4.0, 14.0, 3.0, series.color, 1.0, None, 1.0);
-        svg.text(x + 20.0, 16.0, &series.label, theme.text_dim, Anchor::Start, None, false);
+        svg.text(
+            x + 20.0,
+            16.0,
+            &series.label,
+            theme.text_dim,
+            Anchor::Start,
+            None,
+            false,
+        );
     }
     if !spec.note.is_empty() {
-        svg.text(right, 16.0, &spec.note, theme.text_dim, Anchor::End, None, false);
+        svg.text(
+            right,
+            16.0,
+            &spec.note,
+            theme.text_dim,
+            Anchor::End,
+            None,
+            false,
+        );
     }
-    Drawing { svg: svg.finish(), hits: Vec::new() }
+    Drawing {
+        svg: svg.finish(),
+        hits: Vec::new(),
+    }
 }
 
 /// The runs of a line between its gaps (no value).
@@ -194,9 +276,21 @@ mod tests {
                 LineSeries {
                     label: "Nuclei".into(),
                     color: Rgb(0x2a6bdf),
-                    points: vec![(0.0, Some(10.0), Some(8.0), Some(12.0)), (5.0, None, None, None), (10.0, Some(14.0), Some(12.0), Some(16.0)), (15.0, Some(15.0), Some(13.0), Some(17.0))],
+                    points: vec![
+                        (0.0, Some(10.0), Some(8.0), Some(12.0)),
+                        (5.0, None, None, None),
+                        (10.0, Some(14.0), Some(12.0), Some(16.0)),
+                        (15.0, Some(15.0), Some(13.0), Some(17.0)),
+                    ],
                 },
-                LineSeries { label: "Cells".into(), color: Rgb(0x7b4fc9), points: vec![(0.0, Some(30.0), None, None), (15.0, Some(25.0), None, None)] },
+                LineSeries {
+                    label: "Cells".into(),
+                    color: Rgb(0x7b4fc9),
+                    points: vec![
+                        (0.0, Some(30.0), None, None),
+                        (15.0, Some(25.0), None, None),
+                    ],
+                },
             ],
             x_title: "time (min)".into(),
             y_title: "objects per image".into(),
@@ -211,7 +305,11 @@ mod tests {
         // Nuclei: a lone first value (a dot), the gap at 5, a run; Cells: one.
         assert_eq!(drawing.svg.matches("<polyline").count(), 2);
         assert_eq!(drawing.svg.matches("<circle").count(), 1);
-        assert_eq!(drawing.svg.matches("<polygon").count(), 1, "only Nuclei has a band");
+        assert_eq!(
+            drawing.svg.matches("<polygon").count(),
+            1,
+            "only Nuclei has a band"
+        );
         assert!(drawing.svg.contains(">Nuclei<") && drawing.svg.contains(">Cells<"));
         assert!(drawing.svg.contains("2 of 9 lines shown"));
         assert!(drawing.svg.contains("time (min)"));

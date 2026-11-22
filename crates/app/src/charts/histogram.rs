@@ -43,11 +43,20 @@ pub struct HistogramLook {
 
 /// The histogram of `spec` as a `width` × `height` drawing - a mark per
 /// bin.
-pub fn draw(spec: &HistogramSpec, look: &HistogramLook, theme: &Theme, width: f64, height: f64) -> Drawing {
+pub fn draw(
+    spec: &HistogramSpec,
+    look: &HistogramLook,
+    theme: &Theme,
+    width: f64,
+    height: f64,
+) -> Drawing {
     let mut svg = Svg::new(width, height, theme);
     let bins = spec.counts.len();
     if bins == 0 || spec.edges.len() != bins + 1 || width < 80.0 || height < 80.0 {
-        return Drawing { svg: svg.finish(), hits: Vec::new() };
+        return Drawing {
+            svg: svg.finish(),
+            hits: Vec::new(),
+        };
     }
     let font = theme.font_size;
     let top = 16.0 + font + 6.0;
@@ -80,42 +89,109 @@ pub fn draw(spec: &HistogramSpec, look: &HistogramLook, theme: &Theme, width: f6
             svg.line(left, y, right, y, theme.grid, 1.0);
         }
         svg.line(left - 4.0, y, left, y, theme.axis, 1.0);
-        svg.text(left - 7.0, y + font * 0.35, label, theme.text_dim, Anchor::End, None, false);
+        svg.text(
+            left - 7.0,
+            y + font * 0.35,
+            label,
+            theme.text_dim,
+            Anchor::End,
+            None,
+            false,
+        );
     }
     for (value, label) in x_scale.ticks(x_ticks_wanted) {
         let x = x_of(value);
         svg.line(x, bottom, x, bottom + 4.0, theme.axis, 1.0);
-        svg.text(x, bottom + font + 6.0, &label, theme.text_dim, Anchor::Middle, None, false);
+        svg.text(
+            x,
+            bottom + font + 6.0,
+            &label,
+            theme.text_dim,
+            Anchor::Middle,
+            None,
+            false,
+        );
     }
 
     // The bars, a mark each.
     let mut hits = Vec::with_capacity(bins);
-    let gap = if (right - left) / bins as f64 > 6.0 { 1.0 } else { 0.0 };
+    let gap = if (right - left) / bins as f64 > 6.0 {
+        1.0
+    } else {
+        0.0
+    };
     for (i, count) in spec.counts.iter().enumerate() {
         let (x0, x1) = (x_of(spec.edges[i]), x_of(spec.edges[i + 1]));
         if *count > 0 {
             let y = y_of(*count as f64);
-            svg.rect(x0 + gap / 2.0, y, (x1 - x0 - gap).max(0.5), bottom - y, spec.color, 0.85, None, 1.0);
+            svg.rect(
+                x0 + gap / 2.0,
+                y,
+                (x1 - x0 - gap).max(0.5),
+                bottom - y,
+                spec.color,
+                0.85,
+                None,
+                1.0,
+            );
         }
-        hits.push(Hit { index: i, x: x0, y: top, width: x1 - x0, height: bottom - top });
+        hits.push(Hit {
+            index: i,
+            x: x0,
+            y: top,
+            width: x1 - x0,
+            height: bottom - top,
+        });
     }
 
     svg.line(left, top, left, bottom, theme.axis, 1.0);
     svg.line(left, bottom, right, bottom, theme.axis, 1.0);
-    svg.text_vertical(8.0 + font * 0.5, (top + bottom) / 2.0, &look.y_title, theme.text_dim);
-    svg.text((left + right) / 2.0, height - 6.0, &look.x_title, theme.text_dim, Anchor::Middle, None, false);
+    svg.text_vertical(
+        8.0 + font * 0.5,
+        (top + bottom) / 2.0,
+        &look.y_title,
+        theme.text_dim,
+    );
+    svg.text(
+        (left + right) / 2.0,
+        height - 6.0,
+        &look.x_title,
+        theme.text_dim,
+        Anchor::Middle,
+        None,
+        false,
+    );
 
     // The values beyond the bins.
     if spec.below > 0 {
-        let text = format!("‹ {} below (from {})", format_number(spec.below as f64), format_number(spec.data_min));
-        svg.text(left + 4.0, 16.0, &text, theme.text_dim, Anchor::Start, None, false);
+        let text = format!(
+            "‹ {} below (from {})",
+            format_number(spec.below as f64),
+            format_number(spec.data_min)
+        );
+        svg.text(
+            left + 4.0,
+            16.0,
+            &text,
+            theme.text_dim,
+            Anchor::Start,
+            None,
+            false,
+        );
     }
     if spec.above > 0 {
-        let text = format!("{} above (to {}) ›", format_number(spec.above as f64), format_number(spec.data_max));
+        let text = format!(
+            "{} above (to {}) ›",
+            format_number(spec.above as f64),
+            format_number(spec.data_max)
+        );
         svg.text(right, 16.0, &text, theme.text_dim, Anchor::End, None, false);
     }
 
-    Drawing { svg: svg.finish(), hits }
+    Drawing {
+        svg: svg.finish(),
+        hits,
+    }
 }
 
 #[cfg(test)]
@@ -124,16 +200,35 @@ mod tests {
 
     fn spec(counts: Vec<u64>, below: u64, above: u64) -> HistogramSpec {
         let edges = (0..=counts.len()).map(|i| 40.0 + i as f64 * 10.0).collect();
-        HistogramSpec { edges, counts, color: Rgb(0x2a6bdf), below, above, data_min: 1.0, data_max: 75_400.0 }
+        HistogramSpec {
+            edges,
+            counts,
+            color: Rgb(0x2a6bdf),
+            below,
+            above,
+            data_min: 1.0,
+            data_max: 75_400.0,
+        }
     }
 
     fn look() -> HistogramLook {
-        HistogramLook { x_title: "Area µm²".into(), y_title: "Objects".into(), log_counts: false, grid: true }
+        HistogramLook {
+            x_title: "Area µm²".into(),
+            y_title: "Objects".into(),
+            log_counts: false,
+            grid: true,
+        }
     }
 
     #[test]
     fn every_bin_is_a_mark_and_empty_bins_draw_no_bar() {
-        let drawing = draw(&spec(vec![3, 0, 7, 1], 0, 0), &look(), &Theme::light(), 500.0, 300.0);
+        let drawing = draw(
+            &spec(vec![3, 0, 7, 1], 0, 0),
+            &look(),
+            &Theme::light(),
+            500.0,
+            300.0,
+        );
         assert_eq!(drawing.hits.len(), 4);
         // Bars: three; the background has no rect.
         assert_eq!(drawing.svg.matches("<rect").count(), 3);
@@ -142,7 +237,13 @@ mod tests {
 
     #[test]
     fn values_beyond_the_bins_are_counted_at_the_edges() {
-        let drawing = draw(&spec(vec![3, 5], 41, 312), &look(), &Theme::light(), 500.0, 300.0);
+        let drawing = draw(
+            &spec(vec![3, 5], 41, 312),
+            &look(),
+            &Theme::light(),
+            500.0,
+            300.0,
+        );
         assert!(drawing.svg.contains("‹ 41 below"));
         assert!(drawing.svg.contains("312 above (to 75400) ›"));
     }
@@ -151,7 +252,13 @@ mod tests {
     fn a_log_count_axis_ticks_in_decades() {
         let mut log = look();
         log.log_counts = true;
-        let drawing = draw(&spec(vec![2, 900, 30], 0, 0), &log, &Theme::light(), 500.0, 300.0);
+        let drawing = draw(
+            &spec(vec![2, 900, 30], 0, 0),
+            &log,
+            &Theme::light(),
+            500.0,
+            300.0,
+        );
         assert!(drawing.svg.contains(">1000<") && drawing.svg.contains(">10<"));
     }
 }

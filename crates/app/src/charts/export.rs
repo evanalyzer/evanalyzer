@@ -43,7 +43,13 @@ pub fn svg_in_cm(svg: &str, width_cm: f64, height_cm: f64) -> String {
 
 /// `svg` rendered at `dpi` for `width_cm` × `height_cm` - a PNG with its
 /// dpi in it. `fonts`: the font files the text is drawn with (the app's).
-pub fn png(svg: &str, width_cm: f64, height_cm: f64, dpi: f64, fonts: &[&[u8]]) -> Result<Vec<u8>, String> {
+pub fn png(
+    svg: &str,
+    width_cm: f64,
+    height_cm: f64,
+    dpi: f64,
+    fonts: &[&[u8]],
+) -> Result<Vec<u8>, String> {
     let mut database = usvg::fontdb::Database::new();
     for font in fonts {
         database.load_font_data(font.to_vec());
@@ -53,7 +59,8 @@ pub fn png(svg: &str, width_cm: f64, height_cm: f64, dpi: f64, fonts: &[&[u8]]) 
         fontdb: Arc::new(database),
         ..usvg::Options::default()
     };
-    let tree = usvg::Tree::from_str(svg, &options).map_err(|e| format!("the chart could not be read: {e}"))?;
+    let tree = usvg::Tree::from_str(svg, &options)
+        .map_err(|e| format!("the chart could not be read: {e}"))?;
     let pixels_per_cm = dpi / 2.54;
     let width = (width_cm * pixels_per_cm).round().max(1.0) as u32;
     let height = (height_cm * pixels_per_cm).round().max(1.0) as u32;
@@ -153,12 +160,19 @@ mod tests {
         let (w, h) = layout_size(8.5, 6.0);
         let svg = svg_in_cm(&chart(w, h), 8.5, 6.0);
         assert!(svg.starts_with("<svg") && svg.contains(r#"width="8.50cm" height="6.00cm""#));
-        assert!(svg.contains("viewBox=\"0 0 321.26 226.77\""), "{}", &svg[..200]);
+        assert!(
+            svg.contains("viewBox=\"0 0 321.26 226.77\""),
+            "{}",
+            &svg[..200]
+        );
     }
 
     #[test]
     fn csv_quotes_what_needs_it() {
-        let rows = vec![vec!["Box".to_string(), "Value".to_string()], vec!["ch1, in-cell".to_string(), "3.5".to_string()]];
+        let rows = vec![
+            vec!["Box".to_string(), "Value".to_string()],
+            vec!["ch1, in-cell".to_string(), "3.5".to_string()],
+        ];
         assert_eq!(csv(&rows), "Box,Value\n\"ch1, in-cell\",3.5\n");
     }
 }

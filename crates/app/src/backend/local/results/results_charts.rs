@@ -115,7 +115,19 @@ impl ResultCharts {
 
         let mut stmt = database.connection().prepare(&sql).map_err(err)?;
         #[allow(clippy::type_complexity)]
-        let rows: Vec<(u32, f64, f64, f64, f64, f64, i64, Value, Option<f64>, Option<f64>, (Option<f64>, Option<f64>))> = stmt
+        let rows: Vec<(
+            u32,
+            f64,
+            f64,
+            f64,
+            f64,
+            f64,
+            i64,
+            Value,
+            Option<f64>,
+            Option<f64>,
+            (Option<f64>, Option<f64>),
+        )> = stmt
             .query_map([], |row| {
                 Ok((
                     row.get(0)?,
@@ -137,31 +149,33 @@ impl ResultCharts {
 
         let boxes = rows
             .into_iter()
-            .map(|(class_id, min_v, q1, median, q3, max_v, n, outliers, w_lo, w_hi, (mean, sd))| {
-                let object_class = ObjectClass::Global(class_id);
-                let color = classes
-                    .iter()
-                    .find(|class| class.global() == object_class)
-                    .map(|class| class.color)
-                    .unwrap_or(0);
-                BoxplotBox {
-                    label: class_display_label(object_class, &classes),
-                    color,
-                    min: min_v,
-                    q1,
-                    median,
-                    q3,
-                    max: max_v,
-                    whisker_low: w_lo.unwrap_or(min_v),
-                    whisker_high: w_hi.unwrap_or(max_v),
-                    outliers: extract_f64_list(outliers),
-                    object_count: n as usize,
-                    image_values: Vec::new(),
-                    image_count: 0,
-                    mean: mean.unwrap_or(median),
-                    sd: sd.unwrap_or(0.0),
-                }
-            })
+            .map(
+                |(class_id, min_v, q1, median, q3, max_v, n, outliers, w_lo, w_hi, (mean, sd))| {
+                    let object_class = ObjectClass::Global(class_id);
+                    let color = classes
+                        .iter()
+                        .find(|class| class.global() == object_class)
+                        .map(|class| class.color)
+                        .unwrap_or(0);
+                    BoxplotBox {
+                        label: class_display_label(object_class, &classes),
+                        color,
+                        min: min_v,
+                        q1,
+                        median,
+                        q3,
+                        max: max_v,
+                        whisker_low: w_lo.unwrap_or(min_v),
+                        whisker_high: w_hi.unwrap_or(max_v),
+                        outliers: extract_f64_list(outliers),
+                        object_count: n as usize,
+                        image_values: Vec::new(),
+                        image_count: 0,
+                        mean: mean.unwrap_or(median),
+                        sd: sd.unwrap_or(0.0),
+                    }
+                },
+            )
             .collect();
 
         Ok(BoxplotResult { boxes })
@@ -181,7 +195,11 @@ impl ResultCharts {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         let empty = || Ok(BoxplotResult { boxes: Vec::new() });
         let count = filter.column == Column::Count;
-        let value_expr = if count { "1".to_string() } else { chart_value_expr(&filter.column)? };
+        let value_expr = if count {
+            "1".to_string()
+        } else {
+            chart_value_expr(&filter.column)?
+        };
         let wanted: Option<Vec<u32>> = filter.object_classes.as_ref().map(|wanted| {
             wanted
                 .iter()
@@ -218,10 +236,18 @@ impl ResultCharts {
                     BoxplotGroup::WellRow => 2,
                     _ => 3,
                 };
-                format!("regexp_extract({}, '{}', {part})", grouping.column, grouping.regex)
+                format!(
+                    "regexp_extract({}, '{}', {part})",
+                    grouping.column, grouping.regex
+                )
             }
         };
-        let class_ids = |ids: &[u32]| ids.iter().map(u32::to_string).collect::<Vec<_>>().join(", ");
+        let class_ids = |ids: &[u32]| {
+            ids.iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         // The objects: a box key (the class, or the image's group) and a value.
         let source = if by_class {
             let only = match &wanted {
@@ -256,7 +282,9 @@ impl ResultCharts {
                 String::new()
             };
             let base = if by_class {
-                format!("SELECT b.g, i.image_rel_path FROM images i CROSS JOIN {boxes} b WHERE {image_condition}")
+                format!(
+                    "SELECT b.g, i.image_rel_path FROM images i CROSS JOIN {boxes} b WHERE {image_condition}"
+                )
             } else {
                 format!("SELECT {key} AS g, image_rel_path FROM images WHERE {image_condition}")
             };
@@ -287,11 +315,29 @@ impl ResultCharts {
              FROM stats s JOIN filtered f ON f.g = s.g\n\
              GROUP BY s.g, s.min_v, s.q1, s.med, s.q3, s.max_v, s.images, s.objects, s.mean_v, s.sd_v\n\
              ORDER BY {order}",
-            order = if by_class { "CAST(s.g AS INTEGER)" } else { "regexp_replace(s.g, '[0-9]+$', ''), TRY_CAST(regexp_extract(s.g, '([0-9]+)$', 1) AS INTEGER), s.g" },
+            order = if by_class {
+                "CAST(s.g AS INTEGER)"
+            } else {
+                "regexp_replace(s.g, '[0-9]+$', ''), TRY_CAST(regexp_extract(s.g, '([0-9]+)$', 1) AS INTEGER), s.g"
+            },
         );
         let mut stmt = database.connection().prepare(&sql).map_err(err)?;
         #[allow(clippy::type_complexity)]
-        let rows: Vec<(String, f64, f64, f64, f64, f64, i64, f64, Value, Option<f64>, Option<f64>, Value, (Option<f64>, Option<f64>))> = stmt
+        let rows: Vec<(
+            String,
+            f64,
+            f64,
+            f64,
+            f64,
+            f64,
+            i64,
+            f64,
+            Value,
+            Option<f64>,
+            Option<f64>,
+            Value,
+            (Option<f64>, Option<f64>),
+        )> = stmt
             .query_map([], |row| {
                 Ok((
                     row.get(0)?,
@@ -315,36 +361,52 @@ impl ResultCharts {
         Ok(BoxplotResult {
             boxes: rows
                 .into_iter()
-                .map(|(g, min_v, q1, median, q3, max_v, images, objects, outliers, w_lo, w_hi, all, (mean, sd))| {
-                    let (label, color) = match (by_class, g.parse::<u32>()) {
-                        (true, Ok(id)) => {
-                            let class = ObjectClass::Global(id);
-                            let color = classes
-                                .iter()
-                                .find(|c| c.global() == class)
-                                .map_or(0, |c| c.color);
-                            (class_display_label(class, classes), color)
-                        }
-                        _ => (g, 0),
-                    };
-                    BoxplotBox {
-                        label,
-                        color,
-                        min: min_v,
+                .map(
+                    |(
+                        g,
+                        min_v,
                         q1,
                         median,
                         q3,
-                        max: max_v,
-                        whisker_low: w_lo.unwrap_or(min_v),
-                        whisker_high: w_hi.unwrap_or(max_v),
-                        outliers: extract_f64_list(outliers),
-                        object_count: objects as usize,
-                        image_values: extract_f64_list(all),
-                        image_count: images as usize,
-                        mean: mean.unwrap_or(median),
-                        sd: sd.unwrap_or(0.0),
-                    }
-                })
+                        max_v,
+                        images,
+                        objects,
+                        outliers,
+                        w_lo,
+                        w_hi,
+                        all,
+                        (mean, sd),
+                    )| {
+                        let (label, color) = match (by_class, g.parse::<u32>()) {
+                            (true, Ok(id)) => {
+                                let class = ObjectClass::Global(id);
+                                let color = classes
+                                    .iter()
+                                    .find(|c| c.global() == class)
+                                    .map_or(0, |c| c.color);
+                                (class_display_label(class, classes), color)
+                            }
+                            _ => (g, 0),
+                        };
+                        BoxplotBox {
+                            label,
+                            color,
+                            min: min_v,
+                            q1,
+                            median,
+                            q3,
+                            max: max_v,
+                            whisker_low: w_lo.unwrap_or(min_v),
+                            whisker_high: w_hi.unwrap_or(max_v),
+                            outliers: extract_f64_list(outliers),
+                            object_count: objects as usize,
+                            image_values: extract_f64_list(all),
+                            image_count: images as usize,
+                            mean: mean.unwrap_or(median),
+                            sd: sd.unwrap_or(0.0),
+                        }
+                    },
+                )
                 .collect(),
         })
     }
@@ -422,7 +484,19 @@ impl ResultCharts {
         );
         let mut stmt = database.connection().prepare(&sql).map_err(err)?;
         #[allow(clippy::type_complexity)]
-        let rows: Vec<(String, f64, f64, f64, f64, f64, i64, Value, Option<f64>, Option<f64>, (Option<f64>, Option<f64>))> = stmt
+        let rows: Vec<(
+            String,
+            f64,
+            f64,
+            f64,
+            f64,
+            f64,
+            i64,
+            Value,
+            Option<f64>,
+            Option<f64>,
+            (Option<f64>, Option<f64>),
+        )> = stmt
             .query_map([], |row| {
                 Ok((
                     row.get(0)?,
@@ -445,22 +519,24 @@ impl ResultCharts {
             boxes: rows
                 .into_iter()
                 .map(
-                    |(label, min_v, q1, median, q3, max_v, n, outliers, w_lo, w_hi, (mean, sd))| BoxplotBox {
-                        label,
-                        color: 0,
-                        min: min_v,
-                        q1,
-                        median,
-                        q3,
-                        max: max_v,
-                        whisker_low: w_lo.unwrap_or(min_v),
-                        whisker_high: w_hi.unwrap_or(max_v),
-                        outliers: extract_f64_list(outliers),
-                        object_count: n as usize,
-                        image_values: Vec::new(),
-                        image_count: 0,
-                        mean: mean.unwrap_or(median),
-                        sd: sd.unwrap_or(0.0),
+                    |(label, min_v, q1, median, q3, max_v, n, outliers, w_lo, w_hi, (mean, sd))| {
+                        BoxplotBox {
+                            label,
+                            color: 0,
+                            min: min_v,
+                            q1,
+                            median,
+                            q3,
+                            max: max_v,
+                            whisker_low: w_lo.unwrap_or(min_v),
+                            whisker_high: w_hi.unwrap_or(max_v),
+                            outliers: extract_f64_list(outliers),
+                            object_count: n as usize,
+                            image_values: Vec::new(),
+                            image_count: 0,
+                            mean: mean.unwrap_or(median),
+                            sd: sd.unwrap_or(0.0),
+                        }
                     },
                 )
                 .collect(),
@@ -503,17 +579,30 @@ impl ResultCharts {
              FROM (SELECT {value_expr} AS v FROM objects {where_clause})"
         );
         #[allow(clippy::type_complexity)]
-        let (data_min, data_max, count, p1, p99): (Option<f64>, Option<f64>, i64, Option<f64>, Option<f64>) =
-            database
-                .connection()
-                .query_row(&bounds_sql, [], |row| {
-                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
-                })
-                .map_err(err)?;
+        let (data_min, data_max, count, p1, p99): (
+            Option<f64>,
+            Option<f64>,
+            i64,
+            Option<f64>,
+            Option<f64>,
+        ) = database
+            .connection()
+            .query_row(&bounds_sql, [], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })
+            .map_err(err)?;
         // The 1st to 99th percentile - where far values would stretch the
         // bins (the whole range over twice as wide); else every value.
         let (min, max) = match (filter.full_range, p1, p99, data_min, data_max) {
-            (false, Some(p1), Some(p99), Some(lo), Some(hi)) if p99 > p1 && hi - lo > 2.0 * (p99 - p1) => {
+            (false, Some(p1), Some(p99), Some(lo), Some(hi))
+                if p99 > p1 && hi - lo > 2.0 * (p99 - p1) =>
+            {
                 (Some(p1), Some(p99))
             }
             _ => (data_min, data_max),
@@ -557,7 +646,9 @@ impl ResultCharts {
                     below = cnt as u64;
                 } else if bucket as usize >= bins {
                     above = cnt as u64;
-                } else if let Some(slot) = usize::try_from(bucket).ok().and_then(|b| counts.get_mut(b)) {
+                } else if let Some(slot) =
+                    usize::try_from(bucket).ok().and_then(|b| counts.get_mut(b))
+                {
                     *slot = cnt as u64;
                 }
             }
@@ -1121,7 +1212,10 @@ mod tests {
         let counts = boxplot(Column::Count);
         assert_eq!(counts.boxes.len(), 2);
         let (a, b) = (&counts.boxes[0], &counts.boxes[1]);
-        assert_eq!((a.label.as_str(), a.image_count, a.object_count), ("ClassA", 2, 3));
+        assert_eq!(
+            (a.label.as_str(), a.image_count, a.object_count),
+            ("ClassA", 2, 3)
+        );
         let mut a_values = a.image_values.clone();
         a_values.sort_by(f64::total_cmp);
         assert_eq!(a_values, vec![1.0, 2.0]);
@@ -1435,10 +1529,17 @@ mod tests {
                 },
             )
             .expect("histogram");
-        assert!(result.max < 2000.0, "not up to the far value: {}", result.max);
+        assert!(
+            result.max < 2000.0,
+            "not up to the far value: {}",
+            result.max
+        );
         assert_eq!(result.data_max, 100_000.0);
         assert!(result.above >= 1);
-        assert_eq!(result.counts.iter().sum::<u64>() + result.below + result.above, 100);
+        assert_eq!(
+            result.counts.iter().sum::<u64>() + result.below + result.above,
+            100
+        );
     }
 
     #[test]

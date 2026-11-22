@@ -38,7 +38,11 @@ struct ExportRequest {
 
 /// A number in a CSV: full precision, "." decimals; none empty.
 fn csv_number(value: f64) -> String {
-    if value.is_finite() { value.to_string() } else { String::new() }
+    if value.is_finite() {
+        value.to_string()
+    } else {
+        String::new()
+    }
 }
 
 impl ResultsStateController {
@@ -51,11 +55,19 @@ impl ResultsStateController {
         let mut theme = Theme::light();
         theme.background = (!request.transparent).then_some(Rgb(0xffffff));
         let (width, height) = export::layout_size(request.width_cm, request.height_cm);
-        let rendered = self.render_chart(width, height, &theme).ok_or("No chart to save")?;
+        let rendered = self
+            .render_chart(width, height, &theme)
+            .ok_or("No chart to save")?;
         if request.format == 1 {
             Ok(export::svg_in_cm(&rendered.svg, request.width_cm, request.height_cm).into_bytes())
         } else {
-            export::png(&rendered.svg, request.width_cm, request.height_cm, request.dpi, &FONTS)
+            export::png(
+                &rendered.svg,
+                request.width_cm,
+                request.height_cm,
+                request.dpi,
+                &FONTS,
+            )
         }
     }
 
@@ -75,7 +87,10 @@ impl ResultsStateController {
                 let mut rows = Vec::new();
                 if per_image {
                     // A row per image: the dots.
-                    rows.push(vec!["Group".to_string(), super::column_panel::chart_value_label(&chart.column, true, &classes)]);
+                    rows.push(vec![
+                        "Group".to_string(),
+                        super::column_panel::chart_value_label(&chart.column, true, &classes),
+                    ]);
                     for b in boxes {
                         for value in &b.image_values {
                             rows.push(vec![b.label.clone(), csv_number(value * factor)]);
@@ -83,10 +98,12 @@ impl ResultsStateController {
                     }
                 } else {
                     rows.push(
-                        ["Group", "n", "Median", "Q1", "Q3", "Mean", "SD", "Min", "Max"]
-                            .iter()
-                            .map(|h| (*h).to_string())
-                            .collect(),
+                        [
+                            "Group", "n", "Median", "Q1", "Q3", "Mean", "SD", "Min", "Max",
+                        ]
+                        .iter()
+                        .map(|h| (*h).to_string())
+                        .collect(),
                     );
                     for b in boxes {
                         rows.push(vec![
@@ -105,7 +122,11 @@ impl ResultsStateController {
                 rows
             }
             ChartData::Histogram(histogram) => {
-                let mut rows = vec![vec![format!("{name} from"), format!("{name} to"), "Objects".to_string()]];
+                let mut rows = vec![vec![
+                    format!("{name} from"),
+                    format!("{name} to"),
+                    "Objects".to_string(),
+                ]];
                 for (i, count) in histogram.counts.iter().enumerate() {
                     rows.push(vec![
                         csv_number(histogram.bin_edges[i] * factor),
@@ -114,22 +135,38 @@ impl ResultsStateController {
                     ]);
                 }
                 if histogram.below > 0 {
-                    rows.push(vec![csv_number(histogram.data_min * factor), csv_number(histogram.min * factor), histogram.below.to_string()]);
+                    rows.push(vec![
+                        csv_number(histogram.data_min * factor),
+                        csv_number(histogram.min * factor),
+                        histogram.below.to_string(),
+                    ]);
                 }
                 if histogram.above > 0 {
-                    rows.push(vec![csv_number(histogram.max * factor), csv_number(histogram.data_max * factor), histogram.above.to_string()]);
+                    rows.push(vec![
+                        csv_number(histogram.max * factor),
+                        csv_number(histogram.data_max * factor),
+                        histogram.above.to_string(),
+                    ]);
                 }
                 rows
             }
             ChartData::Scatter(scatter) => {
                 let y_label = chart.y_column.display_label(&classes);
                 let y_factor = unit_factor(&y_label);
-                let mut rows = vec![vec![name, super::coloc::picker_label(&y_label), "Image".to_string()]];
+                let mut rows = vec![vec![
+                    name,
+                    super::coloc::picker_label(&y_label),
+                    "Image".to_string(),
+                ]];
                 for point in &scatter.points {
                     rows.push(vec![
                         csv_number(point.x * factor),
                         csv_number(point.y * y_factor),
-                        scatter.images.get(point.image as usize).cloned().unwrap_or_default(),
+                        scatter
+                            .images
+                            .get(point.image as usize)
+                            .cloned()
+                            .unwrap_or_default(),
                     ]);
                 }
                 rows
@@ -145,7 +182,13 @@ impl ResultsStateController {
                 for series in &spec.series {
                     for (x, c, lo, hi) in &series.points {
                         let opt = |v: &Option<f64>| v.map_or(String::new(), csv_number);
-                        rows.push(vec![series.label.clone(), csv_number(*x), opt(c), opt(lo), opt(hi)]);
+                        rows.push(vec![
+                            series.label.clone(),
+                            csv_number(*x),
+                            opt(c),
+                            opt(lo),
+                            opt(hi),
+                        ]);
                     }
                 }
                 rows
@@ -158,7 +201,8 @@ impl ResultsStateController {
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                ui.global::<ResultsState>().set_chart_export_message(message.into());
+                ui.global::<ResultsState>()
+                    .set_chart_export_message(message.into());
             }
         })
         .ok();
@@ -188,24 +232,40 @@ impl ResultsStateController {
                 .filter(what, &[extension])
                 .file_name(&format!("chart.{extension}"));
             let manager = manager.clone();
-            manager._app_state.file_browser.clone().open(file_request, move |path| {
-                let Some(path) = path else {
-                    return;
-                };
-                let path = if path.extension().is_none() { path.with_extension(extension) } else { path };
-                let manager = manager.clone();
-                // Off the UI thread: a large PNG takes a moment.
-                std::thread::spawn(move || {
-                    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    let written = manager
-                        .export_bytes(request)
-                        .and_then(|bytes| manager._app_state.backend().files().write_file(&path, &bytes).map_err(|e| e.to_string()));
-                    manager.set_export_message(match written {
-                        Ok(()) => format!("Saved {name}"),
-                        Err(error) => format!("Not saved: {error}"),
+            manager
+                ._app_state
+                .file_browser
+                .clone()
+                .open(file_request, move |path| {
+                    let Some(path) = path else {
+                        return;
+                    };
+                    let path = if path.extension().is_none() {
+                        path.with_extension(extension)
+                    } else {
+                        path
+                    };
+                    let manager = manager.clone();
+                    // Off the UI thread: a large PNG takes a moment.
+                    std::thread::spawn(move || {
+                        let name = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        let written = manager.export_bytes(request).and_then(|bytes| {
+                            manager
+                                ._app_state
+                                .backend()
+                                .files()
+                                .write_file(&path, &bytes)
+                                .map_err(|e| e.to_string())
+                        });
+                        manager.set_export_message(match written {
+                            Ok(()) => format!("Saved {name}"),
+                            Err(error) => format!("Not saved: {error}"),
+                        });
                     });
                 });
-            });
         });
     }
 }

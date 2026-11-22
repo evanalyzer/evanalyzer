@@ -13,14 +13,13 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::coloc::{
-    model_of, picker_label,
     COLOC_AT_LEAST_GROUP, COLOC_EXACTLY_GROUP, COLOC_GROUP, ColocSettings, coloc_classes,
-    is_coloc_column,
+    is_coloc_column, model_of, picker_label,
 };
 use super::*;
 use crate::{ColocColumnItem, ColocKind, ColumnPreset, IntensityCell};
-use slint::SharedString;
 use evanalyzer_app::results::{ColocMatch, view_settings::DEFAULT_LIST_COLUMNS};
+use slint::SharedString;
 
 /// A channel's intensity column of one value (e.g. `Column::IntensityAvg`).
 type IntensityOf = fn(u32) -> Column;
@@ -95,7 +94,10 @@ pub(super) fn intensity_grid(
 
 /// The intensity grid's heads.
 pub(super) fn intensity_heads() -> Vec<SharedString> {
-    INTENSITY_VALUES.iter().map(|(head, _)| (*head).into()).collect()
+    INTENSITY_VALUES
+        .iter()
+        .map(|(head, _)| (*head).into())
+        .collect()
 }
 
 /// A chart value's name: "Objects per image" for the count per image, the
@@ -179,7 +181,10 @@ pub(super) fn presets(available: &[ColumnEntry], raw: &[ColumnEntry]) -> Vec<Pre
     if !coloc_classes(raw).is_empty() {
         // With each class some object overlaps - not those no combination
         // holds (a column of zeros).
-        let occurring: Vec<ObjectClass> = super::coloc::coloc_sets(raw).into_iter().flatten().collect();
+        let occurring: Vec<ObjectClass> = super::coloc::coloc_sets(raw)
+            .into_iter()
+            .flatten()
+            .collect();
         let mut coloc = identity;
         coloc.extend(
             available
@@ -290,7 +295,10 @@ impl ColocGroupUi {
             classes: self.classes.into(),
             open: self.open,
             kinds: ModelRc::from(Rc::new(VecModel::from(
-                self.kinds.into_iter().map(ColocKindUi::into_slint).collect::<Vec<_>>(),
+                self.kinds
+                    .into_iter()
+                    .map(ColocKindUi::into_slint)
+                    .collect::<Vec<_>>(),
             ))),
         }
     }
@@ -312,9 +320,15 @@ fn block_names(block: &[ObjectClass], classes: &[Class], number: usize) -> (Stri
     let parts: Vec<Option<(&str, &str)>> = names.iter().map(|name| name.split_once('@')).collect();
     match parts.first() {
         Some(Some((_, shared)))
-            if !shared.is_empty() && parts.iter().all(|p| p.is_some_and(|(_, rest)| rest == *shared)) =>
+            if !shared.is_empty()
+                && parts
+                    .iter()
+                    .all(|p| p.is_some_and(|(_, rest)| rest == *shared)) =>
         {
-            let heads: Vec<&str> = parts.iter().filter_map(|p| p.map(|(head, _)| head)).collect();
+            let heads: Vec<&str> = parts
+                .iter()
+                .filter_map(|p| p.map(|(head, _)| head))
+                .collect();
             (shared.to_string(), heads.join(" · "))
         }
         _ => (format!("Group {number}"), names.join(" · ")),
@@ -339,13 +353,22 @@ pub(super) fn coloc_group_blocks(
         // "With no class" with several groups: marks over every class would
         // say little - none.
         let marked: Vec<ObjectClass> = match block {
-            Some((_, block)) => settings.partners.iter().copied().filter(|c| block.contains(c)).collect(),
+            Some((_, block)) => settings
+                .partners
+                .iter()
+                .copied()
+                .filter(|c| block.contains(c))
+                .collect(),
             None if groups.len() > 1 => Vec::new(),
             None => settings.partners.clone(),
         };
         [
             (COLOC_GROUP, "EACH CLASS", "One column per partner class."),
-            (COLOC_AT_LEAST_GROUP, "AT LEAST", "Overlaps all of these classes, maybe more."),
+            (
+                COLOC_AT_LEAST_GROUP,
+                "AT LEAST",
+                "Overlaps all of these classes, maybe more.",
+            ),
             (
                 COLOC_EXACTLY_GROUP,
                 "EXACTLY",
@@ -360,11 +383,15 @@ pub(super) fn coloc_group_blocks(
                 .filter(|entry| {
                     let with = coloc_with(&entry.key).unwrap_or_default();
                     match block {
-                        Some((_, block)) => !with.is_empty() && with.iter().all(|c| block.contains(c)),
+                        Some((_, block)) => {
+                            !with.is_empty() && with.iter().all(|c| block.contains(c))
+                        }
                         None => with.is_empty(),
                     }
                 })
-                .filter(|entry| filter.is_empty() || entry.display_name.to_lowercase().contains(filter))
+                .filter(|entry| {
+                    filter.is_empty() || entry.display_name.to_lowercase().contains(filter)
+                })
                 .map(|entry| ColocColumnItem {
                     key: entry.key.as_key(classes).into(),
                     name: entry.display_name.as_str().into(),
@@ -400,7 +427,9 @@ pub(super) fn coloc_group_blocks(
                 return None;
             }
             let key = format!("coloc group {}", i + 1);
-            let any_chosen = kinds.iter().any(|k| k.items.iter().any(|item| item.selected));
+            let any_chosen = kinds
+                .iter()
+                .any(|k| k.items.iter().any(|item| item.selected));
             let (name, members) = block_names(block, classes, i + 1);
             Some(ColocGroupUi {
                 open: !filter.is_empty() || open.get(&key).copied().unwrap_or(i == 0 || any_chosen),
@@ -453,7 +482,10 @@ impl ResultsStateController {
             let Some(channel) = channels.get(index) else {
                 return;
             };
-            INTENSITY_VALUES.iter().map(|(_, make)| make(*channel)).collect()
+            INTENSITY_VALUES
+                .iter()
+                .map(|(_, make)| make(*channel))
+                .collect()
         } else {
             let Some((_, make)) = INTENSITY_VALUES.get(index) else {
                 return;
@@ -474,7 +506,14 @@ impl ResultsStateController {
     /// The columns of the starting set `key` shown instead of the others
     /// (Coloc first makes every partner class chosen if none is).
     fn apply_column_preset(self: &Arc<Self>, key: &str) {
-        if key == "coloc" && self.coloc_settings.lock().expect("Poisoned").partners.is_empty() {
+        if key == "coloc"
+            && self
+                .coloc_settings
+                .lock()
+                .expect("Poisoned")
+                .partners
+                .is_empty()
+        {
             let raw = self.raw_columns.lock().expect("Poisoned").clone();
             let partners = coloc_classes(&raw);
             {
@@ -486,7 +525,10 @@ impl ResultsStateController {
         }
         let available = self.available_columns.lock().expect("Poisoned").clone();
         let raw = self.raw_columns.lock().expect("Poisoned").clone();
-        let Some(set) = presets(&available, &raw).into_iter().find(|set| set.key == key) else {
+        let Some(set) = presets(&available, &raw)
+            .into_iter()
+            .find(|set| set.key == key)
+        else {
             return;
         };
         self.list_filter.lock().expect("Poisoned").columns = set.columns;
@@ -497,7 +539,12 @@ impl ResultsStateController {
     /// A one-choice picker's parts (Plate, Charts): the List's groups,
     /// intensity grid and coloc kinds over `available` with `selected`
     /// chosen, those the search `filter` matches.
-    fn single_picker(&self, available: &[ColumnEntry], selected: &[Column], filter: &str) -> SinglePicker {
+    fn single_picker(
+        &self,
+        available: &[ColumnEntry],
+        selected: &[Column],
+        filter: &str,
+    ) -> SinglePicker {
         let classes = self.classes.lock().expect("Poisoned").clone();
         let settings = self.coloc_settings.lock().expect("Poisoned").clone();
         let open = self.column_sections_open.lock().expect("Poisoned").clone();
@@ -552,13 +599,21 @@ impl ResultsStateController {
             };
             let state = ui.global::<ResultsState>();
             state.set_matrix_column_sections(model_of(
-                picker.sections.into_iter().map(super::coloc::SectionUi::into_slint).collect(),
+                picker
+                    .sections
+                    .into_iter()
+                    .map(super::coloc::SectionUi::into_slint)
+                    .collect(),
             ));
             state.set_matrix_intensity_cells(model_of(picker.cells));
             state.set_matrix_intensity_title(picker.intensity_title.into());
             state.set_matrix_intensity_open(picker.intensity_open);
             state.set_matrix_coloc_groups(model_of(
-                picker.kinds.into_iter().map(ColocGroupUi::into_slint).collect(),
+                picker
+                    .kinds
+                    .into_iter()
+                    .map(ColocGroupUi::into_slint)
+                    .collect(),
             ));
         })
         .ok();
@@ -577,13 +632,19 @@ impl ResultsStateController {
             .lock()
             .expect("Poisoned")
             .iter()
-            .filter(|entry| is_chartable_column(&entry.key) || (per_image && entry.key == Column::Count))
+            .filter(|entry| {
+                is_chartable_column(&entry.key) || (per_image && entry.key == Column::Count)
+            })
             .cloned()
             .collect();
         let y = *self.chart_value_y.lock().expect("Poisoned");
         let selected = {
             let chart = self.chart_filter.lock().expect("Poisoned");
-            vec![if y { chart.y_column.clone() } else { chart.column.clone() }]
+            vec![if y {
+                chart.y_column.clone()
+            } else {
+                chart.column.clone()
+            }]
         };
         let filter = self.chart_column_filter.lock().expect("Poisoned").clone();
         let picker = self.single_picker(&available, &selected, &filter);
@@ -594,13 +655,21 @@ impl ResultsStateController {
             };
             let state = ui.global::<ResultsState>();
             state.set_chart_column_sections(model_of(
-                picker.sections.into_iter().map(super::coloc::SectionUi::into_slint).collect(),
+                picker
+                    .sections
+                    .into_iter()
+                    .map(super::coloc::SectionUi::into_slint)
+                    .collect(),
             ));
             state.set_chart_intensity_cells(model_of(picker.cells));
             state.set_chart_intensity_title(picker.intensity_title.into());
             state.set_chart_intensity_open(picker.intensity_open);
             state.set_chart_coloc_groups(model_of(
-                picker.kinds.into_iter().map(ColocGroupUi::into_slint).collect(),
+                picker
+                    .kinds
+                    .into_iter()
+                    .map(ColocGroupUi::into_slint)
+                    .collect(),
             ));
         })
         .ok();
@@ -616,7 +685,8 @@ impl ResultsStateController {
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                ui.global::<ResultsState>().set_chart_column_summary(label.into());
+                ui.global::<ResultsState>()
+                    .set_chart_column_summary(label.into());
             }
         })
         .ok();
@@ -798,7 +868,10 @@ mod tests {
         assert_eq!(cells.len(), 2 * INTENSITY_VALUES.len());
         // Channel 0: only its mean is offered.
         assert!(!cells[0].key.is_empty() && !cells[0].selected);
-        assert!(cells[1].key.is_empty(), "a value the results lack has no key");
+        assert!(
+            cells[1].key.is_empty(),
+            "a value the results lack has no key"
+        );
         // Channel 1: the mean shown, the sum offered.
         let row = INTENSITY_VALUES.len();
         assert!(cells[row].selected);
@@ -807,7 +880,11 @@ mod tests {
 
     #[test]
     fn a_group_is_named_by_what_its_classes_share_else_numbered() {
-        let class = |id: u32, name: &str| Class { id, name: name.into(), ..Class::default() };
+        let class = |id: u32, name: &str| Class {
+            id,
+            name: name.into(),
+            ..Class::default()
+        };
         let classes = vec![
             class(4, "ch1@in-cell-spots"),
             class(5, "ch2@in-cell-spots"),

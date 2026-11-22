@@ -3989,7 +3989,11 @@ impl ResultsStateController {
             marker: match (filter.profile_mark, peak) {
                 (true, Some((p, v))) => Some((
                     p,
-                    format!("highest {} at {}", format_chart_value(v), format_chart_value(p)),
+                    format!(
+                        "highest {} at {}",
+                        format_chart_value(v),
+                        format_chart_value(p)
+                    ),
                 )),
                 _ => None,
             },
@@ -4176,19 +4180,30 @@ impl ResultsStateController {
                         color: evanalyzer_app::charts::Rgb(*color & 0x00ff_ffff),
                         points: points
                             .iter()
-                            .map(|(t, c, l, h)| (f64::from(*t) * per, scale(*c), scale(*l), scale(*h)))
+                            .map(|(t, c, l, h)| {
+                                (f64::from(*t) * per, scale(*c), scale(*l), scale(*h))
+                            })
                             .collect(),
                     })
                     .collect(),
                 faint: faint
                     .iter()
-                    .map(|(_, _, points)| points.iter().map(|(t, c, _, _)| (f64::from(*t) * per, scale(*c))).collect())
+                    .map(|(_, _, points)| {
+                        points
+                            .iter()
+                            .map(|(t, c, _, _)| (f64::from(*t) * per, scale(*c)))
+                            .collect()
+                    })
                     .collect(),
                 x_title,
                 y_title: format!(
                     "{}{}",
                     coloc::picker_label(&column),
-                    if filter.time_relative { " · % of the first time point" } else { "" }
+                    if filter.time_relative {
+                        " · % of the first time point"
+                    } else {
+                        ""
+                    }
                 ),
                 note: note.clone(),
                 ..chart_draw::LinesSpec::default()
@@ -8948,10 +8963,7 @@ pub(crate) mod tests {
         // counting partners.
         state.invoke_list_columns_section_select("Coloc · exactly".into(), true);
         drain_ui_queue();
-        assert_eq!(
-            headers(),
-            ["Coloc with ClassB", "Coloc exactly ClassB"]
-        );
+        assert_eq!(headers(), ["Coloc with ClassB", "Coloc exactly ClassB"]);
 
         // Without ClassB as a partner class, no coloc column is left.
         state.invoke_list_coloc_partner_toggled("2".into());
