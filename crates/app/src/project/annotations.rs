@@ -29,54 +29,6 @@ pub enum AnnotationScope {
     AllImages,
 }
 
-pub trait AnnotationsExt {
-    /// Whether `id` is a manual annotation of the open image (not a
-    /// preview object): only those can be changed or deleted.
-    fn is_manual_object(&self, id: ObjectId) -> bool;
-
-    /// Copies these preview objects of the open image into its manual
-    /// annotations. `object_class`: the class the copies get, `None` keeps
-    /// the preview objects' classes. An object whose exact shape is already
-    /// a manual annotation (copied before) is skipped. Returns the copies'
-    /// ids, in the order of `ids`.
-    fn copy_preview_objects_to_manual(
-        &mut self,
-        ids: &[ObjectId],
-        object_class: Option<ObjectClass>,
-    ) -> Vec<ObjectId>;
-
-    /// The classes of the open image's preview objects with how many have
-    /// each (an object with two classes counts for both), most first;
-    /// [`ObjectClass::Unset`] for those without a class.
-    fn preview_object_classes(&self) -> Vec<(ObjectClass, usize)>;
-
-    /// The classes of the manual annotations in `scope` with how many have
-    /// each, as [`Self::preview_object_classes`].
-    fn manual_annotation_classes(&self, scope: AnnotationScope) -> Vec<(ObjectClass, usize)>;
-
-    /// The ids of the open image's preview objects with any of `classes`
-    /// (all of them for none; [`ObjectClass::Unset`] = those without a
-    /// class).
-    fn preview_object_ids(&self, classes: &[ObjectClass]) -> Vec<ObjectId>;
-
-    /// How many manual annotations [`Self::delete_manual_annotations`]
-    /// would delete, and on how many images.
-    fn count_manual_annotations(
-        &self,
-        scope: AnnotationScope,
-        classes: &[ObjectClass],
-    ) -> (usize, usize);
-
-    /// Deletes the manual annotations in `scope` with any of `classes` (all
-    /// of them for none; [`ObjectClass::Unset`] = those without a class).
-    /// Returns how many.
-    fn delete_manual_annotations(
-        &mut self,
-        scope: AnnotationScope,
-        classes: &[ObjectClass],
-    ) -> usize;
-}
-
 /// Whether `object` has one of `classes` (any object for none).
 fn has_class(object: &ObjectMetricSettings, classes: &[ObjectClass]) -> bool {
     classes.is_empty()
@@ -150,13 +102,20 @@ fn manual_copy(
     copy
 }
 
-impl AnnotationsExt for ProjectWithRuntime {
-    fn is_manual_object(&self, id: ObjectId) -> bool {
+impl ProjectWithRuntime {
+    /// Whether `id` is a manual annotation of the open image (not a
+    /// preview object): only those can be changed or deleted.
+    pub fn is_manual_object(&self, id: ObjectId) -> bool {
         self.get_objects()
             .is_some_and(|objects| objects.iter().any(|o| o.id == id))
     }
 
-    fn copy_preview_objects_to_manual(
+    /// Copies these preview objects of the open image into its manual
+    /// annotations. `object_class`: the class the copies get, `None` keeps
+    /// the preview objects' classes. An object whose exact shape is already
+    /// a manual annotation (copied before) is skipped. Returns the copies'
+    /// ids, in the order of `ids`.
+    pub fn copy_preview_objects_to_manual(
         &mut self,
         ids: &[ObjectId],
         object_class: Option<ObjectClass>,
@@ -184,11 +143,16 @@ impl AnnotationsExt for ProjectWithRuntime {
         copied
     }
 
-    fn preview_object_classes(&self) -> Vec<(ObjectClass, usize)> {
+    /// The classes of the open image's preview objects with how many have
+    /// each (an object with two classes counts for both), most first;
+    /// [`ObjectClass::Unset`] for those without a class.
+    pub fn preview_object_classes(&self) -> Vec<(ObjectClass, usize)> {
         class_counts(self.get_preview_objects().iter())
     }
 
-    fn manual_annotation_classes(&self, scope: AnnotationScope) -> Vec<(ObjectClass, usize)> {
+    /// The classes of the manual annotations in `scope` with how many have
+    /// each, as [`Self::preview_object_classes`].
+    pub fn manual_annotation_classes(&self, scope: AnnotationScope) -> Vec<(ObjectClass, usize)> {
         match scope {
             AnnotationScope::CurrentImage => {
                 class_counts(self.get_objects().unwrap_or_default().iter())
@@ -204,7 +168,10 @@ impl AnnotationsExt for ProjectWithRuntime {
         }
     }
 
-    fn preview_object_ids(&self, classes: &[ObjectClass]) -> Vec<ObjectId> {
+    /// The ids of the open image's preview objects with any of `classes`
+    /// (all of them for none; [`ObjectClass::Unset`] = those without a
+    /// class).
+    pub fn preview_object_ids(&self, classes: &[ObjectClass]) -> Vec<ObjectId> {
         self.get_preview_objects()
             .iter()
             .filter(|o| has_class(o, classes))
@@ -212,7 +179,9 @@ impl AnnotationsExt for ProjectWithRuntime {
             .collect()
     }
 
-    fn count_manual_annotations(
+    /// How many manual annotations [`Self::delete_manual_annotations`]
+    /// would delete, and on how many images.
+    pub fn count_manual_annotations(
         &self,
         scope: AnnotationScope,
         classes: &[ObjectClass],
@@ -238,7 +207,10 @@ impl AnnotationsExt for ProjectWithRuntime {
         }
     }
 
-    fn delete_manual_annotations(
+    /// Deletes the manual annotations in `scope` with any of `classes` (all
+    /// of them for none; [`ObjectClass::Unset`] = those without a class).
+    /// Returns how many.
+    pub fn delete_manual_annotations(
         &mut self,
         scope: AnnotationScope,
         classes: &[ObjectClass],

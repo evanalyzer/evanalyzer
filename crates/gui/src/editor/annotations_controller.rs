@@ -23,9 +23,9 @@ use crate::{
 use evanalyzer_app::project::ClassificationExt;
 use evanalyzer_app::project::ImageListExt;
 use evanalyzer_app::project::{
-    AnnotationScope, AnnotationsExt, ClassTarget, ImportReport, PendingImport, PipelineObjects,
-    ProjectWithRuntime, apply_import, default_class_target, export_image_geojson,
-    image_annotation_classes, measure_on_source, measure_pending, read_image_geojson,
+    AnnotationScope, ClassTarget, ImportReport, PendingImport, PipelineObjects, ProjectWithRuntime,
+    apply_import, default_class_target, export_image_geojson, image_annotation_classes,
+    measure_on_source, measure_pending, read_image_geojson,
 };
 use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;

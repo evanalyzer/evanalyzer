@@ -43,7 +43,7 @@ pub use crate::annotations::geojson::{
     read_image_geojson,
 };
 pub use crate::annotations::measure::measure_on_source;
-pub use annotations::{AnnotationScope, AnnotationsExt};
+pub use annotations::AnnotationScope;
 pub use class_ids::{ClassIdChange, change_class_id, free_class_ids, next_class_id};
 pub use classes::ClassificationExt;
 pub use current_image::{ConfigValueSource, DEFAULT_FRAME_INTERVAL_S};
