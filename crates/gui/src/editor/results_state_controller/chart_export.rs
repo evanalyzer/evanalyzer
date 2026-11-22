@@ -83,13 +83,30 @@ impl ResultsStateController {
         Some(match &*data {
             ChartData::None => return None,
             ChartData::Boxplot(boxes) | ChartData::Bars(boxes) => {
+                // In % of the control as drawn: the same factor.
+                let by_mean = matches!(&*data, ChartData::Bars(_));
+                let relative = self
+                    .chart_look
+                    .lock()
+                    .expect("Poisoned")
+                    .relative
+                    .then(|| super::chart_draw::control_factor(boxes, factor, by_mean))
+                    .flatten();
+                let factor = relative.as_ref().map_or(factor, |(relative, _)| *relative);
                 let per_image = boxes.iter().any(|b| !b.image_values.is_empty());
                 let mut rows = Vec::new();
                 if per_image {
                     // A row per image: the dots.
                     rows.push(vec![
                         "Group".to_string(),
-                        super::column_panel::chart_value_label(&chart.column, true, &classes),
+                        match relative {
+                            Some((_, title)) => title,
+                            None => super::column_panel::chart_value_label(
+                                &chart.column,
+                                true,
+                                &classes,
+                            ),
+                        },
                     ]);
                     for b in boxes {
                         for value in &b.image_values {
@@ -97,13 +114,20 @@ impl ResultsStateController {
                         }
                     }
                 } else {
+                    // In % of the control: every value is, the head says so.
+                    let unit = match &relative {
+                        Some(_) => " (% of control)",
+                        None => "",
+                    };
                     rows.push(
-                        [
-                            "Group", "n", "Median", "Q1", "Q3", "Mean", "SD", "Min", "Max",
-                        ]
-                        .iter()
-                        .map(|h| (*h).to_string())
-                        .collect(),
+                        std::iter::once("Group".to_string())
+                            .chain(std::iter::once("n".to_string()))
+                            .chain(
+                                ["Median", "Q1", "Q3", "Mean", "SD", "Min", "Max"]
+                                    .iter()
+                                    .map(|h| format!("{h}{unit}")),
+                            )
+                            .collect(),
                     );
                     for b in boxes {
                         rows.push(vec![

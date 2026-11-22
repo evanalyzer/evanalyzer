@@ -230,6 +230,20 @@ pub(super) enum ChartData {
     Lines(LinesSpec),
 }
 
+/// In % of the control: the factor that makes the first group 100 (its
+/// mean as bars, `by_mean`, else its median) and the value's title -
+/// none when that is 0. `factor`: to shown units.
+pub(super) fn control_factor(
+    boxes: &[BoxplotBox],
+    factor: f64,
+    by_mean: bool,
+) -> Option<(f64, String)> {
+    let first = boxes.first()?;
+    let control = if by_mean { first.mean } else { first.median };
+    (control * factor != 0.0 && control.is_finite())
+        .then(|| (100.0 / control, format!("% of control ({})", first.label)))
+}
+
 impl ResultsStateController {
     /// The boxplot's boxes came: kept and drawn.
     pub(super) fn set_boxplot_boxes(&self, boxes: Vec<BoxplotBox>) {
@@ -498,12 +512,10 @@ impl ResultsStateController {
             )
         };
         let mut factor = unit_factor(&label);
-        // In % of the control: the first bar's mean is 100.
         if look.relative
-            && let Some(first) = boxes.first().filter(|b| b.mean * factor != 0.0)
+            && let Some((relative, control)) = control_factor(boxes, factor, true)
         {
-            title = format!("% of control ({})", first.label);
-            factor = 100.0 / first.mean;
+            (factor, title) = (relative, control);
         }
         let error = match look.error {
             1 => ErrorBar::Sem,
@@ -590,12 +602,10 @@ impl ResultsStateController {
         };
         let mut factor = unit_factor(&label);
         let mut title = title;
-        // In % of the control: the first box's median is 100.
         if look.relative
-            && let Some(first) = boxes.first().filter(|b| b.median * factor != 0.0)
+            && let Some((relative, control)) = control_factor(boxes, factor, false)
         {
-            title = format!("% of control ({})", first.label);
-            factor = 100.0 / first.median;
+            (factor, title) = (relative, control);
         }
         let specs = box_specs(boxes, factor, &look);
         let drawing = boxplot::draw(
@@ -902,5 +912,35 @@ mod tests {
             Rgb(PALETTE[0]),
             "no class colour: the palette's"
         );
+    }
+
+    #[test]
+    fn the_control_is_its_median_as_boxes_and_its_mean_as_bars() {
+        let group = |label: &str, median: f64, mean: f64| BoxplotBox {
+            label: label.into(),
+            color: 0,
+            min: 0.0,
+            q1: 0.0,
+            median,
+            q3: 0.0,
+            max: 0.0,
+            whisker_low: 0.0,
+            whisker_high: 0.0,
+            outliers: Vec::new(),
+            object_count: 1,
+            image_values: Vec::new(),
+            image_count: 0,
+            mean,
+            sd: 0.0,
+        };
+        let boxes = [group("ctrl", 4.0, 5.0), group("drug", 8.0, 10.0)];
+        let title = "% of control (ctrl)".to_string();
+        assert_eq!(
+            control_factor(&boxes, 1.0, false),
+            Some((25.0, title.clone()))
+        );
+        assert_eq!(control_factor(&boxes, 1.0, true), Some((20.0, title)));
+        assert_eq!(control_factor(&[group("c", 0.0, 0.0)], 1.0, false), None);
+        assert_eq!(control_factor(&[], 1.0, false), None);
     }
 }
