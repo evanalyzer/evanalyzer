@@ -3964,6 +3964,30 @@ impl ResultsStateController {
             format!("{} px", format_chart_value(x_hi)),
         );
         let (y_min, y_max) = ("0".to_string(), format_chart_value(high));
+        // Drawn by the chart module.
+        self.set_lines(chart_draw::LinesSpec {
+            series: series
+                .iter()
+                .map(|(label, color, points)| chart_draw::LineSeries {
+                    label: label.clone(),
+                    color: evanalyzer_app::charts::Rgb(*color & 0x00ff_ffff),
+                    points: points.clone(),
+                })
+                .collect(),
+            highlight: curve.to_vec(),
+            marker: match (filter.profile_mark, peak) {
+                (true, Some((p, v))) => Some((
+                    p,
+                    format!("highest {} at {}", format_chart_value(v), format_chart_value(p)),
+                )),
+                _ => None,
+            },
+            x_title: "Position (px)".to_string(),
+            y_title: label.to_string(),
+            from_zero: true,
+            note: note.clone(),
+            ..chart_draw::LinesSpec::default()
+        });
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
@@ -4116,6 +4140,50 @@ impl ResultsStateController {
             format!("{}{unit}", format_chart_value(low)),
             format!("{}{unit}", format_chart_value(high)),
         );
+
+        // Drawn by the chart module: time in s, min or h, values in µm.
+        {
+            let (x_title, per) = match result.frame_interval_s {
+                Some(interval) => match f64::from(t_max) * interval {
+                    span if span >= 7200.0 => ("Time (h)".to_string(), interval / 3600.0),
+                    span if span >= 120.0 => ("Time (min)".to_string(), interval / 60.0),
+                    _ => ("Time (s)".to_string(), interval),
+                },
+                None => ("Time point".to_string(), 1.0),
+            };
+            let factor = if filter.time_relative {
+                1.0
+            } else {
+                chart_draw::unit_factor(&column)
+            };
+            let scale = |v: Option<f64>| v.map(|v| v * factor);
+            let spec = chart_draw::LinesSpec {
+                series: shown
+                    .iter()
+                    .map(|(label, color, points)| chart_draw::LineSeries {
+                        label: label.clone(),
+                        color: evanalyzer_app::charts::Rgb(*color & 0x00ff_ffff),
+                        points: points
+                            .iter()
+                            .map(|(t, c, l, h)| (f64::from(*t) * per, scale(*c), scale(*l), scale(*h)))
+                            .collect(),
+                    })
+                    .collect(),
+                faint: faint
+                    .iter()
+                    .map(|(_, _, points)| points.iter().map(|(t, c, _, _)| (f64::from(*t) * per, scale(*c))).collect())
+                    .collect(),
+                x_title,
+                y_title: format!(
+                    "{}{}",
+                    coloc::picker_label(&column),
+                    if filter.time_relative { " · % of the first time point" } else { "" }
+                ),
+                note: note.clone(),
+                ..chart_draw::LinesSpec::default()
+            };
+            self.set_lines(spec);
+        }
 
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {

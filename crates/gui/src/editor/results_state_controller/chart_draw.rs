@@ -17,6 +17,7 @@ use crate::ChartHit;
 use evanalyzer_app::charts::boxplot::{self, BoxSpec, BoxplotLook};
 use evanalyzer_app::charts::histogram::{self, HistogramLook, HistogramSpec};
 use evanalyzer_app::charts::scatter::{self, ScatterLook, ScatterSpec};
+pub(super) use evanalyzer_app::charts::lines::{self, LineSeries, LinesSpec};
 use evanalyzer_app::charts::{Rgb, Theme};
 
 /// The chart area: its size (px) and whether the scheme is dark.
@@ -59,7 +60,7 @@ pub(super) const PICKABLE: [u32; 12] = [
 
 /// The factor that turns a value named `label` into the unit the results
 /// show (nm, nm², nm³ as µm, µm², µm³ - `in_micrometers`).
-fn unit_factor(label: &str) -> f64 {
+pub(super) fn unit_factor(label: &str) -> f64 {
     if label.contains("[nm²]") {
         1e-6
     } else if label.contains("[nm³]") {
@@ -180,12 +181,20 @@ pub(super) enum ChartData {
     Boxplot(Vec<BoxplotBox>),
     Histogram(HistogramResult),
     Scatter(ScatterResult),
+    /// Over time, a profile: ready in shown units.
+    Lines(LinesSpec),
 }
 
 impl ResultsStateController {
     /// The boxplot's boxes came: kept and drawn.
     pub(super) fn set_boxplot_boxes(&self, boxes: Vec<BoxplotBox>) {
         *self.chart_data.lock().expect("Poisoned") = ChartData::Boxplot(boxes);
+        self.draw_chart();
+    }
+
+    /// Over time's or a profile's lines came: kept and drawn.
+    pub(super) fn set_lines(&self, spec: LinesSpec) {
+        *self.chart_data.lock().expect("Poisoned") = ChartData::Lines(spec);
         self.draw_chart();
     }
 
@@ -215,6 +224,11 @@ impl ResultsStateController {
             ChartData::Boxplot(boxes) => self.draw_boxplot(boxes, canvas, &theme),
             ChartData::Histogram(histogram) => self.draw_histogram(histogram, canvas, &theme),
             ChartData::Scatter(scatter) => self.draw_scatter(scatter, canvas, &theme),
+            ChartData::Lines(spec) => {
+                let grid = self.chart_look.lock().expect("Poisoned").grid;
+                let drawing = lines::draw(spec, grid, Rgb(PALETTE[0]), &theme, canvas.width, canvas.height);
+                self.push_picture(drawing.svg, Vec::new(), Vec::new(), String::new());
+            }
         }
     }
 

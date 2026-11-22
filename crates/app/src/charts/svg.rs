@@ -111,6 +111,26 @@ impl Svg {
         );
     }
 
+    /// A line through `points`; `dash`: dashed.
+    pub fn polyline(&mut self, points: &[(f64, f64)], color: Rgb, width: f64, opacity: f64, dash: bool) {
+        if points.len() < 2 {
+            return;
+        }
+        let points: Vec<String> = points
+            .iter()
+            .map(|(x, y)| format!("{},{}", n(*x), n(*y)))
+            .collect();
+        let _ = write!(
+            self.out,
+            r#"<polyline points="{}" fill="none" stroke="{}" stroke-width="{}" stroke-opacity="{}" stroke-linejoin="round"{}/>"#,
+            points.join(" "),
+            color.hex(),
+            n(width),
+            n(opacity),
+            if dash { r#" stroke-dasharray="4 3""# } else { "" }
+        );
+    }
+
     /// A filled polygon through `points`.
     pub fn polygon(&mut self, points: &[(f64, f64)], fill: Rgb, opacity: f64) {
         let points: Vec<String> = points

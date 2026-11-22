@@ -442,146 +442,35 @@ component OverTimeChart inherits Rectangle {
             }
         }
 
-        // The legend.
-        HorizontalLayout {
-            spacing: 14px;
-            alignment: start;
-            for line in ResultsState.chart-time-data: HorizontalLayout {
-                spacing: 6px;
-                VerticalLayout {
-                    alignment: center;
-                    Rectangle {
-                        width: 14px;
-                        height: 3px;
-                        background: line.color;
-                    }
-                }
-                Text {
-                    text: line.label;
-                    font-size: Ink.fs-secondary;
-                    color: Ink.text-dim;
-                }
-            }
-        }
-
-        HorizontalLayout {
+        // Lines, bands, the legend and both axes: drawn by the chart
+        // module at the area's size and scheme.
+        time-plot := Rectangle {
             vertical-stretch: 1;
-            spacing: 6px;
-            VerticalLayout {
-                width: 64px;
-                Text {
-                    text: ResultsState.chart-time-y-max;
-                    font-size: Ink.fs-caption;
-                    font-family: Ink.font-mono;
-                    color: Ink.text-mute;
-                    horizontal-alignment: right;
-                }
-                Rectangle {
-                    vertical-stretch: 1;
-                }
-                Text {
-                    text: ResultsState.chart-time-y-min;
-                    font-size: Ink.fs-caption;
-                    font-family: Ink.font-mono;
-                    color: Ink.text-mute;
-                    horizontal-alignment: right;
-                }
+            function ask() {
+                ResultsState.chart-resized(self.width / 1px, self.height / 1px, Ink.scheme != InkScheme.light);
             }
-            plot := Rectangle {
-                border-width: 1px;
-                border-color: Ink.border-soft;
+            init => {
+                self.ask();
+            }
+            changed width => {
+                self.ask();
+            }
+            changed height => {
+                self.ask();
+            }
+            Image {
+                width: parent.width;
+                height: parent.height;
+                source: ResultsState.chart-picture;
+                image-fit: fill;
                 accessible-role: image;
                 accessible-label: ResultsState.chart-time-y-title;
-                for faint in ResultsState.chart-time-faint: Path {
-                    width: plot.width;
-                    height: plot.height;
-                    viewbox-width: 1000;
-                    viewbox-height: 1000;
-                    // Stretched to the plot (the box isn't square).
-                    fit: fill;
-                    commands: faint;
-                    stroke: Ink.text-mute;
-                    stroke-width: 1px;
-                    opacity: 0.25;
-                }
-                for line in ResultsState.chart-time-data: Path {
-                    width: plot.width;
-                    height: plot.height;
-                    viewbox-width: 1000;
-                    viewbox-height: 1000;
-                    // Stretched to the plot (the box isn't square).
-                    fit: fill;
-                    commands: line.band != "" ? line.band : "M 0 0";
-                    fill: line.color;
-                    opacity: line.band != "" ? 0.16 : 0;
-                }
-                for line in ResultsState.chart-time-data: Path {
-                    width: plot.width;
-                    height: plot.height;
-                    viewbox-width: 1000;
-                    viewbox-height: 1000;
-                    // Stretched to the plot (the box isn't square).
-                    fit: fill;
-                    commands: line.line != "" ? line.line : "M 0 0";
-                    stroke: line.color;
-                    stroke-width: 2px;
-                }
-                // Profile: the marker (the selected curve's highest value)
-                // and the selected object's own curve on top.
-                if ResultsState.chart-time-marker != "": Path {
-                    width: plot.width;
-                    height: plot.height;
-                    viewbox-width: 1000;
-                    viewbox-height: 1000;
-                    fit: fill;
-                    commands: ResultsState.chart-time-marker;
-                    stroke: Ink.focus;
-                    stroke-width: 1px;
-                    opacity: 0.7;
-                }
-                if ResultsState.chart-time-highlight != "": Path {
-                    width: plot.width;
-                    height: plot.height;
-                    viewbox-width: 1000;
-                    viewbox-height: 1000;
-                    fit: fill;
-                    commands: ResultsState.chart-time-highlight;
-                    stroke: Ink.focus;
-                    stroke-width: 2.5px;
-                }
-                if ResultsState.chart-time-marker-label != "": Text {
-                    x: 8px;
-                    y: 6px;
-                    text: ResultsState.chart-time-marker-label;
-                    font-size: Ink.fs-caption;
-                    font-family: Ink.font-mono;
-                    color: Ink.focus;
-                }
-            }
-        }
-
-        HorizontalLayout {
-            padding-left: 70px;
-            Text {
-                text: ResultsState.chart-time-x-min;
-                font-size: Ink.fs-caption;
-                font-family: Ink.font-mono;
-                color: Ink.text-mute;
-            }
-            Rectangle {
-                horizontal-stretch: 1;
-            }
-            Text {
-                text: ResultsState.chart-time-x-max;
-                font-size: Ink.fs-caption;
-                font-family: Ink.font-mono;
-                color: Ink.text-mute;
             }
         }
 
         // Profile: the selected object's values.
         if ResultsState.chart-profile-cards.length > 0: HorizontalLayout {
-            padding-left: 70px;
+            padding-left: 16px;
             spacing: 10px;
             alignment: start;
             for card in ResultsState.chart-profile-cards: Rectangle {
@@ -897,6 +786,14 @@ component ChartsPanel inherits ViewPanel {
                 picked(i) => {
                     ResultsState.chart-time-summary = i;
                     ResultsState.chart-time-changed();
+                }
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.over-time || ResultsState.chart-kind == ResultsChartKind2.profile: InkSwitch {
+                text: "Grid lines";
+                checked: ResultsState.chart-box-look.grid;
+                toggled(on) => {
+                    ResultsState.chart-box-look.grid = on;
+                    ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
                 }
             }
             if ResultsState.chart-kind == ResultsChartKind2.profile: InkSwitch {
