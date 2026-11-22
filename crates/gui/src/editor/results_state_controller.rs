@@ -2119,7 +2119,14 @@ impl ResultsStateController {
                         ResultsChartKind2::Profile => ChartKind::Profile,
                         ResultsChartKind2::Bar => ChartKind::Bar,
                     };
-                    manager.chart_filter.lock().expect("Poisened").kind = kind;
+                    {
+                        let mut chart = manager.chart_filter.lock().expect("Poisened");
+                        chart.kind = kind;
+                        let available = manager.available_columns.lock().expect("Poisoned");
+                        count_only_per_image(&mut chart, &available);
+                    }
+                    manager.push_chart_picker();
+                    manager.push_chart_value_summary();
                     manager.refresh_charts();
                 });
 
@@ -2192,18 +2199,8 @@ impl ResultsStateController {
                     {
                         let mut chart = manager.chart_filter.lock().expect("Poisoned");
                         chart.per_image = per_image;
-                        // Objects per image means nothing per object.
-                        if !per_image && chart.column == Column::Count {
-                            if let Some(first) = manager
-                                .available_columns
-                                .lock()
-                                .expect("Poisoned")
-                                .iter()
-                                .find(|entry| is_chartable_column(&entry.key))
-                            {
-                                chart.column = first.key.clone();
-                            }
-                        }
+                        let available = manager.available_columns.lock().expect("Poisoned");
+                        count_only_per_image(&mut chart, &available);
                     }
                     manager.push_chart_picker();
                     manager.push_chart_value_summary();
@@ -6718,6 +6715,21 @@ fn column_for_key(key: &str, classes: &[Class], available: &[ColumnEntry]) -> Op
 /// measurement, so charting it doesn't mean anything the way it does for
 /// Images-mode's own per-image counts. Neither is an image measurement (a
 /// value per image, see `Column::is_image_measurement`).
+/// Objects per image is a value only of a per-image boxplot or bar chart:
+/// any other chart (or per object) shows the first chartable column
+/// instead.
+fn count_only_per_image(chart: &mut ChartFilter, available: &[ColumnEntry]) {
+    let counts = chart.per_image && matches!(chart.kind, ChartKind::Boxplot | ChartKind::Bar);
+    if chart.column == Column::Count
+        && !counts
+        && let Some(first) = available
+            .iter()
+            .find(|entry| is_chartable_column(&entry.key))
+    {
+        chart.column = first.key.clone();
+    }
+}
+
 fn is_chartable_column(column: &Column) -> bool {
     !matches!(
         column,
@@ -12109,6 +12121,33 @@ pub(crate) mod tests {
         state.invoke_matrix_value_clicked();
 
         assert_eq!(matrix_filter_value(&o, |f| f.column.clone()), column);
+    }
+
+    /// Objects per image only stays the value of a per-image boxplot or
+    /// bar chart.
+    #[test]
+    fn the_count_goes_when_its_chart_can_not_show_it() {
+        let available = [Column::ObjectId, Column::AreaSizePx].map(|key| ColumnEntry {
+            display_name: String::new(),
+            key,
+            group: String::new(),
+            coloc_group: 0,
+        });
+        let chart = |kind, per_image| {
+            let mut chart = ChartFilter {
+                kind,
+                per_image,
+                column: Column::Count,
+                ..ChartFilter::default()
+            };
+            count_only_per_image(&mut chart, &available);
+            chart.column
+        };
+        assert_eq!(chart(ChartKind::Boxplot, true), Column::Count);
+        assert_eq!(chart(ChartKind::Bar, true), Column::Count);
+        assert_eq!(chart(ChartKind::Boxplot, false), Column::AreaSizePx);
+        assert_eq!(chart(ChartKind::Histogram, true), Column::AreaSizePx);
+        assert_eq!(chart(ChartKind::Scatter, true), Column::AreaSizePx);
     }
 
     /// A measurement's picker key resolves to its column among the open

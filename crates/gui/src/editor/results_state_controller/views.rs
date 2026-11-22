@@ -442,6 +442,7 @@ impl ResultsStateController {
             chart.profile_lines = view.profile_lines;
             chart.profile_curve = view.profile_curve;
             chart.profile_mark = view.profile_mark;
+            super::count_only_per_image(chart, &available);
         }
         self.tracks_all
             .lock()
