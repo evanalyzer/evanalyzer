@@ -10,10 +10,9 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-mod drawn_images;
-pub use drawn_images::{colorize, colorize_thumbnail};
+mod export;
 mod results_charts;
-mod results_exporter;
+pub use export::drawn_images::{colorize, colorize_thumbnail};
 mod results_generator;
 mod results_profile;
 mod results_time_course;

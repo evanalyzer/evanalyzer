@@ -17,7 +17,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use super::results_generator::{ResultsGenerator, class_filter_sql};
+use super::super::results_generator::{ResultsGenerator, class_filter_sql};
 use crate::results::{
     ChannelDisplay, DrawBrightness, DrawStyle, DrawnImages, ExportProgress, ImageDisplay,
 };
