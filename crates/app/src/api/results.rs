@@ -1500,6 +1500,11 @@ pub struct DrawnImages {
     /// place of `display`.
     #[serde(default)]
     pub image_display: std::collections::BTreeMap<String, ImageDisplay>,
+    /// The images whose path below `image_root` isn't the one in the
+    /// results (the image folder changed since the run): results path ->
+    /// the project's. Only those - usually none.
+    #[serde(default)]
+    pub image_paths: std::collections::BTreeMap<String, String>,
 }
 
 /// How "Images with objects drawn" draws an object.

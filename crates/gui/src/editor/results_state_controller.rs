@@ -6227,8 +6227,31 @@ impl ResultsStateController {
     fn drawn_images(&self, state: &ExportDialogState) -> evanalyzer_app::results::DrawnImages {
         use evanalyzer_app::project::ProjectExt;
         use evanalyzer_app::results::{DrawBrightness, DrawStyle};
+        let results_images: Vec<String> = self
+            .images
+            .lock()
+            .expect("Poisoned")
+            .iter()
+            .map(|image| image.rel_path.to_string_lossy().into_owned())
+            .collect();
+        let run_root = self.run_image_root.lock().expect("Poisoned").clone();
         let project = self._app_state.get_project();
         let (display, image_display) = project.drawn_image_display();
+        // The images the project has below another path than the results
+        // (its image folder changed since the run) - usually none.
+        let finder = evanalyzer_app::project::ResultsImageFinder::new(
+            &project.images.list,
+            project.images.root.as_deref(),
+            run_root.as_deref(),
+        );
+        let image_paths = results_images
+            .into_iter()
+            .filter_map(|rel| {
+                let image = finder.find(Path::new(&rel))?;
+                let image = image.to_string_lossy().into_owned();
+                (image != rel).then_some((rel, image))
+            })
+            .collect();
         evanalyzer_app::results::DrawnImages {
             image_root: project.images.root.clone().unwrap_or_default(),
             series: project.images.settings.selected_series.unwrap_or(0),
@@ -6249,6 +6272,7 @@ impl ResultsStateController {
             },
             display,
             image_display,
+            image_paths,
         }
     }
 

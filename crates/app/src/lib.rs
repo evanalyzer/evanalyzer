@@ -221,6 +221,7 @@ pub mod project {
     pub use crate::workspace::extensions::object_ext::{ObjectExt, ShownPlane};
     pub use crate::workspace::extensions::project_ext::ConfigValueSource;
     pub use crate::workspace::extensions::project_ext::ProjectExt;
+    pub use crate::workspace::extensions::project_ext::ResultsImageFinder;
     pub use crate::workspace::extensions::project_ext::SaveProjectActions;
     pub use crate::workspace::extensions::project_ext::SelectNewProjectRootAction;
     pub use crate::workspace::extensions::project_ext::collect_images_at_root;

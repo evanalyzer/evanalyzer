@@ -81,7 +81,9 @@ use std::sync::Arc;
 // 53: `BoxplotBox::mean` / `sd`.
 // 54: `HistogramFilter::full_range`, `HistogramResult::below` / `above` /
 // `data_min` / `data_max`.
-pub const PROTOCOL_VERSION: u32 = 54;
+// 55: `DrawnImages::image_paths` (the images whose folder changed since the
+// run).
+pub const PROTOCOL_VERSION: u32 = 55;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 

@@ -1,5 +1,5 @@
 {
-  "protocol_version": 54,
+  "protocol_version": 55,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -682,6 +682,14 @@
               "VALUE": {
                 "TYPENAME": "ImageDisplay"
               }
+            }
+          }
+        },
+        {
+          "image_paths": {
+            "MAP": {
+              "KEY": "STR",
+              "VALUE": "STR"
             }
           }
         }

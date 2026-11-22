@@ -81,18 +81,24 @@ pub(super) fn export_drawn_images(
             return Err(InternalErrors::Internal("Export cancelled".into()));
         }
         on_progress("Drawing the objects on the images", i, images.len());
-        // From the results file - anyone's: it stays below the root (an
-        // absolute path would replace it, `..` leave it).
-        if !evanalyzer_cfg::core_types::is_contained_rel_path(rel_path) {
+        // Where the project has it now (its folder may have changed since
+        // the run).
+        let image = settings
+            .image_paths
+            .get(rel_path.as_str())
+            .map_or(rel_path.as_str(), String::as_str);
+        // From the results file or the client - anyone's: it stays below
+        // the root (an absolute path would replace it, `..` leave it).
+        if !evanalyzer_cfg::core_types::is_contained_rel_path(image) {
             return Err(InternalErrors::InvalidArgument(format!(
-                "the image path {rel_path:?} in the results leaves the images folder - not drawn"
+                "the image path {image:?} leaves the images folder - not drawn"
             )));
         }
         let display = settings
             .image_display
-            .get(rel_path)
+            .get(image)
             .unwrap_or(&settings.display);
-        let source = Source::open(&settings.image_root.join(rel_path), settings)?;
+        let source = Source::open(&settings.image_root.join(image), settings)?;
         for (z, t) in image_planes(database, rel_path, &planes)? {
             if cancel.load(Ordering::Relaxed) {
                 return Err(InternalErrors::Internal("Export cancelled".into()));

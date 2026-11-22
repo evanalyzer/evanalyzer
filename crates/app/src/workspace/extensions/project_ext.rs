@@ -51,7 +51,7 @@ use evanalyzer_cfg::{
 use human_sort::compare;
 use log::{info, trace, warn};
 use rayon::prelude::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -2017,50 +2017,87 @@ fn is_supported_image_path(path: &Path, formats: &[String]) -> bool {
 }
 
 /// The image of `list` (paths relative to `root`) a results file names
-/// `results_rel` (relative to `run_root`, the image folder of its run):
-/// 1. the same file, when it lies in `root`: the image folder moved up or
-///    down since the run;
-/// 2. the same path: the folder itself moved (or the run's is unknown);
-/// 3. the image whose path ends the same way the longest (at least the
-///    file name), when only one does: the folder was moved elsewhere.
-///
-/// The first two are lookups; only an image found by neither is searched
-/// for in the list.
+/// `results_rel` (relative to `run_root`, the image folder of its run) -
+/// see [`ResultsImageFinder::find`].
 pub fn find_results_image(
     list: &evanalyzer_cfg::settings::images_settings::ImageList,
     root: Option<&Path>,
     results_rel: &Path,
     run_root: Option<&Path>,
 ) -> Option<PathBuf> {
-    if let (Some(run_root), Some(root)) = (run_root, root)
-        && let Ok(rel) = run_root.join(results_rel).strip_prefix(root)
-        && list.0.contains_key(rel)
-    {
-        return Some(rel.to_path_buf());
-    }
-    if list.0.contains_key(results_rel) {
-        return Some(results_rel.to_path_buf());
-    }
-    let wanted: Vec<_> = results_rel.components().rev().collect();
-    let mut best: Option<&PathBuf> = None;
-    let (mut best_len, mut ties) = (0, 0);
-    for path in list.0.keys() {
-        let len = path
-            .components()
-            .rev()
-            .zip(&wanted)
-            .take_while(|(a, b)| a == *b)
-            .count();
-        if len == 0 || len < best_len {
-            continue;
+    ResultsImageFinder::new(list, root, run_root).find(results_rel)
+}
+
+/// Finds the images a results file names in a project's list (paths
+/// relative to `root`); the results' paths are relative to `run_root`, the
+/// image folder of their run. For many images: the list's file names are
+/// indexed once, at the first image not found directly.
+pub struct ResultsImageFinder<'a> {
+    list: &'a evanalyzer_cfg::settings::images_settings::ImageList,
+    root: Option<&'a Path>,
+    run_root: Option<&'a Path>,
+    by_name: std::cell::OnceCell<HashMap<&'a std::ffi::OsStr, Vec<&'a PathBuf>>>,
+}
+
+impl<'a> ResultsImageFinder<'a> {
+    pub fn new(
+        list: &'a evanalyzer_cfg::settings::images_settings::ImageList,
+        root: Option<&'a Path>,
+        run_root: Option<&'a Path>,
+    ) -> Self {
+        Self {
+            list,
+            root,
+            run_root,
+            by_name: std::cell::OnceCell::new(),
         }
-        if len > best_len {
-            (best, best_len, ties) = (Some(path), len, 1);
-        } else {
-            ties += 1;
-        }
     }
-    best.filter(|_| ties == 1).cloned()
+
+    /// The project's image of `results_rel`:
+    /// 1. the same file, when it lies in the project's folder: the image
+    ///    folder moved up or down since the run;
+    /// 2. the same path: the folder itself moved (or the run's is unknown);
+    /// 3. the image with the same file name whose path ends the same way
+    ///    the longest, when only one does: the folder was moved elsewhere.
+    pub fn find(&self, results_rel: &Path) -> Option<PathBuf> {
+        let list = &self.list.0;
+        if let (Some(run_root), Some(root)) = (self.run_root, self.root)
+            && let Ok(rel) = run_root.join(results_rel).strip_prefix(root)
+            && list.contains_key(rel)
+        {
+            return Some(rel.to_path_buf());
+        }
+        if list.contains_key(results_rel) {
+            return Some(results_rel.to_path_buf());
+        }
+        let name = results_rel.file_name()?;
+        let by_name = self.by_name.get_or_init(|| {
+            let mut by_name: HashMap<&std::ffi::OsStr, Vec<&PathBuf>> = HashMap::new();
+            for path in list.keys() {
+                if let Some(name) = path.file_name() {
+                    by_name.entry(name).or_default().push(path);
+                }
+            }
+            by_name
+        });
+        let wanted: Vec<_> = results_rel.components().rev().collect();
+        let mut best: Option<&PathBuf> = None;
+        let (mut best_len, mut ties) = (0, 0);
+        for path in by_name.get(name)? {
+            let len = path
+                .components()
+                .rev()
+                .zip(&wanted)
+                .take_while(|(a, b)| a == *b)
+                .count();
+            if len > best_len {
+                (best, best_len, ties) = (Some(*path), len, 1);
+            } else if len == best_len {
+                ties += 1;
+            }
+        }
+        best.filter(|_| ties == 1).cloned()
+    }
 }
 
 /// The image folder the run of the results `results_db` analysed: from the

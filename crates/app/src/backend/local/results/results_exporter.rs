@@ -4234,6 +4234,42 @@ mod tests {
         assert!(picture.width() > 0 && picture.height() > 0);
     }
 
+    /// The image folder changed since the run: the images are read where
+    /// the project has them now - still never outside the images folder.
+    #[test]
+    fn images_with_objects_drawn_are_read_where_the_project_has_them_now() {
+        let run_path = "old-run/multi-channel-4D-series.ome.tif";
+        let export_with = |image: &str| {
+            let (database, out_dir) = open(&[ObjectSpec::new(run_path, "ClassA", 1, 100)]);
+            let (z_stacks, t_stacks) = full_range();
+            let export = ResultExport {
+                output_dir: out_dir.clone(),
+                format: ExportFormat::XLSX,
+                z_stacks,
+                t_stacks,
+                drawn_images: Some(crate::api::DrawnImages {
+                    image_root: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../core/tests"),
+                    series: 0,
+                    max_side: 4096,
+                    colors: [(0, [1.0, 0.0, 0.0])].into(),
+                    image_paths: [(run_path.to_string(), image.to_string())].into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let result = export.start_export(&database, &no_cancel(), &mut no_progress());
+            let drawn = std::fs::read_dir(out_dir.join("images")).map_or(0, |d| d.count());
+            (result, drawn)
+        };
+        let (result, drawn) = export_with("multi-channel-4D-series.ome.tif");
+        result.expect("export");
+        assert_eq!(drawn, 1);
+        let (result, drawn) = export_with("../tests/multi-channel-4D-series.ome.tif");
+        let err = result.expect_err("refused").to_string();
+        assert!(err.contains("leaves the images folder"), "{err}");
+        assert_eq!(drawn, 0);
+    }
+
     /// Results with several time points: a PNG per plane, named by it; the
     /// chosen time range limits them.
     #[test]
