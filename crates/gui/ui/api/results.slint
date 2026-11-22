@@ -348,6 +348,20 @@ export struct ChartHit {
     label: string,
 }
 
+/// How a boxplot is drawn: a log axis, grid lines, every image a dot, the
+/// mean, n under the boxes, % of the first box (the control), min - max
+/// whiskers (else 1.5 × IQR), colours (0 per box, 1 one, 2 control grey).
+export struct ChartBoxLook {
+    log: bool,
+    grid: bool,
+    dots: bool,
+    mean: bool,
+    show-n: bool,
+    relative: bool,
+    min-max: bool,
+    colors: int,
+}
+
 export global ResultsState {
     // -- Split with image (board Z) --
     // Results left, the image right (asked for - see `split-offered`).
@@ -1037,10 +1051,9 @@ export global ResultsState {
     in-out property <image> chart-picture;
     in-out property <[ChartHit]> chart-hits: [];
     callback chart-resized(float, float, bool);
-    // The boxplot's look: a log axis, grid lines.
-    in-out property <bool> chart-box-log: false;
-    in-out property <bool> chart-grid: true;
-    callback chart-look-changed(bool, bool);
+    // The boxplot's look (saved with the view).
+    in-out property <ChartBoxLook> chart-box-look: { grid: true, dots: true, show-n: true };
+    callback chart-box-look-changed(ChartBoxLook);
     // The boxplot: a value per image (each image a dot), else per object.
     in-out property <bool> chart-per-image: false;
     callback chart-per-image-changed(bool);

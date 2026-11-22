@@ -1,5 +1,5 @@
 {
-  "protocol_version": 52,
+  "protocol_version": 53,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -70,6 +70,12 @@
         },
         {
           "image_count": "U64"
+        },
+        {
+          "mean": "F64"
+        },
+        {
+          "sd": "F64"
         }
       ]
     },

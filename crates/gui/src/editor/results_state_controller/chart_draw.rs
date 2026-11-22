@@ -25,16 +25,20 @@ pub(super) struct ChartCanvas {
     pub dark: bool,
 }
 
-/// What the charts draw now, besides their data.
-#[derive(Debug, Clone, PartialEq)]
-pub(super) struct ChartLook {
-    pub log: bool,
-    pub grid: bool,
-}
+/// What the charts draw now, besides their data: the boxplot's look.
+pub(super) type ChartLook = evanalyzer_app::results::view_settings::BoxLook;
 
-impl Default for ChartLook {
-    fn default() -> Self {
-        Self { log: false, grid: true }
+/// The look as Slint shows it.
+pub(super) fn look_to_slint(look: &ChartLook) -> crate::ChartBoxLook {
+    crate::ChartBoxLook {
+        log: look.log,
+        grid: look.grid,
+        dots: look.dots,
+        mean: look.mean,
+        show_n: look.show_n,
+        relative: look.relative,
+        min_max: look.min_max,
+        colors: i32::from(look.colors),
     }
 }
 
@@ -57,17 +61,34 @@ fn unit_factor(label: &str) -> f64 {
     }
 }
 
-/// The boxes for the chart module, in the shown unit (`factor`).
-fn box_specs(boxes: &[BoxplotBox], factor: f64) -> Vec<BoxSpec> {
+/// The colour of box `index` (`class_color` 0: not a class) by the look's
+/// colours: per box, one colour, or the control (the first) dark grey and
+/// the others light grey.
+fn box_color(index: usize, class_color: u32, colors: u8) -> Rgb {
+    match colors {
+        1 => Rgb(PALETTE[0]),
+        2 if index == 0 => Rgb(0x52525b),
+        2 => Rgb(0xa1a1aa),
+        _ if class_color == 0 => Rgb(PALETTE[index % PALETTE.len()]),
+        _ => Rgb(class_color & 0x00ff_ffff),
+    }
+}
+
+/// The boxes for the chart module, values times `factor` (the shown unit,
+/// % of control).
+fn box_specs(boxes: &[BoxplotBox], factor: f64, colors: u8) -> Vec<BoxSpec> {
     boxes
         .iter()
         .enumerate()
         .map(|(i, b)| BoxSpec {
             label: b.label.clone(),
-            color: Rgb(if b.color == 0 { PALETTE[i % PALETTE.len()] } else { b.color & 0x00ff_ffff }),
+            color: box_color(i, b.color, colors),
+            min: b.min * factor,
             q1: b.q1 * factor,
             median: b.median * factor,
             q3: b.q3 * factor,
+            max: b.max * factor,
+            mean: b.mean * factor,
             whisker_low: b.whisker_low * factor,
             whisker_high: b.whisker_high * factor,
             outliers: b.outliers.iter().map(|v| v * factor).collect(),
@@ -101,8 +122,17 @@ impl ResultsStateController {
                 super::column_panel::chart_value_label(&chart.column, chart.per_image, &classes),
             )
         };
-        let factor = unit_factor(&label);
-        let specs = box_specs(&self.chart_boxes.lock().expect("Poisoned"), factor);
+        let mut factor = unit_factor(&label);
+        let mut title = title;
+        // In % of the control: the first box's median is 100.
+        if look.relative {
+            let boxes = self.chart_boxes.lock().expect("Poisoned");
+            if let Some(first) = boxes.first().filter(|b| b.median * factor != 0.0) {
+                title = format!("% of control ({})", first.label);
+                factor = 100.0 / first.median;
+            }
+        }
+        let specs = box_specs(&self.chart_boxes.lock().expect("Poisoned"), factor, look.colors);
         let theme = if canvas.dark { Theme::dark() } else { Theme::light() };
         let drawing = boxplot::draw(
             &specs,
@@ -110,6 +140,10 @@ impl ResultsStateController {
                 y_title: title,
                 log: look.log,
                 grid: look.grid,
+                dots: look.dots,
+                mean: look.mean,
+                show_n: look.show_n,
+                min_max: look.min_max,
             },
             &theme,
             canvas.width,
@@ -174,8 +208,18 @@ impl ResultsStateController {
             }
         });
         let manager = self.clone();
-        state.on_chart_look_changed(move |log, grid| {
-            *manager.chart_look.lock().expect("Poisoned") = ChartLook { log, grid };
+        state.on_chart_box_look_changed(move |look| {
+            *manager.chart_look.lock().expect("Poisoned") = ChartLook {
+                log: look.log,
+                grid: look.grid,
+                dots: look.dots,
+                mean: look.mean,
+                show_n: look.show_n,
+                relative: look.relative,
+                min_max: look.min_max,
+                colors: u8::try_from(look.colors).unwrap_or(0),
+            };
+            manager.remember_view();
             manager.draw_chart();
         });
     }
@@ -184,6 +228,15 @@ impl ResultsStateController {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_colours_follow_the_look() {
+        assert_eq!(box_color(3, 0, 0), Rgb(PALETTE[3]));
+        assert_eq!(box_color(3, 0x123456, 0), Rgb(0x123456), "a class keeps its colour");
+        assert_eq!(box_color(3, 0x123456, 1), Rgb(PALETTE[0]));
+        assert_eq!(box_color(0, 0, 2), Rgb(0x52525b), "the control dark");
+        assert_eq!(box_color(1, 0, 2), Rgb(0xa1a1aa));
+    }
 
     #[test]
     fn nanometre_values_are_drawn_in_micrometres() {
@@ -204,8 +257,10 @@ mod tests {
             object_count: 7,
             image_values: Vec::new(),
             image_count: 0,
+            mean: 3e6,
+            sd: 1e6,
         }];
-        let specs = box_specs(&boxes, 1e-6);
+        let specs = box_specs(&boxes, 1e-6, 0);
         assert_eq!(specs[0].median, 3.0);
         assert_eq!(specs[0].outliers, [9.0]);
         assert_eq!(specs[0].color, Rgb(PALETTE[0]), "no class colour: the palette's");

@@ -26,9 +26,12 @@ use crate::number_format::format_number;
 pub struct BoxSpec {
     pub label: String,
     pub color: Rgb,
+    pub min: f64,
     pub q1: f64,
     pub median: f64,
     pub q3: f64,
+    pub max: f64,
+    pub mean: f64,
     /// The furthest values within 1.5 × IQR of Q1 and Q3.
     pub whisker_low: f64,
     pub whisker_high: f64,
@@ -50,6 +53,30 @@ pub struct BoxplotLook {
     pub y_title: String,
     pub log: bool,
     pub grid: bool,
+    /// Every point a dot (else only the far values).
+    pub dots: bool,
+    /// The mean as a ◇.
+    pub mean: bool,
+    /// How many values under each box.
+    pub show_n: bool,
+    /// Whiskers from the smallest to the largest value - no far values -
+    /// instead of to the furthest within 1.5 × IQR.
+    pub min_max: bool,
+}
+
+impl BoxplotLook {
+    /// As the boxplot starts: grid, dots, n, Tukey whiskers.
+    pub fn new(y_title: impl Into<String>) -> Self {
+        Self {
+            y_title: y_title.into(),
+            log: false,
+            grid: true,
+            dots: true,
+            mean: false,
+            show_n: true,
+            min_max: false,
+        }
+    }
 }
 
 /// Far values beyond this many times the whiskers' span cut the axis.
@@ -69,6 +96,22 @@ pub fn draw(boxes: &[BoxSpec], look: &BoxplotLook, theme: &Theme, width: f64, he
         return Drawing { svg: svg.finish(), hits: Vec::new() };
     }
     let font = theme.font_size;
+    // Min - max whiskers: they reach every value, none is far.
+    let owned: Vec<BoxSpec>;
+    let boxes = if look.min_max {
+        owned = boxes
+            .iter()
+            .map(|b| BoxSpec {
+                whisker_low: b.min,
+                whisker_high: b.max,
+                outliers: Vec::new(),
+                ..b.clone()
+            })
+            .collect();
+        &owned[..]
+    } else {
+        boxes
+    };
 
     // The values' range: the whiskers, and the far values while they don't
     // squash the boxes.
@@ -114,8 +157,10 @@ pub fn draw(boxes: &[BoxSpec], look: &BoxplotLook, theme: &Theme, width: f64, he
             .fold(0.0, f64::max);
         // Turned by 50 degrees: about this high.
         (longest * 0.77 + font + 12.0).min(height * 0.4)
-    } else {
+    } else if look.show_n {
         font * 2.0 + 18.0
+    } else {
+        font + 14.0
     };
     let bottom = height - below;
     let tick_count = ((bottom - top) / 56.0).round().clamp(2.0, 10.0) as usize;
@@ -174,7 +219,7 @@ pub fn draw(boxes: &[BoxSpec], look: &BoxplotLook, theme: &Theme, width: f64, he
         // The dots - every point, or else the far values (at most MAX_DOTS,
         // an even sample with the extremes) - or at an edge their number.
         let (mut above, mut below) = (0usize, 0usize);
-        let dots = if b.points.is_empty() { &b.outliers } else { &b.points };
+        let dots = if b.points.is_empty() || !look.dots { &b.outliers } else { &b.points };
         let inside: Vec<f64> = dots
             .iter()
             .copied()
@@ -188,12 +233,13 @@ pub fn draw(boxes: &[BoxSpec], look: &BoxplotLook, theme: &Theme, width: f64, he
                 (top..=bottom).contains(&y)
             })
             .collect();
-        let spread = if b.points.is_empty() { 0.5 } else { 0.8 };
+        let all_points = !b.points.is_empty() && look.dots;
+        let spread = if all_points { 0.8 } else { 0.5 };
         for (k, v) in sample(&inside, MAX_DOTS).into_iter().enumerate() {
             // A little spread sideways, the same every time; among all the
             // points the far ones darker.
             let jitter = ((k as f64 * 0.618_034).fract() - 0.5) * box_w * spread;
-            let far = !b.points.is_empty() && (v < b.whisker_low || v > b.whisker_high);
+            let far = all_points && (v < b.whisker_low || v > b.whisker_high);
             let (color, opacity) = if far { (theme.text, 0.85) } else { (b.color, 0.55) };
             svg.circle(cx + jitter, y_of(v), 2.6, color, opacity);
         }
@@ -206,14 +252,25 @@ pub fn draw(boxes: &[BoxSpec], look: &BoxplotLook, theme: &Theme, width: f64, he
             svg.text(cx + 7.0, bottom - 1.0, &format_number(below as f64), theme.text_dim, Anchor::Start, None, false);
         }
 
+        // The mean: a ◇ on the box.
+        if look.mean {
+            let y = y_of(b.mean);
+            if (top..=bottom).contains(&y) {
+                let r = 4.5;
+                svg.polygon(&[(cx, y - r), (cx + r, y), (cx, y + r), (cx - r, y)], theme.text, 0.85);
+            }
+        }
+
         // Its name and how many, shortened to its slot - or turned.
         if turned {
             svg.text_turned(cx + font * 0.3, bottom + 10.0, &turned_names[i], theme.text, -50.0);
         } else {
             let name = fit(&b.label, slot - 6.0, theme);
             svg.text(cx, bottom + font + 6.0, &name, theme.text, Anchor::Middle, None, false);
-            let count = count_label(b.count, &b.count_noun, slot - 6.0, theme);
-            svg.text(cx, bottom + font * 2.0 + 10.0, &count, theme.text_dim, Anchor::Middle, None, false);
+            if look.show_n {
+                let count = count_label(b.count, &b.count_noun, slot - 6.0, theme);
+                svg.text(cx, bottom + font * 2.0 + 10.0, &count, theme.text_dim, Anchor::Middle, None, false);
+            }
         }
 
         hits.push(Hit { index: i, x: cx - slot / 2.0, y: top, width: slot, height: bottom - top });
@@ -278,9 +335,12 @@ mod tests {
         BoxSpec {
             label: label.into(),
             color: Rgb(0x2a6bdf),
+            min: lo.min(outliers.iter().copied().fold(lo, f64::min)),
             q1,
             median,
             q3,
+            max: hi.max(outliers.iter().copied().fold(hi, f64::max)),
+            mean: median,
             whisker_low: lo,
             whisker_high: hi,
             outliers,
@@ -291,7 +351,7 @@ mod tests {
     }
 
     fn look() -> BoxplotLook {
-        BoxplotLook { y_title: "Area µm²".into(), log: false, grid: true }
+        BoxplotLook::new("Area µm²")
     }
 
     #[test]
@@ -347,6 +407,29 @@ mod tests {
         let dark = format!("<circle cx=\"");
         assert!(drawing.svg.contains(&dark));
         assert!(drawing.svg.contains(&format!("fill=\"{}\" fill-opacity=\"0.85\"", Theme::light().text.hex())));
+    }
+
+    #[test]
+    fn the_look_options_change_what_is_drawn() {
+        let mut b = spec("a", 10.0, 12.0, 14.0, 8.0, 18.0, vec![21.0]);
+        b.points = vec![9.0, 11.0, 13.0, 21.0];
+        let boxes = [b];
+        let theme = Theme::light();
+        // Mean: a diamond (a polygon); no n.
+        let mut with = look();
+        with.mean = true;
+        with.show_n = false;
+        let drawing = draw(&boxes, &with, &theme, 400.0, 300.0);
+        assert!(drawing.svg.contains("<polygon"));
+        assert!(!drawing.svg.contains("n = "));
+        // No dots: only the far value.
+        let mut no_dots = look();
+        no_dots.dots = false;
+        assert_eq!(draw(&boxes, &no_dots, &theme, 400.0, 300.0).svg.matches("<circle").count(), 1);
+        // Min - max whiskers: nothing is far, no dots without the points.
+        let mut min_max = no_dots.clone();
+        min_max.min_max = true;
+        assert_eq!(draw(&boxes, &min_max, &theme, 400.0, 300.0).svg.matches("<circle").count(), 0);
     }
 
     #[test]

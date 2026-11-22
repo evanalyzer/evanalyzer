@@ -1352,6 +1352,11 @@ pub struct BoxplotBox {
     pub image_values: Vec<f64>,
     #[serde(default)]
     pub image_count: usize,
+    /// The mean and the standard deviation of the box's values.
+    #[serde(default)]
+    pub mean: f64,
+    #[serde(default)]
+    pub sd: f64,
 }
 
 #[derive(Serialize, Deserialize)]

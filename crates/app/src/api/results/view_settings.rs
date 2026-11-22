@@ -275,6 +275,38 @@ pub struct PlateView {
     pub square_size: Option<usize>,
 }
 
+/// How a boxplot is drawn: a log axis, grid lines, every point a dot, the
+/// mean, n under the boxes, values in % of the first box's median (the
+/// control), min - max whiskers (else 1.5 × IQR), the colours (0 per box,
+/// 1 one colour, 2 the control grey).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct BoxLook {
+    pub log: bool,
+    pub grid: bool,
+    pub dots: bool,
+    pub mean: bool,
+    pub show_n: bool,
+    pub relative: bool,
+    pub min_max: bool,
+    pub colors: u8,
+}
+
+impl Default for BoxLook {
+    fn default() -> Self {
+        Self {
+            log: false,
+            grid: true,
+            dots: true,
+            mean: false,
+            show_n: true,
+            relative: false,
+            min_max: false,
+            colors: 0,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ChartView {
@@ -286,6 +318,8 @@ pub struct ChartView {
     pub group_by: BoxplotGroup,
     /// Boxplot: a value per image (each image a dot), else per object.
     pub per_image: bool,
+    /// The boxplot's look (design canvas "Results rework", ChartBox).
+    pub box_look: BoxLook,
     pub bins: usize,
     pub log_counts: bool,
     /// The scatter's points picker (0..3, see `scatter_points_limit`).
@@ -313,6 +347,7 @@ impl Default for ChartView {
             class: None,
             group_by: BoxplotGroup::Class,
             per_image: false,
+            box_look: BoxLook::default(),
             bins: DEFAULT_HISTOGRAM_BINS,
             log_counts: false,
             points: 1,

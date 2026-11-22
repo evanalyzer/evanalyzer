@@ -78,7 +78,8 @@ use std::sync::Arc;
 // older side would be misread).
 // 51: `ColumnEntry::coloc_group`.
 // 52: `BoxplotFilter::per_image`, `BoxplotBox::image_values` / `image_count`.
-pub const PROTOCOL_VERSION: u32 = 52;
+// 53: `BoxplotBox::mean` / `sd`.
+pub const PROTOCOL_VERSION: u32 = 53;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 

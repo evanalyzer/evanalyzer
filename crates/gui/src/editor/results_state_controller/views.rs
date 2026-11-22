@@ -425,6 +425,7 @@ impl ResultsStateController {
                 None => None,
             };
             chart.group_by = view.group_by;
+            *self.chart_look.lock().expect("Poisoned") = view.box_look.clone();
             chart.per_image = view.per_image;
             chart.bins = view.bins.clamp(5, 200);
             chart.log_counts = view.log_counts;
@@ -531,6 +532,7 @@ impl ResultsStateController {
                     .or(unavailable.chart_class),
                 group_by: filter.group_by,
                 per_image: filter.per_image,
+                box_look: self.chart_look.lock().expect("Poisoned").clone(),
                 bins: filter.bins,
                 log_counts: filter.log_counts,
                 points: points_index(filter.max_points),
@@ -887,6 +889,7 @@ impl ResultsStateController {
                 )
             });
         let chart = self.chart_filter.lock().expect("Poisoned").clone();
+        let box_look = super::chart_draw::look_to_slint(&self.chart_look.lock().expect("Poisoned"));
 
         let matrix_columns: Vec<ColumnEntry> = available
             .iter()
@@ -1058,6 +1061,7 @@ impl ResultsStateController {
                 _ => 0,
             });
             state.set_chart_per_image(chart.per_image);
+            state.set_chart_box_look(box_look);
             state.set_chart_bins(chart.bins as i32);
             state.set_chart_log_counts(chart.log_counts);
             state.set_chart_points_index(points_index(chart.max_points));

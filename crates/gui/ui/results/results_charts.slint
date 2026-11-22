@@ -549,22 +549,72 @@ component ChartsPanel inherits ViewPanel {
         spacing: 12px;
         InkSwitch {
             text: "Log scale";
-            checked: ResultsState.chart-box-log;
+            checked: ResultsState.chart-box-look.log;
             toggled(on) => {
-                ResultsState.chart-box-log = on;
-                ResultsState.chart-look-changed(ResultsState.chart-box-log, ResultsState.chart-grid);
+                ResultsState.chart-box-look.log = on;
+                ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
             }
         }
         InkSwitch {
             text: "Grid lines";
-            checked: ResultsState.chart-grid;
+            checked: ResultsState.chart-box-look.grid;
             toggled(on) => {
-                ResultsState.chart-grid = on;
-                ResultsState.chart-look-changed(ResultsState.chart-box-log, ResultsState.chart-grid);
+                ResultsState.chart-box-look.grid = on;
+                ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
+            }
+        }
+        if ResultsState.chart-per-image: InkSwitch {
+            text: "A dot per image";
+            checked: ResultsState.chart-box-look.dots;
+            toggled(on) => {
+                ResultsState.chart-box-look.dots = on;
+                ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
+            }
+        }
+        InkSwitch {
+            text: "Mean (◇)";
+            checked: ResultsState.chart-box-look.mean;
+            toggled(on) => {
+                ResultsState.chart-box-look.mean = on;
+                ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
+            }
+        }
+        InkSwitch {
+            text: "n under each box";
+            checked: ResultsState.chart-box-look.show-n;
+            toggled(on) => {
+                ResultsState.chart-box-look.show-n = on;
+                ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
+            }
+        }
+        InkSwitch {
+            text: "% of control (the first box)";
+            checked: ResultsState.chart-box-look.relative;
+            toggled(on) => {
+                ResultsState.chart-box-look.relative = on;
+                ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
+            }
+        }
+        IndexChoiceList {
+            title: "WHISKERS";
+            model: ["To 1.5 × IQR - the values beyond as dots", "Min - max"];
+            current: ResultsState.chart-box-look.min-max ? 1 : 0;
+            picked(i) => {
+                ResultsState.chart-box-look.min-max = i == 1;
+                ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
+            }
+        }
+        IndexChoiceList {
+            title: "COLOURS";
+            model: ["A colour per box", "One colour", "Control dark, the others grey"];
+            current: ResultsState.chart-box-look.colors;
+            picked(i) => {
+                ResultsState.chart-box-look.colors = i;
+                ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
             }
         }
         InkHint {
-            text: "Whiskers reach the furthest values within 1.5 × IQR; the values beyond are dots. Far values that would squash the boxes are counted at the axis' edge.";
+            text: "Far values that would squash the boxes are counted at the axis' edge. Saved with the view; the export draws the same.";
         }
     }
     if root.current == "Look" && root.kind != ResultsChartKind2.boxplot: VerticalLayout {

@@ -94,7 +94,9 @@ impl ResultCharts {
                         quantile_cont(v, 0.5) AS med,\n\
                         quantile_cont(v, 0.75) AS q3,\n\
                         MAX(v) AS max_v,\n\
-                        COUNT(*) AS n\n\
+                        COUNT(*) AS n,\n\
+                        AVG(v) AS mean_v,\n\
+                        STDDEV_SAMP(v) AS sd_v\n\
                  FROM filtered\n\
                  GROUP BY class_id\n\
              )\n\
@@ -103,16 +105,17 @@ impl ResultCharts {
                         WHERE f.v < s.q1 - 1.5 * (s.q3 - s.q1) OR f.v > s.q3 + 1.5 * (s.q3 - s.q1)\n\
                     ) AS outliers,\n\
                     MIN(f.v) FILTER (WHERE f.v >= s.q1 - 1.5 * (s.q3 - s.q1)) AS w_lo,\n\
-                    MAX(f.v) FILTER (WHERE f.v <= s.q3 + 1.5 * (s.q3 - s.q1)) AS w_hi\n\
+                    MAX(f.v) FILTER (WHERE f.v <= s.q3 + 1.5 * (s.q3 - s.q1)) AS w_hi,\n\
+                    s.mean_v, s.sd_v\n\
              FROM stats s\n\
              JOIN filtered f ON f.class_id = s.class_id\n\
-             GROUP BY s.class_id, s.min_v, s.q1, s.med, s.q3, s.max_v, s.n\n\
+             GROUP BY s.class_id, s.min_v, s.q1, s.med, s.q3, s.max_v, s.n, s.mean_v, s.sd_v\n\
              ORDER BY s.class_id"
         );
 
         let mut stmt = database.connection().prepare(&sql).map_err(err)?;
         #[allow(clippy::type_complexity)]
-        let rows: Vec<(u32, f64, f64, f64, f64, f64, i64, Value, Option<f64>, Option<f64>)> = stmt
+        let rows: Vec<(u32, f64, f64, f64, f64, f64, i64, Value, Option<f64>, Option<f64>, (Option<f64>, Option<f64>))> = stmt
             .query_map([], |row| {
                 Ok((
                     row.get(0)?,
@@ -125,6 +128,7 @@ impl ResultCharts {
                     row.get(7)?,
                     row.get(8)?,
                     row.get(9)?,
+                    (row.get(10)?, row.get(11)?),
                 ))
             })
             .map_err(err)?
@@ -133,7 +137,7 @@ impl ResultCharts {
 
         let boxes = rows
             .into_iter()
-            .map(|(class_id, min_v, q1, median, q3, max_v, n, outliers, w_lo, w_hi)| {
+            .map(|(class_id, min_v, q1, median, q3, max_v, n, outliers, w_lo, w_hi, (mean, sd))| {
                 let object_class = ObjectClass::Global(class_id);
                 let color = classes
                     .iter()
@@ -154,6 +158,8 @@ impl ResultCharts {
                     object_count: n as usize,
                     image_values: Vec::new(),
                     image_count: 0,
+                    mean: mean.unwrap_or(median),
+                    sd: sd.unwrap_or(0.0),
                 }
             })
             .collect();
@@ -269,22 +275,23 @@ impl ResultCharts {
              filtered AS (SELECT * FROM per_image WHERE g IS NOT NULL AND g <> '' AND v IS NOT NULL),\n\
              stats AS (\n\
                  SELECT g, MIN(v) AS min_v, quantile_cont(v, 0.25) AS q1, quantile_cont(v, 0.5) AS med,\n\
-                        quantile_cont(v, 0.75) AS q3, MAX(v) AS max_v, COUNT(*) AS images, SUM(n) AS objects\n\
+                        quantile_cont(v, 0.75) AS q3, MAX(v) AS max_v, COUNT(*) AS images, SUM(n) AS objects,\n\
+                        AVG(v) AS mean_v, STDDEV_SAMP(v) AS sd_v\n\
                  FROM filtered GROUP BY g\n\
              )\n\
              SELECT s.g, s.min_v, s.q1, s.med, s.q3, s.max_v, s.images, s.objects,\n\
                     LIST(f.v) FILTER (WHERE f.v < s.q1 - 1.5 * (s.q3 - s.q1) OR f.v > s.q3 + 1.5 * (s.q3 - s.q1)) AS outliers,\n\
                     MIN(f.v) FILTER (WHERE f.v >= s.q1 - 1.5 * (s.q3 - s.q1)) AS w_lo,\n\
                     MAX(f.v) FILTER (WHERE f.v <= s.q3 + 1.5 * (s.q3 - s.q1)) AS w_hi,\n\
-                    LIST(f.v) AS all_v\n\
+                    LIST(f.v) AS all_v, s.mean_v, s.sd_v\n\
              FROM stats s JOIN filtered f ON f.g = s.g\n\
-             GROUP BY s.g, s.min_v, s.q1, s.med, s.q3, s.max_v, s.images, s.objects\n\
+             GROUP BY s.g, s.min_v, s.q1, s.med, s.q3, s.max_v, s.images, s.objects, s.mean_v, s.sd_v\n\
              ORDER BY {order}",
             order = if by_class { "CAST(s.g AS INTEGER)" } else { "regexp_replace(s.g, '[0-9]+$', ''), TRY_CAST(regexp_extract(s.g, '([0-9]+)$', 1) AS INTEGER), s.g" },
         );
         let mut stmt = database.connection().prepare(&sql).map_err(err)?;
         #[allow(clippy::type_complexity)]
-        let rows: Vec<(String, f64, f64, f64, f64, f64, i64, f64, Value, Option<f64>, Option<f64>, Value)> = stmt
+        let rows: Vec<(String, f64, f64, f64, f64, f64, i64, f64, Value, Option<f64>, Option<f64>, Value, (Option<f64>, Option<f64>))> = stmt
             .query_map([], |row| {
                 Ok((
                     row.get(0)?,
@@ -299,6 +306,7 @@ impl ResultCharts {
                     row.get(9)?,
                     row.get(10)?,
                     row.get(11)?,
+                    (row.get(12)?, row.get(13)?),
                 ))
             })
             .map_err(err)?
@@ -307,7 +315,7 @@ impl ResultCharts {
         Ok(BoxplotResult {
             boxes: rows
                 .into_iter()
-                .map(|(g, min_v, q1, median, q3, max_v, images, objects, outliers, w_lo, w_hi, all)| {
+                .map(|(g, min_v, q1, median, q3, max_v, images, objects, outliers, w_lo, w_hi, all, (mean, sd))| {
                     let (label, color) = match (by_class, g.parse::<u32>()) {
                         (true, Ok(id)) => {
                             let class = ObjectClass::Global(id);
@@ -333,6 +341,8 @@ impl ResultCharts {
                         object_count: objects as usize,
                         image_values: extract_f64_list(all),
                         image_count: images as usize,
+                        mean: mean.unwrap_or(median),
+                        sd: sd.unwrap_or(0.0),
                     }
                 })
                 .collect(),
@@ -391,7 +401,9 @@ impl ResultCharts {
                         quantile_cont(v, 0.5) AS med,\n\
                         quantile_cont(v, 0.75) AS q3,\n\
                         MAX(v) AS max_v,\n\
-                        COUNT(*) AS n\n\
+                        COUNT(*) AS n,\n\
+                        AVG(v) AS mean_v,\n\
+                        STDDEV_SAMP(v) AS sd_v\n\
                  FROM filtered WHERE g <> ''\n\
                  GROUP BY g\n\
              )\n\
@@ -400,16 +412,17 @@ impl ResultCharts {
                         WHERE f.v < s.q1 - 1.5 * (s.q3 - s.q1) OR f.v > s.q3 + 1.5 * (s.q3 - s.q1)\n\
                     ) AS outliers,\n\
                     MIN(f.v) FILTER (WHERE f.v >= s.q1 - 1.5 * (s.q3 - s.q1)) AS w_lo,\n\
-                    MAX(f.v) FILTER (WHERE f.v <= s.q3 + 1.5 * (s.q3 - s.q1)) AS w_hi\n\
+                    MAX(f.v) FILTER (WHERE f.v <= s.q3 + 1.5 * (s.q3 - s.q1)) AS w_hi,\n\
+                    s.mean_v, s.sd_v\n\
              FROM stats s\n\
              JOIN filtered f ON f.g = s.g\n\
-             GROUP BY s.g, s.min_v, s.q1, s.med, s.q3, s.max_v, s.n\n\
+             GROUP BY s.g, s.min_v, s.q1, s.med, s.q3, s.max_v, s.n, s.mean_v, s.sd_v\n\
              ORDER BY regexp_replace(s.g, '[0-9]+$', ''), TRY_CAST(regexp_extract(s.g, '([0-9]+)$', 1) AS INTEGER), s.g",
             conditions = conditions.join(" AND ")
         );
         let mut stmt = database.connection().prepare(&sql).map_err(err)?;
         #[allow(clippy::type_complexity)]
-        let rows: Vec<(String, f64, f64, f64, f64, f64, i64, Value, Option<f64>, Option<f64>)> = stmt
+        let rows: Vec<(String, f64, f64, f64, f64, f64, i64, Value, Option<f64>, Option<f64>, (Option<f64>, Option<f64>))> = stmt
             .query_map([], |row| {
                 Ok((
                     row.get(0)?,
@@ -422,6 +435,7 @@ impl ResultCharts {
                     row.get(7)?,
                     row.get(8)?,
                     row.get(9)?,
+                    (row.get(10)?, row.get(11)?),
                 ))
             })
             .map_err(err)?
@@ -431,7 +445,7 @@ impl ResultCharts {
             boxes: rows
                 .into_iter()
                 .map(
-                    |(label, min_v, q1, median, q3, max_v, n, outliers, w_lo, w_hi)| BoxplotBox {
+                    |(label, min_v, q1, median, q3, max_v, n, outliers, w_lo, w_hi, (mean, sd))| BoxplotBox {
                         label,
                         color: 0,
                         min: min_v,
@@ -445,6 +459,8 @@ impl ResultCharts {
                         object_count: n as usize,
                         image_values: Vec::new(),
                         image_count: 0,
+                        mean: mean.unwrap_or(median),
+                        sd: sd.unwrap_or(0.0),
                     },
                 )
                 .collect(),
@@ -1042,6 +1058,8 @@ mod tests {
         // the outlier, so they don't draw it twice.
         assert_eq!(b.whisker_low, 10.0);
         assert_eq!(b.whisker_high, 40.0);
+        assert_eq!(b.mean, 220.0);
+        assert!(b.sd > 400.0, "sample SD of the five: {}", b.sd);
     }
 
     #[test]
