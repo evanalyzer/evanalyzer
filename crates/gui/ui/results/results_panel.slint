@@ -10,6 +10,7 @@
 
 import { Ink, InkIcons, InkHint, InkCheckList, InkOptionCard, InkSearchField, InkSwitch, MultiSelectItem } from "../ink/ink.slint";
 import { ColumnSection, ColumnPreset, ColocColumnItem, ColocKind, IntensityCell, ResultsState } from "../api/results.slint";
+import { CheckBox, LineEdit } from "../ink/std_compat.slint";
 
 /// A head over a part of the panel: a foldable caption, All / None - the
 /// look of `InkCheckList`'s.
@@ -216,6 +217,118 @@ export component IndexChoiceList inherits VerticalLayout {
                 clicked => {
                     root.picked(i);
                 }
+            }
+        }
+    }
+}
+
+/// Items to tick (`items`' `selected`), without All / None.
+export component TickList inherits VerticalLayout {
+    in property <string> title;
+    in property <[MultiSelectItem]> items;
+    callback picked(string, bool);
+    spacing: 4px;
+    if root.title != "": PartHead {
+        title: root.title;
+        foldable: false;
+        all-none: false;
+    }
+    Rectangle {
+        border-radius: Ink.radius-sm;
+        border-width: 1px;
+        border-color: Ink.border-soft;
+        VerticalLayout {
+            padding: 2px;
+            for item in root.items: PickRow {
+                text: item.value;
+                on: item.selected;
+                clicked => {
+                    root.picked(item.key, !item.selected);
+                }
+            }
+        }
+    }
+}
+
+/// Which tracks are shown (Tracks, Paths): at least so many time points,
+/// from the first one, not touching the edge - each view its own values.
+export component TrackFilters inherits VerticalLayout {
+    in-out property <string> min;
+    in-out property <bool> from-start;
+    in-out property <bool> no-edge;
+    in property <bool> can-reset;
+    callback changed;
+    callback reset;
+    spacing: 10px;
+    PartHead {
+        title: "SHOW ONLY TRACKS";
+        foldable: false;
+        all-none: false;
+    }
+    HorizontalLayout {
+        spacing: 6px;
+        alignment: start;
+        Text {
+            text: "At least";
+            vertical-alignment: center;
+            font-size: Ink.fs-secondary;
+            color: Ink.text-dim;
+        }
+        VerticalLayout {
+            alignment: center;
+            LineEdit {
+                width: 56px;
+                horizontal-alignment: center;
+                input-type: number;
+                text <=> root.min;
+                accepted => {
+                    root.changed();
+                }
+                edited => {
+                    root.changed();
+                }
+            }
+        }
+        Text {
+            text: "time points";
+            vertical-alignment: center;
+            font-size: Ink.fs-secondary;
+            color: Ink.text-dim;
+        }
+    }
+    CheckBox {
+        text: "From the first time point";
+        checked <=> root.from-start;
+        toggled => {
+            root.changed();
+        }
+    }
+    CheckBox {
+        text: "Not touching the edge";
+        checked <=> root.no-edge;
+        toggled => {
+            root.changed();
+        }
+    }
+    HorizontalLayout {
+        alignment: start;
+        reset-ta := TouchArea {
+            enabled: root.can-reset;
+            mouse-cursor: self.enabled ? pointer : default;
+            width: reset-text.preferred-width;
+            height: reset-text.preferred-height;
+            accessible-role: button;
+            accessible-label: "Reset filters";
+            accessible-action-default => {
+                root.reset();
+            }
+            clicked => {
+                root.reset();
+            }
+            reset-text := Text {
+                text: "Reset filters";
+                font-size: Ink.fs-secondary;
+                color: reset-ta.enabled ? Ink.focus : Ink.text-mute;
             }
         }
     }

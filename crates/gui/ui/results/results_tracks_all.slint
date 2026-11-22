@@ -10,7 +10,8 @@ import { ResultsState } from "../api/results.slint";
 import { Ink, InkButton, InkButtonKind, InkIcons, InkMultiSelect, InkSegmented } from "../ink/ink.slint";
 import { CheckBox, ComboBox, LineEdit } from "../ink/std_compat.slint";
 import { ListView, ScrollView } from "std-widgets.slint";
-import { ViewBar, BarChip, BarCount } from "results_view_bar.slint";
+import { ViewBar, BarChip, BarCount, BarSpacer, ViewPanel } from "results_view_bar.slint";
+import { IndexChoiceList, TickList, TrackFilters } from "results_panel.slint";
 
 component SortHead inherits Rectangle {
     in property <string> text;
@@ -81,167 +82,123 @@ export component ResultsTracksAllView inherits Rectangle {
         ResultsState.tracks-all-filter-changed();
     }
 
+    property <string> part: ResultsState.panel-part;
+    property <bool> panel-open: root.part == "Class" || root.part == "Images" || root.part == "Filters"
+        || root.part == "Columns" || root.part == "Look";
+
     background: Ink.ground;
 
-    VerticalLayout {
-        padding: 12px;
-        spacing: 12px;
+    // Panels on the ground: which tracks and what of them on the left (a
+    // chip opens it), the bar over the table and the selected track.
+    HorizontalLayout {
+    padding: 12px;
+    spacing: 12px;
 
-        // -- Filters and how many: the results' view bar --
+    if root.panel-open: ViewPanel {
+        title: root.part == "Images" ? "Image" : root.part;
+        if root.part == "Class": IndexChoiceList {
+            title: "TRACKS OF";
+            model: ResultsState.tracks-all-classes;
+            current: ResultsState.tracks-all-class;
+            picked(i) => {
+                ResultsState.tracks-all-class = i;
+                ResultsState.tracks-all-filter-changed();
+            }
+        }
+        if root.part == "Images": IndexChoiceList {
+            title: "TRACKS IN";
+            model: ResultsState.tracks-all-images;
+            current: ResultsState.tracks-all-image;
+            picked(i) => {
+                ResultsState.tracks-all-image = i;
+                ResultsState.tracks-all-filter-changed();
+            }
+        }
+        if root.part == "Filters": TrackFilters {
+            min <=> ResultsState.tracks-all-min;
+            from-start <=> ResultsState.tracks-all-from-start;
+            no-edge <=> ResultsState.tracks-all-no-edge;
+            can-reset: root.active-filters > 0;
+            changed => {
+                ResultsState.tracks-all-filter-changed();
+            }
+            reset => {
+                root.reset-filters();
+            }
+        }
+        if root.part == "Columns": TickList {
+            title: "COLUMNS · " + ResultsState.tracks-all-columns-summary;
+            items: ResultsState.tracks-all-column-items;
+            picked(key, on) => {
+                ResultsState.tracks-all-column-picked(key, on);
+            }
+        }
+        if root.part == "Look": IndexChoiceList {
+            title: "SPEED IN";
+            model: ["px/frame", "µm/min", "µm/s"];
+            current: ResultsState.tracks-unit;
+            picked(i) => {
+                if i == 0 || ResultsState.tracks-all-um {
+                    ResultsState.tracks-unit = i;
+                    ResultsState.tracks-unit-changed(i);
+                }
+            }
+        }
+    }
+
+    VerticalLayout {
+        spacing: 12px;
+        horizontal-stretch: 1;
+
+        // -- Which tracks and how many: the results' view bar --
         ViewBar {
-                VerticalLayout {
-                    alignment: center;
-                    ComboBox {
-                        width: 150px;
-                        model: ResultsState.tracks-all-classes;
-                        current-index: ResultsState.tracks-all-class;
-                        selected(v) => {
-                            ResultsState.tracks-all-class = self.current-index;
-                            ResultsState.tracks-all-filter-changed();
-                        }
-                    }
+            VerticalLayout {
+                alignment: center;
+                BarChip {
+                    label: "Class";
+                    part: "Class";
+                    value: ResultsState.tracks-all-classes[ResultsState.tracks-all-class];
                 }
-                VerticalLayout {
-                    alignment: center;
-                    ComboBox {
-                        width: 170px;
-                        model: ResultsState.tracks-all-images;
-                        current-index: ResultsState.tracks-all-image;
-                        selected(v) => {
-                            ResultsState.tracks-all-image = self.current-index;
-                            ResultsState.tracks-all-filter-changed();
-                        }
-                    }
+            }
+            VerticalLayout {
+                alignment: center;
+                BarChip {
+                    label: "Image";
+                    part: "Images";
+                    value: ResultsState.tracks-all-images[ResultsState.tracks-all-image];
                 }
-                // The track filters in a popover; the badge counts the
-                // ones changed from the default (design canvas "Tracks
-                // toolbar", board 3).
-                VerticalLayout {
-                    alignment: center;
-                    BarChip {
-                        label: "Filters";
-                        badge: root.active-filters;
-                        active: root.active-filters > 0;
-                        popover-width: 280px;
-                                Text {
-                                    text: "SHOW ONLY TRACKS";
-                                    font-size: Ink.fs-caption;
-                                    font-weight: 600;
-                                    color: Ink.text-mute;
-                                }
-                                HorizontalLayout {
-                                    spacing: 6px;
-                                    alignment: start;
-                                    Text {
-                                        text: "At least";
-                                        vertical-alignment: center;
-                                        font-size: Ink.fs-secondary;
-                                        color: Ink.text-dim;
-                                    }
-                                    VerticalLayout {
-                                        alignment: center;
-                                        LineEdit {
-                                            width: 56px;
-                                            horizontal-alignment: center;
-                                            input-type: number;
-                                            text <=> ResultsState.tracks-all-min;
-                                            accepted => {
-                                                ResultsState.tracks-all-filter-changed();
-                                            }
-                                            edited => {
-                                                ResultsState.tracks-all-filter-changed();
-                                            }
-                                        }
-                                    }
-                                    Text {
-                                        text: "time points";
-                                        vertical-alignment: center;
-                                        font-size: Ink.fs-secondary;
-                                        color: Ink.text-dim;
-                                    }
-                                }
-                                CheckBox {
-                                    text: "From the first time point";
-                                    checked <=> ResultsState.tracks-all-from-start;
-                                    toggled => {
-                                        ResultsState.tracks-all-filter-changed();
-                                    }
-                                }
-                                CheckBox {
-                                    text: "Not touching the edge";
-                                    checked <=> ResultsState.tracks-all-no-edge;
-                                    toggled => {
-                                        ResultsState.tracks-all-filter-changed();
-                                    }
-                                }
-                                HorizontalLayout {
-                                    alignment: start;
-                                    reset-ta := TouchArea {
-                                        enabled: root.active-filters > 0;
-                                        mouse-cursor: self.enabled ? pointer : default;
-                                        width: reset-text.preferred-width;
-                                        height: reset-text.preferred-height;
-                                        accessible-role: button;
-                                        accessible-label: "Reset filters";
-                                        accessible-action-default => {
-                                            root.reset-filters();
-                                        }
-                                        clicked => {
-                                            root.reset-filters();
-                                        }
-                                        reset-text := Text {
-                                            text: "Reset filters";
-                                            font-size: Ink.fs-secondary;
-                                            color: reset-ta.enabled ? Ink.focus : Ink.text-mute;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                // "Columns" inline, like a label beside its field.
-                HorizontalLayout {
-                    width: columns-label.preferred-width + 6px + 110px;
-                    spacing: 6px;
-                    columns-label := Text {
-                        text: "Columns";
-                        vertical-alignment: center;
-                        font-size: Ink.fs-secondary;
-                        color: Ink.text-dim;
-                    }
-                    VerticalLayout {
-                        alignment: center;
-                        InkMultiSelect {
-                            summary-text: ResultsState.tracks-all-columns-summary;
-                            items <=> ResultsState.tracks-all-column-items;
-                            multi-select: true;
-                            pill-width: 110px;
-                            item-selected(key, value, selected) => {
-                                ResultsState.tracks-all-column-picked(key, selected);
-                            }
-                        }
-                    }
+            }
+            // The badge counts the filters changed from the default.
+            VerticalLayout {
+                alignment: center;
+                BarChip {
+                    label: "Filters";
+                    part: "Filters";
+                    badge: root.active-filters;
+                    active: root.active-filters > 0;
                 }
-                Rectangle {
-                    horizontal-stretch: 1;
+            }
+            VerticalLayout {
+                alignment: center;
+                BarChip {
+                    label: "Columns";
+                    part: "Columns";
+                    value: ResultsState.tracks-all-columns-summary;
                 }
-                BarCount {
-                    min-width: 120px;
-                    text: ResultsState.tracks-all-summary;
+            }
+            VerticalLayout {
+                alignment: center;
+                BarChip {
+                    label: "Speed in";
+                    part: "Look";
+                    value: ["px/frame", "µm/min", "µm/s"][ResultsState.tracks-unit];
                 }
-                VerticalLayout {
-                    alignment: center;
-                    InkSegmented {
-                        horizontal-stretch: 0;
-                        label: "Speed unit";
-                        model: ["px/frame", "µm/min", "µm/s"];
-                        selected: ResultsState.tracks-unit;
-                        enabled: ResultsState.tracks-all-um;
-                        picked(i) => {
-                            ResultsState.tracks-unit = i;
-                            ResultsState.tracks-unit-changed(i);
-                        }
-                    }
-                }
+            }
+            BarSpacer { }
+            BarCount {
+                min-width: 120px;
+                text: ResultsState.tracks-all-summary;
+            }
         }
 
         HorizontalLayout {
@@ -735,5 +692,6 @@ export component ResultsTracksAllView inherits Rectangle {
                 }
             }
         }
+    }
     }
 }
