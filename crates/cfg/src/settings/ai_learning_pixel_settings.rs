@@ -73,71 +73,9 @@ pub struct AiLearningPixelFeatureSettings {
     pub image_channel_names: Vec<String>,
 }
 
-impl AiLearningPixelFeatureSettings {
-    /// Convenience: same filter at several scales, e.g. gaussian_scales(&[1.0, 2.0, 4.0], 5).
-    /// Values outside [0.1, 8.0] will be silently clamped by GaussianBlur's own
-    /// `From<GaussianBlurSettings>` conversion — see the `PreprocessingSteps` doc comment.
-    // Unused from the build script's own compiled copy of this file (it only
-    // needs the type for `schema_for!`, never calls this) - same reason
-    // `ObjectId`/`TrackId` in `types/ids.rs` carry the same allow.
-    #[allow(dead_code)]
-    pub fn gaussian_scales(sigmas: &[f32], kernel_size: usize) -> Vec<Vec<PreprocessingSteps>> {
-        sigmas
-            .iter()
-            .map(|&sigma| {
-                vec![PreprocessingSteps::GaussianBlur(GaussianBlurSettings {
-                    kernel_size,
-                    sigma,
-                })]
-            })
-            .collect()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // -- gaussian_scales ------------------------------------------------
-
-    #[test]
-    fn gaussian_scales_builds_one_single_step_channel_per_sigma() {
-        let channels = AiLearningPixelFeatureSettings::gaussian_scales(&[1.0, 2.0, 4.0], 5);
-
-        assert_eq!(channels.len(), 3);
-        for (channel, expected_sigma) in channels.iter().zip([1.0, 2.0, 4.0]) {
-            assert_eq!(
-                channel.len(),
-                1,
-                "each channel is a single GaussianBlur step"
-            );
-            let PreprocessingSteps::GaussianBlur(settings) = &channel[0] else {
-                panic!("expected a GaussianBlur step, got {:?}", channel[0]);
-            };
-            assert_eq!(settings.sigma, expected_sigma);
-            assert_eq!(settings.kernel_size, 5);
-        }
-    }
-
-    #[test]
-    fn gaussian_scales_returns_no_channels_for_an_empty_sigma_slice() {
-        assert!(AiLearningPixelFeatureSettings::gaussian_scales(&[], 5).is_empty());
-    }
-
-    #[test]
-    fn gaussian_scales_preserves_sigma_order() {
-        let channels = AiLearningPixelFeatureSettings::gaussian_scales(&[4.0, 1.0, 2.0], 3);
-        let sigmas: Vec<f32> = channels
-            .iter()
-            .map(|c| {
-                let PreprocessingSteps::GaussianBlur(settings) = &c[0] else {
-                    panic!("expected a GaussianBlur step");
-                };
-                settings.sigma
-            })
-            .collect();
-        assert_eq!(sigmas, vec![4.0, 1.0, 2.0]);
-    }
 
     // -- serde round trip -------------------------------------------------
     //
@@ -202,10 +140,10 @@ mod tests {
         let settings = AiLearningPixelFeatureSettings {
             channels: vec![
                 vec![], // Raw / unmodified pixel value
-                AiLearningPixelFeatureSettings::gaussian_scales(&[1.0, 2.0], 5)
-                    .into_iter()
-                    .next()
-                    .unwrap(),
+                vec![PreprocessingSteps::GaussianBlur(GaussianBlurSettings {
+                    kernel_size: 5,
+                    sigma: 1.0,
+                })],
                 vec![PreprocessingSteps::Hessian(HessianSettings {
                     mode:
                         crate::settings::pipeline_command_settings::FiltersHessianHessianModeSettings::EigenvaluesX,

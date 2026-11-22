@@ -9,7 +9,6 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::ops::Add;
 
 // Segmentation class -----------------
 
@@ -32,10 +31,6 @@ pub struct SegmentationClass(pub u32);
 impl SegmentationClass {
     pub const BACKGROUND: Self = SegmentationClass(0);
     pub const MANUAL_ANNOTATED: Self = SegmentationClass(0xFFFFFFFF);
-
-    pub fn from_object_class(class: SegmentationClass) -> Self {
-        SegmentationClass(class.0)
-    }
 
     pub fn as_u32(&self) -> u32 {
         self.0
@@ -149,22 +144,6 @@ pub type ModelClass = ObjectClass;
 /// class ID of a trained model, not one of the project's.
 pub type ModelSegmentationClass = SegmentationClass;
 
-impl Add for ObjectClass {
-    type Output = Self;
-
-    fn add(self, other: Self) -> Self {
-        match (self, other) {
-            // Case 1: Both are valid numbers
-            (ObjectClass::Global(a), ObjectClass::Global(b)) => {
-                // Using wrapping_add to prevent panics on overflow
-                ObjectClass::Global(a.wrapping_add(b))
-            }
-            // Case 2: If either one is 'Special', the result is 'Special'
-            _ => ObjectClass::Unset,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
 
@@ -222,14 +201,6 @@ mod tests {
     }
 
     #[test]
-    fn segmentation_class_from_object_class_copies_the_id() {
-        assert_eq!(
-            SegmentationClass::from_object_class(SegmentationClass(9)),
-            SegmentationClass(9)
-        );
-    }
-
-    #[test]
     fn segmentation_class_as_u32_returns_the_inner_value() {
         assert_eq!(SegmentationClass(42).as_u32(), 42);
     }
@@ -275,30 +246,5 @@ mod tests {
     fn object_class_to_i32_is_the_id_for_valid_and_negative_one_for_unset() {
         assert_eq!(ObjectClass::Global(4).to_i32(), 4);
         assert_eq!(ObjectClass::Unset.to_i32(), -1);
-    }
-
-    #[test]
-    fn adding_two_valid_object_classes_wrapping_adds_their_ids() {
-        assert_eq!(
-            ObjectClass::Global(2) + ObjectClass::Global(3),
-            ObjectClass::Global(5)
-        );
-        assert_eq!(
-            ObjectClass::Global(u32::MAX) + ObjectClass::Global(1),
-            ObjectClass::Global(0)
-        );
-    }
-
-    #[test]
-    fn adding_an_unset_object_class_to_anything_yields_unset() {
-        assert_eq!(
-            ObjectClass::Global(2) + ObjectClass::Unset,
-            ObjectClass::Unset
-        );
-        assert_eq!(
-            ObjectClass::Unset + ObjectClass::Global(2),
-            ObjectClass::Unset
-        );
-        assert_eq!(ObjectClass::Unset + ObjectClass::Unset, ObjectClass::Unset);
     }
 }
