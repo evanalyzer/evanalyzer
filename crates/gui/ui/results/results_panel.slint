@@ -191,6 +191,36 @@ export component ChoiceList inherits VerticalLayout {
     }
 }
 
+/// One of `model` to pick (by index): radio rows.
+export component IndexChoiceList inherits VerticalLayout {
+    in property <string> title;
+    in property <[string]> model;
+    in property <int> current;
+    callback picked(int);
+    spacing: 4px;
+    if root.title != "": PartHead {
+        title: root.title;
+        foldable: false;
+        all-none: false;
+    }
+    Rectangle {
+        border-radius: Ink.radius-sm;
+        border-width: 1px;
+        border-color: Ink.border-soft;
+        VerticalLayout {
+            padding: 2px;
+            for text[i] in root.model: PickRow {
+                text: text;
+                on: i == root.current;
+                single: true;
+                clicked => {
+                    root.picked(i);
+                }
+            }
+        }
+    }
+}
+
 /// A group of the picker: its columns to tick or pick, foldable.
 component SectionList inherits VerticalLayout {
     in property <ColumnSection> section;

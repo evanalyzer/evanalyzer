@@ -610,8 +610,12 @@ pub struct ResultsStateController {
     column_sections_open: Mutex<HashMap<String, bool>>,
     /// The sidebar's column search.
     column_filter: Mutex<String>,
-    /// The Plate's value picker's search (lower case not yet).
+    /// The Plate's value picker's search.
     matrix_column_filter: Mutex<String>,
+    /// The Charts' value picker's search, and whether it picks scatter's Y
+    /// (else X / the value).
+    chart_column_filter: Mutex<String>,
+    chart_value_y: Mutex<bool>,
     /// The results' profile measurements (Charts › Profile, its export).
     profile_columns: Mutex<Vec<MeasurementColumn>>,
     /// Charts › Profile's selected object's circles on the split view.
@@ -742,6 +746,8 @@ impl ResultsStateController {
             column_sections_open: Mutex::new(HashMap::new()),
             column_filter: Mutex::new(String::new()),
             matrix_column_filter: Mutex::new(String::new()),
+            chart_column_filter: Mutex::new(String::new()),
+            chart_value_y: Mutex::new(false),
             profile_columns: Mutex::new(Vec::new()),
             profile_rings: Mutex::new(None),
             profile_pos: Mutex::new((0, 0)),

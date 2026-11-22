@@ -526,8 +526,9 @@ impl ResultsStateController {
             ));
         })
         .ok();
-        // The Plate's picker offers the same columns.
+        // The Plate's and the Charts' pickers offer the same columns.
         self.push_matrix_picker();
+        self.push_chart_picker();
     }
 
     /// The coloc settings changed (`change`): the chosen coloc columns of

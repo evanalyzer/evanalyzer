@@ -95,6 +95,15 @@ pub(super) fn intensity_heads() -> Vec<SharedString> {
     INTENSITY_VALUES.iter().map(|(head, _)| (*head).into()).collect()
 }
 
+/// A one-choice picker's parts, made off the UI thread.
+struct SinglePicker {
+    sections: Vec<super::coloc::SectionUi>,
+    cells: Vec<IntensityCell>,
+    intensity_title: String,
+    intensity_open: bool,
+    kinds: Vec<ColocKindUi>,
+}
+
 /// A starting set: its key, name, what it holds and its columns.
 pub(super) struct Preset {
     pub key: &'static str,
@@ -350,9 +359,31 @@ impl ResultsStateController {
         self.refresh_list();
     }
 
-    /// The Plate's value picker: the List's groups, intensity grid and coloc
-    /// kinds with the Plate's one column chosen - the columns a Plate can
-    /// show (not an object's identity).
+    /// A one-choice picker's parts (Plate, Charts): the List's groups,
+    /// intensity grid and coloc kinds over `available` with `selected`
+    /// chosen, those the search `filter` matches.
+    fn single_picker(&self, available: &[ColumnEntry], selected: &[Column], filter: &str) -> SinglePicker {
+        let classes = self.classes.lock().expect("Poisoned").clone();
+        let settings = self.coloc_settings.lock().expect("Poisoned").clone();
+        let open = self.column_sections_open.lock().expect("Poisoned").clone();
+        let filter = filter.to_lowercase();
+        let (sections, _, _, _) =
+            super::coloc::picker_sections(available, selected, &classes, &open, &filter, true);
+        let (_, cells) = intensity_grid(available, selected, &classes);
+        let intensity_section = sections.iter().find(|section| section.group == "intensity");
+        SinglePicker {
+            intensity_title: intensity_section
+                .map(|section| section.title.clone())
+                .unwrap_or_default(),
+            intensity_open: intensity_section.is_some_and(|section| section.open),
+            kinds: coloc_kinds(available, selected, &settings, &classes, &filter),
+            sections,
+            cells,
+        }
+    }
+
+    /// The Plate's value picker - the columns a Plate can show (not an
+    /// object's identity), its one column chosen.
     pub(super) fn push_matrix_picker(&self) {
         let available: Vec<ColumnEntry> = self
             .available_columns
@@ -362,7 +393,6 @@ impl ResultsStateController {
             .filter(|entry| is_matrix_column(&entry.key))
             .cloned()
             .collect();
-        let classes = self.classes.lock().expect("Poisoned").clone();
         let selected: Vec<Column> = self
             .matrix_filter
             .lock()
@@ -370,20 +400,8 @@ impl ResultsStateController {
             .as_ref()
             .map(|filter| vec![filter.column.clone()])
             .unwrap_or_default();
-        let settings = self.coloc_settings.lock().expect("Poisoned").clone();
-        let open = self.column_sections_open.lock().expect("Poisoned").clone();
-        let filter = self.matrix_column_filter.lock().expect("Poisoned").to_lowercase();
-
-        let (sections, _, _, _) =
-            super::coloc::picker_sections(&available, &selected, &classes, &open, &filter, true);
-        let (channels, cells) = intensity_grid(&available, &selected, &classes);
-        let intensity_section = sections.iter().find(|section| section.group == "intensity");
-        let intensity_title = intensity_section
-            .map(|section| section.title.clone())
-            .unwrap_or_default();
-        let intensity_open = intensity_section.is_some_and(|section| section.open);
-        let kinds = coloc_kinds(&available, &selected, &settings, &classes, &filter);
-
+        let filter = self.matrix_column_filter.lock().expect("Poisoned").clone();
+        let picker = self.single_picker(&available, &selected, &filter);
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             let Some(ui) = ui_weak.upgrade() else {
@@ -391,19 +409,100 @@ impl ResultsStateController {
             };
             let state = ui.global::<ResultsState>();
             state.set_matrix_column_sections(model_of(
-                sections.into_iter().map(super::coloc::SectionUi::into_slint).collect(),
+                picker.sections.into_iter().map(super::coloc::SectionUi::into_slint).collect(),
             ));
-            state.set_matrix_intensity_channels(model_of(
-                channels.into_iter().map(SharedString::from).collect(),
-            ));
-            state.set_matrix_intensity_cells(model_of(cells));
-            state.set_matrix_intensity_title(intensity_title.into());
-            state.set_matrix_intensity_open(intensity_open);
+            state.set_matrix_intensity_cells(model_of(picker.cells));
+            state.set_matrix_intensity_title(picker.intensity_title.into());
+            state.set_matrix_intensity_open(picker.intensity_open);
             state.set_matrix_coloc_kinds(model_of(
-                kinds.into_iter().map(ColocKindUi::into_slint).collect(),
+                picker.kinds.into_iter().map(ColocKindUi::into_slint).collect(),
             ));
         })
         .ok();
+    }
+
+    /// The Charts' value picker - the columns a chart can draw - with the
+    /// column of the slot being picked (X, or scatter's Y) chosen.
+    pub(super) fn push_chart_picker(&self) {
+        let available: Vec<ColumnEntry> = self
+            .available_columns
+            .lock()
+            .expect("Poisoned")
+            .iter()
+            .filter(|entry| is_chartable_column(&entry.key))
+            .cloned()
+            .collect();
+        let y = *self.chart_value_y.lock().expect("Poisoned");
+        let selected = {
+            let chart = self.chart_filter.lock().expect("Poisoned");
+            vec![if y { chart.y_column.clone() } else { chart.column.clone() }]
+        };
+        let filter = self.chart_column_filter.lock().expect("Poisoned").clone();
+        let picker = self.single_picker(&available, &selected, &filter);
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let state = ui.global::<ResultsState>();
+            state.set_chart_column_sections(model_of(
+                picker.sections.into_iter().map(super::coloc::SectionUi::into_slint).collect(),
+            ));
+            state.set_chart_intensity_cells(model_of(picker.cells));
+            state.set_chart_intensity_title(picker.intensity_title.into());
+            state.set_chart_intensity_open(picker.intensity_open);
+            state.set_chart_coloc_kinds(model_of(
+                picker.kinds.into_iter().map(ColocKindUi::into_slint).collect(),
+            ));
+        })
+        .ok();
+    }
+
+    /// The chart draws column `key` on the slot being picked (X, or
+    /// scatter's Y).
+    fn pick_chart_column(self: &Arc<Self>, key: &str) {
+        let classes = self.classes.lock().expect("Poisoned").clone();
+        let Some(column) = self.column_for_key(key, &classes) else {
+            warn!("Unknown chart column key picked: {key}");
+            return;
+        };
+        let label = picker_label(&column.display_label(&classes));
+        let y = *self.chart_value_y.lock().expect("Poisoned");
+        {
+            let mut chart = self.chart_filter.lock().expect("Poisoned");
+            if y {
+                chart.y_column = column;
+            } else {
+                chart.column = column;
+            }
+        }
+        self.push_chart_picker();
+        let ui_weak = self.ui.clone();
+        let key = key.to_string();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let state = ui.global::<ResultsState>();
+            let items = if y {
+                state.set_chart_y_column_summary(label.into());
+                state.get_chart_y_column_items()
+            } else {
+                state.set_chart_column_summary(label.into());
+                state.get_chart_column_items()
+            };
+            for i in 0..items.row_count() {
+                if let Some(mut item) = items.row_data(i) {
+                    let on = item.key.as_str() == key;
+                    if item.selected != on {
+                        item.selected = on;
+                        items.set_row_data(i, item);
+                    }
+                }
+            }
+        })
+        .ok();
+        self.refresh_charts();
     }
 
     /// The Plate shows column `key` (its picker's).
@@ -452,6 +551,27 @@ impl ResultsStateController {
         state.on_matrix_columns_filter_changed(move |text| {
             *manager.matrix_column_filter.lock().expect("Poisoned") = text.to_string();
             manager.push_matrix_picker();
+        });
+        let manager = self.clone();
+        state.on_chart_value_picked(move |key| manager.pick_chart_column(key.as_str()));
+        let manager = self.clone();
+        state.on_chart_value_slot_changed(move |slot| {
+            *manager.chart_value_y.lock().expect("Poisoned") = slot == 1;
+            manager.push_chart_picker();
+        });
+        let manager = self.clone();
+        state.on_chart_columns_filter_changed(move |text| {
+            *manager.chart_column_filter.lock().expect("Poisoned") = text.to_string();
+            manager.push_chart_picker();
+        });
+        let manager = self.clone();
+        state.on_chart_columns_section_toggled(move |group, open| {
+            manager
+                .column_sections_open
+                .lock()
+                .expect("Poisoned")
+                .insert(group.to_string(), open);
+            manager.push_chart_picker();
         });
         let manager = self.clone();
         state.on_matrix_columns_section_toggled(move |group, open| {

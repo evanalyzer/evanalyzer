@@ -15,6 +15,8 @@ import { ScrollView } from "std-widgets.slint";
 import { Ink } from "../ink/palette.slint";
 
 import { InkMultiSelect } from "../ink/ink.slint";
+import { ViewBar, BarChip, BarLabel, BarSpacer, ViewPanel } from "results_view_bar.slint";
+import { ColumnPicker, ChoiceList, IndexChoiceList } from "results_panel.slint";
 
 component ChartErrorOrEmpty inherits Text {
     text: ResultsState.chart-error;
@@ -260,62 +262,6 @@ component BoxplotChart inherits Rectangle {
     }
 }
 
-// A chart kind to pick: its drawn picture above its name. Every tile gets
-// its width from the grid (all equal); selected shows by border and tint
-// only, so the name keeps its weight and nothing moves.
-component ChartTile inherits Rectangle {
-    // The picture as path commands on a 28 × 18 grid.
-    in property <string> icon;
-    // Filled (the scatter's dots) instead of stroked lines.
-    in property <bool> icon-filled;
-    in property <string> text;
-    in property <bool> selected;
-    callback clicked;
-
-    height: 58px;
-    border-radius: Ink.radius-md;
-    border-width: 1px;
-    border-color: root.selected ? Ink.focus : Ink.border;
-    background: root.selected ? Ink.info-tint : ta.has-hover ? Ink.hover : Ink.panel;
-    accessible-role: button;
-    accessible-label: root.text;
-    accessible-checked: root.selected;
-
-    VerticalLayout {
-        alignment: center;
-        spacing: 4px;
-        HorizontalLayout {
-            alignment: center;
-            Path {
-                width: 28px;
-                height: 18px;
-                viewbox-width: 28;
-                viewbox-height: 18;
-                commands: root.icon;
-                fill: root.icon-filled ? (root.selected ? Ink.focus : Ink.text-dim) : transparent;
-                stroke: root.icon-filled ? transparent : (root.selected ? Ink.focus : Ink.text-dim);
-                stroke-width: root.icon-filled ? 0px : 1.6px;
-                stroke-line-cap: round;
-                stroke-line-join: round;
-            }
-        }
-        Text {
-            text: root.text;
-            font-size: Ink.fs-secondary;
-            color: Ink.text;
-            horizontal-alignment: center;
-            overflow: elide;
-        }
-    }
-
-    ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => {
-            root.clicked();
-        }
-    }
-}
-
 // Over time: a line per class / image / well / track, its spread as a band,
 // the individual tracks faint behind (all paths from Rust, in a 1000 x 1000
 // box), the axes' ends as labels.
@@ -520,337 +466,315 @@ component OverTimeChart inherits Rectangle {
     }
 }
 
+/// The Charts' left panel (design canvas "Results rework", PanelViews):
+/// the part the bar's chip names - Value (the List's column picker, one
+/// choice; X and Y for a scatter), Class, Groups (a box / a line per), Look.
+component ChartsPanel inherits ViewPanel {
+    property <string> part: ResultsState.panel-part;
+    property <ResultsChartKind2> kind: ResultsState.chart-kind;
+    title: root.part == "Groups" ? (root.kind == ResultsChartKind2.boxplot ? "A box per" : "A line per") : root.part;
+
+    if root.part == "Value" && root.kind == ResultsChartKind2.profile: IndexChoiceList {
+        title: "PROFILE";
+        model: ResultsState.chart-profile-names;
+        current: ResultsState.chart-profile-index;
+        picked(i) => {
+            ResultsState.chart-profile-index = i;
+            ResultsState.chart-profile-selected(i);
+        }
+    }
+    if root.part == "Value" && root.kind == ResultsChartKind2.scatter: InkSegmented {
+        label: "Axis";
+        model: ["X axis", "Y axis"];
+        selected: ResultsState.chart-value-slot;
+        picked(i) => {
+            ResultsState.chart-value-slot = i;
+            ResultsState.chart-value-slot-changed(i);
+        }
+    }
+    if root.part == "Value" && root.kind != ResultsChartKind2.profile: ColumnPicker {
+        single: true;
+        placeholder: "Find a value - area, mean, coloc…";
+        filter: ResultsState.chart-columns-filter;
+        sections: ResultsState.chart-column-sections;
+        intensity-title: ResultsState.chart-intensity-title;
+        intensity-open: ResultsState.chart-intensity-open;
+        intensity-channels: ResultsState.list-intensity-channels;
+        intensity-stats: ResultsState.list-intensity-stats;
+        intensity-cells: ResultsState.chart-intensity-cells;
+        has-coloc: ResultsState.list-coloc-partner-items.length > 0;
+        coloc-kinds: ResultsState.chart-coloc-kinds;
+        filter-edited(text) => {
+            ResultsState.chart-columns-filter = text;
+            ResultsState.chart-columns-filter-changed(text);
+        }
+        picked(key, on) => {
+            ResultsState.chart-value-picked(key);
+        }
+        section-toggled(group, open) => {
+            if group == "intensity" {
+                ResultsState.chart-intensity-open = open;
+            }
+            ResultsState.chart-columns-section-toggled(group, open);
+        }
+    }
+
+    if root.part == "Class": ChoiceList {
+        title: "THE OBJECTS OF";
+        items: ResultsState.chart-class-items;
+        chosen: ResultsState.chart-class-summary;
+        picked(key, value) => {
+            ResultsState.chart-class-summary = value;
+            ResultsState.chart-class-selected(key, true);
+        }
+    }
+
+    if root.part == "Groups" && root.kind == ResultsChartKind2.boxplot: IndexChoiceList {
+        model: ["Class", "Image", "Well", "Plate row", "Plate column"];
+        current: ResultsState.chart-group;
+        picked(i) => {
+            ResultsState.chart-group = i;
+            ResultsState.chart-group-selected(i);
+        }
+    }
+    if root.part == "Groups" && root.kind == ResultsChartKind2.over-time: IndexChoiceList {
+        model: ["Class", "Image", "Well", "Track"];
+        current: ResultsState.chart-time-lines;
+        picked(i) => {
+            ResultsState.chart-time-lines = i;
+            ResultsState.chart-time-changed();
+        }
+    }
+    if root.part == "Groups" && root.kind == ResultsChartKind2.profile: IndexChoiceList {
+        model: ["Class", "Image", "Well", "Plate"];
+        current: ResultsState.chart-profile-lines;
+        picked(i) => {
+            ResultsState.chart-profile-lines = i;
+            ResultsState.chart-time-changed();
+        }
+    }
+
+    if root.part == "Look": VerticalLayout {
+        spacing: 12px;
+            if ResultsState.chart-kind == ResultsChartKind2.histogram: HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    horizontal-stretch: 1;
+                    text: "Bins";
+                    font-size: Ink.fs-secondary;
+                    color: Ink.text;
+                    vertical-alignment: center;
+                }
+                InkNumberField {
+                    width: 110px;
+                    label: "Bins";
+                    value: ResultsState.chart-bins;
+                    min: 5;
+                    max: 200;
+                    step: 1;
+                    changed(v) => {
+                        ResultsState.chart-bins = clamp(round(v.to-float()), 5, 200);
+                        ResultsState.chart-display-changed();
+                    }
+                }
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.histogram: InkSwitch {
+                text: "Counts on a log scale";
+                checked: ResultsState.chart-log-counts;
+                toggled(on) => {
+                    ResultsState.chart-log-counts = on;
+                    ResultsState.chart-display-changed();
+                }
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.scatter: InkSegmented {
+                label: "Points drawn";
+                model: ["500", "2 000", "10 000", "All"];
+                selected: ResultsState.chart-points-index;
+                picked(i) => {
+                    ResultsState.chart-points-index = i;
+                    ResultsState.chart-display-changed();
+                }
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.scatter: InkHint {
+                text: "Click a point to see its object on its image.";
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.over-time || ResultsState.chart-kind == ResultsChartKind2.profile: InkSegmented {
+                label: "Summary";
+                model: ["Mean ± SD", "Median + IQR"];
+                tips: ["Mean ± standard deviation", "Median and interquartile range"];
+                tip-details: [
+                    "The line is the average of the objects at each time point; the band reaches one standard deviation above and below it - how far the values typically spread. A few very large or small objects pull both.",
+                    "The line is the middle value: half of the objects lie above it, half below. The band holds the middle half of the objects (25th to 75th percentile). Robust to outliers and skewed values such as sizes or intensities.",
+                ];
+                selected: ResultsState.chart-time-summary;
+                picked(i) => {
+                    ResultsState.chart-time-summary = i;
+                    ResultsState.chart-time-changed();
+                }
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.profile: InkSwitch {
+                text: "The selected object's curve";
+                checked: ResultsState.chart-profile-curve;
+                toggled(on) => {
+                    ResultsState.chart-profile-curve = on;
+                    ResultsState.chart-time-changed();
+                }
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.profile: InkSwitch {
+                text: "Mark its highest value";
+                checked: ResultsState.chart-profile-mark;
+                toggled(on) => {
+                    ResultsState.chart-profile-mark = on;
+                    ResultsState.chart-time-changed();
+                }
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.profile: InkHint {
+                text: ResultsState.split
+                    ? "Click an object on the image - or use ‹ › - to see its curve and its circles. A position an object doesn't reach counts as 0."
+                    : "Split with image to pick an object and see its curve and its circles. A position an object doesn't reach counts as 0.";
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.over-time: InkSwitch {
+                text: "Relative to the first time point";
+                checked: ResultsState.chart-time-relative;
+                toggled(on) => {
+                    ResultsState.chart-time-relative = on;
+                    ResultsState.chart-time-changed();
+                }
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.over-time: InkSwitch {
+                text: "Individual tracks, faint";
+                checked: ResultsState.chart-time-tracks;
+                toggled(on) => {
+                    ResultsState.chart-time-tracks = on;
+                    ResultsState.chart-time-changed();
+                }
+            }
+            // Across divisions and fusions - where tracks are drawn.
+            if ResultsState.chart-kind == ResultsChartKind2.over-time && ResultsState.has-lineage
+                && (ResultsState.chart-time-lines == 3 || ResultsState.chart-time-tracks): InkSegmented {
+                label: "History";
+                model: ["Own track", "With parents'"];
+                tips: ["Each track its own line", "A line per cell, from its first ancestor"];
+                tip-details: [
+                    "Each track is its own line: a mother's ends at the division, its daughters' start there.",
+                    "Each daughter's line starts with its mother's track; a fused track has a line per parent. The parents' time points count once per line - in Mean ± SD, relative to the first time point and the export.",
+                ];
+                selected: ResultsState.chart-time-history;
+                picked(i) => {
+                    ResultsState.chart-time-history = i;
+                    ResultsState.chart-time-changed();
+                }
+            }
+            }
+}
+
+/// The Charts' bar: the kind of chart, then what it draws - the value, the
+/// class, a box or a line per, the look - as chips that open the left
+/// panel on their part.
+component ChartsBar inherits ViewBar {
+    property <ResultsChartKind2> kind: ResultsState.chart-kind;
+    property <bool> has-class: root.kind != ResultsChartKind2.boxplot
+        && !(root.kind == ResultsChartKind2.over-time && ResultsState.chart-time-lines == 0)
+        && !(root.kind == ResultsChartKind2.profile && ResultsState.chart-profile-lines == 0);
+    property <bool> has-groups: root.kind == ResultsChartKind2.boxplot || root.kind == ResultsChartKind2.over-time
+        || root.kind == ResultsChartKind2.profile;
+
+    BarLabel {
+        text: "Chart";
+    }
+    VerticalLayout {
+        alignment: center;
+        horizontal-stretch: 0;
+        InkSegmented {
+            horizontal-stretch: 0;
+            label: "Chart";
+            model: ResultsState.has-profiles ? ["Histogram", "Boxplot", "Scatter", "Over time", "Profile"] : ["Histogram", "Boxplot", "Scatter", "Over time"];
+            selected: root.kind == ResultsChartKind2.boxplot ? 1 : root.kind == ResultsChartKind2.scatter ? 2
+                : root.kind == ResultsChartKind2.over-time ? 3 : root.kind == ResultsChartKind2.profile ? 4 : 0;
+            picked(i) => {
+                ResultsState.chart-kind = i == 1 ? ResultsChartKind2.boxplot : i == 2 ? ResultsChartKind2.scatter
+                    : i == 3 ? ResultsChartKind2.over-time : i == 4 ? ResultsChartKind2.profile : ResultsChartKind2.histogram;
+                ResultsState.chart-kind-selected(ResultsState.chart-kind);
+                // Only a scatter has a Y to pick.
+                if ResultsState.chart-kind != ResultsChartKind2.scatter && ResultsState.chart-value-slot != 0 {
+                    ResultsState.chart-value-slot = 0;
+                    ResultsState.chart-value-slot-changed(0);
+                }
+                // A part this kind lacks closes.
+                if (ResultsState.panel-part == "Look" && ResultsState.chart-kind == ResultsChartKind2.boxplot)
+                    || (ResultsState.panel-part == "Groups" && (ResultsState.chart-kind == ResultsChartKind2.histogram || ResultsState.chart-kind == ResultsChartKind2.scatter)) {
+                    ResultsState.panel-part = "";
+                }
+            }
+        }
+    }
+    VerticalLayout {
+        alignment: center;
+        BarChip {
+            label: root.kind == ResultsChartKind2.profile ? "Profile" : "Value";
+            part: "Value";
+            value: root.kind == ResultsChartKind2.profile ? ResultsState.chart-profile-names[ResultsState.chart-profile-index]
+                : root.kind == ResultsChartKind2.scatter ? ResultsState.chart-column-summary + " × " + ResultsState.chart-y-column-summary
+                : ResultsState.chart-column-summary;
+        }
+    }
+    if root.has-class: VerticalLayout {
+        alignment: center;
+        BarChip {
+            label: "Class";
+            part: "Class";
+            value: ResultsState.chart-class-summary;
+        }
+    }
+    if root.has-groups: VerticalLayout {
+        alignment: center;
+        BarChip {
+            label: root.kind == ResultsChartKind2.boxplot ? "A box per" : "A line per";
+            part: "Groups";
+            value: root.kind == ResultsChartKind2.boxplot ? ["Class", "Image", "Well", "Plate row", "Plate column"][ResultsState.chart-group]
+                : root.kind == ResultsChartKind2.over-time ? ["Class", "Image", "Well", "Track"][ResultsState.chart-time-lines]
+                : ["Class", "Image", "Well", "Plate"][ResultsState.chart-profile-lines];
+        }
+    }
+    if root.kind != ResultsChartKind2.boxplot: VerticalLayout {
+        alignment: center;
+        BarChip {
+            label: "Look";
+            part: "Look";
+        }
+    }
+    BarSpacer { }
+    InkHint {
+        vertical-alignment: center;
+        horizontal-stretch: 0;
+        text: root.kind == ResultsChartKind2.boxplot ? "Click a box to see its objects in the List."
+            : root.kind == ResultsChartKind2.scatter ? "Click a point to see its object on its image." : "";
+    }
+}
+
 export component ResultsChartsView inherits Rectangle {
-    property <length> side-w: 280px;
-    property <length> field-w: root.side-w - 2 * Ink.pad-panel;
-    property <length> kind-gap: 6px;
-    property <int> kind-columns: ResultsState.has-profiles ? 3 : 2;
-    property <length> kind-tile-w: (root.field-w - (root.kind-columns - 1) * root.kind-gap) / root.kind-columns;
+    property <string> part: ResultsState.panel-part;
+    property <ResultsChartKind2> kind: ResultsState.chart-kind;
+    property <bool> panel-open: root.part == "Value"
+        || (root.part == "Class" && root.kind != ResultsChartKind2.boxplot)
+        || (root.part == "Groups" && root.kind != ResultsChartKind2.histogram && root.kind != ResultsChartKind2.scatter)
+        || (root.part == "Look" && root.kind != ResultsChartKind2.boxplot);
 
     background: Ink.ground;
 
-    // Panels on the ground (boards H, L, M): the settings left, the content
-    // beside them.
+    // Panels on the ground: what is drawn on the left (a chip opens it),
+    // the bar over the chart.
     HorizontalLayout {
         padding: 12px;
         spacing: 12px;
 
-        // -- The chart and what it shows --
-        Rectangle {
-            width: root.side-w;
-            background: Ink.panel;
-            border-radius: Ink.radius-lg;
-            border-width: 1px;
-            border-color: Ink.border;
-            clip: true;
+        if root.panel-open: ChartsPanel { }
 
+        VerticalLayout {
+        spacing: 12px;
+        horizontal-stretch: 1;
 
-            VerticalLayout {
-                padding: Ink.pad-panel;
-                spacing: 16px;
-                alignment: start;
-
-                SettingsGroup {
-                    title: "CHART";
-                    // The kinds as one grid of equal tiles, each with a drawn
-                    // picture: 3 columns with Profile (a value per radius, with
-                    // profile measurements in the results), 2 without.
-                    VerticalLayout {
-                        spacing: root.kind-gap;
-                        HorizontalLayout {
-                            spacing: root.kind-gap;
-                            alignment: start;
-                            ChartTile {
-                                width: root.kind-tile-w;
-                                icon: "M 2 17 H 26 M 5 17 V 13 H 9 V 17 M 10 17 V 7 H 14 V 17 M 15 17 V 3 H 19 V 17 M 20 17 V 11 H 24 V 17";
-                                text: "Histogram";
-                                selected: ResultsState.chart-kind == ResultsChartKind2.histogram;
-                                clicked => {
-                                    ResultsState.chart-kind = ResultsChartKind2.histogram;
-                                    ResultsState.chart-kind-selected(ResultsState.chart-kind);
-                                }
-                            }
-                            ChartTile {
-                                width: root.kind-tile-w;
-                                icon: "M 2 9 H 8 M 20 9 H 26 M 2 5 V 13 M 26 5 V 13 M 8 4 H 20 V 14 H 8 Z M 14 4 V 14";
-                                text: "Boxplot";
-                                selected: ResultsState.chart-kind == ResultsChartKind2.boxplot;
-                                clicked => {
-                                    ResultsState.chart-kind = ResultsChartKind2.boxplot;
-                                    ResultsState.chart-kind-selected(ResultsState.chart-kind);
-                                }
-                            }
-                            if ResultsState.has-profiles: ChartTile {
-                                width: root.kind-tile-w;
-                                icon: "M 3.2 13 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 8.2 9 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 11.2 14 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 15.2 6 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 19.2 9 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 22.2 3 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0";
-                                icon-filled: true;
-                                text: "Scatter";
-                                selected: ResultsState.chart-kind == ResultsChartKind2.scatter;
-                                clicked => {
-                                    ResultsState.chart-kind = ResultsChartKind2.scatter;
-                                    ResultsState.chart-kind-selected(ResultsState.chart-kind);
-                                }
-                            }
-                        }
-                        HorizontalLayout {
-                            spacing: root.kind-gap;
-                            alignment: start;
-                            if !ResultsState.has-profiles: ChartTile {
-                                width: root.kind-tile-w;
-                                icon: "M 3.2 13 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 8.2 9 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 11.2 14 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 15.2 6 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 19.2 9 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 22.2 3 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0";
-                                icon-filled: true;
-                                text: "Scatter";
-                                selected: ResultsState.chart-kind == ResultsChartKind2.scatter;
-                                clicked => {
-                                    ResultsState.chart-kind = ResultsChartKind2.scatter;
-                                    ResultsState.chart-kind-selected(ResultsState.chart-kind);
-                                }
-                            }
-                            ChartTile {
-                                width: root.kind-tile-w;
-                                icon: "M 2 14 L 8 7 L 13 12 L 19 3 L 26 9";
-                                text: "Over time";
-                                selected: ResultsState.chart-kind == ResultsChartKind2.over-time;
-                                clicked => {
-                                    ResultsState.chart-kind = ResultsChartKind2.over-time;
-                                    ResultsState.chart-kind-selected(ResultsState.chart-kind);
-                                }
-                            }
-                            if ResultsState.has-profiles: ChartTile {
-                                width: root.kind-tile-w;
-                                icon: "M 2 17 C 4 4 7 3 9 6 C 11 9 13 16 17 16 C 21 16 23 15 26 15";
-                                text: "Profile";
-                                selected: ResultsState.chart-kind == ResultsChartKind2.profile;
-                                clicked => {
-                                    ResultsState.chart-kind = ResultsChartKind2.profile;
-                                    ResultsState.chart-kind-selected(ResultsState.chart-kind);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                SettingsGroup {
-                    title: "VALUE";
-                    // Only profile measurements (a value per radius).
-                    if ResultsState.chart-kind == ResultsChartKind2.profile: VerticalLayout {
-                        spacing: 4px;
-                        Text {
-                            text: "Profile";
-                            font-size: Ink.fs-caption;
-                            color: Ink.text-dim;
-                        }
-                        ComboBox {
-                            model: ResultsState.chart-profile-names;
-                            current-index: ResultsState.chart-profile-index;
-                            selected(v) => {
-                                ResultsState.chart-profile-index = self.current-index;
-                                ResultsState.chart-profile-selected(self.current-index);
-                            }
-                        }
-                    }
-                    if ResultsState.chart-kind != ResultsChartKind2.profile: InkMultiSelect {
-                        label: ResultsState.chart-kind == ResultsChartKind2.scatter ? "X" : "Property";
-                        summary-text: ResultsState.chart-column-summary;
-                        items <=> ResultsState.chart-column-items;
-                        multi-select: false;
-                        groups: ResultsState.list-columns-groups;
-                        pill-width: root.field-w;
-                        item-selected(key, value, selected) => {
-                            ResultsState.chart-column-summary = value;
-                            ResultsState.chart-column-selected(key);
-                        }
-                    }
-                    if ResultsState.chart-kind == ResultsChartKind2.scatter: InkMultiSelect {
-                        label: "Y";
-                        summary-text: ResultsState.chart-y-column-summary;
-                        items <=> ResultsState.chart-y-column-items;
-                        multi-select: false;
-                        groups: ResultsState.list-columns-groups;
-                        pill-width: root.field-w;
-                        item-selected(key, value, selected) => {
-                            ResultsState.chart-y-column-summary = value;
-                            ResultsState.chart-y-column-selected(key);
-                        }
-                    }
-                    if ResultsState.chart-kind != ResultsChartKind2.profile && ResultsState.list-coloc-partner-items.length > 0: ColocCountRow {
-                        text: "Coloc counts";
-                    }
-                    if ResultsState.chart-kind == ResultsChartKind2.boxplot: VerticalLayout {
-                        spacing: 4px;
-                        Text {
-                            text: "A box per";
-                            font-size: Ink.fs-caption;
-                            color: Ink.text-dim;
-                        }
-                        ComboBox {
-                            model: ["Class", "Image", "Well", "Plate row", "Plate column"];
-                            current-index: ResultsState.chart-group;
-                            selected(v) => {
-                                ResultsState.chart-group = self.current-index;
-                                ResultsState.chart-group-selected(self.current-index);
-                            }
-                        }
-                    }
-                    // Over time and Profile: one box, their own choices.
-                    if ResultsState.chart-kind == ResultsChartKind2.over-time || ResultsState.chart-kind == ResultsChartKind2.profile: VerticalLayout {
-                        spacing: 4px;
-                        Text {
-                            text: "A line per";
-                            font-size: Ink.fs-caption;
-                            color: Ink.text-dim;
-                        }
-                        ComboBox {
-                            model: ResultsState.chart-kind == ResultsChartKind2.profile
-                                ? ["Class", "Image", "Well", "Plate"]
-                                : ["Class", "Image", "Well", "Track"];
-                            current-index: ResultsState.chart-kind == ResultsChartKind2.profile
-                                ? ResultsState.chart-profile-lines : ResultsState.chart-time-lines;
-                            selected(v) => {
-                                if ResultsState.chart-kind == ResultsChartKind2.profile {
-                                    ResultsState.chart-profile-lines = self.current-index;
-                                } else {
-                                    ResultsState.chart-time-lines = self.current-index;
-                                }
-                                ResultsState.chart-time-changed();
-                            }
-                        }
-                    }
-                    // A line per class: every class - else the class picked.
-                    if ResultsState.chart-kind != ResultsChartKind2.boxplot
-                        && !(ResultsState.chart-kind == ResultsChartKind2.over-time && ResultsState.chart-time-lines == 0)
-                        && !(ResultsState.chart-kind == ResultsChartKind2.profile && ResultsState.chart-profile-lines == 0): InkMultiSelect {
-                        label: "Class";
-                        summary-text: ResultsState.chart-class-summary;
-                        items <=> ResultsState.chart-class-items;
-                        multi-select: false;
-                        pill-width: root.field-w;
-                        item-selected(key, value, selected) => {
-                            ResultsState.chart-class-summary = value;
-                            ResultsState.chart-class-selected(key, selected);
-                        }
-                    }
-                }
-
-                // How it's drawn.
-                if ResultsState.chart-kind != ResultsChartKind2.boxplot: SettingsGroup {
-                    title: "DISPLAY";
-                    if ResultsState.chart-kind == ResultsChartKind2.histogram: HorizontalLayout {
-                        spacing: 8px;
-                        Text {
-                            horizontal-stretch: 1;
-                            text: "Bins";
-                            font-size: Ink.fs-secondary;
-                            color: Ink.text;
-                            vertical-alignment: center;
-                        }
-                        InkNumberField {
-                            width: 110px;
-                            label: "Bins";
-                            value: ResultsState.chart-bins;
-                            min: 5;
-                            max: 200;
-                            step: 1;
-                            changed(v) => {
-                                ResultsState.chart-bins = clamp(round(v.to-float()), 5, 200);
-                                ResultsState.chart-display-changed();
-                            }
-                        }
-                    }
-                    if ResultsState.chart-kind == ResultsChartKind2.histogram: InkSwitch {
-                        text: "Counts on a log scale";
-                        checked: ResultsState.chart-log-counts;
-                        toggled(on) => {
-                            ResultsState.chart-log-counts = on;
-                            ResultsState.chart-display-changed();
-                        }
-                    }
-                    if ResultsState.chart-kind == ResultsChartKind2.scatter: InkSegmented {
-                        label: "Points drawn";
-                        model: ["500", "2 000", "10 000", "All"];
-                        selected: ResultsState.chart-points-index;
-                        picked(i) => {
-                            ResultsState.chart-points-index = i;
-                            ResultsState.chart-display-changed();
-                        }
-                    }
-                    if ResultsState.chart-kind == ResultsChartKind2.scatter: InkHint {
-                        text: "Click a point to see its object on its image.";
-                    }
-                    if ResultsState.chart-kind == ResultsChartKind2.over-time || ResultsState.chart-kind == ResultsChartKind2.profile: InkSegmented {
-                        label: "Summary";
-                        model: ["Mean ± SD", "Median + IQR"];
-                        tips: ["Mean ± standard deviation", "Median and interquartile range"];
-                        tip-details: [
-                            "The line is the average of the objects at each time point; the band reaches one standard deviation above and below it - how far the values typically spread. A few very large or small objects pull both.",
-                            "The line is the middle value: half of the objects lie above it, half below. The band holds the middle half of the objects (25th to 75th percentile). Robust to outliers and skewed values such as sizes or intensities.",
-                        ];
-                        selected: ResultsState.chart-time-summary;
-                        picked(i) => {
-                            ResultsState.chart-time-summary = i;
-                            ResultsState.chart-time-changed();
-                        }
-                    }
-                    if ResultsState.chart-kind == ResultsChartKind2.profile: InkSwitch {
-                        text: "The selected object's curve";
-                        checked: ResultsState.chart-profile-curve;
-                        toggled(on) => {
-                            ResultsState.chart-profile-curve = on;
-                            ResultsState.chart-time-changed();
-                        }
-                    }
-                    if ResultsState.chart-kind == ResultsChartKind2.profile: InkSwitch {
-                        text: "Mark its highest value";
-                        checked: ResultsState.chart-profile-mark;
-                        toggled(on) => {
-                            ResultsState.chart-profile-mark = on;
-                            ResultsState.chart-time-changed();
-                        }
-                    }
-                    if ResultsState.chart-kind == ResultsChartKind2.profile: InkHint {
-                        text: ResultsState.split
-                            ? "Click an object on the image - or use ‹ › - to see its curve and its circles. A position an object doesn't reach counts as 0."
-                            : "Split with image to pick an object and see its curve and its circles. A position an object doesn't reach counts as 0.";
-                    }
-                    if ResultsState.chart-kind == ResultsChartKind2.over-time: InkSwitch {
-                        text: "Relative to the first time point";
-                        checked: ResultsState.chart-time-relative;
-                        toggled(on) => {
-                            ResultsState.chart-time-relative = on;
-                            ResultsState.chart-time-changed();
-                        }
-                    }
-                    if ResultsState.chart-kind == ResultsChartKind2.over-time: InkSwitch {
-                        text: "Individual tracks, faint";
-                        checked: ResultsState.chart-time-tracks;
-                        toggled(on) => {
-                            ResultsState.chart-time-tracks = on;
-                            ResultsState.chart-time-changed();
-                        }
-                    }
-                    // Across divisions and fusions - where tracks are drawn.
-                    if ResultsState.chart-kind == ResultsChartKind2.over-time && ResultsState.has-lineage
-                        && (ResultsState.chart-time-lines == 3 || ResultsState.chart-time-tracks): InkSegmented {
-                        label: "History";
-                        model: ["Own track", "With parents'"];
-                        tips: ["Each track its own line", "A line per cell, from its first ancestor"];
-                        tip-details: [
-                            "Each track is its own line: a mother's ends at the division, its daughters' start there.",
-                            "Each daughter's line starts with its mother's track; a fused track has a line per parent. The parents' time points count once per line - in Mean ± SD, relative to the first time point and the export.",
-                        ];
-                        selected: ResultsState.chart-time-history;
-                        picked(i) => {
-                            ResultsState.chart-time-history = i;
-                            ResultsState.chart-time-changed();
-                        }
-                    }
-                }
-
-                if ResultsState.chart-kind == ResultsChartKind2.boxplot: InkHint {
-                    text: "Click a box to see its objects in the List.";
-                }
-            }
-        }
+        ChartsBar { }
 
         // The content, a panel beside them.
         Rectangle {
@@ -877,5 +801,6 @@ export component ResultsChartsView inherits Rectangle {
                 }
             }
         }
+    }
     }
 }

@@ -765,6 +765,19 @@ export global ResultsState {
     in-out property <bool> matrix-intensity-open: false;
     in-out property <[ColocKind]> matrix-coloc-kinds: [];
     callback matrix-value-picked(string);
+    // The Charts' value picker in the panel: one column - scatter's X
+    // (`chart-value-slot` 0) or Y (1).
+    in-out property <int> chart-value-slot: 0;
+    in-out property <string> chart-columns-filter: "";
+    in-out property <[ColumnSection]> chart-column-sections: [];
+    in-out property <[IntensityCell]> chart-intensity-cells: [];
+    in-out property <string> chart-intensity-title: "";
+    in-out property <bool> chart-intensity-open: false;
+    in-out property <[ColocKind]> chart-coloc-kinds: [];
+    callback chart-value-picked(string);
+    callback chart-value-slot-changed(int);
+    callback chart-columns-filter-changed(string);
+    callback chart-columns-section-toggled(string, bool);
     callback matrix-columns-filter-changed(string);
     callback matrix-columns-section-toggled(string, bool);
     callback list-intensity-row(int);
