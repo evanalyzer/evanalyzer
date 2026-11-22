@@ -11,7 +11,7 @@
 
 import { ResultsState } from "../api/results.slint";
 import { Ink, InkSegmented } from "../ink/ink.slint";
-import { ViewBar, BarChip, BarSpacer, BarCount, ViewPanel } from "results_view_bar.slint";
+import { ViewBar, BarChip, BarSpacer, BarCount, BarFolded, ViewPanel } from "results_view_bar.slint";
 import { IndexChoiceList } from "results_panel.slint";
 import { ListView } from "std-widgets.slint";
 
@@ -63,7 +63,7 @@ export component ResultsTreesView inherits Rectangle {
     property <length> branch-w: 92px;
     property <length> tips-w: 48px;
     property <float> zoom: 1;
-    property <bool> panel-open: ResultsState.panel-part == "Look";
+    property <bool> panel-open: ResultsState.trees-panel-open;
 
     // Panels on the ground: how the trees are drawn on the left (a chip
     // opens it), the bar over the neurons and the selected one's tree.
@@ -73,6 +73,10 @@ export component ResultsTreesView inherits Rectangle {
 
     if root.panel-open: ViewPanel {
         title: "Colour by";
+        parts: ["Look"];
+        fold => {
+            ResultsState.trees-panel-open = false;
+        }
         IndexChoiceList {
             model: ["Branch level", "Strahler order"];
             current: ResultsState.trees-color-by;
@@ -88,12 +92,10 @@ export component ResultsTreesView inherits Rectangle {
     horizontal-stretch: 1;
 
     ViewBar {
-        VerticalLayout {
-            alignment: center;
-            BarChip {
-                label: "Colour by";
-                part: "Look";
-                value: ["Branch level", "Strahler order"][ResultsState.trees-color-by];
+        if !ResultsState.trees-panel-open: BarFolded {
+            summary: "Colour by " + ["branch level", "Strahler order"][ResultsState.trees-color-by];
+            unfold => {
+                ResultsState.trees-panel-open = true;
             }
         }
         BarSpacer { }

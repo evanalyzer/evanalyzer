@@ -8,8 +8,7 @@
 //
 //   ViewBar { BarChip { … popover content … } … BarSpacer { } BarCount { } BarMore { … } }
 
-import { Ink, InkIcons, InkIconButton, InkMenuFrame } from "../ink/ink.slint";
-import { ResultsState } from "../api/results.slint";
+import { Ink, InkIcons, InkIconButton, InkMenuFrame, InkSegmented } from "../ink/ink.slint";
 import { ScrollView } from "std-widgets.slint";
 
 // The bar's frame: a panel across the view, its parts in a row.
@@ -44,12 +43,8 @@ export component BarLabel inherits Text {
 // A picker: "Images · All ▾" - a click opens its popover (the chip's
 // children). `active`: the picker narrows what is shown (outlined, and
 // `badge` - e.g. how many filters - beside the name).
-// With `part`: the chip opens the view's left panel on that part instead
-// (`ResultsState.panel-part`; a second click closes it) and is marked
-// while the panel shows it - the chips are the panel's switch.
 export component BarChip inherits Rectangle {
     in property <string> label;
-    in property <string> part;
     in property <string> value;
     in property <int> badge;
     in property <bool> active;
@@ -59,14 +54,13 @@ export component BarChip inherits Rectangle {
     in property <length> popover-width: 300px;
     in property <length> popover-max-height: 520px;
     callback opened;
-    property <bool> in-panel: root.part != "" && ResultsState.panel-part == root.part;
 
     height: Ink.control-h;
     width: chip-row.preferred-width;
     border-radius: Ink.radius-sm;
-    background: root.in-panel ? Ink.selection-row : ta.has-hover && root.enabled ? Ink.hover : Ink.field;
-    border-width: root.in-panel ? 1.5px : 1px;
-    border-color: root.active || root.in-panel ? Ink.focus : (ta.has-hover && root.enabled ? Ink.text-faint : Ink.border);
+    background: ta.has-hover && root.enabled ? Ink.hover : Ink.field;
+    border-width: 1px;
+    border-color: root.active ? Ink.focus : (ta.has-hover && root.enabled ? Ink.text-faint : Ink.border);
     opacity: root.enabled ? 1.0 : 0.5;
     accessible-role: combobox;
     accessible-label: root.label;
@@ -78,11 +72,7 @@ export component BarChip inherits Rectangle {
 
     public function open() {
         root.opened();
-        if root.part != "" {
-            ResultsState.panel-part = root.in-panel ? "" : root.part;
-        } else {
-            popup.show();
-        }
+        popup.show();
     }
 
     public function close() {
@@ -122,7 +112,7 @@ export component BarChip inherits Rectangle {
             }
         }
         Image {
-            source: root.part != "" ? InkIcons.caret-right : InkIcons.caret-down;
+            source: InkIcons.caret-down;
             width: 10px;
             colorize: Ink.text-mute;
         }
@@ -171,12 +161,21 @@ export component BarChip inherits Rectangle {
     }
 }
 
-// The view's left panel: what is shown, one part at a time - the chip
-// clicked on the bar names it (`ResultsState.panel-part`). A panel on the
-// ground beside the view (not floating: no blur), the part's settings in
-// its children; it scrolls.
+// The view's left panel: what is shown (design canvas "Results rework",
+// PanelSwitch A1). On top the switch between its parts - the same control
+// as "A row per" - or with one part its `title`; ‹ folds it away (the bar
+// then shows `BarFolded`). A panel on the ground beside the view (not
+// floating: no blur); `current` is the part shown - `part` if it is one of
+// `parts`, else the first. It scrolls.
 export component ViewPanel inherits Rectangle {
     in property <string> title;
+    in property <[string]> parts;
+    in property <string> part;
+    callback part-picked(string);
+    callback fold;
+    property <int> index: root.parts[0] == root.part ? 0 : root.parts[1] == root.part ? 1
+        : root.parts[2] == root.part ? 2 : root.parts[3] == root.part ? 3 : root.parts[4] == root.part ? 4 : 0;
+    out property <string> current: root.parts[root.index];
 
     width: 400px;
     background: Ink.panel;
@@ -189,10 +188,23 @@ export component ViewPanel inherits Rectangle {
         HorizontalLayout {
             padding-left: 14px;
             padding-right: 8px;
-            padding-top: 8px;
-            padding-bottom: 4px;
+            padding-top: 10px;
+            padding-bottom: 10px;
             spacing: 8px;
-            Text {
+            if root.parts.length > 1: VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 1;
+                InkSegmented {
+                    equal: true;
+                    label: "Show";
+                    model: root.parts;
+                    selected: root.index;
+                    picked(i) => {
+                        root.part-picked(root.parts[i]);
+                    }
+                }
+            }
+            if root.parts.length <= 1: Text {
                 horizontal-stretch: 1;
                 text: root.title;
                 font-size: Ink.fs-heading;
@@ -203,23 +215,55 @@ export component ViewPanel inherits Rectangle {
             }
             InkIconButton {
                 size: 26px;
-                icon: InkIcons.close;
-                label: "Close the panel";
+                icon: InkIcons.caret-left;
+                label: "Fold the panel away";
                 clicked => {
-                    ResultsState.panel-part = "";
+                    root.fold();
                 }
             }
+        }
+        Rectangle {
+            height: 1px;
+            background: Ink.border-soft;
         }
         ScrollView {
             vertical-stretch: 1;
             VerticalLayout {
                 padding: 14px;
-                padding-top: 6px;
                 spacing: 12px;
                 alignment: start;
                 @children
             }
         }
+    }
+}
+
+// First in the bar while the view's panel is folded away: the button that
+// brings it back, and what it shows in a grey line ("All images · all
+// classes · 6 columns").
+export component BarFolded inherits HorizontalLayout {
+    in property <string> summary;
+    callback unfold;
+    spacing: 8px;
+    horizontal-stretch: 0;
+    VerticalLayout {
+        alignment: center;
+        InkIconButton {
+            size: 26px;
+            icon: InkIcons.image-controls;
+            label: "Show the settings panel";
+            clicked => {
+                root.unfold();
+            }
+        }
+    }
+    Text {
+        max-width: 420px;
+        text: root.summary;
+        font-size: Ink.fs-secondary;
+        color: Ink.text-mute;
+        vertical-alignment: center;
+        overflow: elide;
     }
 }
 

@@ -10,7 +10,7 @@ import { ResultsState } from "../api/results.slint";
 import { Ink, InkButton, InkButtonKind, InkIcons, InkMultiSelect, InkSegmented } from "../ink/ink.slint";
 import { CheckBox, ComboBox, LineEdit } from "../ink/std_compat.slint";
 import { ListView, ScrollView } from "std-widgets.slint";
-import { ViewBar, BarChip, BarCount, BarSpacer, ViewPanel } from "results_view_bar.slint";
+import { ViewBar, BarChip, BarCount, BarSpacer, BarFolded, ViewPanel } from "results_view_bar.slint";
 import { IndexChoiceList, TickList, TrackFilters } from "results_panel.slint";
 
 component SortHead inherits Rectangle {
@@ -82,9 +82,7 @@ export component ResultsTracksAllView inherits Rectangle {
         ResultsState.tracks-all-filter-changed();
     }
 
-    property <string> part: ResultsState.panel-part;
-    property <bool> panel-open: root.part == "Class" || root.part == "Images" || root.part == "Filters"
-        || root.part == "Columns" || root.part == "Look";
+    property <bool> panel-open: ResultsState.tracks-panel-open;
 
     background: Ink.ground;
 
@@ -94,9 +92,16 @@ export component ResultsTracksAllView inherits Rectangle {
     padding: 12px;
     spacing: 12px;
 
-    if root.panel-open: ViewPanel {
-        title: root.part == "Images" ? "Image" : root.part;
-        if root.part == "Class": IndexChoiceList {
+    if root.panel-open: panel := ViewPanel {
+        parts: ["Class", "Image", "Filters", "Columns", "Look"];
+        part: ResultsState.tracks-panel-part;
+        part-picked(part) => {
+            ResultsState.tracks-panel-part = part;
+        }
+        fold => {
+            ResultsState.tracks-panel-open = false;
+        }
+        if panel.current == "Class": IndexChoiceList {
             title: "TRACKS OF";
             model: ResultsState.tracks-all-classes;
             current: ResultsState.tracks-all-class;
@@ -105,7 +110,7 @@ export component ResultsTracksAllView inherits Rectangle {
                 ResultsState.tracks-all-filter-changed();
             }
         }
-        if root.part == "Images": IndexChoiceList {
+        if panel.current == "Image": IndexChoiceList {
             title: "TRACKS IN";
             model: ResultsState.tracks-all-images;
             current: ResultsState.tracks-all-image;
@@ -114,7 +119,7 @@ export component ResultsTracksAllView inherits Rectangle {
                 ResultsState.tracks-all-filter-changed();
             }
         }
-        if root.part == "Filters": TrackFilters {
+        if panel.current == "Filters": TrackFilters {
             min <=> ResultsState.tracks-all-min;
             from-start <=> ResultsState.tracks-all-from-start;
             no-edge <=> ResultsState.tracks-all-no-edge;
@@ -126,14 +131,14 @@ export component ResultsTracksAllView inherits Rectangle {
                 root.reset-filters();
             }
         }
-        if root.part == "Columns": TickList {
+        if panel.current == "Columns": TickList {
             title: "COLUMNS · " + ResultsState.tracks-all-columns-summary;
             items: ResultsState.tracks-all-column-items;
             picked(key, on) => {
                 ResultsState.tracks-all-column-picked(key, on);
             }
         }
-        if root.part == "Look": IndexChoiceList {
+        if panel.current == "Look": IndexChoiceList {
             title: "SPEED IN";
             model: ["px/frame", "µm/min", "µm/s"];
             current: ResultsState.tracks-unit;
@@ -152,46 +157,13 @@ export component ResultsTracksAllView inherits Rectangle {
 
         // -- Which tracks and how many: the results' view bar --
         ViewBar {
-            VerticalLayout {
-                alignment: center;
-                BarChip {
-                    label: "Class";
-                    part: "Class";
-                    value: ResultsState.tracks-all-classes[ResultsState.tracks-all-class];
-                }
-            }
-            VerticalLayout {
-                alignment: center;
-                BarChip {
-                    label: "Image";
-                    part: "Images";
-                    value: ResultsState.tracks-all-images[ResultsState.tracks-all-image];
-                }
-            }
-            // The badge counts the filters changed from the default.
-            VerticalLayout {
-                alignment: center;
-                BarChip {
-                    label: "Filters";
-                    part: "Filters";
-                    badge: root.active-filters;
-                    active: root.active-filters > 0;
-                }
-            }
-            VerticalLayout {
-                alignment: center;
-                BarChip {
-                    label: "Columns";
-                    part: "Columns";
-                    value: ResultsState.tracks-all-columns-summary;
-                }
-            }
-            VerticalLayout {
-                alignment: center;
-                BarChip {
-                    label: "Speed in";
-                    part: "Look";
-                    value: ["px/frame", "µm/min", "µm/s"][ResultsState.tracks-unit];
+            if !ResultsState.tracks-panel-open: BarFolded {
+                summary: ResultsState.tracks-all-classes[ResultsState.tracks-all-class] + " · "
+                    + ResultsState.tracks-all-images[ResultsState.tracks-all-image]
+                    + (root.active-filters > 0 ? " · " + root.active-filters + (root.active-filters == 1 ? " filter" : " filters") : "")
+                    + " · columns " + ResultsState.tracks-all-columns-summary;
+                unfold => {
+                    ResultsState.tracks-panel-open = true;
                 }
             }
             BarSpacer { }

@@ -379,8 +379,10 @@ component SectionList inherits VerticalLayout {
 component PresetCard inherits Rectangle {
     in property <ColumnPreset> preset;
     callback picked;
+    // Equal widths, whatever the text: the row's width shared out evenly.
     horizontal-stretch: 1;
     min-width: 0px;
+    preferred-width: 0px;
     // The row's cards share the tallest one's height.
     min-height: card-text.preferred-height;
     border-radius: Ink.radius-md;

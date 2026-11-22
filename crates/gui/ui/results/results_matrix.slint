@@ -16,7 +16,7 @@ import { Ink } from "../ink/palette.slint";
 
 import { ColocCountRow, FilterPill, LegendBar, SettingsGroup } from "results_common.slint";
 import { InkMultiSelect } from "../ink/ink.slint";
-import { ViewBar, BarChip, BarSpacer, ViewPanel } from "results_view_bar.slint";
+import { ViewBar, BarChip, BarSpacer, BarFolded, ViewPanel } from "results_view_bar.slint";
 import { ColumnPicker, ChoiceList } from "results_panel.slint";
 
 component MatrixCellView inherits Rectangle {
@@ -530,11 +530,17 @@ component SelectedCellCard inherits Rectangle {
 /// the part the bar's chip names - Value (the List's column picker, one
 /// choice), Class, Of the images, Plate, Look.
 component PlatePanel inherits ViewPanel {
-    property <string> part: ResultsState.panel-part;
     property <length> field-w: 372px;
-    title: root.part == "Summary" ? "Of the images" : root.part;
+    parts: ["Value", "Class", "Summary", "Plate", "Look"];
+    part: ResultsState.plate-panel-part;
+    part-picked(part) => {
+        ResultsState.plate-panel-part = part;
+    }
+    fold => {
+        ResultsState.plate-panel-open = false;
+    }
 
-    if root.part == "Value": ColumnPicker {
+    if root.current == "Value": ColumnPicker {
         single: true;
         grouped: true;
         placeholder: "Find a value - area, mean, coloc…";
@@ -562,7 +568,7 @@ component PlatePanel inherits ViewPanel {
         }
     }
 
-    if root.part == "Class": ChoiceList {
+    if root.current == "Class": ChoiceList {
         title: "THE OBJECTS OF";
         items: ResultsState.matrix-class-items;
         chosen: ResultsState.matrix-class-summary;
@@ -572,7 +578,7 @@ component PlatePanel inherits ViewPanel {
         }
     }
 
-    if root.part == "Summary": VerticalLayout {
+    if root.current == "Summary": VerticalLayout {
         spacing: 12px;
         InkHint {
             text: ResultsState.matrix-aggregate-enabled
@@ -589,7 +595,7 @@ component PlatePanel inherits ViewPanel {
         }
     }
 
-    if root.part == "Plate": VerticalLayout {
+    if root.current == "Plate": VerticalLayout {
         spacing: 12px;
         // Per level: the plate's size, a well's layout (see
         // `ResultsState.matrix-plate-size-items`).
@@ -673,7 +679,7 @@ component PlatePanel inherits ViewPanel {
         }
     }
 
-    if root.part == "Look": VerticalLayout {
+    if root.current == "Look": VerticalLayout {
         spacing: 12px;
         InkMultiSelect {
             label: "Colors";
@@ -710,48 +716,15 @@ component PlatePanel inherits ViewPanel {
     }
 }
 
-/// The Plate's bar: what is drawn - the value, the class, how a well sums
-/// up its images, the plate and the look - as chips that open the left
-/// panel on their part.
+/// The Plate's bar - only while the panel is folded away: the button that
+/// brings it back and what is drawn.
 component PlateBar inherits ViewBar {
-    VerticalLayout {
-        alignment: center;
-        BarChip {
-            label: "Value";
-            part: "Value";
-            value: ResultsState.matrix-column-summary;
-        }
-    }
-    VerticalLayout {
-        alignment: center;
-        BarChip {
-            label: "Class";
-            part: "Class";
-            value: ResultsState.matrix-class-summary;
-        }
-    }
-    if ResultsState.matrix-aggregate-enabled: VerticalLayout {
-        alignment: center;
-        BarChip {
-            label: "Of the images";
-            part: "Summary";
-            value: ResultsState.matrix-aggregate;
-        }
-    }
-    VerticalLayout {
-        alignment: center;
-        BarChip {
-            label: "Plate";
-            part: "Plate";
-            value: ResultsState.matrix-grouping-summary;
-        }
-    }
-    VerticalLayout {
-        alignment: center;
-        BarChip {
-            label: "Look";
-            part: "Look";
-            value: ResultsState.matrix-color-scale-summary;
+    BarFolded {
+        summary: ResultsState.matrix-class-summary + " · " + ResultsState.matrix-column-summary
+            + (ResultsState.matrix-aggregate-enabled ? " · " + ResultsState.matrix-aggregate : "")
+            + " · " + ResultsState.matrix-color-scale-summary;
+        unfold => {
+            ResultsState.plate-panel-open = true;
         }
     }
     BarSpacer { }
@@ -760,10 +733,7 @@ component PlateBar inherits ViewBar {
 export component ResultsMatrixView inherits Rectangle {
     property <string> level-name: ResultsState.matrix-level == MatrixLevel.plate ? "per well"
         : ResultsState.matrix-level == MatrixLevel.well ? "per image" : "per tile";
-    property <string> part: ResultsState.panel-part;
-    property <bool> panel-open: !ResultsState.split
-        && (root.part == "Value" || root.part == "Class" || root.part == "Plate" || root.part == "Look"
-            || (root.part == "Summary" && ResultsState.matrix-aggregate-enabled));
+    property <bool> panel-open: !ResultsState.split && ResultsState.plate-panel-open;
 
     background: Ink.ground;
 
@@ -779,7 +749,9 @@ export component ResultsMatrixView inherits Rectangle {
         spacing: 12px;
         horizontal-stretch: 1;
 
-        if !ResultsState.split: PlateBar { }
+        // The Plate has no choice of its own on the bar: it is there while
+        // the panel is folded away.
+        if !ResultsState.split && !ResultsState.plate-panel-open: PlateBar { }
 
         // The content, a panel beside them.
         Rectangle {

@@ -506,10 +506,19 @@ export global ResultsState {
 
     // -------- Navigation --------
     in-out property <ResultsRailMode> rail-mode: ResultsRailMode.list;
-    // The part of the view the left panel shows ("Columns", "Images", ...;
-    // "" - closed): a chip on the view's bar opens it (design canvas
-    // "Results rework", PanelNav D - the chips are the switch).
-    in-out property <string> panel-part: "";
+    // Each view's left panel (design canvas "Results rework", PanelSwitch
+    // A1): open or folded away, and the part it shows.
+    in-out property <bool> list-panel-open: true;
+    in-out property <string> list-panel-part: "Columns";
+    in-out property <bool> plate-panel-open: true;
+    in-out property <string> plate-panel-part: "Value";
+    in-out property <bool> chart-panel-open: true;
+    in-out property <string> chart-panel-part: "Value";
+    in-out property <bool> tracks-panel-open: true;
+    in-out property <string> tracks-panel-part: "Class";
+    in-out property <bool> paths-panel-open: true;
+    in-out property <string> paths-panel-part: "Class";
+    in-out property <bool> trees-panel-open: false;
     in-out property <MatrixLevel> matrix-level: MatrixLevel.plate;
     in-out property <[BreadcrumbItem]> breadcrumb: [{ label: "All results" }];
     callback rail-mode-selected(ResultsRailMode);

@@ -9,7 +9,7 @@
 
 import { ResultsState } from "../api/results.slint";
 import { Ink, InkSegmented, InkHint } from "../ink/ink.slint";
-import { ViewBar, BarChip, BarLabel, BarSpacer, ViewPanel } from "results_view_bar.slint";
+import { ViewBar, BarChip, BarLabel, BarSpacer, BarFolded, ViewPanel } from "results_view_bar.slint";
 import { IndexChoiceList, TrackFilters } from "results_panel.slint";
 import { CheckBox, ComboBox, LineEdit } from "../ink/std_compat.slint";
 
@@ -35,8 +35,7 @@ component PanelTitle inherits HorizontalLayout {
 }
 
 export component ResultsPathsView inherits Rectangle {
-    property <string> part: ResultsState.panel-part;
-    property <bool> panel-open: root.part == "Class" || root.part == "Images" || root.part == "Filters" || root.part == "Look";
+    property <bool> panel-open: ResultsState.paths-panel-open;
     // The filters on (the Filters badge).
     property <int> active-filters: (ResultsState.paths-min.to-float() > 1 ? 1 : 0)
         + (ResultsState.paths-from-start ? 1 : 0)
@@ -57,9 +56,16 @@ export component ResultsPathsView inherits Rectangle {
         padding: 12px;
         spacing: 12px;
 
-        if root.panel-open: ViewPanel {
-            title: root.part == "Images" ? "Image" : root.part == "Look" ? "Motion map" : root.part;
-            if root.part == "Class": IndexChoiceList {
+        if root.panel-open: panel := ViewPanel {
+            parts: ["Class", "Image", "Filters", "Look"];
+            part: ResultsState.paths-panel-part;
+            part-picked(part) => {
+                ResultsState.paths-panel-part = part;
+            }
+            fold => {
+                ResultsState.paths-panel-open = false;
+            }
+            if panel.current == "Class": IndexChoiceList {
                 title: "TRACKS OF";
                 model: ResultsState.paths-classes;
                 current: ResultsState.paths-class;
@@ -68,7 +74,7 @@ export component ResultsPathsView inherits Rectangle {
                     ResultsState.paths-filter-changed();
                 }
             }
-            if root.part == "Images": IndexChoiceList {
+            if panel.current == "Image": IndexChoiceList {
                 title: "TRACKS IN";
                 model: ResultsState.paths-images;
                 current: ResultsState.paths-image;
@@ -77,7 +83,7 @@ export component ResultsPathsView inherits Rectangle {
                     ResultsState.paths-filter-changed();
                 }
             }
-            if root.part == "Filters": TrackFilters {
+            if panel.current == "Filters": TrackFilters {
                 min <=> ResultsState.paths-min;
                 from-start <=> ResultsState.paths-from-start;
                 no-edge <=> ResultsState.paths-no-edge;
@@ -89,8 +95,8 @@ export component ResultsPathsView inherits Rectangle {
                     root.reset-filters();
                 }
             }
-            if root.part == "Look": IndexChoiceList {
-                title: "Y AXIS";
+            if panel.current == "Look": IndexChoiceList {
+                title: "MOTION MAP, Y AXIS";
                 model: ["Turning", "MSD α"];
                 current: ResultsState.paths-y-axis;
                 picked(i) => {
@@ -98,7 +104,7 @@ export component ResultsPathsView inherits Rectangle {
                     ResultsState.paths-filter-changed();
                 }
             }
-            if root.part == "Look": InkHint {
+            if panel.current == "Look": InkHint {
                 text: "At most 2000 paths are drawn (an even sample) and 5000 dots shown; the header says how many there are.";
             }
         }
@@ -108,31 +114,6 @@ export component ResultsPathsView inherits Rectangle {
             horizontal-stretch: 1;
 
             ViewBar {
-                VerticalLayout {
-                    alignment: center;
-                    BarChip {
-                        label: "Class";
-                        part: "Class";
-                        value: ResultsState.paths-classes[ResultsState.paths-class];
-                    }
-                }
-                VerticalLayout {
-                    alignment: center;
-                    BarChip {
-                        label: "Image";
-                        part: "Images";
-                        value: ResultsState.paths-images[ResultsState.paths-image];
-                    }
-                }
-                VerticalLayout {
-                    alignment: center;
-                    BarChip {
-                        label: "Filters";
-                        part: "Filters";
-                        badge: root.active-filters;
-                        active: root.active-filters > 0;
-                    }
-                }
                 BarLabel {
                     text: "Colour by";
                 }
@@ -148,14 +129,6 @@ export component ResultsPathsView inherits Rectangle {
                             ResultsState.paths-color-by = i;
                             ResultsState.paths-filter-changed();
                         }
-                    }
-                }
-                VerticalLayout {
-                    alignment: center;
-                    BarChip {
-                        label: "Motion map";
-                        part: "Look";
-                        value: ["Turning", "MSD α"][ResultsState.paths-y-axis];
                     }
                 }
                 BarSpacer { }

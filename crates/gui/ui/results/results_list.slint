@@ -11,7 +11,7 @@ import { ScrollView } from "std-widgets.slint";
 import { Ink } from "../ink/palette.slint";
 
 import { InkCheckList, InkMultiSelect, InkSearchField, InkSegmented, InkSwitch, InkTipSide, InkTipZone, InkMenuItem } from "../ink/ink.slint";
-import { ViewBar, BarChip, BarLabel, BarSpacer, BarCount, BarMore, ViewPanel } from "results_view_bar.slint";
+import { ViewBar, BarChip, BarLabel, BarSpacer, BarCount, BarMore, BarFolded, ViewPanel } from "results_view_bar.slint";
 import { ColumnPicker } from "results_panel.slint";
 
 /// The List's left panel (design canvas "Results rework", ColumnPanel E
@@ -19,10 +19,16 @@ import { ColumnPicker } from "results_panel.slint";
 /// Classes, Values.
 component ListPanel inherits ViewPanel {
     in property <bool> grouped;
-    property <string> part: ResultsState.panel-part;
-    title: root.part == "Values" ? "Values per row" : root.part;
+    parts: root.grouped ? ["Columns", "Images", "Classes", "Values"] : ["Columns", "Images", "Classes"];
+    part: ResultsState.list-panel-part;
+    part-picked(part) => {
+        ResultsState.list-panel-part = part;
+    }
+    fold => {
+        ResultsState.list-panel-open = false;
+    }
 
-    if root.part == "Columns": VerticalLayout {
+    if root.current == "Columns": VerticalLayout {
         spacing: 12px;
         ColumnPicker {
             grouped: root.grouped;
@@ -105,7 +111,7 @@ component ListPanel inherits ViewPanel {
         }
     }
 
-    if root.part == "Images": VerticalLayout {
+    if root.current == "Images": VerticalLayout {
         spacing: 12px;
         InkSegmented {
             label: "Images";
@@ -137,7 +143,7 @@ component ListPanel inherits ViewPanel {
         }
     }
 
-    if root.part == "Classes": VerticalLayout {
+    if root.current == "Classes": VerticalLayout {
         spacing: 12px;
         InkCheckList {
             title: "CLASSES · " + ResultsState.list-class-summary;
@@ -165,7 +171,7 @@ component ListPanel inherits ViewPanel {
         }
     }
 
-    if root.part == "Values": VerticalLayout {
+    if root.current == "Values": VerticalLayout {
         spacing: 12px;
         InkHint {
             text: "Each column summed up over the objects of a row - a column per value.";
@@ -196,6 +202,15 @@ component ListBar inherits ViewBar {
     property <bool> has-pairs: ResultsState.list-group-by-items.length > 4;
     property <string> rows: ResultsState.list-group-by-summary;
 
+    if !ResultsState.list-panel-open: BarFolded {
+        summary: (ResultsState.list-image-summary == "All Images" ? "All images" : ResultsState.list-image-summary + " images")
+            + " · " + (ResultsState.list-class-summary == "All" ? "all classes" : ResultsState.list-class-summary + " classes")
+            + " · " + ResultsState.list-columns-summary + " columns"
+            + (root.grouped ? " · " + ResultsState.list-aggregate : "");
+        unfold => {
+            ResultsState.list-panel-open = true;
+        }
+    }
     BarLabel {
         text: "A row per";
     }
@@ -212,51 +227,13 @@ component ListBar inherits ViewBar {
             picked(i) => {
                 ResultsState.list-group-by-summary = i == 1 ? "Images" : i == 2 ? "Wells" : i == 3 ? "Folders" : i == 4 ? "Coloc pairs" : "Objects";
                 ResultsState.list-group-by-selected(i == 1 ? "images" : i == 2 ? "wells" : i == 3 ? "folders" : i == 4 ? "pairs" : "objects");
-                // Values belong to rows of several objects only.
-                if ResultsState.panel-part == "Values" && (i == 0 || i == 4) {
-                    ResultsState.panel-part = "";
-                }
             }
         }
     }
 
-    VerticalLayout {
-        alignment: center;
-        BarChip {
-            label: "Images";
-            part: "Images";
-            value: (ResultsState.list-image-state-summary != "All" ? ResultsState.list-image-state-summary + " · " : "")
-                + (ResultsState.list-image-summary == "All Images" ? "All" : ResultsState.list-image-summary);
-            active: ResultsState.list-image-state-summary != "All" || ResultsState.list-image-summary != "All Images";
-        }
-    }
 
-    VerticalLayout {
-        alignment: center;
-        BarChip {
-            label: "Classes";
-            part: "Classes";
-            value: ResultsState.list-class-summary;
-        }
-    }
 
-    VerticalLayout {
-        alignment: center;
-        BarChip {
-            label: "Columns";
-            part: "Columns";
-            value: ResultsState.list-columns-summary;
-        }
-    }
 
-    if root.grouped: VerticalLayout {
-        alignment: center;
-        BarChip {
-            label: "Values";
-            part: "Values";
-            value: ResultsState.list-aggregate;
-        }
-    }
 
     BarSpacer { }
 
@@ -301,9 +278,7 @@ export component ResultsListView inherits Rectangle {
     property <string> row-per: ResultsState.list-group-by-summary;
     // Rows of several objects: aggregated.
     property <bool> grouped: root.row-per == "Images" || root.row-per == "Wells" || root.row-per == "Folders";
-    property <string> part: ResultsState.panel-part;
-    property <bool> panel-open: !ResultsState.split
-        && (root.part == "Columns" || root.part == "Images" || root.part == "Classes" || (root.part == "Values" && root.grouped));
+    property <bool> panel-open: !ResultsState.split && ResultsState.list-panel-open;
 
     // Panels on the ground: what is shown on the left (a chip opens it),
     // the bar on top (split with the image: in the table's head instead),
