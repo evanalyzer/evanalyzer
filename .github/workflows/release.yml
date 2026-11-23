@@ -101,7 +101,7 @@ jobs:
         id: check_templates
         continue-on-error: ${{ startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-test.') }}
         run: >-
-          cargo run -p evanalyzer_app --example check_templates --
+          cargo run --locked -p evanalyzer_app --example check_templates --
           templates --image crates/core/tests/multi-channel-4D-series.ome.tif
 
       - name: Report template check failure (test tag - not blocking)
@@ -172,8 +172,8 @@ jobs:
         # (evanalyzer_ai as a cdylib with its `torch` engine - in a
         # separate command, so the app itself never links libtorch).
         run: |
-          cargo build-linux
-          cargo build-ai-plugin --release --target x86_64-unknown-linux-gnu
+          cargo build-linux --locked
+          cargo build-ai-plugin --release --target x86_64-unknown-linux-gnu --locked
 
       - name: Download templates
         uses: actions/download-artifact@v4
@@ -219,7 +219,7 @@ jobs:
       # font or display libraries): for servers and compute clusters. After
       # the package above - it overwrites target/…/release/evanalyzer.
       - name: Build the command-line version
-        run: cargo build-linux-cli
+        run: cargo build-linux-cli --locked
 
       - name: Package the command-line version
         run: |
@@ -317,7 +317,7 @@ jobs:
       - name: Build
         # The app, then the libtorch plugin it loads on the first AI step.
         run: |
-          cargo build-win
+          cargo build-win --locked
           cargo xwin rustc -p evanalyzer_ai --features torch --crate-type cdylib --release --target x86_64-pc-windows-msvc
 
       - name: Sign the Windows binaries
@@ -419,8 +419,8 @@ jobs:
         # (evanalyzer_ai as a cdylib with its `torch` engine - in a
         # separate command, so the app itself never links libtorch).
         run: |
-          cargo build-linux
-          cargo build-ai-plugin --release --target x86_64-unknown-linux-gnu
+          cargo build-linux --locked
+          cargo build-ai-plugin --release --target x86_64-unknown-linux-gnu --locked
 
       - name: Download templates
         uses: actions/download-artifact@v4
@@ -506,7 +506,7 @@ jobs:
       # the CUDA plugin: for GPU compute clusters without a desktop. After
       # the package above - it overwrites target/…/release/evanalyzer.
       - name: Build the command-line version
-        run: cargo build-linux-cli
+        run: cargo build-linux-cli --locked
 
       - name: Package the command-line version
         run: |
@@ -612,7 +612,7 @@ jobs:
       - name: Build
         # The app, then the libtorch plugin it loads on the first AI step.
         run: |
-          cargo build-win
+          cargo build-win --locked
           cargo xwin rustc -p evanalyzer_ai --features torch --crate-type cdylib --release --target x86_64-pc-windows-msvc
 
       - name: Sign the Windows binaries
@@ -738,8 +738,8 @@ jobs:
           DUCKDB_LIB_DIR: ${{ github.workspace }}/libs/libduckdb-osx-universal
           DUCKDB_INCLUDE_DIR: ${{ github.workspace }}/libs/libduckdb-osx-universal
         run: |
-          cargo build-mac
-          cargo build-ai-plugin --release --target aarch64-apple-darwin
+          cargo build-mac --locked
+          cargo build-ai-plugin --release --target aarch64-apple-darwin --locked
 
       - name: Download templates
         uses: actions/download-artifact@v4
@@ -872,7 +872,7 @@ jobs:
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
       - name: Build
-        run: cargo build-linux-arm
+        run: cargo build-linux-arm --locked
 
       - name: Download templates
         uses: actions/download-artifact@v4
@@ -918,7 +918,7 @@ jobs:
       # The command line, server and worker without the desktop app. After
       # the package above - it overwrites target/…/release/evanalyzer.
       - name: Build the command-line version
-        run: cargo build-linux-arm-cli
+        run: cargo build-linux-arm-cli --locked
 
       - name: Package the command-line version
         run: |
@@ -1020,7 +1020,7 @@ jobs:
         # clang-cl style flags (/imsvc) of the default mode. The plugin keeps
         # clang-cl, which the torch-sys shim above relies on.
         run: |
-          cargo build-win-arm --cross-compiler clang
+          cargo build-win-arm --cross-compiler clang --locked
           cargo xwin rustc -p evanalyzer_ai --features torch --crate-type cdylib --release --target aarch64-pc-windows-msvc
 
       - name: Sign the Windows binaries
@@ -1240,7 +1240,7 @@ jobs:
           CARGO_PROFILE_DEV_DEBUG: "0"
           CARGO_BUILD_JOBS: "2"
         run: >-
-          cargo llvm-cov --workspace --no-report
+          cargo llvm-cov --workspace --no-report --locked
           --features evanalyzer_core/libtorch,evanalyzer_core/libtorch-in-process
 
       - name: Generate coverage reports

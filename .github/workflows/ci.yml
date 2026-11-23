@@ -75,7 +75,7 @@ jobs:
         # the test process; `libtorch`: the plugin loader, whose test builds
         # and loads the real plugin.
         run: >-
-          cargo llvm-cov --workspace --no-report
+          cargo llvm-cov --workspace --no-report --locked
           --features evanalyzer_core/libtorch,evanalyzer_core/libtorch-in-process
 
       - name: Generate coverage reports
@@ -182,7 +182,7 @@ jobs:
           key: linux-x86_64-fmt
 
       - name: Regenerate build-script-generated source
-        run: cargo check -p evanalyzer_cfg
+        run: cargo check -p evanalyzer_cfg --locked
 
       - name: Check formatting
         run: cargo fmt --check
@@ -227,7 +227,7 @@ jobs:
 
       - name: Check every template is usable
         run: >-
-          cargo run -p evanalyzer_app --example check_templates --
+          cargo run --locked -p evanalyzer_app --example check_templates --
           evanalyzer-templates --image crates/core/tests/multi-channel-4D-series.ome.tif
 
   licenses:
