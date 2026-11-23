@@ -1,7 +1,5 @@
 FROM rust:1.99-trixie AS live
 
-RUN curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/latest/download/cargo-dist-installer.sh | sh
-
 # Slint debugging
 RUN apt-get update && apt-get install -y \
     libxkbcommon0 \
@@ -23,22 +21,29 @@ RUN apt-get update && apt-get install -y \
 
 
 # Tools
+# Every tool pinned (version + --locked): CI and the release (which signs
+# with these tools in the image) get exactly what was reviewed, not the
+# newest upload of a crate.
 
-RUN rustup component add rustfmt
-RUN cargo install cargo-llvm-cov
-RUN cargo install cargo-audit
-RUN cargo install cargo-auditable
-RUN cargo install cargo-about --locked --version 0.9.3 --features cli
-RUN cargo install cargo-cyclonedx
-RUN cargo install cargo-outdated
-RUN cargo install cargo-edit
-RUN rustup component add llvm-tools-preview
+RUN rustup component add rustfmt llvm-tools-preview
+RUN cargo install --locked cargo-llvm-cov --version 0.9.1
+RUN cargo install --locked cargo-audit --version 0.22.2
+RUN cargo install --locked cargo-auditable --version 0.7.7
+RUN cargo install --locked cargo-about --version 0.9.3 --features cli
+RUN cargo install --locked cargo-cyclonedx --version 0.5.9
+RUN cargo install --locked cargo-outdated --version 0.19.0
+RUN cargo install --locked cargo-edit --version 0.13.14
+RUN cargo install --locked ssign --version 0.1.8
+RUN cargo install --locked tokei --version 15.0.0
+
+# Packaging: zip/unzip (Windows zips, signing job), 7z (CUDA packages),
+# xz (CLI CUDA package).
+RUN apt-get update && apt-get install -y zip unzip p7zip-full xz-utils \
+    && rm -rf /var/lib/apt/lists/*
 
 # Cross build
-RUN cargo install cargo-xwin
-RUN apt-get update && apt-get install -y clang llvm gcc-aarch64-linux-gnu zip build-essential binutils lld mold
-RUN rustup target add x86_64-pc-windows-msvc
-RUN rustup target add aarch64-unknown-linux-gnu
+RUN cargo install --locked cargo-xwin --version 0.23.1
+RUN apt-get update && apt-get install -y clang llvm gcc-aarch64-linux-gnu build-essential binutils lld mold \
+    && rm -rf /var/lib/apt/lists/*
+RUN rustup target add x86_64-pc-windows-msvc aarch64-pc-windows-msvc aarch64-unknown-linux-gnu
 RUN ldconfig
-
-
