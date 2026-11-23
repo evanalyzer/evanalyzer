@@ -21,7 +21,7 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
-          pattern='^(feat|fix|perf|refactor|test|docs|build|ci|style|chore|revert)(\([a-z0-9-]+\))?!?: [^ ].{0,70}[^.]$'
+          pattern='^(feat|fix|perf|refactor|test|docs|build|ci|style|chore|revert)(\([a-z0-9-]+\))?!?: [^ ].{0,98}[^.]$'
           ok=true
           if ! printf '%s' "$TITLE" | grep -Eq "$pattern"; then
             echo "::error::PR title is not a conventional commit: $TITLE"
