@@ -123,6 +123,7 @@ pub struct ViewSettings {
     pub tracks: TracksView,
     pub paths: PathsView,
     pub trees: TreesView,
+    pub split: SplitView,
 }
 
 impl ViewSettings {
@@ -147,8 +148,20 @@ impl ViewSettings {
             tracks: section(value, "tracks"),
             paths: section(value, "paths"),
             trees: section(value, "trees"),
+            split: section(value, "split"),
         }
     }
+}
+
+/// Results › Split with image: what is drawn on the image (no setting
+/// changes a value - only what is shown).
+#[derive(Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SplitView {
+    /// Classes (by id) whose objects aren't drawn - their eye in the
+    /// drawer's Classes panel. Kept also when an analysis lacks one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub hidden_classes: Vec<u32>,
 }
 
 /// Results › Trees: how its dendrogram is drawn (no setting changes a

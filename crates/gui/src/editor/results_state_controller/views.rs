@@ -20,7 +20,7 @@
 
 use super::*;
 use evanalyzer_app::results::view_settings::{
-    ChartView, ListView, PlateView, TracksView, ViewSettings,
+    ChartView, ListView, PlateView, SplitView, TracksView, ViewSettings,
 };
 use evanalyzer_cfg::settings::project_settings::{ResultsView, ResultsViewKind};
 
@@ -268,10 +268,20 @@ impl ResultsStateController {
         self.push_view_controls_in_slint();
         self.push_views_in_slint();
         self.push_view_missing(missing);
-        // The split's state follows the view.
+        // The split's state follows the view: shown, the classes drawn.
         let shown_split =
             view.split && matches!(view.kind, ResultsViewKind::List | ResultsViewKind::Plate);
-        self.split.lock().expect("Poisoned").shown = shown_split;
+        {
+            let mut split = self.split.lock().expect("Poisoned");
+            split.shown = shown_split;
+            split.hidden_classes = settings
+                .split
+                .hidden_classes
+                .iter()
+                .filter_map(|&id| i32::try_from(id).ok())
+                .collect();
+        }
+        self.split_push_class_items();
         *self.rail_mode.lock().expect("Poisoned") = match view.kind {
             ResultsViewKind::List => ResultsRailMode::List,
             ResultsViewKind::Plate => ResultsRailMode::Matrix,
@@ -559,6 +569,18 @@ impl ResultsStateController {
         let trees = evanalyzer_app::results::view_settings::TreesView {
             by_strahler: self.trees.lock().expect("Poisoned").by_strahler,
         };
+        let split = {
+            let mut hidden_classes: Vec<u32> = self
+                .split
+                .lock()
+                .expect("Poisoned")
+                .hidden_classes
+                .iter()
+                .filter_map(|&id| u32::try_from(id).ok())
+                .collect();
+            hidden_classes.sort_unstable();
+            SplitView { hidden_classes }
+        };
         Some(ViewSettings {
             list,
             plate,
@@ -566,6 +588,7 @@ impl ResultsStateController {
             tracks,
             paths,
             trees,
+            split,
         })
     }
 

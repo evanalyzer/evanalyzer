@@ -98,15 +98,8 @@ pub struct ProjectTmpSettings {
 
     pub selected_object: Option<ObjectId>,
 
-    /// Class IDs currently hidden from the viewport overlay.
-    pub hidden_classes: HashSet<ObjectClass>,
-
-    /// Hide ROIs that carry no object class at all (shown in red as
-    /// "Unclassified" otherwise). Defaults to hidden - these are usually
-    /// pipeline output the user hasn't classified yet, not something worth
-    /// cluttering the list/viewport with by default.
-    pub hide_unclassified_objects: bool,
-
+    // The classes hidden by the user, and whether unclassified objects are
+    // drawn, are saved with the project: `ProjectSettings::editor`.
     /// Pipeline focus overlay - see [`PipelineFocus`]. `None` = the user's
     /// own visibility settings apply.
     pub pipeline_focus: Option<PipelineFocus>,
@@ -122,8 +115,6 @@ impl Default for ProjectTmpSettings {
             preview_objects: Vec::new(),
             preview_measurements: Vec::new(),
             selected_object: None,
-            hidden_classes: HashSet::new(),
-            hide_unclassified_objects: true,
             pipeline_focus: None,
         }
     }

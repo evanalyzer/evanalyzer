@@ -97,6 +97,8 @@ impl ResultsStateController {
                 }
             }
             manager.split_push_overlay();
+            // Kept in the view shown, like its other settings.
+            manager.remember_view();
         });
         let weak = Arc::downgrade(self);
         state.on_split_class_selected(move |class| {

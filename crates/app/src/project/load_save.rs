@@ -57,6 +57,7 @@ impl ProjectWithRuntime {
         // project still has `schema_version: 0` from `Default`).
         self.settings.schema_version = evanalyzer_cfg::CURRENT_PROJECT_SCHEMA_VERSION;
         self.settings.meta.app_version = env!("CARGO_PKG_VERSION").to_string();
+        self.forget_hidden_classes_not_defined();
 
         // Every command's file-path field (AI model paths today - see
         // `relativize_file_paths`'s doc comment for why this isn't limited to

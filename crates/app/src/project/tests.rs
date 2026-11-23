@@ -406,6 +406,95 @@ fn toggle_hide_unclassified_objects_is_a_flip_flop() {
     assert_eq!(project.hide_unclassified_objects(), initial);
 }
 
+/// The class eyes are saved with the project: hidden classes, unclassified
+/// objects shown - and a project that hides nothing writes neither.
+#[test]
+fn class_visibility_is_saved_with_the_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("eyes.evaproj");
+    let mut project = ProjectWithRuntime::default();
+    project
+        .classification
+        .classes_mut()
+        .push(class(1, "Nucleus"));
+    project.classification.classes_mut().push(class(2, "Spot"));
+
+    project.save_project_as(&fs(), &path).unwrap();
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        !written.contains("hiddenClasses"),
+        "nothing hidden, nothing written"
+    );
+    assert!(!written.contains("showUnclassifiedObjects"));
+
+    assert!(project.toggle_class_visibility(ObjectClass::Global(2)));
+    project.toggle_hide_unclassified_objects();
+    project.save_project_as(&fs(), &path).unwrap();
+
+    let loaded = load_project(&fs(), &path).expect("load should succeed");
+    assert!(loaded.is_class_visible(&ObjectClass::Global(1)));
+    assert!(!loaded.is_class_visible(&ObjectClass::Global(2)));
+    assert!(!loaded.hide_unclassified_objects());
+    drop(dir);
+}
+
+/// What a pipeline focus shows is never saved: a toggle while focused
+/// changes the focus only and says so.
+#[test]
+fn toggling_a_class_while_focused_changes_nothing_saved() {
+    let mut project = project_with_focus_pipelines();
+    project.focus_pipeline(PipelineId(1));
+
+    assert!(!project.toggle_class_visibility(ObjectClass::Global(3)));
+
+    assert!(project.editor.hidden_classes.is_empty());
+    project.clear_pipeline_focus();
+    assert!(project.is_class_visible(&ObjectClass::Global(3)));
+}
+
+/// A deleted class's eye is forgotten on save, so a new class under the
+/// same id starts visible.
+#[test]
+fn saving_forgets_hidden_classes_the_project_no_longer_has() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gone.evaproj");
+    let mut project = ProjectWithRuntime::default();
+    project
+        .classification
+        .classes_mut()
+        .push(class(1, "Nucleus"));
+    project.classification.classes_mut().push(class(2, "Spot"));
+    project.toggle_class_visibility(ObjectClass::Global(1));
+    project.toggle_class_visibility(ObjectClass::Global(2));
+    project.classification.delete_class(ObjectClass::Global(2));
+
+    project.save_project_as(&fs(), &path).unwrap();
+
+    assert_eq!(
+        project.editor.hidden_classes,
+        [ObjectClass::Global(1)].into()
+    );
+    project
+        .classification
+        .classes_mut()
+        .push(class(2, "Spot again"));
+    assert!(project.is_class_visible(&ObjectClass::Global(2)));
+    drop(dir);
+}
+
+/// A hidden class stays hidden under its new id.
+#[test]
+fn a_changed_class_id_stays_hidden() {
+    let mut project = ProjectWithRuntime::default();
+    project.classification.classes_mut().push(class(3, "Three"));
+    project.toggle_class_visibility(ObjectClass::Global(3));
+
+    project.change_class_id(3, 30).unwrap();
+
+    assert!(!project.is_class_visible(&ObjectClass::Global(30)));
+    assert!(project.is_class_visible(&ObjectClass::Global(3)));
+}
+
 #[test]
 fn count_objects_for_class_counts_both_series_and_preview_objects() {
     let mut project = project_with_one_image();
@@ -2439,10 +2528,7 @@ fn toggling_a_hidden_class_while_focused_shows_it() {
     project.toggle_class_visibility(ObjectClass::Global(5));
 
     assert!(project.is_class_visible(&ObjectClass::Global(5)));
-    assert!(
-        project.tmp_settings.hidden_classes.is_empty(),
-        "the focus only"
-    );
+    assert!(project.editor.hidden_classes.is_empty(), "the focus only");
 }
 
 /// A class the focus shows keeps being shown under its new id.
