@@ -1137,14 +1137,16 @@ pub enum MeasureExcludeImageRuleComparisonSettings {
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum MathSubtractReferenceChannelSaturationSettings {
-    /// The image's largest value (255 for 8 bit, 65535 for 16 bit, …).
+    /// The image's largest gray value (255 for 8 bit, 4095 for 12 bit,
+    /// 65535 for 16 bit, …). None for float images.
     #[serde(alias = "auto")]
     Auto,
     /// A fixed level.
     #[serde(rename_all = "camelCase")]
     #[serde(alias = "manual")]
     Manual {
-        /// Pixels at or above it are saturated.
+        /// Pixels at or above this gray value are saturated (camera counts,
+        /// e.g. 4000 of a 12-bit camera's 4095; on float images as stored).
         #[schemars(range(min = 0, max = 1000000000))]
         level: f32,
     },

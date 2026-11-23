@@ -19,7 +19,7 @@ use crate::algos::TranslateImage;
 use crate::algos::libs::phase_correlation::test_support::{Lcg, fourier_blur, fourier_shift};
 use crate::algos::{
     Alignment, Background, EstimationScope, Factor, ImageAlgorithm, Interpolation, OutputImage,
-    Padding, Sharpness, SubtractReferenceChannel,
+    Padding, Saturation, Sharpness, SubtractReferenceChannel,
 };
 use crate::image::{ImageContainer, ManagedImage};
 use crate::pipeline::pipeline_cache::{CacheAddress, GlobalPipelineCache};
@@ -231,7 +231,9 @@ fn try_run(
     )
     .unwrap();
     ctx.image = target;
-    ctx.image_meta.nr_of_bits = 16;
+    // The scenes are photon counts as they are (not scaled to 0 - 1 like
+    // an integer image as read): float images, kept as stored.
+    ctx.image_meta.nr_of_bits = 32;
     let mut cache = GlobalPipelineCache::default();
     cache.image_cache.insert(
         CacheAddress::Channel((REFERENCE as i32, ctx.image_meta.image_tile_info)),
@@ -544,6 +546,8 @@ fn saturated_pixels_dont_move_the_factor() {
     });
     let mut cmd = command();
     cmd.alignment = Alignment::None;
+    // The scenes are kept as stored: the level in their units.
+    cmd.saturation = Saturation::Manual { level: 65535.0 };
     let clean = run(&cmd, &aligned);
     // 300 saturated pixels on the network.
     for &i in network_pixels(&aligned).iter().step_by(20).take(300) {
@@ -1003,4 +1007,65 @@ fn manual_sharpness_is_the_default_and_measures_nothing_new() {
         ),
         Sharpness::Auto { max_sigma: 2.5 }
     );
+}
+
+/// A 16-bit image as read is scaled to 0 - 1: Saturation Auto finds its
+/// pixels at the largest gray value (1.0), and they don't move the factor.
+#[test]
+fn auto_saturation_finds_the_brightest_gray_value_of_an_image_as_read() {
+    let scene = scene(Recipe {
+        shift: (0.0, 0.0),
+        ..Default::default()
+    });
+    let scaled = |values: &[f32]| -> Vec<f32> { values.iter().map(|v| v / 65535.0).collect() };
+    let mut target = scaled(&scene.target);
+    let reference = scaled(&scene.reference);
+    let mut cmd = command();
+    cmd.alignment = Alignment::None;
+    cmd.saturation = Saturation::Auto;
+    let run16 = |cmd: &SubtractReferenceChannel, target: &[f32]| -> Run {
+        let size = ImageSize {
+            width: SIDE,
+            height: SIDE,
+        };
+        let mut ctx =
+            PipelineContext::new_from_image_test(Image::new(size, vec![0.0; SIDE * SIDE]).unwrap())
+                .unwrap();
+        ctx.image = gray(SIDE, SIDE, target.to_vec());
+        ctx.image_meta.nr_of_bits = 16;
+        let mut cache = GlobalPipelineCache::default();
+        cache.image_cache.insert(
+            CacheAddress::Channel((REFERENCE as i32, ctx.image_meta.image_tile_info)),
+            gray(SIDE, SIDE, reference.clone()),
+        );
+        cmd.run(&mut ctx, &mut cache).unwrap();
+        let values = cache
+            .measurements
+            .measurements
+            .iter()
+            .filter_map(|m| match &m.values {
+                MeasurementValues::Image(values) => values
+                    .first()
+                    .map(|(_, v)| (m.info.key.rsplit('/').next().unwrap().to_string(), *v)),
+                MeasurementValues::Objects(_) => None,
+            })
+            .collect();
+        Run {
+            image: ctx.image.as_f32_slice().unwrap().to_vec(),
+            values,
+        }
+    };
+    let clean = run16(&cmd, &target);
+    assert_eq!(clean.value("saturated_fraction"), 0.0);
+    for &i in network_pixels(&scene).iter().step_by(20).take(300) {
+        target[i] = 1.0;
+    }
+    let saturated = run16(&cmd, &target);
+    assert!(
+        (saturated.value("saturated_fraction") - 300.0 / (SIDE * SIDE) as f64).abs() < 1e-9,
+        "{:?}",
+        saturated.values
+    );
+    let (a, b) = (clean.value("factor"), saturated.value("factor"));
+    assert!((a - b).abs() < 0.01 * a, "a {a:.4} -> {b:.4}");
 }

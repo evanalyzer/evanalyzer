@@ -2272,7 +2272,7 @@
       "description": "The level from which a pixel counts as saturated.",
       "oneOf": [
         {
-          "description": "The image's largest value (255 for 8 bit, 65535 for 16 bit, …).",
+          "description": "The image's largest gray value (255 for 8 bit, 4095 for 12 bit,\n65535 for 16 bit, …). None for float images.",
           "type": "object",
           "properties": {
             "type": {
@@ -2289,7 +2289,7 @@
           "type": "object",
           "properties": {
             "level": {
-              "description": "Pixels at or above it are saturated.",
+              "description": "Pixels at or above this gray value are saturated (camera counts,\ne.g. 4000 of a 12-bit camera's 4095; on float images as stored).",
               "type": "number",
               "format": "float",
               "maximum": 1000000000,

@@ -245,11 +245,13 @@ pub enum CameraOffset {
 /// The level from which a pixel counts as saturated.
 #[derive(Clone, Copy, PartialEq, Debug, CommandsMeta)]
 pub enum Saturation {
-    /// The image's largest value (255 for 8 bit, 65535 for 16 bit, …).
+    /// The image's largest gray value (255 for 8 bit, 4095 for 12 bit,
+    /// 65535 for 16 bit, …). None for float images.
     Auto,
     /// A fixed level.
     Manual {
-        /// Pixels at or above it are saturated.
+        /// Pixels at or above this gray value are saturated (camera counts,
+        /// e.g. 4000 of a 12-bit camera's 4095; on float images as stored).
         #[cmdsmeta(default = 65535.0, min = 0.0, max = 1.0e9, step = 1.0)]
         level: f32,
     },
@@ -564,13 +566,7 @@ impl ImageAlgorithm for SubtractReferenceChannel {
             );
         }
 
-        let saturation = match self.saturation {
-            Saturation::Auto if ctx.image_meta.nr_of_bits < 32 => {
-                Some(((1u64 << ctx.image_meta.nr_of_bits) - 1) as f32)
-            }
-            Saturation::Auto | Saturation::Off => None,
-            Saturation::Manual { level } => Some(level),
-        };
+        let saturation = saturation_level(self.saturation, ctx.image_meta.nr_of_bits);
         // The result goes into the scratch pad (prepared at the pipeline
         // image's size; a channel target of another size gets its own).
         let size = target_image.data.size();
@@ -1210,6 +1206,24 @@ impl SubtractReferenceChannel {
     }
 }
 
+/// The saturation level on the image's values; `None` for none. Integer
+/// images (`nr_of_bits` 1 - 31) are read scaled to 0 - 1 by their largest
+/// gray value `2^bits − 1`: Auto is that maximum (half a gray value below
+/// 1, so the scaling's rounding doesn't miss it) and a Manual level in gray
+/// values is scaled alike (as Threshold's Bit unit). Float images keep
+/// their values: Auto has no level, Manual is taken as it is.
+fn saturation_level(saturation: Saturation, nr_of_bits: u16) -> Option<f32> {
+    let largest = (1..32)
+        .contains(&nr_of_bits)
+        .then(|| ((1u64 << nr_of_bits) - 1) as f64);
+    match (saturation, largest) {
+        (Saturation::Off, _) | (Saturation::Auto, None) => None,
+        (Saturation::Auto, Some(largest)) => Some((1.0 - 0.5 / largest) as f32),
+        (Saturation::Manual { level }, Some(largest)) => Some((level as f64 / largest) as f32),
+        (Saturation::Manual { level }, None) => Some(level),
+    }
+}
+
 /// `mask` (`w × h`) grown by `reach` px in every direction (a square).
 fn dilate(mask: &[bool], w: usize, h: usize, reach: usize) -> Vec<bool> {
     let mut rows = vec![false; mask.len()];
@@ -1813,6 +1827,33 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    /// Images are read scaled to 0 - 1 by their largest gray value: Auto
+    /// is that maximum and a Manual level in gray values is scaled the
+    /// same; float images keep their values.
+    #[test]
+    fn the_saturation_level_is_on_the_scaled_values() {
+        // A 12-bit camera's 4095 is 1.0 when read; 4094 is not saturated.
+        let auto = saturation_level(Saturation::Auto, 12).unwrap();
+        assert!(1.0 >= auto && 4094.0 / 4095.0 < auto, "{auto}");
+        let auto16 = saturation_level(Saturation::Auto, 16).unwrap();
+        assert!(1.0 >= auto16 && 65534.0 / 65535.0 < auto16, "{auto16}");
+        assert_eq!(
+            saturation_level(Saturation::Manual { level: 4000.0 }, 12),
+            Some((4000.0f64 / 4095.0) as f32)
+        );
+        // Float images (32 bit), and no bit depth: as stored.
+        assert_eq!(saturation_level(Saturation::Auto, 32), None);
+        assert_eq!(
+            saturation_level(Saturation::Manual { level: 7.5 }, 32),
+            Some(7.5)
+        );
+        assert_eq!(
+            saturation_level(Saturation::Manual { level: 7.5 }, 0),
+            Some(7.5)
+        );
+        assert_eq!(saturation_level(Saturation::Off, 16), None);
     }
 
     /// A pixel flipping in and out at the outlier cut moves the line back
