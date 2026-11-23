@@ -1193,12 +1193,60 @@ jobs:
         with:
           files: ${{ matrix.archive }}
 
+  attest:
+    # Provenance for every file of the release: a statement signed by
+    # GitHub/Sigstore that exactly this file (its SHA-256) was built by this
+    # workflow, in this repository, from this commit and tag - no key of
+    # ours. Users check a download with
+    #   gh attestation verify <file> -R evanalyzer/evanalyzer
+    # and, without gh, against SHA256SUMS (added to the release here).
+    #
+    # Own job, after everything else: id-token (which can create
+    # attestations) is never given to a job that runs build scripts of
+    # dependencies. No checkout - only the finished files come in.
+    # `!cancelled()`: the files of the builds that succeeded are attested.
+    needs: [templates, build-linux, build-linux-cuda, build-macos, build-linux-arm64, package-windows, sbom, audit, coverage]
+    if: startsWith(github.ref, 'refs/tags/') && !cancelled() && needs.templates.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write       # adds SHA256SUMS to the GitHub release
+      id-token: write       # Sigstore certificate for the attestations
+      attestations: write   # stores them with the repository
+    steps:
+      # Every file the release got: the packages, SBOM, audit and coverage
+      # reports (artifacts evanalyzer-*; the internal windows-* ones not).
+      - name: Download the release files
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: evanalyzer-*
+          merge-multiple: true
+          path: release
+
+      - name: Attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release/*
+
+      - name: SHA256SUMS
+        run: |
+          (cd release && sha256sum -- * > ../SHA256SUMS)
+          cat SHA256SUMS
+
+      - name: Add to the GitHub release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          files: SHA256SUMS
+
   # The container images (docker.yml), from the Linux builds' command-line
   # packages.
   docker:
     needs: [build-linux, build-linux-cuda, build-linux-arm64]
     if: startsWith(github.ref, 'refs/tags/')
     uses: ./.github/workflows/docker.yml
+    permissions:
+      contents: read
+      id-token: write       # attestations of the pushed images (see docker.yml)
+      attestations: write
     with:
       version: ${{ github.ref_name }}
     secrets:

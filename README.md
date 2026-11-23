@@ -47,6 +47,20 @@ Get the latest version for Linux, Windows or macOS from the
 Unpack the archive and start `evanalyzer` - everything it needs is included.
 GPU (CUDA) builds for AI models are available for Linux and Windows.
 
+**Checking a download.** Every file of a release comes with a provenance
+attestation: proof that exactly this file was built by this repository's
+release workflow from the tagged commit. With the
+[GitHub CLI](https://cli.github.com/):
+
+```sh
+gh attestation verify evanalyzer-linux-x86_64.tar.gz -R evanalyzer/evanalyzer
+gh attestation verify oci://joda001/evanalyzer:<version> -R evanalyzer/evanalyzer   # Docker image
+```
+
+Without it, compare the file's SHA-256 (`sha256sum`, on Windows
+`certutil -hashfile <file> SHA256`) with `SHA256SUMS` on the release page.
+The Windows programs are additionally signed (Authenticode).
+
 ## Where EVAnalyzer stores its data
 
 **Your settings and templates** are in one folder in your home folder:
