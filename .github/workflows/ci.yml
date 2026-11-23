@@ -16,6 +16,11 @@ on:
     branches: ["main", "beta-fix"]
   pull_request:
 
+# Read-only by default (this runs pull requests' code); the jobs that need
+# more (pages) say so themselves.
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -26,14 +31,14 @@ jobs:
     # merges, and avoids paying for CUDA/Windows/macOS runners on every push.
     runs-on: ubuntu-latest
     container:
-      image: joda001/evanalyzer-toolchain:0.3.1
+      image: joda001/evanalyzer-toolchain:0.3.2@sha256:b56ac9d19a5d1d4149eb71608286afe48af3f12ddb201ef5fbf9c4e155c34a9f
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Trust the checked-out workspace
         # The toolchain image runs workflow steps as a different user than
@@ -43,7 +48,7 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Cache Cargo registry & build artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: linux-x86_64-test
 
@@ -57,9 +62,6 @@ jobs:
 
       - name: Unzip libtorch
         run: unzip -q "libs/libtorch-"*.zip -d libs
-
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Run tests with coverage instrumentation
         env:
@@ -94,7 +96,7 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: coverage-report
           path: |
@@ -126,7 +128,7 @@ jobs:
 
       - name: Upload the GitHub Pages site (push to main only)
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
           path: site/
 
@@ -147,7 +149,7 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deploy
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
 
   fmt:
     # Checks that source is `cargo fmt`-clean, including the files
@@ -166,18 +168,18 @@ jobs:
     # downloads the `test` job pays for.
     runs-on: ubuntu-latest
     container:
-      image: joda001/evanalyzer-toolchain:0.3.1
+      image: joda001/evanalyzer-toolchain:0.3.2@sha256:b56ac9d19a5d1d4149eb71608286afe48af3f12ddb201ef5fbf9c4e155c34a9f
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Trust the checked-out workspace
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Cache Cargo registry & build artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: linux-x86_64-fmt
 
@@ -204,18 +206,18 @@ jobs:
     # downloads the `test` job pays for.
     runs-on: ubuntu-latest
     container:
-      image: joda001/evanalyzer-toolchain:0.3.1
+      image: joda001/evanalyzer-toolchain:0.3.2@sha256:b56ac9d19a5d1d4149eb71608286afe48af3f12ddb201ef5fbf9c4e155c34a9f
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Trust the checked-out workspace
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Cache Cargo registry & build artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: linux-x86_64-check-templates
 
@@ -239,25 +241,17 @@ jobs:
     # fails the generation itself. Needs only `cargo metadata`, no build.
     runs-on: ubuntu-latest
     container:
-      image: joda001/evanalyzer-toolchain:0.3.1
+      image: joda001/evanalyzer-toolchain:0.3.2@sha256:b56ac9d19a5d1d4149eb71608286afe48af3f12ddb201ef5fbf9c4e155c34a9f
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Trust the checked-out workspace
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-      - name: Install cargo-about
-        # Pinned: about.toml works around a 0.9.3 bug, and another version
-        # may format the output differently.
-        run: |
-          if [ "$(cargo about --version 2>/dev/null)" != "cargo-about 0.9.3" ]; then
-            cargo install cargo-about --locked --version 0.9.3 --features cli
-          fi
 
       - name: Regenerate the license list
         run: |
@@ -284,14 +278,14 @@ jobs:
     # release.yml attaches the same report to every release.
     runs-on: ubuntu-latest
     container:
-      image: joda001/evanalyzer-toolchain:0.3.1
+      image: joda001/evanalyzer-toolchain:0.3.2@sha256:b56ac9d19a5d1d4149eb71608286afe48af3f12ddb201ef5fbf9c4e155c34a9f
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Trust the checked-out workspace
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"

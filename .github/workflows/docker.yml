@@ -23,6 +23,11 @@ on:
         description: "The release's tag (1.2.0 or v1.2.0)"
         type: string
         required: true
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: true
+      DOCKERHUB_TOKEN:
+        required: true
   workflow_dispatch:
     inputs:
       version:
@@ -33,6 +38,10 @@ on:
         description: "Push the images to Docker Hub"
         type: boolean
         default: false
+
+# Reads the repository (and its releases) only; pushes go to Docker Hub.
+permissions:
+  contents: read
 
 env:
   IMAGE: joda001/evanalyzer
@@ -53,12 +62,15 @@ jobs:
             suffix: "-cuda"
             latest: cuda
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Tags
         id: tags
+        # The version through env, not pasted into the script: a tag name
+        # may contain shell syntax.
+        env:
+          TAG: ${{ inputs.version }}
         run: |
-          TAG="${{ inputs.version }}"
           VERSION="${TAG#v}"
           TAGS="${IMAGE}:${VERSION}${{ matrix.suffix }}"
           # Pre-releases (a "-" in the version) don't move latest / cuda.
@@ -77,7 +89,7 @@ jobs:
       # The release run's packages (its build-linux* jobs)...
       - name: Packages of this release run
         if: github.event_name != 'workflow_dispatch'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: evanalyzer-cli-linux-*
           merge-multiple: true
@@ -88,8 +100,9 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.version }}
         run: |
-          gh release download "${{ inputs.version }}" --dir downloads \
+          gh release download "$TAG" --dir downloads \
             --pattern 'evanalyzer-cli-linux-*'
 
       # One folder per architecture, as docker/Dockerfile expects.
@@ -105,17 +118,17 @@ jobs:
           rm -rf downloads
           du -sh pkg/*
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Log in to Docker Hub
         if: steps.tags.outputs.push == 'true'
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build (and push)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: docker/Dockerfile
@@ -131,7 +144,7 @@ jobs:
       # Read & Write.
       - name: Docker Hub description
         if: steps.tags.outputs.push == 'true' && matrix.flavour == 'cpu'
-        uses: peter-evans/dockerhub-description@v4
+        uses: peter-evans/dockerhub-description@432a30c9e07499fd01da9f8a49f0faf9e0ca5b77 # v4.0.2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}

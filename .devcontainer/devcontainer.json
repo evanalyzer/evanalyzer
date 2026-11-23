@@ -1,6 +1,6 @@
 {
 "name": "evanalyzer",
-    "image": "joda001/evanalyzer-toolchain:0.3.1",
+    "image": "joda001/evanalyzer-toolchain:0.3.2@sha256:b56ac9d19a5d1d4149eb71608286afe48af3f12ddb201ef5fbf9c4e155c34a9f",
     "runArgs": [
         "--privileged",
         "--network=host",

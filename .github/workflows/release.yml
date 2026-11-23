@@ -6,26 +6,17 @@ on:
     # both trigger a release build) - anything starting with a digit or
     # "v<digit>" followed by anything else.
     tags: ["v[0-9]+.*", "[0-9]+.*"]
+    # Test runs of the whole pipeline: built and packed like a release,
+    # but nothing is signed or published (signing runs on tags only).
     branches: ["pipeline_start"]
+  # A manual run started on a release tag ("Use workflow from" → the tag)
+  # signs and publishes like the tag push; on a branch it's a test run.
   workflow_dispatch:
-    inputs:
-      sign:
-        description: Sign the Windows binaries (Certum SimplySign)
-        type: boolean
-        default: true
 
-env:
-  # Windows code signing (see "Sign the Windows binaries" in build-windows).
-  # On by default: the "sign" input only exists on a manual run, so pushes
-  # (tags, pipeline_start) fall back to the 'true' at the end and every
-  # pushed build is signed (needs the CERTUM_* secrets) - change it to
-  # 'false' to build unsigned. A manual run follows its "sign" input.
-  SIGN_WINDOWS: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.sign) || 'true' }}
-
-# Every build job uploads its own files to the release (see "Create the
-# GitHub release" in the templates job).
+# Read-only by default. Write access only where a job adds files to the
+# GitHub release (see "Create the GitHub release" in the templates job).
 permissions:
-  contents: write
+  contents: read
 
 defaults:
   run:
@@ -34,6 +25,54 @@ defaults:
     shell: bash
 
 jobs:
+  verify-tag:
+    # First on a release tag: is the tag signed with a key in TAG_SIGNERS
+    # (variable of the `release` environment)? If not, nothing else runs -
+    # no build, no GitHub release (templates and so every job waits for
+    # this one). Skipped on test runs (pipeline_start, a manual run on a
+    # branch). Fetches only the tag; nothing of the repository runs here.
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - &check-tag-signature
+        name: Check the tag's signature
+        # Only the tag (and its commit, depth 1) is fetched into an empty
+        # repository - no checkout of the tree. A lightweight (unsigned)
+        # tag fails here too: verify-tag needs a signed tag object.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_SIGNERS: ${{ vars.TAG_SIGNERS }}
+        run: |
+          if [ -z "$TAG_SIGNERS" ]; then
+            echo "::error::The TAG_SIGNERS variable is not set in the 'release' environment."
+            exit 1
+          fi
+          signers="$PWD/allowed_signers"
+          git init -q tag-check
+          cd tag-check
+          git -c "http.extraHeader=Authorization: Basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
+            fetch -q --depth=1 --no-tags "https://github.com/${GITHUB_REPOSITORY}.git" "+${GITHUB_REF}:${GITHUB_REF}"
+          # One allowed key per line of TAG_SIGNERS.
+          printf '%s\n' "$TAG_SIGNERS" | sed -e '/^[[:space:]]*$/d' -e 's/^/release namespaces="git" /' > "$signers"
+          git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile="$signers" verify-tag "${GITHUB_REF}" || {
+            echo "::error::${GITHUB_REF_NAME} is not signed with a key in TAG_SIGNERS - nothing is signed."
+            exit 1
+          }
+          # The name inside the signed tag is the pushed one: an old signed
+          # tag can't be pushed again under a new name.
+          name=$(git cat-file tag "${GITHUB_REF}" | sed -n 's/^tag //p' | head -1)
+          [ "$name" = "$GITHUB_REF_NAME" ] || {
+            echo "::error::The signed tag is named '$name', but was pushed as ${GITHUB_REF_NAME}."
+            exit 1
+          }
+          tagged=$(git rev-parse "${GITHUB_REF}^{commit}")
+          [ "$tagged" = "$GITHUB_SHA" ] || {
+            echo "::error::${GITHUB_REF_NAME} points at $tagged, but this run built $GITHUB_SHA."
+            exit 1
+          }
+          echo "${GITHUB_REF_NAME}: signed with a key in TAG_SIGNERS, commit $GITHUB_SHA"
+
   templates:
     # Templates now live in evanalyzer/evanalyzer-templates, not this repo.
     # Fetched once here (rather than in every build-* job below) and shared
@@ -57,14 +96,19 @@ jobs:
     # project is built and before it's released" is exactly this point.
     # Exception: on a test tag (e.g. 0.1.0-test.11) a failed check is only
     # reported as a warning and the builds go on.
+    needs: [verify-tag]
+    # Success, or skipped (not a tag) - never after a failed tag check.
+    if: ${{ !cancelled() && needs.verify-tag.result != 'failure' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # creates the GitHub release
     container:
-      image: joda001/evanalyzer-toolchain:0.3.1
+      image: joda001/evanalyzer-toolchain:0.3.2@sha256:b56ac9d19a5d1d4149eb71608286afe48af3f12ddb201ef5fbf9c4e155c34a9f
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # Full history and tags for the release notes below.
           fetch-depth: 0
@@ -82,7 +126,7 @@ jobs:
         run: cargo set-version --workspace --dry-run "${GITHUB_REF_NAME#v}"
 
       - name: Cache Cargo registry & build artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: linux-x86_64-check-templates
 
@@ -110,7 +154,7 @@ jobs:
           echo "::warning title=Template check failed::Some templates aren't usable with this version (see the step above). Not blocking because ${GITHUB_REF_NAME} is a test tag."
           echo "### :warning: Template check failed (not blocking on test tag \`${GITHUB_REF_NAME}\`)" >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: templates
           path: templates/
@@ -127,7 +171,7 @@ jobs:
 
       - name: Create the GitHub release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           body_path: release-notes.md
           # Any pre-release version (1.0.0-beta.1, 0.1.0-test.11, ...) is
@@ -137,16 +181,18 @@ jobs:
   build-linux:
     needs: [templates]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # adds its files to the GitHub release
     container:
-      image: joda001/evanalyzer-toolchain:0.3.1
+      image: joda001/evanalyzer-toolchain:0.3.2@sha256:b56ac9d19a5d1d4149eb71608286afe48af3f12ddb201ef5fbf9c4e155c34a9f
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Cache Cargo registry & build artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: linux-x86_64
 
@@ -176,7 +222,7 @@ jobs:
           cargo build-ai-plugin --release --target x86_64-unknown-linux-gnu --locked
 
       - name: Download templates
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: templates
           path: dist/templates
@@ -204,14 +250,14 @@ jobs:
         # base and raised that floor unnoticed.
         run: bash .github/scripts/check-glibc.sh 2.39 dist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: evanalyzer-linux-x86_64
           path: evanalyzer-linux-x86_64.tar.gz
 
       - name: Add to the GitHub release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: evanalyzer-linux-x86_64.tar.gz
 
@@ -232,14 +278,14 @@ jobs:
       - name: Check the oldest glibc the command-line version runs on
         run: bash .github/scripts/check-glibc.sh 2.39 dist-cli
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: evanalyzer-cli-linux-x86_64
           path: evanalyzer-cli-linux-x86_64.tar.gz
 
       - name: Add the command-line version to the GitHub release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: evanalyzer-cli-linux-x86_64.tar.gz
 
@@ -247,15 +293,15 @@ jobs:
     needs: [templates]
     runs-on: ubuntu-latest
     container:
-      image: joda001/evanalyzer-toolchain:0.3.1
+      image: joda001/evanalyzer-toolchain:0.3.2@sha256:b56ac9d19a5d1d4149eb71608286afe48af3f12ddb201ef5fbf9c4e155c34a9f
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Cache Cargo registry & build artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: windows-x86_64
 
@@ -320,37 +366,8 @@ jobs:
           cargo build-win --locked
           cargo xwin rustc -p evanalyzer_ai --features torch --crate-type cdylib --release --target x86_64-pc-windows-msvc
 
-      - name: Sign the Windows binaries
-        # Authenticode-signs our own exe and AI plugin with the Certum
-        # SimplySign cloud certificate; the third-party DLLs (DuckDB,
-        # libtorch) stay as their vendors ship them. ssign derives the login
-        # code from the TOTP seed, so this runs unattended. On/off: the
-        # SIGN_WINDOWS flag at the top of this file.
-        if: env.SIGN_WINDOWS == 'true'
-        env:
-          CERTUM_EMAIL: ${{ secrets.CERTUM_EMAIL }}
-          CERTUM_OTP: ${{ secrets.CERTUM_OTP }}
-        run: |
-          if [ -z "$CERTUM_EMAIL" ] || [ -z "$CERTUM_OTP" ]; then
-            echo "::error::Signing is on, but the CERTUM_EMAIL / CERTUM_OTP secrets are not set. Add them, or turn SIGN_WINDOWS off in release.yml."
-            exit 1
-          fi
-          cargo install ssign --version 0.1.8 --locked
-          # The three Windows builds log in at about the same time with the
-          # same one-time code, which SimplySign may refuse to accept twice:
-          # retry once the next code is out (a new one every 30 s). One file
-          # per call, so a retry never signs an already signed file again.
-          for file in target/x86_64-pc-windows-msvc/release/evanalyzer.exe \
-            target/x86_64-pc-windows-msvc/release/evanalyzer_ai.dll; do
-            for attempt in 1 2 3; do
-              ssign --name EVAnalyzer "$file" && break
-              [ "$attempt" = 3 ] && exit 1
-              sleep 35
-            done
-          done
-
       - name: Download templates
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: templates
           path: dist/templates
@@ -368,32 +385,40 @@ jobs:
           mkdir -p dist/ai/cpu
           cp target/x86_64-pc-windows-msvc/release/evanalyzer_ai.dll dist/ai/cpu/
           cp libs/libtorch/lib/*.dll                           dist/ai/cpu/
-          (cd dist && zip -r ../evanalyzer-windows-x86_64.zip .)
 
-      - uses: actions/upload-artifact@v4
+      # Not packed here: package-windows packs it, on release tags with the
+      # signed exe and plugin from sign-windows.
+      - name: Upload the build for packing
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: evanalyzer-windows-x86_64
-          path: evanalyzer-windows-x86_64.zip
+          name: windows-build-x86_64
+          path: dist/
+          retention-days: 1
 
-      - name: Add to the GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+      - name: Upload the files to sign
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          files: evanalyzer-windows-x86_64.zip
+          name: windows-unsigned-x86_64
+          path: |
+            dist/evanalyzer.exe
+            dist/ai/cpu/evanalyzer_ai.dll
+          retention-days: 1
 
   build-linux-cuda:
     needs: [templates]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # adds its files to the GitHub release
     container:
-      image: joda001/evanalyzer-toolchain:0.3.1
+      image: joda001/evanalyzer-toolchain:0.3.2@sha256:b56ac9d19a5d1d4149eb71608286afe48af3f12ddb201ef5fbf9c4e155c34a9f
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Cache Cargo registry & build artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: linux-x86_64-cuda
 
@@ -423,7 +448,7 @@ jobs:
           cargo build-ai-plugin --release --target x86_64-unknown-linux-gnu --locked
 
       - name: Download templates
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: templates
           path: dist/templates
@@ -478,7 +503,6 @@ jobs:
           done
           # 7-Zip at maximum compression (-mx=9) keeps it one file below
           # GitHub's 2 GiB release asset limit.
-          command -v 7z >/dev/null || { apt-get update -qq && apt-get install -y -qq p7zip-full; }
           ( cd dist && 7z a -t7z -mx=9 ../evanalyzer-linux-x86_64-cuda.7z . )
           size=$(stat -c %s evanalyzer-linux-x86_64-cuda.7z)
           echo "evanalyzer-linux-x86_64-cuda.7z: $((size / 1048576)) MiB"
@@ -491,14 +515,14 @@ jobs:
         # base and raised that floor unnoticed.
         run: bash .github/scripts/check-glibc.sh 2.39 dist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: evanalyzer-linux-x86_64-cuda
           path: evanalyzer-linux-x86_64-cuda.7z
 
       - name: Add to the GitHub release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: evanalyzer-linux-x86_64-cuda.7z
 
@@ -518,7 +542,6 @@ jobs:
           # tar.xz, not 7z: unpacks with plain tar on servers without 7-Zip.
           # xz at its highest level keeps it below GitHub's 2 GiB limit like
           # the 7z above.
-          command -v xz >/dev/null || { apt-get update -qq && apt-get install -y -qq xz-utils; }
           tar -I 'xz -9 -T0' -cf evanalyzer-cli-linux-x86_64-cuda.tar.xz -C dist-cli .
           size=$(stat -c %s evanalyzer-cli-linux-x86_64-cuda.tar.xz)
           echo "evanalyzer-cli-linux-x86_64-cuda.tar.xz: $((size / 1048576)) MiB"
@@ -527,14 +550,14 @@ jobs:
       - name: Check the oldest glibc the command-line version runs on
         run: bash .github/scripts/check-glibc.sh 2.39 dist-cli
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: evanalyzer-cli-linux-x86_64-cuda
           path: evanalyzer-cli-linux-x86_64-cuda.tar.xz
 
       - name: Add the command-line version to the GitHub release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: evanalyzer-cli-linux-x86_64-cuda.tar.xz
 
@@ -542,15 +565,15 @@ jobs:
     needs: [templates]
     runs-on: ubuntu-latest
     container:
-      image: joda001/evanalyzer-toolchain:0.3.1
+      image: joda001/evanalyzer-toolchain:0.3.2@sha256:b56ac9d19a5d1d4149eb71608286afe48af3f12ddb201ef5fbf9c4e155c34a9f
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Cache Cargo registry & build artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: windows-x86_64-cuda
 
@@ -615,33 +638,8 @@ jobs:
           cargo build-win --locked
           cargo xwin rustc -p evanalyzer_ai --features torch --crate-type cdylib --release --target x86_64-pc-windows-msvc
 
-      - name: Sign the Windows binaries
-        # Same as in build-windows - see there.
-        if: env.SIGN_WINDOWS == 'true'
-        env:
-          CERTUM_EMAIL: ${{ secrets.CERTUM_EMAIL }}
-          CERTUM_OTP: ${{ secrets.CERTUM_OTP }}
-        run: |
-          if [ -z "$CERTUM_EMAIL" ] || [ -z "$CERTUM_OTP" ]; then
-            echo "::error::Signing is on, but the CERTUM_EMAIL / CERTUM_OTP secrets are not set. Add them, or turn SIGN_WINDOWS off in release.yml."
-            exit 1
-          fi
-          cargo install ssign --version 0.1.8 --locked
-          # The three Windows builds log in at about the same time with the
-          # same one-time code, which SimplySign may refuse to accept twice:
-          # retry once the next code is out (a new one every 30 s). One file
-          # per call, so a retry never signs an already signed file again.
-          for file in target/x86_64-pc-windows-msvc/release/evanalyzer.exe \
-            target/x86_64-pc-windows-msvc/release/evanalyzer_ai.dll; do
-            for attempt in 1 2 3; do
-              ssign --name EVAnalyzer "$file" && break
-              [ "$attempt" = 3 ] && exit 1
-              sleep 35
-            done
-          done
-
       - name: Download templates
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: templates
           path: dist/templates
@@ -675,42 +673,44 @@ jobs:
           # registers itself - nothing links it): without it the build runs
           # CPU-only.
           [ -f dist/ai/cuda/torch_cuda.dll ] || { echo "::error::dist/ai/cuda/torch_cuda.dll missing - the CUDA build would run CPU-only"; exit 1; }
-          # 7-Zip at maximum compression (-mx=9) keeps it one file below
-          # GitHub's 2 GiB release asset limit.
-          command -v 7z >/dev/null || { apt-get update -qq && apt-get install -y -qq p7zip-full; }
-          ( cd dist && 7z a -t7z -mx=9 ../evanalyzer-windows-x86_64-cuda.7z . )
-          size=$(stat -c %s evanalyzer-windows-x86_64-cuda.7z)
-          echo "evanalyzer-windows-x86_64-cuda.7z: $((size / 1048576)) MiB"
-          [ "$size" -lt 2147483648 ] || { echo "::error::evanalyzer-windows-x86_64-cuda.7z is over GitHub's 2 GiB release asset limit"; exit 1; }
 
-      - uses: actions/upload-artifact@v4
+      # Not packed here: package-windows packs it, on release tags with the
+      # signed exe and plugin from sign-windows.
+      - name: Upload the build for packing
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: evanalyzer-windows-x86_64-cuda
-          path: evanalyzer-windows-x86_64-cuda.7z
+          name: windows-build-x86_64-cuda
+          path: dist/
+          retention-days: 1
 
-      - name: Add to the GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+      - name: Upload the files to sign
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          files: evanalyzer-windows-x86_64-cuda.7z
+          name: windows-unsigned-x86_64-cuda
+          path: |
+            dist/evanalyzer.exe
+            dist/ai/cuda/evanalyzer_ai.dll
+          retention-days: 1
 
   build-macos:
     needs: [templates]
     runs-on: macos-15   # Apple Silicon (arm64); macos-14 retired 2026-11-02
+    permissions:
+      contents: write   # adds its files to the GitHub release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Cache Cargo registry & build artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: macos-arm64
 
       - name: Install cargo-edit
         # Runs on the macOS runner, not in the toolchain image, so
         # `cargo set-version` (below) isn't preinstalled here.
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2.90.8
         with:
-          tool: cargo-edit
+          tool: cargo-edit@0.13.14   # as in the toolchain image
 
       - name: Set version
         run: |
@@ -742,7 +742,7 @@ jobs:
           cargo build-ai-plugin --release --target aarch64-apple-darwin --locked
 
       - name: Download templates
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: templates
           path: dist/templates
@@ -817,48 +817,40 @@ jobs:
 
           tar -czf evanalyzer-macos-arm64.tar.gz -C dist .
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: evanalyzer-macos-arm64
           path: evanalyzer-macos-arm64.tar.gz
 
       - name: Add to the GitHub release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: evanalyzer-macos-arm64.tar.gz
 
   build-linux-arm64:
     # Built natively on GitHub's ARM runner: cross-compiling needs an arm64
     # sysroot for fontconfig (the GUI's font lookup), the native runner
-    # has it. The toolchain image is amd64 only, so this runs in the
-    # (multi-arch) Rust image it is based on.
+    # has it. In the toolchain image's arm64 build (same tools, versions
+    # and glibc as the amd64 jobs).
     # No AI plugin: pytorch.org publishes no libtorch for Linux ARM64 - AI
     # steps report the plugin as not installed.
     needs: [templates]
     runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: write   # adds its files to the GitHub release
     container:
-      image: rust:1.96-trixie
+      image: joda001/evanalyzer-toolchain:0.3.2@sha256:b56ac9d19a5d1d4149eb71608286afe48af3f12ddb201ef5fbf9c4e155c34a9f
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install build tools
-        run: apt-get update -qq && apt-get install -y -qq mold
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Cache Cargo registry & build artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: linux-arm64
-
-      - name: Install cargo-edit
-        # The plain Rust image (not the toolchain image) has no
-        # `cargo set-version` (below).
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-edit
 
       - name: Set version
         run: |
@@ -875,7 +867,7 @@ jobs:
         run: cargo build-linux-arm --locked
 
       - name: Download templates
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: templates
           path: dist/templates
@@ -904,14 +896,14 @@ jobs:
         # base and raised that floor unnoticed.
         run: bash .github/scripts/check-glibc.sh 2.39 dist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: evanalyzer-linux-arm64
           path: evanalyzer-linux-arm64.tar.gz
 
       - name: Add to the GitHub release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: evanalyzer-linux-arm64.tar.gz
 
@@ -931,14 +923,14 @@ jobs:
       - name: Check the oldest glibc the command-line version runs on
         run: bash .github/scripts/check-glibc.sh 2.39 dist-cli
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: evanalyzer-cli-linux-arm64
           path: evanalyzer-cli-linux-arm64.tar.gz
 
       - name: Add the command-line version to the GitHub release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: evanalyzer-cli-linux-arm64.tar.gz
 
@@ -948,18 +940,15 @@ jobs:
     needs: [templates]
     runs-on: ubuntu-latest
     container:
-      image: joda001/evanalyzer-toolchain:0.3.1
+      image: joda001/evanalyzer-toolchain:0.3.2@sha256:b56ac9d19a5d1d4149eb71608286afe48af3f12ddb201ef5fbf9c4e155c34a9f
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Add the Rust target
-        run: rustup target add aarch64-pc-windows-msvc
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Cache Cargo registry & build artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: windows-arm64
 
@@ -1023,33 +1012,8 @@ jobs:
           cargo build-win-arm --cross-compiler clang --locked
           cargo xwin rustc -p evanalyzer_ai --features torch --crate-type cdylib --release --target aarch64-pc-windows-msvc
 
-      - name: Sign the Windows binaries
-        # Same as in build-windows - see there.
-        if: env.SIGN_WINDOWS == 'true'
-        env:
-          CERTUM_EMAIL: ${{ secrets.CERTUM_EMAIL }}
-          CERTUM_OTP: ${{ secrets.CERTUM_OTP }}
-        run: |
-          if [ -z "$CERTUM_EMAIL" ] || [ -z "$CERTUM_OTP" ]; then
-            echo "::error::Signing is on, but the CERTUM_EMAIL / CERTUM_OTP secrets are not set. Add them, or turn SIGN_WINDOWS off in release.yml."
-            exit 1
-          fi
-          cargo install ssign --version 0.1.8 --locked
-          # The three Windows builds log in at about the same time with the
-          # same one-time code, which SimplySign may refuse to accept twice:
-          # retry once the next code is out (a new one every 30 s). One file
-          # per call, so a retry never signs an already signed file again.
-          for file in target/aarch64-pc-windows-msvc/release/evanalyzer.exe \
-            target/aarch64-pc-windows-msvc/release/evanalyzer_ai.dll; do
-            for attempt in 1 2 3; do
-              ssign --name EVAnalyzer "$file" && break
-              [ "$attempt" = 3 ] && exit 1
-              sleep 35
-            done
-          done
-
       - name: Download templates
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: templates
           path: dist/templates
@@ -1065,18 +1029,169 @@ jobs:
           mkdir -p dist/ai/cpu
           cp target/aarch64-pc-windows-msvc/release/evanalyzer_ai.dll dist/ai/cpu/
           cp libs/libtorch/lib/*.dll                           dist/ai/cpu/
-          (cd dist && zip -r ../evanalyzer-windows-arm64.zip .)
 
-      - uses: actions/upload-artifact@v4
+      # Not packed here: package-windows packs it, on release tags with the
+      # signed exe and plugin from sign-windows.
+      - name: Upload the build for packing
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: evanalyzer-windows-arm64
-          path: evanalyzer-windows-arm64.zip
+          name: windows-build-arm64
+          path: dist/
+          retention-days: 1
+
+      - name: Upload the files to sign
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-unsigned-arm64
+          path: |
+            dist/evanalyzer.exe
+            dist/ai/cpu/evanalyzer_ai.dll
+          retention-days: 1
+
+  sign-windows:
+    # Authenticode-signs our own exe and AI plugin of every Windows build
+    # with the Certum SimplySign cloud certificate; the third-party DLLs
+    # (DuckDB, libtorch) stay as their vendors ship them.
+    #
+    # Only on release tags, and only in the `release` environment: it
+    # holds the CERTUM_* secrets and the TAG_SIGNERS variable and accepts
+    # release tags only. The tag must be signed with a key in TAG_SIGNERS
+    # (the owner's release key on a YubiKey: `git tag -s -u <key>.pub`) and
+    # point at the commit this run built - a tag pushed with a stolen
+    # GitHub login alone signs nothing.
+    # Nothing of the repository runs next to the secret: no checkout, no
+    # build, no build script of any dependency - only the tag object is
+    # fetched (to check its signature, nothing of it runs) and the two
+    # unsigned files per build come in and go out signed, with tools from
+    # the pinned toolchain image.
+    #
+    # One job for all Windows builds: the logins one after another
+    # (SimplySign may refuse the same one-time code twice).
+    # `!cancelled()`: one failed Windows build doesn't stop the others.
+    needs: [templates, build-windows, build-windows-cuda, build-windows-arm64]
+    if: startsWith(github.ref, 'refs/tags/') && !cancelled() && needs.templates.result == 'success'
+    runs-on: ubuntu-latest
+    environment: release
+    container:
+      image: joda001/evanalyzer-toolchain:0.3.2@sha256:b56ac9d19a5d1d4149eb71608286afe48af3f12ddb201ef5fbf9c4e155c34a9f
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      # The same check as in verify-tag, right next to the secret: signing
+      # never relies on another job having checked.
+      - *check-tag-signature
+
+      # One folder per build: windows/windows-unsigned-<build>/…
+      - name: Download the files to sign
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: windows-unsigned-*
+          path: windows
+
+      - name: Sign
+        # ssign derives the login code from the TOTP seed, so this runs
+        # unattended. A refused code is retried once the next one is out (a
+        # new one every 30 s); one file per call, so a retry never signs an
+        # already signed file again.
+        env:
+          CERTUM_EMAIL: ${{ secrets.CERTUM_EMAIL }}
+          CERTUM_OTP: ${{ secrets.CERTUM_OTP }}
+        run: |
+          if [ -z "$CERTUM_EMAIL" ] || [ -z "$CERTUM_OTP" ]; then
+            echo "::error::The CERTUM_EMAIL / CERTUM_OTP secrets are not set in the 'release' environment."
+            exit 1
+          fi
+          shopt -s nullglob
+          files=(windows/*/evanalyzer.exe windows/*/ai/*/evanalyzer_ai.dll)
+          [ "${#files[@]}" -gt 0 ] || { echo "::error::No Windows build to sign."; exit 1; }
+          for file in "${files[@]}"; do
+            before=$(sha256sum < "$file")
+            for attempt in 1 2 3; do
+              ssign --name EVAnalyzer "$file" && break
+              [ "$attempt" = 3 ] && exit 1
+              sleep 35
+            done
+            [ "$(sha256sum < "$file")" != "$before" ] || { echo "::error::$file is unchanged after signing."; exit 1; }
+            echo "signed $file"
+          done
+
+      - name: Upload the signed files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-signed
+          path: windows/
+          retention-days: 1
+
+  package-windows:
+    # One download per Windows build with everything in it: zip, or 7z at
+    # maximum compression for CUDA (keeps it below GitHub's 2 GiB release
+    # asset limit). On a release tag with the signed exe and plugin from
+    # sign-windows - a release is never packed unsigned; on other runs
+    # (pipeline_start, a manual run on a branch) unsigned.
+    # Runs when sign-windows succeeded, or was skipped (not a tag).
+    needs: [templates, build-windows, build-windows-cuda, build-windows-arm64, sign-windows]
+    if: ${{ !cancelled() && needs.templates.result == 'success' && needs.sign-windows.result != 'failure' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - build: x86_64
+            archive: evanalyzer-windows-x86_64.zip
+          - build: x86_64-cuda
+            archive: evanalyzer-windows-x86_64-cuda.7z
+          - build: arm64
+            archive: evanalyzer-windows-arm64.zip
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # adds its files to the GitHub release
+    container:
+      image: joda001/evanalyzer-toolchain:0.3.2@sha256:b56ac9d19a5d1d4149eb71608286afe48af3f12ddb201ef5fbf9c4e155c34a9f
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - name: Download the build
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: windows-build-${{ matrix.build }}
+          path: dist
+
+      - name: Download the signed files
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: windows-signed
+          path: signed
+
+      - name: Package
+        env:
+          BUILD: ${{ matrix.build }}
+          ARCHIVE: ${{ matrix.archive }}
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            src="signed/windows-unsigned-${BUILD}"
+            [ -f "$src/evanalyzer.exe" ] || { echo "::error::No signed files for ${BUILD} - a release is never packed unsigned."; exit 1; }
+            cp -r "$src/." dist/
+          fi
+          case "$ARCHIVE" in
+            *.zip) (cd dist && zip -qr "../$ARCHIVE" .) ;;
+            *.7z)  (cd dist && 7z a -t7z -mx=9 "../$ARCHIVE" .) ;;
+          esac
+          size=$(stat -c %s "$ARCHIVE")
+          echo "$ARCHIVE: $((size / 1048576)) MiB"
+          [ "$size" -lt 2147483648 ] || { echo "::error::$ARCHIVE is over GitHub's 2 GiB release asset limit"; exit 1; }
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: evanalyzer-windows-${{ matrix.build }}
+          path: ${{ matrix.archive }}
 
       - name: Add to the GitHub release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
-          files: evanalyzer-windows-arm64.zip
+          files: ${{ matrix.archive }}
 
   # The container images (docker.yml), from the Linux builds' command-line
   # packages.
@@ -1086,7 +1201,9 @@ jobs:
     uses: ./.github/workflows/docker.yml
     with:
       version: ${{ github.ref_name }}
-    secrets: inherit
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
 
   sbom:
     # SBOM for the shipped `evanalyzer` binary (crates/bin), covering its full
@@ -1097,19 +1214,21 @@ jobs:
     # duplicates.
     needs: [templates]   # uploads into the release created there
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # adds its files to the GitHub release
     container:
-      image: joda001/evanalyzer-toolchain:0.3.1
+      image: joda001/evanalyzer-toolchain:0.3.2@sha256:b56ac9d19a5d1d4149eb71608286afe48af3f12ddb201ef5fbf9c4e155c34a9f
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Trust the checked-out workspace
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Cache Cargo registry & build artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: sbom
 
@@ -1133,14 +1252,14 @@ jobs:
           cargo cyclonedx --format json --manifest-path crates/ai/Cargo.toml --features torch
           mv crates/ai/evanalyzer_ai.cdx.json evanalyzer-ai-plugin-${VERSION}-sbom.cdx.json
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: evanalyzer-sbom
           path: evanalyzer-*-sbom.cdx.json
 
       - name: Add to the GitHub release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: evanalyzer-*-sbom.cdx.json
 
@@ -1151,13 +1270,15 @@ jobs:
     # release, they're documented in the attached report.
     needs: [templates]   # uploads into the release created there
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # adds its files to the GitHub release
     container:
-      image: joda001/evanalyzer-toolchain:0.3.1
+      image: joda001/evanalyzer-toolchain:0.3.2@sha256:b56ac9d19a5d1d4149eb71608286afe48af3f12ddb201ef5fbf9c4e155c34a9f
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Trust the checked-out workspace
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -1179,14 +1300,14 @@ jobs:
           cargo audit > evanalyzer-${VERSION}-audit.txt || true
           cargo audit --json > evanalyzer-${VERSION}-audit.json || true
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: evanalyzer-audit
           path: evanalyzer-*-audit.*
 
       - name: Add to the GitHub release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: evanalyzer-*-audit.*
 
@@ -1196,19 +1317,21 @@ jobs:
     # as ci.yml's `test` job, in parallel with the platform builds.
     needs: [templates]   # uploads into the release created there
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # adds its files to the GitHub release
     container:
-      image: joda001/evanalyzer-toolchain:0.3.1
+      image: joda001/evanalyzer-toolchain:0.3.2@sha256:b56ac9d19a5d1d4149eb71608286afe48af3f12ddb201ef5fbf9c4e155c34a9f
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Trust the checked-out workspace
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Cache Cargo registry & build artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: linux-x86_64-coverage
 
@@ -1227,9 +1350,6 @@ jobs:
 
       - name: Unzip libtorch
         run: unzip -q "libs/libtorch-"*.zip -d libs
-
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Run tests with coverage instrumentation
         env:
@@ -1250,13 +1370,13 @@ jobs:
           cargo llvm-cov report --summary-only > evanalyzer-${VERSION}-coverage-summary.txt
           (cd target/llvm-cov && zip -qr "../../evanalyzer-${VERSION}-coverage-html.zip" html)
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: evanalyzer-coverage
           path: evanalyzer-*-coverage*
 
       - name: Add to the GitHub release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: evanalyzer-*-coverage*

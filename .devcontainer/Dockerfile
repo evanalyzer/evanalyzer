@@ -29,6 +29,8 @@ RUN rustup component add rustfmt llvm-tools-preview
 RUN cargo install --locked cargo-llvm-cov --version 0.9.1
 RUN cargo install --locked cargo-audit --version 0.22.2
 RUN cargo install --locked cargo-auditable --version 0.7.7
+# cargo-about exactly 0.9.3: about.toml works around a bug of it, and another
+# version may format the license list differently (ci.yml's licenses job).
 RUN cargo install --locked cargo-about --version 0.9.3 --features cli
 RUN cargo install --locked cargo-cyclonedx --version 0.5.9
 RUN cargo install --locked cargo-outdated --version 0.19.0
