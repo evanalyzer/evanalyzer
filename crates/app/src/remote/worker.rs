@@ -27,8 +27,8 @@ use super::job_registry::{JobEntry, JobRegistry};
 use super::wire::conn::{self, HANDSHAKE_MESSAGE_SIZE, MAX_MESSAGE_SIZE};
 use super::wire::frame::{self, Frame};
 use super::wire::protocol::{
-    APP_VERSION, ClientMsg, PROTOCOL_VERSION, Reply, Request, ResultsAnswer, ResultsQuery,
-    ServerMsg, WireError, channels_to_wire, event_to_wire, from_postcard, to_postcard,
+    APP_VERSION, ClientMsg, PROTOCOL_VERSION, Reply, Request, ServerMsg, WireError,
+    channels_to_wire, event_to_wire, from_postcard, to_postcard,
 };
 use crate::backend::Backend;
 use crate::images::ImageSource;
@@ -582,7 +582,12 @@ impl Session {
             Request::QueryResults { handle } => {
                 let answer = self
                     .results_for(handle)
-                    .and_then(|source| answer_query(source.as_ref(), from_postcard(blobs.first())?))
+                    .and_then(|source| {
+                        crate::remote::results::answer(
+                            source.as_ref(),
+                            from_postcard(blobs.first())?,
+                        )
+                    })
                     .and_then(|answer| to_postcard(&answer));
                 match answer {
                     Ok(bytes) => self.reply(id, Reply::ResultsAnswer, vec![bytes]),
@@ -789,83 +794,6 @@ impl Session {
             Vec::new(),
         );
     }
-}
-
-fn answer_query(
-    source: &dyn ResultsSource,
-    query: ResultsQuery,
-) -> Result<ResultsAnswer, InternalErrors> {
-    Ok(match query {
-        ResultsQuery::ObjectList(filter) => ResultsAnswer::Table(source.get_object_list(&filter)?),
-        ResultsQuery::ObjectListPageStarts { filter, object_id } => {
-            ResultsAnswer::PageStarts(source.object_list_page_starts(&filter, &object_id)?)
-        }
-        ResultsQuery::GroupedByImage(filter) => {
-            ResultsAnswer::Table(source.get_grouped_by_image(&filter)?)
-        }
-        ResultsQuery::GroupByPlate(filter, view) => {
-            ResultsAnswer::Table(source.get_group_by_plate(&filter, &view)?)
-        }
-        ResultsQuery::GroupByWell(filter, view) => {
-            ResultsAnswer::Table(source.get_group_by_well(&filter, &view)?)
-        }
-        ResultsQuery::ImageHeatmap(filter, view) => {
-            ResultsAnswer::Table(source.get_image_heatmap(&filter, &view)?)
-        }
-        ResultsQuery::Images => ResultsAnswer::Images(source.get_images()?),
-        ResultsQuery::EnableImage {
-            image_rel_path,
-            disable,
-        } => {
-            source.enable_image(&image_rel_path, disable)?;
-            ResultsAnswer::Done
-        }
-        ResultsQuery::ChangeImageReview {
-            image_rel_path,
-            change,
-        } => {
-            source.change_image_review(&image_rel_path, change)?;
-            ResultsAnswer::Done
-        }
-        ResultsQuery::ObjectClasses => ResultsAnswer::Classes(source.get_object_classes()?),
-        ResultsQuery::AvailableColumns => ResultsAnswer::Columns(source.get_available_columns()?),
-        ResultsQuery::ZStacks => ResultsAnswer::Count(source.get_nr_of_z_stacks()),
-        ResultsQuery::TStacks => ResultsAnswer::Count(source.get_nr_of_t_stacks()),
-        ResultsQuery::Planes => ResultsAnswer::Planes(source.get_planes()?),
-        ResultsQuery::RunStatus => ResultsAnswer::RunStatus(source.run_status()?),
-        ResultsQuery::Boxplot(filter) => ResultsAnswer::Boxplot(source.boxplot(&filter)?),
-        ResultsQuery::Histogram(filter) => ResultsAnswer::Histogram(source.histogram(&filter)?),
-        ResultsQuery::Scatter(filter) => ResultsAnswer::Scatter(source.scatter(&filter)?),
-        ResultsQuery::TimeCourse(filter) => ResultsAnswer::TimeCourse(source.time_course(&filter)?),
-        ResultsQuery::ProfileColumns => ResultsAnswer::ProfileColumns(source.profile_columns()?),
-        ResultsQuery::Profile(filter) => ResultsAnswer::Profile(source.profile(&filter)?),
-        ResultsQuery::ObjectProfile { key, object_id } => {
-            ResultsAnswer::ObjectProfile(source.object_profile(&key, &object_id)?)
-        }
-        ResultsQuery::ProfileStep(filter) => {
-            ResultsAnswer::ProfileStep(source.profile_step(&filter)?)
-        }
-        ResultsQuery::HasTrees => ResultsAnswer::Flag(source.has_trees()?),
-        ResultsQuery::TreeNeurons(images) => {
-            ResultsAnswer::TreeNeurons(source.tree_neurons(images)?)
-        }
-        ResultsQuery::TreeSegments(soma) => {
-            ResultsAnswer::TreeSegments(source.tree_segments(&soma)?)
-        }
-        ResultsQuery::ImageObjects(filter) => {
-            ResultsAnswer::Objects(source.image_objects(&filter)?)
-        }
-        ResultsQuery::ImageTracks(filter) => ResultsAnswer::Tracks(source.image_tracks(&filter)?),
-        ResultsQuery::HasTracks => ResultsAnswer::Count(u32::from(source.has_tracks()?)),
-        ResultsQuery::HasLineage => ResultsAnswer::Count(u32::from(source.has_lineage()?)),
-        ResultsQuery::TrackSummary(filter) => {
-            ResultsAnswer::TrackSummary(source.track_summary(&filter)?)
-        }
-        ResultsQuery::TrackPaths(filter) => ResultsAnswer::TrackPaths(source.track_paths(&filter)?),
-        ResultsQuery::GroupingRegex(grouping) => {
-            ResultsAnswer::Text(source.grouping_regex(&grouping)?)
-        }
-    })
 }
 
 #[cfg(all(test, not(windows)))]

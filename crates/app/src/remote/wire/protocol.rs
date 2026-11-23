@@ -25,26 +25,10 @@ use crate::jobs::ProgressEvent;
 use crate::remote::wire::pixels::RawImageInfo;
 use crate::remote::wire::pixels::image_from_raw;
 use crate::remote::wire::pixels::image_to_raw;
-use crate::results::BoxplotFilter;
-use crate::results::BoxplotResult;
-use crate::results::ColumnEntry;
-use crate::results::DatabaseResult;
-use crate::results::GroupedByImageFilter;
-use crate::results::HistogramFilter;
-use crate::results::HistogramResult;
-use crate::results::ImageHeatmapFilter;
-use crate::results::ListFilter;
-use crate::results::PlateFilter;
-use crate::results::ScatterFilter;
-use crate::results::ScatterResult;
-use crate::results::View;
-use crate::results::WellFilter;
-use crate::results::{ImageEntry, ImageReviewChange};
 use crate::training::TrainingItems;
 use crate::training::TrainingRequest;
 use crate::user::settings::AppSettings;
 use evanalyzer_cfg::core_types::{InternalErrors, PipelineId, StepId, TrainingProgressEvent};
-use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -57,7 +41,7 @@ use std::sync::Arc;
 /// - the messages below (`ClientMsg`, `Request`, `ServerMsg`, `Reply`, ...):
 ///   a renamed, removed or retyped variant or field. They travel as JSON, so
 ///   a new field with `#[serde(default)]` is compatible;
-/// - any type that travels as postcard - [`ResultsQuery`], [`ResultsAnswer`]
+/// - any type that travels as postcard - [`ResultsQuery`](crate::remote::results::ResultsQuery), [`ResultsAnswer`](crate::remote::results::ResultsAnswer)
 ///   and `ResultExport` with everything in them. Postcard isn't
 ///   self-describing: *any* change there is incompatible, and the other side
 ///   misreads it instead of failing. The test
@@ -83,7 +67,9 @@ use std::sync::Arc;
 // `data_min` / `data_max`.
 // 55: `DrawnImages::image_paths` (the images whose folder changed since the
 // run).
-pub const PROTOCOL_VERSION: u32 = 55;
+// 56: one query and one answer variant per results call, from the list in
+// `remote/results.rs` (the answers were shared: `Table`, `Count`, ...).
+pub const PROTOCOL_VERSION: u32 = 56;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -146,7 +132,7 @@ pub(crate) enum Request {
     OpenResults {
         path: PathBuf,
     },
-    /// A postcard-encoded [`ResultsQuery`] follows as blob 0.
+    /// A postcard-encoded [`ResultsQuery`](crate::remote::results::ResultsQuery) follows as blob 0.
     QueryResults {
         handle: u64,
     },
@@ -185,90 +171,6 @@ pub(crate) enum Request {
     /// The user's app preferences, stored in their user folder there.
     LoadAppSettings,
     SaveAppSettings(AppSettings),
-}
-
-/// One results-database operation. Travels as postcard (not JSON) because
-/// results carry `NaN`/`±inf` floats, which JSON can't represent.
-#[derive(Serialize, Deserialize)]
-pub(crate) enum ResultsQuery {
-    ObjectList(ListFilter),
-    GroupedByImage(GroupedByImageFilter),
-    GroupByPlate(PlateFilter, View),
-    GroupByWell(WellFilter, View),
-    ImageHeatmap(ImageHeatmapFilter, View),
-    Images,
-    EnableImage {
-        image_rel_path: String,
-        disable: bool,
-    },
-    ChangeImageReview {
-        image_rel_path: String,
-        change: ImageReviewChange,
-    },
-    ObjectClasses,
-    AvailableColumns,
-    ZStacks,
-    TStacks,
-    Planes,
-    RunStatus,
-    Boxplot(BoxplotFilter),
-    Histogram(HistogramFilter),
-    Scatter(ScatterFilter),
-    TimeCourse(crate::results::TimeCourseFilter),
-    ProfileColumns,
-    Profile(crate::results::ProfileFilter),
-    ObjectProfile {
-        key: String,
-        object_id: String,
-    },
-    ProfileStep(crate::results::ProfileStepFilter),
-    HasTrees,
-    TreeNeurons(Option<Vec<String>>),
-    TreeSegments(String),
-    GroupingRegex(crate::results::Grouping),
-    ImageObjects(crate::results::ImageObjectsFilter),
-    ImageTracks(crate::results::ImageTracksFilter),
-    HasTracks,
-    TrackSummary(crate::results::TrackSummaryFilter),
-    HasLineage,
-    TrackPaths(crate::results::TrackPathsFilter),
-    /// See `ResultsSource::object_list_page_starts`.
-    ObjectListPageStarts {
-        filter: ListFilter,
-        object_id: String,
-    },
-}
-
-/// The successful result of a [`ResultsQuery`] (failures travel as
-/// `Reply::Failed`).
-#[derive(Serialize, Deserialize)]
-pub(crate) enum ResultsAnswer {
-    Table(DatabaseResult),
-    Images(Vec<ImageEntry>),
-    Classes(Vec<Class>),
-    Columns(Vec<ColumnEntry>),
-    Count(u32),
-    Boxplot(BoxplotResult),
-    Histogram(HistogramResult),
-    Scatter(ScatterResult),
-    RunStatus(crate::results::RunStatus),
-    Done,
-    Text(String),
-    Objects(Vec<crate::results::ResultObject>),
-    Planes(Vec<crate::results::PlaneFilter>),
-    TimeCourse(crate::results::TimeCourseResult),
-    ProfileColumns(Vec<crate::results::MeasurementColumn>),
-    Profile(crate::results::ProfileResult),
-    ObjectProfile(Vec<(f64, f64)>),
-    ProfileStep(crate::results::ProfileStep),
-    Flag(bool),
-    TreeNeurons(crate::results::TreeNeurons),
-    TreeSegments(Vec<crate::results::TreeSegment>),
-    Tracks(crate::results::ImageTracks),
-    TrackSummary(Vec<crate::results::TrackSummary>),
-    TrackPaths(crate::results::TrackPaths),
-    /// See `ResultsSource::object_list_page_starts`.
-    PageStarts(Option<Vec<String>>),
 }
 
 pub(crate) fn to_postcard<T: Serialize>(value: &T) -> Result<Vec<u8>, InternalErrors> {
@@ -335,7 +237,7 @@ pub(crate) enum Reply {
     ResultsOpened {
         handle: u64,
     },
-    /// A postcard-encoded [`ResultsAnswer`] follows as blob 0.
+    /// A postcard-encoded [`ResultsAnswer`](crate::remote::results::ResultsAnswer) follows as blob 0.
     ResultsAnswer,
     ExportProgress {
         message: String,
@@ -748,6 +650,9 @@ pub(crate) fn channels_from_wire(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::remote::results::{ResultsAnswer, ResultsQuery};
+    use crate::results::ScatterResult;
+    use evanalyzer_cfg::settings::classification_settings::Class;
 
     /// A step's error keeps its step across the wire (the GUI points at it
     /// in remote mode too); a server from before the field sends none.

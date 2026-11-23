@@ -27,6 +27,8 @@ mod session;
 mod tls;
 
 pub use remote_backend::RemoteBackend;
+pub(super) use results::RemoteResults;
+pub(super) use session::unexpected_reply;
 pub use tls::{ServerCertificate, TlsTrust};
 
 /// The TLS certificate of the server at `url` (`wss://`), without trusting

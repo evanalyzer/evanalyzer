@@ -32,6 +32,7 @@
 
 mod client;
 mod job_registry;
+pub(crate) mod results;
 pub(crate) mod wire;
 mod worker;
 

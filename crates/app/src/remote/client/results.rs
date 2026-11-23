@@ -13,36 +13,18 @@
 use super::link::{Link, Reopen};
 use super::session::{Session, unexpected_reply};
 use crate::backend::ExportProgressFn;
+use crate::remote::results::{ResultsAnswer, ResultsQuery};
 use crate::remote::wire::frame::Frame;
-use crate::remote::wire::protocol::{
-    ClientMsg, Reply, Request, ResultsAnswer, ResultsQuery, from_postcard, to_postcard,
-};
-use crate::results::BoxplotFilter;
-use crate::results::BoxplotResult;
-use crate::results::ColumnEntry;
-use crate::results::DatabaseResult;
-use crate::results::GroupedByImageFilter;
-use crate::results::HistogramFilter;
-use crate::results::HistogramResult;
-use crate::results::ImageHeatmapFilter;
-use crate::results::ListFilter;
-use crate::results::PlateFilter;
+use crate::remote::wire::protocol::{ClientMsg, Reply, Request, from_postcard, to_postcard};
 use crate::results::ResultExport;
-use crate::results::ResultsSource;
-use crate::results::ScatterFilter;
-use crate::results::ScatterResult;
-use crate::results::View;
-use crate::results::WellFilter;
-use crate::results::{ImageEntry, ImageReviewChange};
 use evanalyzer_cfg::core_types::InternalErrors;
-use evanalyzer_cfg::settings::classification_settings::Class;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
 use std::time::Duration;
 
-pub(super) struct RemoteResults {
+pub(in crate::remote) struct RemoteResults {
     path: PathBuf,
     handle: Reopen,
 }
@@ -77,7 +59,10 @@ impl RemoteResults {
         self.handle.get(|session| open(session, &self.path))
     }
 
-    fn query(&self, query: ResultsQuery) -> Result<ResultsAnswer, InternalErrors> {
+    pub(in crate::remote) fn query(
+        &self,
+        query: ResultsQuery,
+    ) -> Result<ResultsAnswer, InternalErrors> {
         let (session, handle) = self.session()?;
         let request = Request::QueryResults { handle };
         let (id, rx) = session.request_with_blobs(request, vec![to_postcard(&query)?])?;
@@ -96,311 +81,9 @@ impl RemoteResults {
         }
     }
 
-    fn table(&self, query: ResultsQuery) -> Result<DatabaseResult, InternalErrors> {
-        match self.query(query)? {
-            ResultsAnswer::Table(table) => Ok(table),
-            _ => Err(unexpected_reply()),
-        }
-    }
-
-    fn count(&self, query: ResultsQuery) -> u32 {
-        match self.query(query) {
-            Ok(ResultsAnswer::Count(n)) => n,
-            Ok(_) => {
-                log::warn!("Unexpected answer to a stack-count query");
-                1
-            }
-            Err(e) => {
-                log::warn!("Could not read stack count from the server: {e}");
-                1
-            }
-        }
-    }
-}
-
-impl ResultsSource for RemoteResults {
-    fn get_object_list(&self, filter: &ListFilter) -> Result<DatabaseResult, InternalErrors> {
-        self.table(ResultsQuery::ObjectList(filter.clone()))
-    }
-
-    fn object_list_page_starts(
-        &self,
-        filter: &ListFilter,
-        object_id: &str,
-    ) -> Result<Option<Vec<String>>, InternalErrors> {
-        match self.query(ResultsQuery::ObjectListPageStarts {
-            filter: filter.clone(),
-            object_id: object_id.to_string(),
-        })? {
-            ResultsAnswer::PageStarts(starts) => Ok(starts),
-            _ => Err(unexpected_reply()),
-        }
-    }
-
-    fn get_grouped_by_image(
-        &self,
-        filter: &GroupedByImageFilter,
-    ) -> Result<DatabaseResult, InternalErrors> {
-        self.table(ResultsQuery::GroupedByImage(filter.clone()))
-    }
-
-    fn get_group_by_plate(
-        &self,
-        filter: &PlateFilter,
-        view: &View,
-    ) -> Result<DatabaseResult, InternalErrors> {
-        self.table(ResultsQuery::GroupByPlate(filter.clone(), view.clone()))
-    }
-
-    fn get_group_by_well(
-        &self,
-        filter: &WellFilter,
-        view: &View,
-    ) -> Result<DatabaseResult, InternalErrors> {
-        self.table(ResultsQuery::GroupByWell(filter.clone(), view.clone()))
-    }
-
-    fn get_image_heatmap(
-        &self,
-        filter: &ImageHeatmapFilter,
-        view: &View,
-    ) -> Result<DatabaseResult, InternalErrors> {
-        self.table(ResultsQuery::ImageHeatmap(filter.clone(), view.clone()))
-    }
-
-    fn get_images(&self) -> Result<Vec<ImageEntry>, InternalErrors> {
-        match self.query(ResultsQuery::Images)? {
-            ResultsAnswer::Images(images) => Ok(images),
-            _ => Err(unexpected_reply()),
-        }
-    }
-
-    fn enable_image(&self, image_rel_path: &str, disable: bool) -> Result<(), InternalErrors> {
-        let query = ResultsQuery::EnableImage {
-            image_rel_path: image_rel_path.into(),
-            disable,
-        };
-        match self.query(query)? {
-            ResultsAnswer::Done => Ok(()),
-            _ => Err(unexpected_reply()),
-        }
-    }
-
-    fn change_image_review(
-        &self,
-        image_rel_path: &str,
-        change: ImageReviewChange,
-    ) -> Result<(), InternalErrors> {
-        let query = ResultsQuery::ChangeImageReview {
-            image_rel_path: image_rel_path.into(),
-            change,
-        };
-        match self.query(query)? {
-            ResultsAnswer::Done => Ok(()),
-            _ => Err(unexpected_reply()),
-        }
-    }
-
-    fn get_object_classes(&self) -> Result<Vec<Class>, InternalErrors> {
-        match self.query(ResultsQuery::ObjectClasses)? {
-            ResultsAnswer::Classes(classes) => Ok(classes),
-            _ => Err(unexpected_reply()),
-        }
-    }
-
-    fn get_available_columns(&self) -> Result<Vec<ColumnEntry>, InternalErrors> {
-        match self.query(ResultsQuery::AvailableColumns)? {
-            ResultsAnswer::Columns(columns) => Ok(columns),
-            _ => Err(unexpected_reply()),
-        }
-    }
-
-    fn get_nr_of_z_stacks(&self) -> u32 {
-        self.count(ResultsQuery::ZStacks)
-    }
-
-    fn get_nr_of_t_stacks(&self) -> u32 {
-        self.count(ResultsQuery::TStacks)
-    }
-
-    fn get_planes(&self) -> Result<Vec<crate::results::PlaneFilter>, InternalErrors> {
-        match self.query(ResultsQuery::Planes)? {
-            ResultsAnswer::Planes(planes) => Ok(planes),
-            _ => Err(unexpected_reply()),
-        }
-    }
-
-    fn run_status(&self) -> Result<crate::results::RunStatus, InternalErrors> {
-        match self.query(ResultsQuery::RunStatus)? {
-            ResultsAnswer::RunStatus(status) => Ok(status),
-            _ => Err(unexpected_reply()),
-        }
-    }
-
-    fn grouping_regex(
-        &self,
-        grouping: &crate::results::Grouping,
-    ) -> Result<String, InternalErrors> {
-        match self.query(ResultsQuery::GroupingRegex(grouping.clone()))? {
-            ResultsAnswer::Text(regex) => Ok(regex),
-            _ => Err(unexpected_reply()),
-        }
-    }
-
-    fn boxplot(&self, filter: &BoxplotFilter) -> Result<BoxplotResult, InternalErrors> {
-        match self.query(ResultsQuery::Boxplot(filter.clone()))? {
-            ResultsAnswer::Boxplot(result) => Ok(result),
-            _ => Err(unexpected_reply()),
-        }
-    }
-
-    fn histogram(&self, filter: &HistogramFilter) -> Result<HistogramResult, InternalErrors> {
-        match self.query(ResultsQuery::Histogram(filter.clone()))? {
-            ResultsAnswer::Histogram(result) => Ok(result),
-            _ => Err(unexpected_reply()),
-        }
-    }
-
-    fn scatter(&self, filter: &ScatterFilter) -> Result<ScatterResult, InternalErrors> {
-        match self.query(ResultsQuery::Scatter(filter.clone()))? {
-            ResultsAnswer::Scatter(result) => Ok(result),
-            _ => Err(unexpected_reply()),
-        }
-    }
-
-    fn time_course(
-        &self,
-        filter: &crate::results::TimeCourseFilter,
-    ) -> Result<crate::results::TimeCourseResult, InternalErrors> {
-        match self.query(ResultsQuery::TimeCourse(filter.clone()))? {
-            ResultsAnswer::TimeCourse(result) => Ok(result),
-            _ => Err(unexpected_reply()),
-        }
-    }
-
-    fn profile_columns(&self) -> Result<Vec<crate::results::MeasurementColumn>, InternalErrors> {
-        match self.query(ResultsQuery::ProfileColumns)? {
-            ResultsAnswer::ProfileColumns(columns) => Ok(columns),
-            _ => Err(unexpected_reply()),
-        }
-    }
-
-    fn profile(
-        &self,
-        filter: &crate::results::ProfileFilter,
-    ) -> Result<crate::results::ProfileResult, InternalErrors> {
-        match self.query(ResultsQuery::Profile(filter.clone()))? {
-            ResultsAnswer::Profile(result) => Ok(result),
-            _ => Err(unexpected_reply()),
-        }
-    }
-
-    fn object_profile(
-        &self,
-        key: &str,
-        object_id: &str,
-    ) -> Result<Vec<(f64, f64)>, InternalErrors> {
-        match self.query(ResultsQuery::ObjectProfile {
-            key: key.to_string(),
-            object_id: object_id.to_string(),
-        })? {
-            ResultsAnswer::ObjectProfile(curve) => Ok(curve),
-            _ => Err(unexpected_reply()),
-        }
-    }
-
-    fn profile_step(
-        &self,
-        filter: &crate::results::ProfileStepFilter,
-    ) -> Result<crate::results::ProfileStep, InternalErrors> {
-        match self.query(ResultsQuery::ProfileStep(filter.clone()))? {
-            ResultsAnswer::ProfileStep(step) => Ok(step),
-            _ => Err(unexpected_reply()),
-        }
-    }
-
-    fn has_trees(&self) -> Result<bool, InternalErrors> {
-        match self.query(ResultsQuery::HasTrees)? {
-            ResultsAnswer::Flag(yes) => Ok(yes),
-            _ => Err(unexpected_reply()),
-        }
-    }
-
-    fn tree_neurons(
-        &self,
-        images: Option<Vec<String>>,
-    ) -> Result<crate::results::TreeNeurons, InternalErrors> {
-        match self.query(ResultsQuery::TreeNeurons(images))? {
-            ResultsAnswer::TreeNeurons(neurons) => Ok(neurons),
-            _ => Err(unexpected_reply()),
-        }
-    }
-
-    fn tree_segments(
-        &self,
-        soma_id: &str,
-    ) -> Result<Vec<crate::results::TreeSegment>, InternalErrors> {
-        match self.query(ResultsQuery::TreeSegments(soma_id.to_string()))? {
-            ResultsAnswer::TreeSegments(segments) => Ok(segments),
-            _ => Err(unexpected_reply()),
-        }
-    }
-
-    fn image_objects(
-        &self,
-        filter: &crate::results::ImageObjectsFilter,
-    ) -> Result<Vec<crate::results::ResultObject>, InternalErrors> {
-        match self.query(ResultsQuery::ImageObjects(filter.clone()))? {
-            ResultsAnswer::Objects(objects) => Ok(objects),
-            _ => Err(unexpected_reply()),
-        }
-    }
-
-    fn track_summary(
-        &self,
-        filter: &crate::results::TrackSummaryFilter,
-    ) -> Result<Vec<crate::results::TrackSummary>, InternalErrors> {
-        match self.query(ResultsQuery::TrackSummary(filter.clone()))? {
-            ResultsAnswer::TrackSummary(tracks) => Ok(tracks),
-            _ => Err(unexpected_reply()),
-        }
-    }
-
-    fn track_paths(
-        &self,
-        filter: &crate::results::TrackPathsFilter,
-    ) -> Result<crate::results::TrackPaths, InternalErrors> {
-        match self.query(ResultsQuery::TrackPaths(filter.clone()))? {
-            ResultsAnswer::TrackPaths(paths) => Ok(paths),
-            _ => Err(unexpected_reply()),
-        }
-    }
-
-    fn has_tracks(&self) -> Result<bool, InternalErrors> {
-        match self.query(ResultsQuery::HasTracks)? {
-            ResultsAnswer::Count(n) => Ok(n > 0),
-            _ => Err(unexpected_reply()),
-        }
-    }
-
-    fn has_lineage(&self) -> Result<bool, InternalErrors> {
-        match self.query(ResultsQuery::HasLineage)? {
-            ResultsAnswer::Count(n) => Ok(n > 0),
-            _ => Err(unexpected_reply()),
-        }
-    }
-
-    fn image_tracks(
-        &self,
-        filter: &crate::results::ImageTracksFilter,
-    ) -> Result<crate::results::ImageTracks, InternalErrors> {
-        match self.query(ResultsQuery::ImageTracks(filter.clone()))? {
-            ResultsAnswer::Tracks(tracks) => Ok(tracks),
-            _ => Err(unexpected_reply()),
-        }
-    }
-
-    fn export(
+    /// `ResultsSource::export`: the worker writes the files and streams its
+    /// progress; `cancel` stops it.
+    pub(in crate::remote) fn export_results(
         &self,
         export: &ResultExport,
         cancel: &AtomicBool,
@@ -646,13 +329,13 @@ mod tests {
             "00000000-0000-0000-0000-000000000009".to_string(),
         ]);
         let bytes = crate::remote::wire::protocol::to_postcard(
-            &crate::remote::wire::protocol::ResultsAnswer::PageStarts(starts.clone()),
+            &crate::remote::results::ResultsAnswer::ObjectListPageStarts(starts.clone()),
         )
         .unwrap();
-        let back: crate::remote::wire::protocol::ResultsAnswer =
+        let back: crate::remote::results::ResultsAnswer =
             crate::remote::wire::protocol::from_postcard(Some(&bytes)).unwrap();
         assert!(
-            matches!(back, crate::remote::wire::protocol::ResultsAnswer::PageStarts(s) if s == starts)
+            matches!(back, crate::remote::results::ResultsAnswer::ObjectListPageStarts(s) if s == starts)
         );
         let summary = TrackSummaryFilter::default();
         assert_eq!(
@@ -1308,9 +991,10 @@ mod tests {
     /// A worker of this protocol answering as `odd` says - as a client of
     /// another build could meet it.
     fn odd_worker(odd: Odd) -> RemoteBackend {
+        use crate::remote::results::{ResultsAnswer, ResultsQuery};
         use crate::remote::wire::frame;
         use crate::remote::wire::protocol::{
-            APP_VERSION, ClientMsg, Reply, Request, ResultsAnswer, ServerMsg, WireError,
+            APP_VERSION, ClientMsg, Reply, Request, ServerMsg, WireError, from_postcard,
             to_postcard,
         };
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1322,7 +1006,8 @@ mod tests {
                 let tungstenite::Message::Binary(bytes) = message else {
                     continue;
                 };
-                let (msg, blobs) = match frame::decode::<ClientMsg>(&bytes).unwrap().msg {
+                let frame = frame::decode::<ClientMsg>(&bytes).unwrap();
+                let (msg, blobs) = match frame.msg {
                     ClientMsg::Hello { .. } => (
                         ServerMsg::Welcome {
                             app_version: APP_VERSION.into(),
@@ -1336,10 +1021,16 @@ mod tests {
                             (Request::OpenResults { .. }, _) => {
                                 (Reply::ResultsOpened { handle: 1 }, Vec::new())
                             }
-                            (Request::QueryResults { .. }, Odd::WrongAnswer) => (
-                                Reply::ResultsAnswer,
-                                vec![to_postcard(&ResultsAnswer::Done).unwrap()],
-                            ),
+                            // An answer of another call than the one asked.
+                            (Request::QueryResults { .. }, Odd::WrongAnswer) => {
+                                let asked: ResultsQuery =
+                                    from_postcard(frame.blobs.first()).unwrap();
+                                let wrong = match asked {
+                                    ResultsQuery::HasTrees {} => ResultsAnswer::HasLineage(true),
+                                    _ => ResultsAnswer::HasTrees(true),
+                                };
+                                (Reply::ResultsAnswer, vec![to_postcard(&wrong).unwrap()])
+                            }
                             (Request::ExportResults { .. }, Odd::WrongReply) => (
                                 Reply::Failed(WireError::message("no space left")),
                                 Vec::new(),
@@ -1461,8 +1152,11 @@ mod tests {
             }),
             "scatter",
         );
-        // `Done` is enabling's answer: that one works.
-        db.enable_image(image, true).unwrap();
+        unexpected(db.enable_image(image, true), "enable image");
+        unexpected(
+            db.change_image_review(image, ImageReviewChange::Note(String::new())),
+            "image review",
+        );
         assert_eq!(db.get_nr_of_z_stacks(), 1);
         assert_eq!(db.get_nr_of_t_stacks(), 1);
         unexpected(

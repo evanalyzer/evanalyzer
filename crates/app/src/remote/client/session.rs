@@ -324,7 +324,7 @@ impl Session {
     }
 }
 
-pub(super) fn unexpected_reply() -> InternalErrors {
+pub(in crate::remote) fn unexpected_reply() -> InternalErrors {
     InternalErrors::Internal("unexpected reply from server".into())
 }
 
