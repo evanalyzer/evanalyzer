@@ -1167,7 +1167,7 @@ mod tests {
     /// out, modules opened up, nested ones too.
     #[test]
     fn cfg_run_commands_lists_what_a_run_expands() {
-        use evanalyzer_cfg::settings::step_roles::run_commands;
+        use crate::pipeline::step_roles::run_commands;
         let key = |k: &str| PipelineCommand::default_for_key(k).unwrap();
         let mut disabled = command_step(3, key("fill_holes"));
         disabled.enabled = false;

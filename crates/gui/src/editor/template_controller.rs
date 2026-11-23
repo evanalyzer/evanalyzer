@@ -12,7 +12,6 @@ use crate::DialogType;
 use crate::FileRequest;
 use crate::UiState;
 use crate::{GlobalAppState, TemplateMetaSlint, TemplateMetaState};
-use evanalyzer_app::project::ProjectExt;
 use evanalyzer_app::templates::load_module_templates;
 use evanalyzer_app::templates::load_project_templates;
 use evanalyzer_cfg::core_types::PipelineId;
@@ -42,7 +41,7 @@ enum TemplateTarget {
 /// 2. On confirm, a native "Save File" dialog is shown, defaulting to the
 ///    user's templates folder.
 /// 3. The selected metadata + path are handed off to
-///    `ProjectExt::save_project_as_template`, `modules::save_module_template`
+///    `ProjectWithRuntime::save_project_as_template`, `modules::save_module_template`
 ///    or `modules::save_pipeline_as_module`.
 pub struct TemplateController {
     ui: slint::Weak<AppWindow>,

@@ -12,7 +12,7 @@ use crate::commands::common::{
     cell_text, resolve_image_rel_paths, resolve_object_classes, shown_planes,
 };
 use crate::table::print_object_table;
-use evanalyzer_app::backends::Backend;
+use evanalyzer_app::backend::Backend;
 use evanalyzer_app::results::Cell;
 use evanalyzer_app::results::CellValue;
 use evanalyzer_app::results::Column;
@@ -138,7 +138,7 @@ fn tracks_table(
     db: &dyn evanalyzer_app::results::ResultsSource,
     args: &ViewArgs,
 ) -> Result<DatabaseResult, InternalErrors> {
-    use evanalyzer_app::global::SpeedUnit;
+    use evanalyzer_app::results::SpeedUnit;
     let image_rel_paths = resolve_image_rel_paths(db, &args.filter.images)?;
     let object_classes = resolve_object_classes(db, &args.filter.classes)?;
     let tracks = db.track_summary(&evanalyzer_app::results::TrackSummaryFilter {
@@ -296,6 +296,7 @@ pub fn run(args: ViewArgs, backend: &dyn Backend) -> Result<(), InternalErrors> 
             after: None,
         },
         transpond_table: args.filter.transpond.unwrap_or_else(|| false),
+        sort: None,
     };
 
     let result = rows_page(db, &base_filter, &args)?;
@@ -414,7 +415,7 @@ fn summarize(names: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use evanalyzer_app::backends::local::LocalBackend;
+    use evanalyzer_app::backend::local::LocalBackend;
 
     use super::*;
 
@@ -481,6 +482,7 @@ mod tests {
                 after: None,
             },
             transpond_table: false,
+            sort: None,
         };
         let result = rows_page(source.as_ref(), &base, args).unwrap();
         let rows = result

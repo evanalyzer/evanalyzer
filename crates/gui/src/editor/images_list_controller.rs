@@ -18,8 +18,9 @@ use crate::helper::size_formater::format_bytes;
 use crate::{AppWindow, DialogType, GlobalAppState, ObjectHighlightBox, ViewportObjectState};
 use crate::{ImageItemData, ImagesListState, WellState};
 use evanalyzer_app::project::ImageListExt;
+use evanalyzer_app::project::ImageSettingsExt;
+use evanalyzer_app::project::SelectNewProjectRootAction;
 use evanalyzer_app::project::collect_images_at_root;
-use evanalyzer_app::project::{ProjectExt, SelectNewProjectRootAction};
 use log::{debug, info, warn};
 use slint::{ComponentHandle, Model};
 use std::path::PathBuf;
@@ -1127,7 +1128,7 @@ fn build_group_rows(
     let mut placed = vec![false; matching.len()];
     for part in parts {
         let part_paths: Vec<&std::path::Path> = part.iter().map(|&i| paths[i]).collect();
-        let layout = evanalyzer_app::images::plate_layout(&part_paths, plate);
+        let layout = evanalyzer_app::project::plate_layout(&part_paths, plate);
         for well in layout.wells {
             let entry = wells
                 .entry((well.row, well.col))

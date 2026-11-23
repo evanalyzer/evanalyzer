@@ -12,11 +12,11 @@ use crate::commands::common::{
     ResolvedGrouping, resolve_grouping, resolve_image_rel_paths, resolve_object_classes,
     to_time_course_stat,
 };
-use evanalyzer_app::backends::Backend;
-use evanalyzer_app::global::SpeedUnit;
+use evanalyzer_app::backend::Backend;
 use evanalyzer_app::project::load_project;
 use evanalyzer_app::results::ExportFormat;
 use evanalyzer_app::results::ResultExport;
+use evanalyzer_app::results::SpeedUnit;
 use evanalyzer_app::results::view_settings::{
     DEFAULT_LIST_COLUMNS, ListView, ViewSettings, resolve_columns, with_related_columns,
 };
@@ -366,7 +366,7 @@ fn move_time_course_csv_into_place(
 
 #[cfg(test)]
 mod tests {
-    use evanalyzer_app::backends::local::LocalBackend;
+    use evanalyzer_app::backend::local::LocalBackend;
 
     use super::*;
 

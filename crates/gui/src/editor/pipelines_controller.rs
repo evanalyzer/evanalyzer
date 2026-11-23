@@ -28,12 +28,12 @@ use crate::{
     RunAnalysisState, SectionView, StepCategory, TunedSetting, UiState, WarningState,
 };
 use crate::{ResultItemData, ResultsListState};
-use evanalyzer_app::ai_learning::load_classifier_settings;
-use evanalyzer_app::fs::FileSystem;
+use evanalyzer_app::ai::learning::load_classifier_settings;
+use evanalyzer_app::files::FileSystem;
 use evanalyzer_app::modules::ClassRole;
+use evanalyzer_app::modules::{step_roles, tracker_after};
 use evanalyzer_app::project::ImageEntryExt;
 use evanalyzer_app::project::ImageListExt;
-use evanalyzer_app::project::ProjectExt;
 use evanalyzer_app::templates::load_module_templates;
 use evanalyzer_cfg::core_types::MemorySlot;
 use evanalyzer_cfg::core_types::ModuleParamKey;
@@ -65,7 +65,6 @@ use evanalyzer_cfg::settings::pipeline_settings::{
     PipelineSettings, PipelineStepSettings, StepContent,
 };
 use evanalyzer_cfg::settings::project_settings::{PinnedSetting, ProjectSettings};
-use evanalyzer_cfg::settings::step_roles::{step_roles, tracker_after};
 use evanalyzer_cfg::settings::templates::ModuleTemplate;
 use evanalyzer_gui_slint::CommandAuthor;
 use log::debug;
@@ -99,9 +98,9 @@ pub struct PipelinesController {
     pub(crate) template_controller: Arc<TemplateController>,
     pub(crate) task_request: Arc<(Mutex<Option<PipelineTask>>, Condvar)>,
     /// Cancels the running analysis.
-    pub(crate) pipeline_cancel_flag: Arc<Mutex<Option<evanalyzer_app::analysis::CancelHandle>>>,
+    pub(crate) pipeline_cancel_flag: Arc<Mutex<Option<evanalyzer_app::jobs::CancelHandle>>>,
     /// Cancels the running preview - it may run while an analysis does.
-    pub(crate) preview_cancel_flag: Arc<Mutex<Option<evanalyzer_app::analysis::CancelHandle>>>,
+    pub(crate) preview_cancel_flag: Arc<Mutex<Option<evanalyzer_app::jobs::CancelHandle>>>,
     /// An analysis (not a preview) is running - closing the window asks
     /// what to do with it.
     pub(crate) analysis_running: Arc<std::sync::atomic::AtomicBool>,
@@ -1066,7 +1065,7 @@ impl PipelinesController {
                                     name.clear();
                                 }
                                 steps.insert(idx + 1, cloned);
-                                evanalyzer_app::utils::assign_step_ids(steps);
+                                evanalyzer_app::project::utils::assign_step_ids(steps);
                             }
                         }
                     }
@@ -1197,7 +1196,7 @@ impl PipelinesController {
                                 .expect("Poisoned");
                             detail.ram = command_ram_text(&command, image).into();
                             detail.citations = ModelRc::new(VecModel::from(
-                                evanalyzer_app::exporter::command_citations(&command)
+                                evanalyzer_app::project::command_citations(&command)
                                     .into_iter()
                                     .map(SharedString::from)
                                     .collect::<Vec<_>>(),
@@ -2309,7 +2308,7 @@ impl PipelinesController {
                         // The RDF is read through the backend, so a model on
                         // the server resolves to server paths.
                         crate::helper::ui_thread::spawn(move || {
-                            let result = evanalyzer_app::bioimageio::configure_from(
+                            let result = evanalyzer_app::ai::bioimageio::configure_from(
                                 manager.app_state.backend().files(),
                                 &path,
                             );
@@ -2335,7 +2334,7 @@ impl PipelinesController {
                                                     ((after_idx as usize) + 1).min(pipeline.steps.len())
                                                 };
                                                 pipeline.steps.insert(insert_at, step);
-                                                evanalyzer_app::utils::assign_step_ids(
+                                                evanalyzer_app::project::utils::assign_step_ids(
                                                     &mut pipeline.steps,
                                                 );
                                             }
@@ -2433,10 +2432,10 @@ impl PipelinesController {
                         // A measurement setting is picked by label - in an
                         // opened module among the module's own.
                         let measurements = match manager.open_module_key(pipeline_id) {
-                            Some(key) => evanalyzer_app::settings_of::module_measurement_choices(
+                            Some(key) => evanalyzer_app::modules::module_measurement_choices(
                                 &project, &key,
                             ),
-                            None => evanalyzer_app::settings_of::measurement_choices(&project),
+                            None => evanalyzer_app::modules::measurement_choices(&project),
                         };
                         let Some(step) = manager
                             .shown_steps_mut(&mut project, pipeline_id)
@@ -2479,13 +2478,13 @@ impl PipelinesController {
                         let Some(command) = step.command_mut() else {
                             return;
                         };
-                        let value_str = evanalyzer_app::settings_of::measurement_setting_text(
+                        let value_str = evanalyzer_app::modules::measurement_setting_text(
                             command,
                             &param_name,
                             &value_str,
                             &measurements,
                         );
-                        evanalyzer_app::settings_of::apply_command_param(
+                        evanalyzer_app::modules::apply_command_param(
                             command,
                             &param_name,
                             &value_str,
@@ -2525,14 +2524,14 @@ impl PipelinesController {
                         {
                             needs_full_resync = true;
                             if let Err(e) =
-                                evanalyzer_app::settings_of::declared_script_params(&settings.source)
+                                evanalyzer_app::modules::declared_script_params(&settings.source)
                             {
                                 script_problem = Some(e);
                             }
                         }
                         let mut parameters =
-                            evanalyzer_app::settings_of::command_parameters(command);
-                        evanalyzer_app::settings_of::show_measurement_choices(
+                            evanalyzer_app::modules::command_parameters(command);
+                        evanalyzer_app::modules::show_measurement_choices(
                             &mut parameters,
                             &measurements,
                         );
@@ -3335,7 +3334,7 @@ impl PipelinesController {
 
         let state = ui.global::<RunAnalysisState>();
         state.set_job_name("".into());
-        state.set_job_name_placeholder(evanalyzer_app::analysis::random_job_name().into());
+        state.set_job_name_placeholder(evanalyzer_app::jobs::random_job_name().into());
         state.set_dataset_only(false);
         state.set_has_dataset_steps(has_dataset_steps);
         state.set_base_names(ModelRc::new(VecModel::from(names)));
@@ -3476,7 +3475,7 @@ impl PipelinesController {
         {
             let mut project = self.app_state.get_project_write();
             evanalyzer_app::modules::prune_module_values(&mut project);
-            evanalyzer_app::utils::assign_measurement_ids(&mut project);
+            evanalyzer_app::project::utils::assign_measurement_ids(&mut project);
         }
         self.app_state.mark_dirty();
         self.focus_controller.refresh();
@@ -3507,7 +3506,7 @@ impl PipelinesController {
         let model = if !ai.loaded_model_path.is_empty() {
             std::path::PathBuf::from(ai.loaded_model_path.as_str())
         } else {
-            evanalyzer_app::ai_learning::model_output_path(
+            evanalyzer_app::ai::learning::model_output_path(
                 std::path::Path::new(""),
                 ai.model_name.as_str(),
             )
@@ -3520,7 +3519,7 @@ impl PipelinesController {
             show_values: state.get_prediction_values(),
         };
         self.app_state.update_app_settings(|app| {
-            app.prediction_overlay = evanalyzer_app::global::PredictionOverlayPrefs {
+            app.prediction_overlay = evanalyzer_app::user::PredictionOverlayPrefs {
                 opacity: settings.opacity,
                 show_background: settings.show_background,
                 show_values: settings.show_values,
@@ -5211,7 +5210,7 @@ impl PipelinesController {
                         ((after_idx as usize) + 1).min(steps.len())
                     };
                     steps.splice(insert_at..insert_at, new_steps);
-                    evanalyzer_app::utils::assign_step_ids(steps);
+                    evanalyzer_app::project::utils::assign_step_ids(steps);
                     (insert_at, steps.len())
                 })
         };
@@ -5530,8 +5529,8 @@ impl PipelinesController {
         ): (String, String, Vec<StepData>, i32, i32, i32) = {
             let project = self.app_state.get_project();
             let measurements = match &open_module {
-                Some(key) => evanalyzer_app::settings_of::module_measurement_choices(&project, key),
-                None => evanalyzer_app::settings_of::measurement_choices(&project),
+                Some(key) => evanalyzer_app::modules::module_measurement_choices(&project, key),
+                None => evanalyzer_app::modules::measurement_choices(&project),
             };
             let total_enabled_across_all = project
                 .pipelines
@@ -5606,10 +5605,10 @@ impl PipelinesController {
                                 enabled: step.enabled,
                                 parameters: {
                                     let mut parameters =
-                                        evanalyzer_app::settings_of::command_parameters(command);
+                                        evanalyzer_app::modules::command_parameters(command);
                                     // Measurement settings: the project's
                                     // measurements, by label.
-                                    evanalyzer_app::settings_of::show_measurement_choices(
+                                    evanalyzer_app::modules::show_measurement_choices(
                                         &mut parameters,
                                         &measurements,
                                     );
@@ -7789,7 +7788,7 @@ mod tests {
         assert_eq!(steps, ["b", "c", "a"]);
     }
     use super::*;
-    use evanalyzer_app::fs::LocalFileSystem;
+    use evanalyzer_app::files::LocalFileSystem;
     use evanalyzer_cfg::settings::images_settings::SeriesSettings;
     use evanalyzer_cfg::settings::meta_data::MetaData;
     use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
@@ -10412,7 +10411,7 @@ mod tests {
                 .clone();
             smooth.id = evanalyzer_cfg::core_types::StepId::UNASSIGNED;
             project.pipelines[0].steps.push(smooth);
-            evanalyzer_app::utils::assign_step_ids(&mut project.pipelines[0].steps);
+            evanalyzer_app::project::utils::assign_step_ids(&mut project.pipelines[0].steps);
         }
         controller.sync_steps_of_selected_pipeline_to_slint(PipelineId(1), true);
         drain_ui_queue();
@@ -10825,7 +10824,7 @@ mod tests {
         let (ui, ui_state, _controller) =
             selected(vec![step("Threshold"), step("Blur"), step("Blur")]);
         ui_state.update_app_settings(|settings| {
-            settings.author = Some(evanalyzer_app::global::UserInformation {
+            settings.author = Some(evanalyzer_app::user::UserInformation {
                 full_name: "Ada Lovelace".into(),
                 organization: "Analytical Engines".into(),
             });
@@ -12821,7 +12820,7 @@ mod tests {
     #[test]
     fn stop_cancels_and_closing_the_finished_run_lets_go_of_the_lock() {
         let (ui, _ui_state, controller) = selected(vec![]);
-        let cancel = evanalyzer_app::analysis::CancelHandle::with_callback(|| {});
+        let cancel = evanalyzer_app::jobs::CancelHandle::with_callback(|| {});
         *controller.pipeline_cancel_flag.lock().unwrap() = Some(cancel.clone());
         let running = ui.global::<PipelineRunningState>();
         running.invoke_cancel();
@@ -13223,8 +13222,8 @@ mod tests {
     #[test]
     fn the_preview_has_its_own_cancel() {
         let (ui, _ui_state, controller) = selected(vec![]);
-        let analysis = evanalyzer_app::analysis::CancelHandle::with_callback(|| {});
-        let preview = evanalyzer_app::analysis::CancelHandle::with_callback(|| {});
+        let analysis = evanalyzer_app::jobs::CancelHandle::with_callback(|| {});
+        let preview = evanalyzer_app::jobs::CancelHandle::with_callback(|| {});
         *controller.pipeline_cancel_flag.lock().unwrap() = Some(analysis.clone());
         *controller.preview_cancel_flag.lock().unwrap() = Some(preview.clone());
 
@@ -13241,7 +13240,7 @@ mod tests {
     fn a_change_cancels_or_outdates_the_whole_image_preview() {
         let (ui, _ui_state, controller) = selected(vec![]);
         let state = ui.global::<PreviewRunState>();
-        let preview = evanalyzer_app::analysis::CancelHandle::with_callback(|| {});
+        let preview = evanalyzer_app::jobs::CancelHandle::with_callback(|| {});
         *controller.preview_cancel_flag.lock().unwrap() = Some(preview.clone());
         state.set_shown(true);
 
@@ -14323,8 +14322,8 @@ mod tests {
 }
 
 /// How an analysis ended, for the "ended while away" notice.
-fn describe_end(state: &evanalyzer_app::analysis::JobState) -> String {
-    use evanalyzer_app::analysis::JobState;
+fn describe_end(state: &evanalyzer_app::jobs::JobState) -> String {
+    use evanalyzer_app::jobs::JobState;
     match state {
         JobState::Succeeded => "finished".into(),
         JobState::Cancelled => "cancelled".into(),

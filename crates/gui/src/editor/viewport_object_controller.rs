@@ -27,7 +27,6 @@ use bitvec::order::Lsb0;
 use bitvec::vec::BitVec;
 use evanalyzer_app::images::{Erased, annotation_from_mask, erase_mask, stroke_mask, union_mask};
 use evanalyzer_app::project::ObjectExt;
-use evanalyzer_app::project::ProjectExt;
 use evanalyzer_app::project::ProjectWithRuntime;
 use evanalyzer_cfg::core_types::{ImagePlane, ObjectClass, ObjectId};
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
@@ -369,7 +368,7 @@ impl ViewPortObjectController {
         };
         picks.1.push(rgb);
         state.set_color_picks(picks.1.len() as i32);
-        let Some(range) = evanalyzer_app::settings_of::hsv_range_around(&picks.1) else {
+        let Some(range) = evanalyzer_app::modules::hsv_range_around(&picks.1) else {
             return true;
         };
         drop(picks);
@@ -967,7 +966,8 @@ mod tests {
     use evanalyzer_app::images::ImageChannel;
     use evanalyzer_app::images::ManagedImage;
     use evanalyzer_app::images::Point2d;
-    use evanalyzer_app::prelude::classification_ext::ClassificationExt;
+    use evanalyzer_app::project::GlobalImageSettingsExt;
+    use evanalyzer_app::project::classes::ClassificationExt;
     use evanalyzer_cfg::core_types::ImageDimensionality;
     use evanalyzer_cfg::core_types::ObjectId;
     use evanalyzer_cfg::settings::classification_settings::Class;
@@ -1470,7 +1470,7 @@ mod tests {
         let ui = test_ui_window();
         let ui_state = ui_state_with_window(&ui, project_with_one_image());
         let nuclei = {
-            use evanalyzer_app::prelude::classification_ext::ClassificationExt;
+            use evanalyzer_app::project::classes::ClassificationExt;
             let mut project = ui_state.get_project_write();
             let id = project.classification.add_class(
                 evanalyzer_cfg::settings::classification_settings::Class {
@@ -1869,6 +1869,8 @@ mod tests {
         let live = live_controller(false);
         live.ui_state
             .get_project_write()
+            .images
+            .settings
             .set_global_pixel_size_settings(50.0, 50.0, None);
         live.object_state()
             .invoke_ruler_changed(2.0, 3.0, 414.0, 3.0);
@@ -1876,6 +1878,8 @@ mod tests {
 
         live.ui_state
             .get_project_write()
+            .images
+            .settings
             .set_global_pixel_size_settings(100.0, 200.0, None);
         live.object_state()
             .invoke_ruler_changed(0.0, 0.0, 30.0, 20.0);

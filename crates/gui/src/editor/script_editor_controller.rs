@@ -349,7 +349,7 @@ impl From<Diagnostic> for ScriptDiagnostic {
 /// `param` lines are known). Unknown functions are not errors here - Rhai
 /// resolves calls at run time.
 fn check_syntax(src: &str) -> Diagnostic {
-    match evanalyzer_app::settings_of::script_syntax_error(src) {
+    match evanalyzer_app::modules::script_syntax_error(src) {
         None => Diagnostic {
             ok: true,
             line: 0,

@@ -17,7 +17,8 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::editor::object_render::blend;
-use evanalyzer_app::analysis::{ObjectPredictionCapture, PredictionCapture};
+use evanalyzer_app::jobs::{ObjectPredictionCapture, PredictionCapture};
+use evanalyzer_app::project::ClassificationExt;
 use evanalyzer_cfg::core_types::ObjectId;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -29,14 +30,15 @@ pub(crate) const BACKGROUND_RGB: [u8; 3] = [0x97, 0x97, 0x8f];
 
 /// The colour of `class` on the overlay and in its legend: its project
 /// class's, the background grey (also a class the project no longer has).
-pub(crate) fn class_rgb<P: evanalyzer_app::project::ProjectExt + ?Sized>(
-    project: &P,
-    class: &evanalyzer_app::analysis::PredictedClass,
+pub(crate) fn class_rgb(
+    project: &evanalyzer_app::project::ProjectWithRuntime,
+    class: &evanalyzer_app::jobs::PredictedClass,
 ) -> [u8; 3] {
     if class.segmentation_class == evanalyzer_cfg::core_types::SegmentationClass::BACKGROUND {
         return BACKGROUND_RGB;
     }
     project
+        .classification
         .get_class_from_id(&evanalyzer_cfg::core_types::ObjectClass::Global(
             class.segmentation_class.as_u32(),
         ))
@@ -49,22 +51,22 @@ pub(crate) fn class_rgb<P: evanalyzer_app::project::ProjectExt + ?Sized>(
 /// The legend: each class of the last preview's prediction (the model's,
 /// in its order) with its colour - empty without one.
 impl PredictionOverlay {
-    pub(crate) fn legend<P: evanalyzer_app::project::ProjectExt + ?Sized>(
+    pub(crate) fn legend(
         &self,
-        project: &P,
+        project: &evanalyzer_app::project::ProjectWithRuntime,
     ) -> Vec<(String, [u8; 3])> {
         if let Some(objects) = &*self.objects.read().expect("Poisoned") {
             return objects
                 .classes
                 .iter()
                 .map(|class| {
-                    let rgb = project.get_class_from_id(&class.object_class).map_or(
-                        BACKGROUND_RGB,
-                        |class| {
+                    let rgb = project
+                        .classification
+                        .get_class_from_id(&class.object_class)
+                        .map_or(BACKGROUND_RGB, |class| {
                             let rgb = class.color;
                             [(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8]
-                        },
-                    );
+                        });
                     (class.name.clone(), rgb)
                 })
                 .collect();
@@ -85,7 +87,7 @@ impl PredictionOverlay {
 pub(crate) struct PredictionOverlaySettings {
     pub(crate) on: bool,
     /// The model whose pixel classifier step is shown (see
-    /// `evanalyzer_app::ai_learning::prediction_target`); `None`: the first
+    /// `evanalyzer_app::ai::learning::prediction_target`); `None`: the first
     /// pixel classifier.
     pub(crate) model: Option<PathBuf>,
     /// 0..=1, of a pixel the model is sure of.
@@ -129,7 +131,7 @@ impl PredictionTile {
 /// into `classes`) and probability (0..=255).
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ObjectPrediction {
-    pub(crate) classes: Vec<evanalyzer_app::analysis::PredictedObjectClass>,
+    pub(crate) classes: Vec<evanalyzer_app::jobs::PredictedObjectClass>,
     pub(crate) objects: HashMap<ObjectId, (u8, u8)>,
 }
 
@@ -268,7 +270,7 @@ impl PredictionOverlay {
         &self,
         buffer: &mut [slint::Rgba8Pixel],
         view: ScreenTransform,
-        colour_of: impl Fn(&evanalyzer_app::analysis::PredictedClass) -> [u8; 3],
+        colour_of: impl Fn(&evanalyzer_app::jobs::PredictedClass) -> [u8; 3],
     ) {
         let settings = self.settings();
         if !settings.on {
@@ -337,7 +339,7 @@ pub(crate) fn draw_prediction(
     view: ScreenTransform,
     tiles: &[PredictionTile],
     opacity: f32,
-    colour_of: impl Fn(&evanalyzer_app::analysis::PredictedClass) -> Option<[u8; 3]>,
+    colour_of: impl Fn(&evanalyzer_app::jobs::PredictedClass) -> Option<[u8; 3]>,
 ) {
     let ScreenTransform {
         width,
@@ -387,7 +389,7 @@ pub(crate) fn draw_prediction(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use evanalyzer_app::analysis::PredictedClass;
+    use evanalyzer_app::jobs::PredictedClass;
     use evanalyzer_cfg::core_types::SegmentationClass;
 
     /// A 2 × 1 tile at (`x`, `y`): Background (sure) left, Nucleus right
@@ -574,7 +576,7 @@ mod tests {
     /// Three objects of a two-class object classifier: sure Mitotic, a tie,
     /// fairly sure Interphase.
     fn object_capture() -> ObjectPredictionCapture {
-        use evanalyzer_app::analysis::PredictedObjectClass;
+        use evanalyzer_app::jobs::PredictedObjectClass;
         use evanalyzer_cfg::core_types::ObjectClass;
         ObjectPredictionCapture {
             classes: vec![
@@ -628,7 +630,7 @@ mod tests {
     #[test]
     #[ignore]
     fn bench_object_prediction() {
-        use evanalyzer_app::analysis::PredictedObjectClass;
+        use evanalyzer_app::jobs::PredictedObjectClass;
         use evanalyzer_cfg::core_types::ObjectClass;
         let n = 100_000u128;
         let capture = ObjectPredictionCapture {

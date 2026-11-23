@@ -12,7 +12,6 @@ use crate::editor::view_channel::{Samples, ViewChannel};
 use crate::editor::viewport_controller::ViewportState;
 use crate::helper::size_formater::BYTES_PER_MB;
 use clru::{CLruCache, WeightScale};
-use evanalyzer_app::global::ViewportMemorySettings;
 use evanalyzer_app::images::ImageChannel;
 use evanalyzer_app::images::ImageContainer;
 use evanalyzer_app::images::ImageSource;
@@ -20,7 +19,7 @@ use evanalyzer_app::images::ManagedImage;
 use evanalyzer_app::images::Point2d;
 use evanalyzer_app::images::PyramidInfo;
 use evanalyzer_app::images::TileRequest;
-use evanalyzer_app::project::ProjectExt;
+use evanalyzer_app::user::ViewportMemorySettings;
 use evanalyzer_cfg::core_types::ImageDimensionality;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::core_types::{ImageTile, ZProjection};
@@ -1709,7 +1708,7 @@ fn assemble_channel(
 /// This computer's total RAM in bytes - read once, it doesn't change.
 pub(crate) fn this_computer_ram_bytes() -> u64 {
     static RAM: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-    *RAM.get_or_init(|| evanalyzer_app::backends::local::cpu_ram_diagnostics().1)
+    *RAM.get_or_init(|| evanalyzer_app::backend::local::cpu_ram_diagnostics().1)
 }
 
 /// The cache sizes (tile, overview) in MB `settings` give on this computer.
@@ -2618,7 +2617,6 @@ mod tests {
     /// - for every plane.
     #[test]
     fn an_image_without_a_pyramid_gets_the_overview_it_got_when_read_alone() {
-        use evanalyzer_app::project::ProjectExt;
         let app_state = crate::editor::test_support::test_ui_state_with_project(
             crate::editor::test_support::project_with_fixture_image(),
         );

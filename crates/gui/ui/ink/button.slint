@@ -84,9 +84,20 @@ export component InkButton inherits Rectangle {
     }
 
     // Hovered also when disabled: the tip says why.
+    // Clicked: no tip until the pointer leaves and comes back - the
+    // button may change under a still pointer, or go away, and its tip
+    // then stays.
+    property <bool> tip-quiet: false;
+    property <bool> hovered: ta.has-hover;
+    changed hovered => {
+        if !self.hovered {
+            self.tip-quiet = false;
+        }
+    }
     ta := TouchArea {
         mouse-cursor: root.enabled ? pointer : default;
         clicked => {
+            root.tip-quiet = true;
             if root.enabled {
                 root.clicked();
             }
@@ -108,7 +119,7 @@ export component InkButton inherits Rectangle {
     }
 
     InkTipZone {
-        wanted: (ta.has-hover || keys.has-focus) && !ta.pressed;
+        wanted: ((ta.has-hover && !root.tip-quiet) || keys.has-focus) && !ta.pressed;
         text: root.tip != "" ? root.tip
             : root.keys.length > 0 || (!root.enabled && root.disabled-reason != "") ? root.text : "";
         keys: root.keys;
@@ -169,9 +180,20 @@ export component InkIconButton inherits Rectangle {
     }
 
     // Hovered also when disabled: the tip says why.
+    // Clicked: no tip until the pointer leaves and comes back - the
+    // button may change under a still pointer, or go away, and its tip
+    // then stays.
+    property <bool> tip-quiet: false;
+    property <bool> hovered: ta.has-hover;
+    changed hovered => {
+        if !self.hovered {
+            self.tip-quiet = false;
+        }
+    }
     ta := TouchArea {
         mouse-cursor: root.enabled ? pointer : default;
         clicked => {
+            root.tip-quiet = true;
             if root.enabled {
                 root.clicked();
             }
@@ -193,7 +215,7 @@ export component InkIconButton inherits Rectangle {
     }
 
     InkTipZone {
-        wanted: (ta.has-hover || keys.has-focus) && !ta.pressed;
+        wanted: ((ta.has-hover && !root.tip-quiet) || keys.has-focus) && !ta.pressed;
         text: root.label;
         keys: root.keys;
         sub: root.enabled ? "" : root.disabled-reason;
@@ -256,9 +278,20 @@ export component InkToolButton inherits Rectangle {
     }
 
     // Hovered also when disabled: the tip says why.
+    // Clicked: no tip until the pointer leaves and comes back - the
+    // button may change under a still pointer, or go away, and its tip
+    // then stays.
+    property <bool> tip-quiet: false;
+    property <bool> hovered: ta.has-hover;
+    changed hovered => {
+        if !self.hovered {
+            self.tip-quiet = false;
+        }
+    }
     ta := TouchArea {
         mouse-cursor: root.enabled ? pointer : default;
         clicked => {
+            root.tip-quiet = true;
             if root.enabled {
                 root.clicked();
             }
@@ -266,7 +299,7 @@ export component InkToolButton inherits Rectangle {
     }
 
     InkTipZone {
-        wanted: ta.has-hover && !ta.pressed;
+        wanted: ta.has-hover && !root.tip-quiet && !ta.pressed;
         text: root.label;
         keys: root.keys;
         sub: root.enabled ? "" : root.disabled-reason;

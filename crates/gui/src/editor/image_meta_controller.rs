@@ -15,9 +15,9 @@ use crate::{
     AppWindow, ChannelInfo, ChannelState, ImageMetaData, IntensityProjection, SeriesInfo,
     WavelengthOption,
 };
-use evanalyzer_app::prelude::utils::wavelength_colors;
-use evanalyzer_app::project::ProjectExt;
-use evanalyzer_app::utils::{channel_display_name, wavelength_to_rgb_float};
+use evanalyzer_app::project::GlobalImageSettingsExt;
+use evanalyzer_app::project::utils::wavelength_colors;
+use evanalyzer_app::project::utils::{channel_display_name, wavelength_to_rgb_float};
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::images_settings::ZStackHandling;
 use log::warn;
@@ -230,8 +230,14 @@ impl ImageMetaController {
         {
             let mut project = self.app_state.get_project_write();
             match nm {
-                Some(nm) => project.set_global_emission_wavel_length(channel_idx, nm),
-                None => project.reset_global_emission_wavel_length(channel_idx),
+                Some(nm) => project
+                    .images
+                    .settings
+                    .set_global_emission_wavel_length(channel_idx, nm),
+                None => project
+                    .images
+                    .settings
+                    .reset_global_emission_wavel_length(channel_idx),
             }
         }
         self.app_state.mark_dirty();
@@ -311,7 +317,7 @@ impl ImageMetaController {
     /// updates are dispatched to the main event loop via `slint::invoke_from_event_loop`.
     /// The user setting "Color channels without a wavelength": the shown
     /// image's channels the file gives none get one for the project (see
-    /// `ProjectExt::assign_missing_wavelengths`) - kept like a value the
+    /// `ProjectWithRuntime::assign_missing_wavelengths`) - kept like a value the
     /// user set, so the project looks the same everywhere afterwards.
     pub(crate) fn assign_missing_wavelengths(&self) {
         if !self
@@ -597,7 +603,7 @@ impl ImageMetaController {
                     };
                     // Without a wavelength: a distinct default colour (white
                     // for everything in grayscale mode) - see
-                    // `ProjectExt::get_channel_display_colors`.
+                    // `ProjectWithRuntime::get_channel_display_colors`.
                     let color = display_colors
                         .get(idx)
                         .copied()
@@ -780,7 +786,11 @@ impl ImageMetaController {
         {
             let mut project = self.app_state.get_project_write();
             // 0 (or less): the z spacing is unknown.
-            project.set_global_pixel_size_settings(px, py, (pz > 0.0).then_some(pz));
+            project.images.settings.set_global_pixel_size_settings(
+                px,
+                py,
+                (pz > 0.0).then_some(pz),
+            );
         }
         self.sync_pixel_size_settings_to_slint();
         self.viewport_controller.sync_scale_bar_to_slint();
@@ -804,7 +814,7 @@ impl ImageMetaController {
     pub(crate) fn reset_manual_pixel_sizes(&self) {
         {
             let mut project = self.app_state.get_project_write();
-            project.reset_global_pixel_size_settings();
+            project.images.settings.reset_global_pixel_size_settings();
         }
         self.sync_pixel_size_settings_to_slint();
         self.viewport_controller.sync_scale_bar_to_slint();
@@ -851,7 +861,7 @@ impl ImageMetaController {
 /// A frame interval [s] as the image info panel shows it, like a channel's
 /// colour: the project's (`project_value`, then "edited") if set, else the
 /// image's own from its metadata, else nothing (an empty text). Unlike
-/// `ProjectExt::get_effective_frame_interval`, no default is shown.
+/// `ProjectWithRuntime::get_effective_frame_interval`, no default is shown.
 /// "16 bit", or "16 bit · 12 used" when the file uses fewer bits.
 fn pixel_type_text(bits: u16, significant: Option<u8>) -> String {
     match significant {
@@ -1513,10 +1523,9 @@ mod tests {
     #[test]
     fn the_grayscale_switch_shows_one_white_channel_and_back_in_colour() {
         // The project knows the file's real channels, as after adding it.
-        use evanalyzer_app::backends::Backend;
-        use evanalyzer_app::project::ProjectExt;
+        use evanalyzer_app::backend::Backend;
         let path = crate::editor::test_support::fixture_image_path();
-        let meta = evanalyzer_app::backends::local::LocalBackend::default()
+        let meta = evanalyzer_app::backend::local::LocalBackend::default()
             .read_image_meta(&path)
             .unwrap();
         let mut project = evanalyzer_app::project::ProjectWithRuntime::default();

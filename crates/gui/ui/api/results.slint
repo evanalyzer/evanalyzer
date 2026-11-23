@@ -18,6 +18,53 @@ export struct ColumnSection {
     items: [MultiSelectItem],
 }
 
+/// A cell of the List's intensity grid (channels × values): the column's
+/// picker key ("" - the results lack it) and whether it is shown.
+export struct IntensityCell {
+    key: string,
+    selected: bool,
+}
+
+/// A starting set of the List's columns ("Basic", "Shape", ...): `active`
+/// while exactly its columns are shown.
+export struct ColumnPreset {
+    key: string,
+    title: string,
+    description: string,
+    active: bool,
+}
+
+/// A coloc column in the List's coloc builder: `glyph` says per partner
+/// class what it needs - ● overlaps, ○ must not, · either.
+export struct ColocColumnItem {
+    key: string,
+    name: string,
+    glyph: string,
+    selected: bool,
+}
+
+/// A kind of coloc columns (each class, at least, exactly) with its
+/// columns.
+export struct ColocKind {
+    group: string,
+    title: string,
+    description: string,
+    count: string,
+    items: [ColocColumnItem],
+}
+
+/// A coloc group's block in the builder: the classes one Colocalize step
+/// looked at (`name` "in-cell-spots", `classes` "ch1 · ch2 · ch3"; both
+/// empty: no head - one group only, or "with no class") and its kinds.
+export struct ColocGroup {
+    key: string,
+    name: string,
+    classes: string,
+    open: bool,
+    kinds: [ColocKind],
+}
+
+
 // Tracks: only with tracked objects - one image's tracks, beside it.
 export enum ResultsRailMode { list, matrix, charts, tracks, paths, trees }
 
@@ -25,7 +72,7 @@ export enum ResultsRailMode { list, matrix, charts, tracks, paths, trees }
 // object (single image + detected objects).
 export enum MatrixLevel { plate, well, object }
 
-export enum ResultsChartKind2 { histogram, scatter, boxplot, over-time, profile }
+export enum ResultsChartKind2 { histogram, scatter, boxplot, over-time, profile, bar }
 
 // One of the project's results views (the bar's tabs).
 export struct ResultsViewTab {
@@ -291,6 +338,42 @@ export struct ChartBoxplotBox {
     object-count: int,
 }
 
+/// A mark of a drawn chart a click names (its rectangle in the chart's
+/// px, e.g. a box and its label).
+export struct ChartHit {
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+    label: string,
+    // Its numbers, for the tooltip a click opens ("Median" / "385").
+    lines: [ChartCard],
+}
+
+/// How a boxplot is drawn: a log axis, grid lines, every image a dot, the
+/// mean, n under the boxes, % of the first box (the control), min - max
+/// whiskers (else 1.5 × IQR), colours (0 per box, 1 one, 2 control grey).
+export struct ChartBoxLook {
+    // The bars' error bar: 0 SD, 1 SEM, 2 95 % CI.
+    error: int,
+    log-x: bool,
+    log-y: bool,
+    log: bool,
+    grid: bool,
+    dots: bool,
+    mean: bool,
+    show-n: bool,
+    relative: bool,
+    min-max: bool,
+    colors: int,
+}
+
+/// A row of the boxplot's numbers.
+export struct ChartStatRow {
+    color: color,
+    cells: [string],
+}
+
 export global ResultsState {
     // -- Split with image (board Z) --
     // Results left, the image right (asked for - see `split-offered`).
@@ -311,6 +394,11 @@ export global ResultsState {
     // The image shown ("Well C3 · D3_03.vsi"), its name (the filmstrip's
     // accent), the selected object of how many ("n / total").
     in-out property <string> split-title;
+    // The well whose images the strip under the image shows.
+    in-out property <string> split-well;
+    // The image shown isn't among the project's (its path in the results;
+    // empty: it is): said over the viewer, which still has another one.
+    in-out property <string> split-missing;
     in-out property <string> split-image-key;
     in-out property <int> split-pos: 0;
     in-out property <int> split-total: 0;
@@ -471,6 +559,19 @@ export global ResultsState {
 
     // -------- Navigation --------
     in-out property <ResultsRailMode> rail-mode: ResultsRailMode.list;
+    // Each view's left panel (design canvas "Results rework", PanelSwitch
+    // A1): open or folded away, and the part it shows.
+    in-out property <bool> list-panel-open: true;
+    in-out property <string> list-panel-part: "Columns";
+    in-out property <bool> plate-panel-open: true;
+    in-out property <string> plate-panel-part: "Value";
+    in-out property <bool> chart-panel-open: true;
+    in-out property <string> chart-panel-part: "Value";
+    in-out property <bool> tracks-panel-open: true;
+    in-out property <string> tracks-panel-part: "Class";
+    in-out property <bool> paths-panel-open: true;
+    in-out property <string> paths-panel-part: "Class";
+    in-out property <bool> trees-panel-open: false;
     in-out property <MatrixLevel> matrix-level: MatrixLevel.plate;
     in-out property <[BreadcrumbItem]> breadcrumb: [{ label: "All results" }];
     callback rail-mode-selected(ResultsRailMode);
@@ -539,11 +640,24 @@ export global ResultsState {
     in-out property <[ColumnSection]> list-column-sections: [];
     in-out property <string> list-columns-filter: "";
     in-out property <[ColumnSection]> list-coloc-sections: [];
+    // The same columns for the panel's coloc builder, with their glyphs;
+    // `list-coloc-glyph-head`: the partner classes' initials over them.
+    in-out property <[ColocGroup]> list-coloc-groups: [];
+    // The panel's starting sets and the intensity grid (`list-intensity-
+    // cells`: a row per channel, `list-intensity-stats` values each).
+    in-out property <[ColumnPreset]> list-column-presets: [];
+    in-out property <[string]> list-intensity-channels: [];
+    in-out property <[string]> list-intensity-stats: [];
+    in-out property <[IntensityCell]> list-intensity-cells: [];
+    in-out property <string> list-intensity-title: "";
+    in-out property <bool> list-intensity-open: false;
     in-out property <string> list-coloc-title: "";
     in-out property <bool> list-coloc-open: true;
     // The partner classes the combinations are made of.
     in-out property <[MultiSelectItem]> list-coloc-partner-items: [];
     in-out property <string> list-coloc-partner-summary: "";
+    // The chosen partner classes by name, in the order of the coloc marks.
+    in-out property <string> list-coloc-partner-order: "";
     // 0: objects (1 / 0 per object), 1: partner objects.
     in-out property <int> list-coloc-count: 0;
     in-out property <bool> list-coloc-only-occurring: true;
@@ -630,6 +744,14 @@ export global ResultsState {
     // — so it stays cheap to diff/render no matter how large the underlying
     // database is.
     in-out property <[string]> list-column-headers: [];
+    // Per column head: a click sorts by it; the sorted one (-1 none) and
+    // its direction (▲ ascending, ▼ descending).
+    // Columns of numbers: right-aligned, head and cells.
+    in-out property <[bool]> list-column-numeric: [];
+    in-out property <[bool]> list-column-sortable: [];
+    in-out property <int> list-sort-index: -1;
+    in-out property <bool> list-sort-descending: false;
+    callback list-sort-clicked(int);
     // Each header's second, grey line: its unit and how it is aggregated
     // ("px · mean"), empty for none.
     in-out property <[string]> list-column-subs: [];
@@ -694,10 +816,42 @@ export global ResultsState {
     callback list-columns-select-none();
     // A section's All / None (its group), folded / opened, the search.
     callback list-columns-section-select(string, bool);
+    // The panel: a starting set; a whole channel (row) or value (column) of
+    // the intensity grid on or off.
+    callback list-columns-preset(string);
+    // The Plate's value picker in the panel: the List's parts with one
+    // column chosen (`matrix-value-picked`), its own search.
+    in-out property <string> matrix-columns-filter: "";
+    in-out property <[ColumnSection]> matrix-column-sections: [];
+    in-out property <[string]> matrix-intensity-channels: [];
+    in-out property <[IntensityCell]> matrix-intensity-cells: [];
+    in-out property <string> matrix-intensity-title: "";
+    in-out property <bool> matrix-intensity-open: false;
+    in-out property <[ColocGroup]> matrix-coloc-groups: [];
+    callback matrix-value-picked(string);
+    // The Charts' value picker in the panel: one column - scatter's X
+    // (`chart-value-slot` 0) or Y (1).
+    in-out property <int> chart-value-slot: 0;
+    in-out property <string> chart-columns-filter: "";
+    in-out property <[ColumnSection]> chart-column-sections: [];
+    in-out property <[IntensityCell]> chart-intensity-cells: [];
+    in-out property <string> chart-intensity-title: "";
+    in-out property <bool> chart-intensity-open: false;
+    in-out property <[ColocGroup]> chart-coloc-groups: [];
+    callback chart-value-picked(string);
+    callback chart-value-slot-changed(int);
+    callback chart-columns-filter-changed(string);
+    callback chart-columns-section-toggled(string, bool);
+    callback matrix-columns-filter-changed(string);
+    callback matrix-columns-section-toggled(string, bool);
+    callback list-intensity-row(int);
+    callback list-intensity-column(int);
     callback list-columns-section-toggled(string, bool);
     callback list-columns-filter-changed(string);
     callback list-coloc-toggled(bool);
     callback list-coloc-partner-toggled(string);
+    // Every partner class on (true) or off.
+    callback list-coloc-partners-all(bool);
     callback list-coloc-count-picked(int);
     callback list-coloc-only-occurring-changed(bool);
 
@@ -908,6 +1062,43 @@ export global ResultsState {
     // normalized the same way, rendered as individual dots above/below the
     // whiskers.
     in-out property <[ChartBoxplotBox]> chart-boxplot-boxes: [];
+    // The chart drawn by the app's chart module (an SVG, the same as an
+    // export) and where its marks lie; `chart-resized` asks for it at the
+    // chart area's size and scheme.
+    in-out property <image> chart-picture;
+    in-out property <[ChartHit]> chart-hits: [];
+    callback chart-resized(float, float, bool);
+    // The boxplot's look (saved with the view).
+    in-out property <ChartBoxLook> chart-box-look: { grid: true, dots: true, show-n: true };
+    callback chart-box-look-changed(ChartBoxLook);
+    // The boxplot's numbers under it: a row per box (its colour, its
+    // cells), the heads, and the same as tab-separated text to copy (full
+    // precision, "." decimals); folded or open.
+    in-out property <[string]> chart-stats-head: [];
+    in-out property <[ChartStatRow]> chart-stats-rows: [];
+    in-out property <string> chart-stats-tsv: "";
+    in-out property <bool> chart-stats-open: true;
+    // A box's own colour: one of `chart-box-palette` (-1: back to the
+    // look's colour).
+    in property <[color]> chart-box-palette: [];
+    callback chart-box-color-picked(string, int);
+    // Saving the chart shown (design canvas "Results rework", ChartExport):
+    // PNG (0), SVG (1) or its numbers as CSV (2); the size in cm; the PNG's
+    // dpi; a transparent ground (else white). The message says how it went.
+    in-out property <int> chart-export-format: 0;
+    in-out property <float> chart-export-width: 17;
+    in-out property <float> chart-export-height: 10;
+    in-out property <int> chart-export-dpi: 300;
+    in-out property <bool> chart-export-transparent: false;
+    in-out property <string> chart-export-message: "";
+    callback chart-export-save();
+    // A click in a drawn chart (px) - the scatter's nearest dot.
+    callback chart-picture-clicked(float, float);
+    // The boxplot: a value per image (each image a dot), else per object.
+    in-out property <bool> chart-per-image: false;
+    // The histogram over every value (else the 1st to 99th percentile).
+    in-out property <bool> chart-full-range: false;
+    callback chart-per-image-changed(bool);
 
     // -- Over time: a line per class / image / well / track (0..3), mean ±
     // SD or median + IQR (summary 0 / 1), relative to the first time point,

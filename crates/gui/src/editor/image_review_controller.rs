@@ -16,7 +16,7 @@ use crate::editor::images_list_controller::ImagesListController;
 use crate::{
     AppWindow, ImageItemData, ImageReviewData, ImageReviewState, ImagesListState, UiState,
 };
-use evanalyzer_app::project::{ImageListExt, ProjectExt};
+use evanalyzer_app::project::ImageListExt;
 use evanalyzer_cfg::settings::images_settings::{
     ImageMarker, ImageReview, LeaveOut, LeaveOutReason,
 };

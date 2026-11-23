@@ -18,7 +18,7 @@ mod table;
 
 pub use args::{CliCommand, JobsSubCommand, ProjectSubCommand, ResultsSubCommand};
 
-use evanalyzer_app::backends::Backend;
+use evanalyzer_app::backend::Backend;
 use evanalyzer_cfg::core_types::InternalErrors;
 
 /// Runs `command`. Analysis and training run on `backend` (local or a
@@ -30,7 +30,7 @@ pub fn run(command: CliCommand, backend: &dyn Backend) -> Result<(), InternalErr
             args::ProjectSubCommand::New(project_new_args) => commands::project::new_project(
                 project_new_args,
                 backend,
-                &evanalyzer_app::backends::local::LocalBackend::default(),
+                &evanalyzer_app::backend::local::LocalBackend::default(),
             ),
             args::ProjectSubCommand::Info(project_info_args) => {
                 commands::project::run(project_info_args, backend)

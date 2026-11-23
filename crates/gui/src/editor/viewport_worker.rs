@@ -19,7 +19,6 @@ use crate::{
 };
 use evanalyzer_app::images::ImageChannel;
 use evanalyzer_app::images::ImageContainer;
-use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::settings::images_settings::HistogramSettings;
 use log::{debug, warn};
 use slint::{Rgb8Pixel, SharedPixelBuffer};
@@ -1143,7 +1142,7 @@ impl RenderBuffers {
 
 /// The colour a channel is drawn in: the project's for it (its emission
 /// wavelength's, a default colour without one, white in grayscale mode - see
-/// `ProjectExt::get_channel_display_colors`), or the reader's colour when the
+/// `ProjectWithRuntime::get_channel_display_colors`), or the reader's colour when the
 /// project knows the channel not. RGB images keep their fixed colours -
 /// except in grayscale mode, where every channel is white.
 pub(crate) fn channel_display_color(
@@ -1566,9 +1565,10 @@ pub(crate) fn histogram_to_svg_fast(
 mod tests {
     use super::*;
     use crate::helper::size_formater::BYTES_PER_MB;
-    use evanalyzer_app::global::ViewportMemorySettings;
     use evanalyzer_app::images::ManagedImage;
     use evanalyzer_app::images::Point2d;
+    use evanalyzer_app::project::GlobalImageSettingsExt;
+    use evanalyzer_app::user::ViewportMemorySettings;
     use evanalyzer_cfg::core_types::ImageDimensionality;
     use evanalyzer_cfg::core_types::ImagePlane;
     use kornia_image::{Image, ImageSize};
@@ -1979,6 +1979,7 @@ mod tests {
         //! EVANALYZER_BENCH_IMAGE=<image> [BENCH_VIEWPORT=1920x1080]
         //! cargo test --target x86_64-unknown-linux-gnu --release -p evanalyzer_gui
         //! --lib bench_viewer_interactions -- --ignored --nocapture
+        use evanalyzer_app::project::GlobalImageSettingsExt;
 
         use super::*;
 
@@ -2252,6 +2253,8 @@ mod tests {
                     sim.r
                         .app_state
                         .get_project_write()
+                        .images
+                        .settings
                         .set_global_selected_channel(&(i % channels));
                     sim.controller().trigger_redraw_low_res_and_high_res();
                     sim.settle();
@@ -2266,6 +2269,8 @@ mod tests {
                     sim.r
                         .app_state
                         .get_project_write()
+                        .images
+                        .settings
                         .set_global_z_stack(&ZStackSettings {
                             z_projection: ZStackHandling::SingleStack,
                             z_range: Some(i..=i),
@@ -2793,7 +2798,7 @@ mod tests {
         use crate::editor::prediction_overlay::{
             BACKGROUND_RGB, PredictionOverlaySettings, PredictionTile,
         };
-        use evanalyzer_app::analysis::{PredictedClass, PredictionCapture};
+        use evanalyzer_app::jobs::{PredictedClass, PredictionCapture};
         let mut r = render_fixture(project_with_fixture_image());
         r.draw(TaskDispatch::HighRes, new_image_task());
         set_view(&r, 1.0, 0.0, 0.0);
@@ -2916,7 +2921,7 @@ mod tests {
     #[test]
     fn an_object_prediction_draws_objects_as_strong_as_they_are_sure() {
         use crate::editor::prediction_overlay::PredictionOverlaySettings;
-        use evanalyzer_app::analysis::{ObjectPredictionCapture, PredictedObjectClass};
+        use evanalyzer_app::jobs::{ObjectPredictionCapture, PredictedObjectClass};
         use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
         use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
         let mut r = render_fixture(project_with_fixture_image());
@@ -3344,7 +3349,10 @@ mod tests {
         let mut project = crate::editor::test_support::project_with_image_file(
             crate::editor::test_support::grayscale_image_path(),
         );
-        project.set_global_emission_wavel_length(0, 532.0); // pure green
+        project
+            .images
+            .settings
+            .set_global_emission_wavel_length(0, 532.0); // pure green
         let mut r = render_fixture(project);
         r.draw(TaskDispatch::HighRes, new_image_task());
         let pixels = r.ui.get_display_image().to_rgb8().expect("an RGB8 frame");
@@ -3976,6 +3984,8 @@ mod tests {
         let before = curves(&r);
         r.app_state
             .get_project_write()
+            .images
+            .settings
             .set_global_z_stack(&ZStackSettings {
                 z_projection: ZStackHandling::SingleStack,
                 z_range: Some(1..=1),

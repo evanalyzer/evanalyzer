@@ -132,26 +132,6 @@ pub struct PlateSettings {
     pub well_image_order: Vec<u32>,
 }
 
-impl PlateSettings {
-    /// `well_image_order` for a fresh `rows` x `cols` grid: in number order.
-    pub fn default_image_order(rows: u32, cols: u32) -> Vec<u32> {
-        (1..=rows * cols).collect()
-    }
-
-    /// Sets the well layout, keeping `well_image_order` one entry per grid
-    /// position: the existing entries stay, a bigger grid gets the next
-    /// numbers appended, a smaller one is cut.
-    pub fn set_well_layout(&mut self, layout: WellLayout) {
-        self.well_layout = layout;
-        if let WellLayout::Fixed { rows, cols } = layout {
-            let n = (rows * cols) as usize;
-            self.well_image_order.truncate(n);
-            let next = self.well_image_order.len() as u32 + 1;
-            self.well_image_order.extend(next..=n as u32);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,21 +158,6 @@ mod tests {
         unique.sort();
         unique.dedup();
         assert_eq!(unique.len(), labels.len());
-    }
-
-    #[test]
-    fn set_well_layout_keeps_one_image_order_entry_per_position() {
-        let mut settings = PlateSettings::default();
-        settings.set_well_layout(WellLayout::Fixed { rows: 2, cols: 2 });
-        assert_eq!(settings.well_image_order, vec![1, 2, 3, 4]);
-        settings.well_image_order = vec![4, 3, 2, 1];
-        settings.set_well_layout(WellLayout::Fixed { rows: 2, cols: 3 });
-        assert_eq!(settings.well_image_order, vec![4, 3, 2, 1, 5, 6]);
-        settings.set_well_layout(WellLayout::Fixed { rows: 1, cols: 2 });
-        assert_eq!(settings.well_image_order, vec![4, 3]);
-        // Auto keeps the order for when a fixed grid is chosen again.
-        settings.set_well_layout(WellLayout::Auto);
-        assert_eq!(settings.well_image_order, vec![4, 3]);
     }
 
     #[test]

@@ -204,7 +204,7 @@ export component SplitImageHead inherits Hud {
         }
         HudButton {
             text: "Open in Images ↗";
-            enabled: ResultsState.split-title != "";
+            enabled: ResultsState.split-title != "" && ResultsState.split-missing == "";
             y: (parent.height - self.height) / 2;
             clicked => {
                 ResultsState.split-open-in-images();
@@ -405,6 +405,40 @@ export component SplitSelection inherits Rectangle {
     }
 }
 
+// The image shown isn't among the project's (its folder moved since the
+// run): covers the viewer, which still has another image.
+export component SplitMissing inherits Rectangle {
+    background: #0B0C10;
+    VerticalLayout {
+        alignment: center;
+        padding: 32px;
+        spacing: 6px;
+        Text {
+            text: "This image is not among the project's images";
+            font-size: Ink.fs-body;
+            font-weight: 600;
+            color: #E4E4E7;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+        Text {
+            text: ResultsState.split-missing;
+            font-size: Ink.fs-caption;
+            font-family: Ink.font-mono;
+            color: #A1A1AA;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+        Text {
+            text: "Its folder may have moved: select the folder the images are in now (Images › folder).";
+            font-size: Ink.fs-caption;
+            color: #A1A1AA;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+    }
+}
+
 // Bottom left on the image, above its bar: what a click does.
 export component SplitHint inherits Hud {
     property <bool> plate: ResultsState.rail-mode == ResultsRailMode.matrix;
@@ -461,14 +495,14 @@ export component SplitFilmstrip inherits Rectangle {
         height: 1px;
         background: #2E2E33;
     }
+    // The strip takes the width the well's name leaves.
     HorizontalLayout {
         padding-left: 12px;
         padding-right: 12px;
         spacing: 10px;
-        alignment: start;
         Text {
-            width: 52px;
-            text: "WELL " + ResultsState.active-well;
+            horizontal-stretch: 0;
+            text: "WELL " + ResultsState.split-well;
             font-size: Ink.fs-caption;
             font-weight: 600;
             letter-spacing: 0.6px;

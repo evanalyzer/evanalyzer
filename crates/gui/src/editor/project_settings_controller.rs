@@ -9,7 +9,8 @@
 
 use crate::UiState;
 use crate::{AppWindow, ProjectSettingsSlint, ProjectSettingsState};
-use evanalyzer_app::global::UserInformation;
+use evanalyzer_app::project::PlateSettingsExt;
+use evanalyzer_app::user::UserInformation;
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::plate_settings::{
     GroupingMode, PlateSettings, PlateSize, WellLayout,

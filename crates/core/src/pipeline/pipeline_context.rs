@@ -42,7 +42,7 @@ pub struct PipelineContext {
     /// each command. A local class names objects of this scope only.
     pub scope: Scope,
     /// The role the running command works in at its place (see
-    /// `evanalyzer_cfg::settings::step_roles`) - set by the pipeline before
+    /// `crate::pipeline::step_roles`) - set by the pipeline before
     /// each command; `None` outside a pipeline step. Morphological works on
     /// the segmentation mask in the Instance Segmentation role.
     pub role: Option<CommandCategory>,

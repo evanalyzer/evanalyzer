@@ -17,7 +17,6 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use bitvec::prelude::*;
-use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::core_types::ObjectClass;
 use std::collections::HashMap;
 
@@ -443,9 +442,9 @@ pub(crate) struct ZOrder {
 }
 
 impl ZOrder {
-    pub(crate) fn new<P: ProjectExt + ?Sized>(project: &P) -> Self {
+    pub(crate) fn new(project: &evanalyzer_app::project::ProjectWithRuntime) -> Self {
         Self::of_classes(
-            project.get_object_classes().iter().map(|c| c.global()),
+            project.classification.classes().iter().map(|c| c.global()),
             project.get_selected_object_class(),
         )
     }

@@ -8,12 +8,12 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::args::AnalyzeArgs;
-use evanalyzer_app::analysis::AnalysisRequest;
-use evanalyzer_app::analysis::ProgressEvent;
-use evanalyzer_app::analysis::RunningJob;
-use evanalyzer_app::backends::Backend;
+use evanalyzer_app::backend::Backend;
+use evanalyzer_app::jobs::AnalysisRequest;
+use evanalyzer_app::jobs::ProgressEvent;
+use evanalyzer_app::jobs::RunningJob;
 use evanalyzer_app::project::ImageListExt;
-use evanalyzer_app::project::{ProjectExt, load_project};
+use evanalyzer_app::project::load_project;
 use evanalyzer_cfg::core_types::InternalErrors;
 use std::io::Write;
 use std::path::PathBuf;
@@ -152,7 +152,7 @@ mod tests {
     use super::*;
     use crate::commands::test_support::TempProjectFile;
     use calamine::DataType as _;
-    use evanalyzer_app::backends::local::LocalBackend;
+    use evanalyzer_app::backend::local::LocalBackend;
     use evanalyzer_app::results::LocalResultsGenerator;
     use evanalyzer_app::results::{Cell, CellValue, Column, ListFilter, Pagination, PlaneFilter};
     use evanalyzer_cfg::settings::project_settings::ProjectSettings;
@@ -485,6 +485,7 @@ mod tests {
                             after: None,
                         },
                         transpond_table: false,
+                        sort: None,
                     })
                     .expect("ground-truth object list");
                 for (id, row) in page.row_names.iter().zip(page.rows) {

@@ -14,12 +14,12 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use evanalyzer_app::analysis::{AnalysisRequest, JobState, ProgressEvent, RunningJob};
-use evanalyzer_app::backends::Backend;
-use evanalyzer_app::backends::local::LocalBackend;
-use evanalyzer_app::backends::remote::{RemoteBackend, Worker};
+use evanalyzer_app::backend::Backend;
+use evanalyzer_app::backend::local::LocalBackend;
+use evanalyzer_app::jobs::{AnalysisRequest, JobState, ProgressEvent, RunningJob};
 use evanalyzer_app::project::ImageListExt;
-use evanalyzer_app::project::{ProjectExt, ProjectWithRuntime};
+use evanalyzer_app::project::ProjectWithRuntime;
+use evanalyzer_app::remote::{RemoteBackend, Worker};
 use evanalyzer_cfg::core_types::InternalErrors;
 use std::io;
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -97,7 +97,7 @@ impl Backend for GatedBackend {
         });
         Ok(RunningJob::from_parts(
             events_rx,
-            evanalyzer_app::analysis::CancelHandle::with_callback(move || {
+            evanalyzer_app::jobs::CancelHandle::with_callback(move || {
                 cancelled.store(true, Ordering::SeqCst)
             }),
             output,
@@ -108,26 +108,26 @@ impl Backend for GatedBackend {
 
     fn start_preview(
         &self,
-        req: evanalyzer_app::preview::PreviewRequest,
-    ) -> Result<RunningJob, evanalyzer_app::preview::StartPreviewError> {
+        req: evanalyzer_app::jobs::PreviewRequest,
+    ) -> Result<RunningJob, evanalyzer_app::jobs::StartPreviewError> {
         self.local.start_preview(req)
     }
 
     /// Waits at the gate, then trains for real.
     fn start_training(
         &self,
-        req: evanalyzer_app::ai_learning::TrainingRequest,
+        req: evanalyzer_app::training::TrainingRequest,
     ) -> Result<
-        evanalyzer_app::ai_learning::RunningTraining,
-        evanalyzer_app::ai_learning::StartTrainingError,
+        evanalyzer_app::training::RunningTraining,
+        evanalyzer_app::training::StartTrainingError,
     > {
         // No progress events: the stream ends at once.
         let (_, events_rx) = mpsc::channel();
         let gate = Arc::clone(&self.gate);
-        Ok(evanalyzer_app::ai_learning::RunningTraining::from_parts(
+        Ok(evanalyzer_app::training::RunningTraining::from_parts(
             events_rx,
-            evanalyzer_app::analysis::CancelHandle::with_callback(|| {}),
-            evanalyzer_app::ai_learning::TrainingItems::Objects(2),
+            evanalyzer_app::jobs::CancelHandle::with_callback(|| {}),
+            evanalyzer_app::training::TrainingItems::Objects(2),
             Box::new(move || {
                 gate.wait(&AtomicBool::new(false));
                 let training = LocalBackend::default()
@@ -166,7 +166,7 @@ impl Backend for GatedBackend {
         self.local.template_folders()
     }
 
-    fn files(&self) -> &dyn evanalyzer_app::fs::FileSystem {
+    fn files(&self) -> &dyn evanalyzer_app::files::FileSystem {
         self.local.files()
     }
 
@@ -174,7 +174,7 @@ impl Backend for GatedBackend {
         "gated".into()
     }
 
-    fn system_info(&self) -> Result<evanalyzer_app::backends::SystemInfo, InternalErrors> {
+    fn system_info(&self) -> Result<evanalyzer_app::backend::SystemInfo, InternalErrors> {
         self.local.system_info()
     }
 
@@ -182,13 +182,13 @@ impl Backend for GatedBackend {
         self.local.image_formats()
     }
 
-    fn load_app_settings(&self) -> Result<evanalyzer_app::global::AppSettings, InternalErrors> {
+    fn load_app_settings(&self) -> Result<evanalyzer_app::user::AppSettings, InternalErrors> {
         self.local.load_app_settings()
     }
 
     fn save_app_settings(
         &self,
-        settings: &evanalyzer_app::global::AppSettings,
+        settings: &evanalyzer_app::user::AppSettings,
     ) -> Result<(), InternalErrors> {
         self.local.save_app_settings(settings)
     }
@@ -504,7 +504,7 @@ fn after_a_reconnect_open_images_work_again_and_the_analysis_is_still_there() {
 
 #[test]
 fn a_training_whose_client_disconnected_saves_its_model_itself() {
-    use evanalyzer_app::ai_learning::{ModelDestination, PixelTrainingParams, TrainingRequest};
+    use evanalyzer_app::training::{ModelDestination, PixelTrainingParams, TrainingRequest};
     use evanalyzer_cfg::core_types::ObjectClass;
     use evanalyzer_cfg::settings::ai_learning_object_settings::{
         AiLearningObjectFeatureSettings, ObjectMetric,

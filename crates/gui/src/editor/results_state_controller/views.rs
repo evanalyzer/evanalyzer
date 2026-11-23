@@ -113,6 +113,7 @@ fn chart_kind_key(kind: ChartKind) -> &'static str {
         ChartKind::Boxplot => "boxplot",
         ChartKind::OverTime => "overTime",
         ChartKind::Profile => "profile",
+        ChartKind::Bar => "bar",
     }
 }
 
@@ -122,6 +123,7 @@ fn chart_kind_of_key(key: &str) -> ChartKind {
         "boxplot" => ChartKind::Boxplot,
         "overTime" => ChartKind::OverTime,
         "profile" => ChartKind::Profile,
+        "bar" => ChartKind::Bar,
         _ => ChartKind::Histogram,
     }
 }
@@ -425,8 +427,11 @@ impl ResultsStateController {
                 None => None,
             };
             chart.group_by = view.group_by;
+            *self.chart_look.lock().expect("Poisoned") = view.box_look.clone();
+            chart.per_image = view.per_image;
             chart.bins = view.bins.clamp(5, 200);
             chart.log_counts = view.log_counts;
+            chart.full_range = view.full_range;
             chart.max_points = scatter_points_limit(view.points);
             chart.time_lines = view.time_lines;
             chart.time_median = view.time_median;
@@ -437,6 +442,7 @@ impl ResultsStateController {
             chart.profile_lines = view.profile_lines;
             chart.profile_curve = view.profile_curve;
             chart.profile_mark = view.profile_mark;
+            super::count_only_per_image(chart, &available);
         }
         self.tracks_all
             .lock()
@@ -529,8 +535,11 @@ impl ResultsStateController {
                     .and_then(class_id)
                     .or(unavailable.chart_class),
                 group_by: filter.group_by,
+                per_image: filter.per_image,
+                box_look: self.chart_look.lock().expect("Poisoned").clone(),
                 bins: filter.bins,
                 log_counts: filter.log_counts,
+                full_range: filter.full_range,
                 points: points_index(filter.max_points),
                 time_lines: filter.time_lines,
                 time_median: filter.time_median,
@@ -736,6 +745,7 @@ impl ResultsStateController {
             transpond: false,
             group_by: ListGroupBy::Objects,
             empty_classes: false,
+            sort: None,
             aggregations: vec![Aggregation::Avg],
             children: Vec::new(),
             child_aggregations: vec![Aggregation::Avg],
@@ -884,6 +894,7 @@ impl ResultsStateController {
                 )
             });
         let chart = self.chart_filter.lock().expect("Poisoned").clone();
+        let box_look = super::chart_draw::look_to_slint(&self.chart_look.lock().expect("Poisoned"));
 
         let matrix_columns: Vec<ColumnEntry> = available
             .iter()
@@ -1035,6 +1046,7 @@ impl ResultsStateController {
                 ChartKind::Boxplot => ResultsChartKind2::Boxplot,
                 ChartKind::OverTime => ResultsChartKind2::OverTime,
                 ChartKind::Profile => ResultsChartKind2::Profile,
+                ChartKind::Bar => ResultsChartKind2::Bar,
             });
             state.set_chart_profile_names(profile_names(&profile_list));
             state.set_chart_profile_index(profile_shown);
@@ -1054,8 +1066,11 @@ impl ResultsStateController {
                 BoxplotGroup::WellColumn => 4,
                 _ => 0,
             });
+            state.set_chart_per_image(chart.per_image);
+            state.set_chart_box_look(box_look);
             state.set_chart_bins(chart.bins as i32);
             state.set_chart_log_counts(chart.log_counts);
+            state.set_chart_full_range(chart.full_range);
             state.set_chart_points_index(points_index(chart.max_points));
             state.set_chart_time_lines(time_lines_index(chart.time_lines));
             state.set_chart_time_summary(chart.time_median as i32);

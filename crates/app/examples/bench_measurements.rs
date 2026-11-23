@@ -19,8 +19,8 @@
 //
 // Usage: cargo run --release -p evanalyzer_app --example bench_measurements -- <copy.evadb> [--prepare K] [--iters N] [--only <query name>]
 
-use evanalyzer_app::backends::Backend;
-use evanalyzer_app::backends::local::LocalBackend;
+use evanalyzer_app::backend::Backend;
+use evanalyzer_app::backend::local::LocalBackend;
 use evanalyzer_app::results::Aggregation;
 use evanalyzer_app::results::ColorScale;
 use evanalyzer_app::results::ColorSchema;
@@ -204,6 +204,7 @@ fn main() {
                 transpond_table: false,
                 grouping: None,
                 empty_classes: true,
+                sort: None,
             };
             report(
                 &name,
@@ -226,6 +227,7 @@ fn main() {
                     after: None,
                 },
                 transpond_table: false,
+                sort: None,
             };
             report(
                 &name,
@@ -242,6 +244,7 @@ fn main() {
                 object_classes: None,
                 column: column.clone(),
                 bins: 50,
+                full_range: false,
             };
             report(
                 &name,

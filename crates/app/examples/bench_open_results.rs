@@ -18,8 +18,8 @@
 //
 // Usage: cargo run --release -p evanalyzer_app --example bench_open_results -- <copy.evadb> [--iters N]
 
-use evanalyzer_app::backends::Backend;
-use evanalyzer_app::backends::local::LocalBackend;
+use evanalyzer_app::backend::Backend;
+use evanalyzer_app::backend::local::LocalBackend;
 use evanalyzer_app::results::{
     Aggregation, ColorScale, ColorSchema, Column, HistogramFilter, ListFilter, Pagination,
     PlaneFilter, PlateFilter, ResultsSource, View, WellFilter,
@@ -113,6 +113,7 @@ fn open_sequence(backend: &LocalBackend, path: &PathBuf) -> (Arc<dyn ResultsSour
                 after: None,
             },
             transpond_table: false,
+            sort: None,
         })
         .unwrap()
     });
@@ -154,6 +155,7 @@ fn open_sequence(backend: &LocalBackend, path: &PathBuf) -> (Arc<dyn ResultsSour
             object_classes: None,
             column: chart_column,
             bins: 24,
+            full_range: false,
         })
         .unwrap()
     });

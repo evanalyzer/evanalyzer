@@ -47,6 +47,20 @@ Get the latest version for Linux, Windows or macOS from the
 Unpack the archive and start `evanalyzer` - everything it needs is included.
 GPU (CUDA) builds for AI models are available for Linux and Windows.
 
+**Checking a download.** Every file of a release comes with a provenance
+attestation: proof that exactly this file was built by this repository's
+release workflow from the tagged commit. With the
+[GitHub CLI](https://cli.github.com/):
+
+```sh
+gh attestation verify evanalyzer-linux-x86_64.tar.gz -R evanalyzer/evanalyzer
+gh attestation verify oci://joda001/evanalyzer:<version> -R evanalyzer/evanalyzer   # Docker image
+```
+
+Without it, compare the file's SHA-256 (`sha256sum`, on Windows
+`certutil -hashfile <file> SHA256`) with `SHA256SUMS` on the release page.
+The Windows programs are additionally signed (Authenticode).
+
 ## Where EVAnalyzer stores its data
 
 **Your settings and templates** are in one folder in your home folder:
@@ -246,7 +260,10 @@ After rebuilding the plugin, move the new `libevanalyzer_ai.so` into
 builds and packages every platform; a tag (`v0.2.0` or `0.2.0`) publishes
 a GitHub release, each platform's files added as soon as its build is done.
 Pushing to the `pipeline_start` branch runs the same builds without a
-release. Package layout:
+release, and nothing is signed. On a tag the Windows exe and AI plugin
+are signed with the Certum certificate, only if the tag itself is signed
+with the release key - see [Release tag signing](#release-tag-signing).
+Package layout:
 
 ```text
 evanalyzer(.exe)            the app
@@ -390,6 +407,31 @@ cargo install slint-viewer    # live preview of .slint files
 To show the GUI from inside a dev container, allow X11 forwarding on the host
 first: `xhost +local:docker`.
 
+### Toolchain image
+
+[.devcontainer/Dockerfile](.devcontainer/Dockerfile) is the image
+`joda001/evanalyzer-toolchain`: the dev container and the CI/release jobs
+build in it. Every tool in it is pinned to a version. Built for amd64 and
+arm64 into one tag with Docker buildx (Docker Desktop has it; on Linux
+`apt install docker-buildx-plugin`, or `docker-buildx` with the
+distribution's Docker):
+
+```sh
+docker buildx create --name multi --use                           # once
+docker run --privileged --rm tonistiigi/binfmt --install arm64    # once, x86 Linux without Docker Desktop only
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t joda001/evanalyzer-toolchain:<version> --push .devcontainer
+docker buildx imagetools inspect joda001/evanalyzer-toolchain:<version>
+```
+
+On an x86 machine the arm64 half runs emulated (QEMU) and can take an hour
+or more. The last command prints the image's `Digest:` (one for both
+architectures). Put it in as `joda001/evanalyzer-toolchain:<version>@sha256:<digest>`
+into `.devcontainer/devcontainer.json` and the workflows in
+`.github/workflows/` - the digest, not only the tag: a tag can be moved to
+another image, the digest can't, and the release signs with tools from
+this image.
+
 ### Coverage, audit, SBOM and licenses
 
 | What | Locally | In CI |
@@ -457,6 +499,77 @@ dependencies must be permissive (the only MPL-2.0 crates, `smartstring` via
 
 ---
 
+## Release tag signing
+
+A release starts with a version tag (`v1.2.0` or `1.2.0`). The Windows exe
+and AI plugin are signed with the Certum certificate (job `sign-windows`
+in `.github/workflows/release.yml`) only when the tag is signed with the
+release key - an SSH key on a YubiKey, kept apart from the key that signs
+commits. A tag pushed with a stolen GitHub login alone signs nothing.
+
+### Once: the release key
+
+On the host (not in the dev container), with the YubiKey plugged in:
+
+```sh
+ssh-keygen -t ed25519-sk -C "evanalyzer release tags" -f ~/.ssh/evanalyzer-release
+```
+
+`~/.ssh/evanalyzer-release` is only a handle: without the YubiKey it signs
+nothing. Then on GitHub:
+
+- **Settings → SSH and GPG keys → New SSH key**, type *Signing Key*: the
+  content of `evanalyzer-release.pub` (shows the tags as "Verified").
+- **Repository → Settings → Environments → `release` → Variables**:
+  `TAG_SIGNERS` = the content of `evanalyzer-release.pub` (one key per line;
+  only these keys may start a signed release).
+
+### Once: git
+
+On the host. Both keys go in as text (`key::…`), not as a path, so git
+finds them in the dev container too (VS Code copies `~/.gitconfig` in and
+forwards the SSH agent with the private keys):
+
+```sh
+# commits: the github key, as text instead of a path
+git config --global user.signingkey "key::$(cat ~/.ssh/github.pub)"
+
+# release tags: the YubiKey key, as text
+git config --global alias.release-tag \
+  "tag -s -u 'key::$(cat ~/.ssh/evanalyzer-release.pub)'"
+```
+
+`gpg.format ssh` and `commit.gpgsign true` stay set as for signed commits.
+
+### Every release
+
+```sh
+git release-tag v1.2.0 -m "v1.2.0"   # the YubiKey blinks: touch it
+git push origin v1.2.0
+```
+
+Push the tag with git rather than creating the release on GitHub's web
+page: the workflow creates the release itself, with the release notes.
+The first job, `verify-tag`, checks that the tag is signed with a key in
+`TAG_SIGNERS`, that the name inside the signed tag is the pushed one, and
+that it points at the commit the run built. If not, nothing else runs: no
+build, no GitHub release. `sign-windows` checks the same again right
+before signing. Then delete the tag (`git push origin :refs/tags/v1.2.0`,
+`git tag -d v1.2.0`) and tag again.
+
+### On GitHub
+
+- **Environment `release`**: holds `CERTUM_EMAIL`, `CERTUM_OTP` and
+  `TAG_SIGNERS`; deployment tags `v*` and `[0-9]*` only, no branches.
+  The Certum secrets are not repository secrets.
+- **Tag ruleset** (Settings → Rules): tags `v*` and `[0-9]*` -
+  creation, update and deletion restricted, only repository admins bypass.
+
+A lost YubiKey: make a new key as above and replace it in `TAG_SIGNERS`
+and in the GitHub signing keys. Existing releases stay valid.
+
+---
+
 ## Contributing
 
 Contributions are welcome. Please open an issue first for larger changes, so
@@ -479,7 +592,7 @@ type(scope): description
 ```
 
 - `scope` is optional, lowercase (`a-z`, `0-9`, `-`).
-- The description starts right after `": "`, is at most 72 characters and
+- The description starts right after `": "`, is at most 100 characters and
   doesn't end with a period.
 - A `!` before the colon (`feat(cfg)!: ...`) marks a breaking change; explain
   it in a `BREAKING CHANGE:` footer.

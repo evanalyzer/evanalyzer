@@ -500,8 +500,7 @@ impl Default for MathSubtractReferenceChannelFactorSettings {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum FiltersColorToGrayscaleGrayscaleMethodSettings {
     /// The brightness as the eye sees it: 0.2126 R + 0.7152 G + 0.0722 B
-    /// (ITU-R BT.709) - the same value intensities of a colour image are
-    /// measured with.
+    /// (ITU-R BT.709).
     #[default]
     #[serde(alias = "brightness")]
     Brightness,
@@ -514,7 +513,8 @@ pub enum FiltersColorToGrayscaleGrayscaleMethodSettings {
     /// The blue channel alone.
     #[serde(alias = "blue")]
     Blue,
-    /// (R + G + B) / 3.
+    /// (R + G + B) / 3 - the gray value intensities of a colour image are
+    /// measured with, as in ImageJ.
     #[serde(alias = "average")]
     Average,
     /// The brightest of R, G and B per pixel (HSV value, as Color Filter

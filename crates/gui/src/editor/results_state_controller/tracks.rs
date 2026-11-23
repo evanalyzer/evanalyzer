@@ -18,8 +18,9 @@
 use super::*;
 use crate::editor::results_overlay::TrailsOverlay;
 use crate::{TrackCard, TrackRow};
-use evanalyzer_app::global::{SpeedUnit, TrailMode};
+use evanalyzer_app::results::SpeedUnit;
 use evanalyzer_app::results::{ImageTracks, ImageTracksFilter, TrackPath};
+use evanalyzer_app::user::TrailMode;
 use slint::{Model, ModelNotify, ModelTracker};
 
 /// At most this many points of an image's tracks (~16 MB): beyond, a

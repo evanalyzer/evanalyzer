@@ -3,106 +3,191 @@
 
 // results_list.slint — the results as a table (a row per object or per
 // image), what to show and how in the bar above it (`ListBar`).
-import { InkButton, InkButtonKind, InkCheckbox, InkIconButton, InkIcons, InkHint } from "../ink/ink.slint";
-import { ColocCountRow, SettingsGroup } from "results_common.slint";
-import { ColumnSection, ResultRow, ResultsState } from "../api/results.slint";
+import { InkButton, InkButtonKind, InkCheckbox, InkIconButton, InkIcons, InkHint, InkOptionCard } from "../ink/ink.slint";
+import { SettingsGroup } from "results_common.slint";
+import { ColumnSection, ColumnPreset, ColocColumnItem, IntensityCell, ResultRow, ResultsState } from "../api/results.slint";
 
 import { ScrollView } from "std-widgets.slint";
 import { Ink } from "../ink/palette.slint";
 
 import { InkCheckList, InkMultiSelect, InkSearchField, InkSegmented, InkSwitch, InkTipSide, InkTipZone, InkMenuItem } from "../ink/ink.slint";
-import { ViewBar, BarChip, BarLabel, BarSpacer, BarCount, BarMore } from "results_view_bar.slint";
+import { ViewBar, BarChip, BarLabel, BarSpacer, BarCount, BarMore, BarFolded, ViewPanel } from "results_view_bar.slint";
+import { ColumnPicker } from "results_panel.slint";
 
-/// A section of the column picker: its columns' checklist, foldable.
-component ColumnSectionList inherits InkCheckList {
-    in property <ColumnSection> section;
-    title: root.section.title;
-    items: root.section.items;
-    open: root.section.open;
-    collapsible: true;
-    list-height: 156px;
-    toggled(open) => {
-        ResultsState.list-columns-section-toggled(root.section.group, open);
+/// The List's left panel (design canvas "Results rework", ColumnPanel E
+/// with PanelNav D): the part the bar's chip names - Columns, Images,
+/// Classes, Values.
+component ListPanel inherits ViewPanel {
+    in property <bool> grouped;
+    parts: root.grouped ? ["Columns", "Images", "Classes", "Values"] : ["Columns", "Images", "Classes"];
+    part: ResultsState.list-panel-part;
+    part-picked(part) => {
+        ResultsState.list-panel-part = part;
     }
-    item-selected(key, value, selected) => {
-        ResultsState.list-columns-item-selected(key, selected);
+    fold => {
+        ResultsState.list-panel-open = false;
     }
-    select-all => {
-        ResultsState.list-columns-section-select(root.section.group, true);
-    }
-    select-none => {
-        ResultsState.list-columns-section-select(root.section.group, false);
-    }
-}
 
-/// The coloc columns: the partner classes, objects or partners, then with
-/// each class / at least / exactly, only the combinations that occur.
-component ColocColumns inherits Rectangle {
-    in property <length> field-w;
-    border-radius: Ink.radius-md;
-    border-width: 1px;
-    border-color: Ink.border-soft;
-    background: Ink.raised;
-
-    VerticalLayout {
-        padding: 8px;
-        spacing: 8px;
-
-        HorizontalLayout {
-            spacing: 8px;
-            Rectangle {
-                width: 12px;
-                Image {
-                    source: ResultsState.list-coloc-open ? InkIcons.caret-down : InkIcons.caret-right;
-                    width: 10px;
-                    height: 10px;
-                    colorize: Ink.text-mute;
+    if root.current == "Columns": VerticalLayout {
+        spacing: 12px;
+        ColumnPicker {
+            grouped: root.grouped;
+            filter: ResultsState.list-columns-filter;
+            presets: ResultsState.list-column-presets;
+            sections: ResultsState.list-column-sections;
+            intensity-title: ResultsState.list-intensity-title;
+            intensity-open: ResultsState.list-intensity-open;
+            intensity-channels: ResultsState.list-intensity-channels;
+            intensity-stats: ResultsState.list-intensity-stats;
+            intensity-cells: ResultsState.list-intensity-cells;
+            has-coloc: ResultsState.list-coloc-partner-items.length > 0;
+            coloc-groups: ResultsState.list-coloc-groups;
+            filter-edited(text) => {
+                ResultsState.list-columns-filter = text;
+                ResultsState.list-columns-filter-changed(text);
+            }
+            picked(key, on) => {
+                ResultsState.list-columns-item-selected(key, on);
+            }
+            section-toggled(group, open) => {
+                if group == "intensity" {
+                    ResultsState.list-intensity-open = open;
+                }
+                ResultsState.list-columns-section-toggled(group, open);
+            }
+            section-select(group, on) => {
+                ResultsState.list-columns-section-select(group, on);
+            }
+            intensity-line(by-channel, index) => {
+                if by-channel {
+                    ResultsState.list-intensity-row(index);
+                } else {
+                    ResultsState.list-intensity-column(index);
                 }
             }
-            Text {
-                horizontal-stretch: 1;
-                min-width: 0px;
-                overflow: elide;
-                text: ResultsState.list-coloc-title;
-                font-size: Ink.fs-caption;
-                font-weight: 600;
-                letter-spacing: 0.6px;
-                color: coloc-ta.has-hover ? Ink.text : Ink.text-mute;
-                vertical-alignment: center;
-                coloc-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        ResultsState.list-coloc-open = !ResultsState.list-coloc-open;
-                        ResultsState.list-coloc-toggled(ResultsState.list-coloc-open);
-                    }
-                }
+            preset(key) => {
+                ResultsState.list-columns-preset(key);
             }
         }
+        if ResultsState.list-children-items.length > 0: InkCheckList {
+            title: "CHILDREN · " + ResultsState.list-children-summary;
+            items <=> ResultsState.list-children-items;
+            list-height: 120px;
+            collapsible: true;
+            item-selected(key, value, selected) => {
+                ResultsState.list-children-selected(key, selected);
+            }
+            select-all => {
+                ResultsState.list-children-select-all(true);
+            }
+            select-none => {
+                ResultsState.list-children-select-all(false);
+            }
+        }
+        if ResultsState.list-children-items.length > 0: InkMultiSelect {
+            label: "Of the columns";
+            summary-text: ResultsState.list-child-aggregate;
+            items <=> ResultsState.list-child-aggregation-items;
+            multi-select: true;
+            pill-width: 372px;
+            item-selected(key, value, selected) => {
+                ResultsState.list-child-aggregation-selected(key, selected);
+            }
+        }
+        if ResultsState.list-parent-items.length > 0: InkCheckList {
+            title: "LINKED OBJECTS · " + ResultsState.list-parent-summary;
+            items <=> ResultsState.list-parent-items;
+            list-height: 120px;
+            collapsible: true;
+            item-selected(key, value, selected) => {
+                ResultsState.list-parent-selected(key, selected);
+            }
+            select-all => {
+                ResultsState.list-parent-select-all(true);
+            }
+            select-none => {
+                ResultsState.list-parent-select-all(false);
+            }
+        }
+    }
 
-        if ResultsState.list-coloc-open: VerticalLayout {
-            spacing: 8px;
-            InkMultiSelect {
-                label: "With";
-                summary-text: ResultsState.list-coloc-partner-summary;
-                items <=> ResultsState.list-coloc-partner-items;
-                multi-select: true;
-                pill-width: root.field-w - 16px;
-                item-selected(key, value, selected) => {
-                    ResultsState.list-coloc-partner-toggled(key);
-                }
+    if root.current == "Images": VerticalLayout {
+        spacing: 12px;
+        InkSegmented {
+            label: "Images";
+            model: ["All", "Included", "Left out"];
+            selected: ResultsState.list-image-state-summary == "Included" ? 1 : ResultsState.list-image-state-summary == "Left out" ? 2 : 0;
+            tips: ["Every image, also those left out", "The images the analysis kept", "Only the images left out"];
+            picked(i) => {
+                ResultsState.list-image-state-summary = i == 1 ? "Included" : i == 2 ? "Left out" : "All";
+                ResultsState.list-image-state-selected(i == 1 ? "enabled" : i == 2 ? "disabled" : "all");
             }
-            ColocCountRow { }
-            for section in ResultsState.list-coloc-sections: ColumnSectionList {
-                section: section;
-                list-height: 120px;
+        }
+        InkCheckList {
+            title: "IMAGES · " + ResultsState.list-image-summary;
+            items <=> ResultsState.list-image-items;
+            searchable: true;
+            list-height: 600px;
+            item-selected(key, value, selected) => {
+                ResultsState.list-image-selected(key, selected);
             }
-            InkSwitch {
-                text: "Only combinations that occur";
-                checked: ResultsState.list-coloc-only-occurring;
-                toggled(on) => {
-                    ResultsState.list-coloc-only-occurring = on;
-                    ResultsState.list-coloc-only-occurring-changed(on);
-                }
+            select-all => {
+                ResultsState.list-image-select-all();
+            }
+            select-none => {
+                ResultsState.list-image-select-none();
+            }
+            filter-changed(text) => {
+                ResultsState.list-image-filter-changed(text);
+            }
+        }
+    }
+
+    if root.current == "Classes": VerticalLayout {
+        spacing: 12px;
+        InkCheckList {
+            title: "CLASSES · " + ResultsState.list-class-summary;
+            items <=> ResultsState.list-class-items;
+            list-height: self.items.length * 24px + 4px;
+            item-selected(key, value, selected) => {
+                ResultsState.list-class-selected(key, selected);
+            }
+            select-all => {
+                ResultsState.list-class-select-all();
+            }
+            select-none => {
+                ResultsState.list-class-select-none();
+            }
+        }
+        // A row per image, well or folder: a class without objects there
+        // is a row of zeros, or none.
+        if root.grouped: InkSwitch {
+            text: "Show classes without objects";
+            checked: ResultsState.list-empty-classes;
+            toggled(on) => {
+                ResultsState.list-empty-classes = on;
+                ResultsState.list-empty-classes-changed(on);
+            }
+        }
+    }
+
+    if root.current == "Values": VerticalLayout {
+        spacing: 12px;
+        InkHint {
+            text: "Each column summed up over the objects of a row - a column per value.";
+        }
+        InkCheckList {
+            title: "OF THE OBJECTS IN EACH ROW";
+            items <=> ResultsState.list-aggregation-items;
+            list-height: 240px;
+            item-selected(key, value, selected) => {
+                ResultsState.list-aggregation-item-selected(key, selected);
+            }
+            select-all => {
+                ResultsState.list-aggregation-select-all();
+            }
+            select-none => {
+                ResultsState.list-aggregation-select-none();
             }
         }
     }
@@ -110,21 +195,31 @@ component ColocColumns inherits Rectangle {
 
 /// The List's bar (design canvas "Results rework", ListMock): a row per
 /// first, then what is shown - Images, Classes, Columns, Values (grouped
-/// rows only) - as chips with a popover each; how many rows and the pages
-/// on the right, rarely used settings in ⋯.
+/// rows only) - as chips that open the left panel on their part; how many
+/// rows and the pages on the right, rarely used settings in ⋯.
 component ListBar inherits ViewBar {
+    in property <bool> grouped;
     property <bool> has-pairs: ResultsState.list-group-by-items.length > 4;
     property <string> rows: ResultsState.list-group-by-summary;
-    // Rows of several objects: aggregated.
-    property <bool> grouped: root.rows == "Images" || root.rows == "Wells" || root.rows == "Folders";
-    property <length> popover-field-w: 316px;
 
+    if !ResultsState.list-panel-open: BarFolded {
+        summary: (ResultsState.list-image-summary == "All Images" ? "All images" : ResultsState.list-image-summary + " images")
+            + " · " + (ResultsState.list-class-summary == "All" ? "all classes" : ResultsState.list-class-summary + " classes")
+            + " · " + ResultsState.list-columns-summary + " columns"
+            + (root.grouped ? " · " + ResultsState.list-aggregate : "");
+        unfold => {
+            ResultsState.list-panel-open = true;
+        }
+    }
     BarLabel {
         text: "A row per";
     }
+    // Its own width - the bar's free space stays on the right.
     VerticalLayout {
         alignment: center;
+        horizontal-stretch: 0;
         InkSegmented {
+            horizontal-stretch: 0;
             label: "A row per";
             model: root.has-pairs ? ["Objects", "Images", "Wells", "Folders", "Coloc pairs"] : ["Objects", "Images", "Wells", "Folders"];
             selected: root.rows == "Images" ? 1 : root.rows == "Wells" ? 2 : root.rows == "Folders" ? 3 : root.rows == "Coloc pairs" ? 4 : 0;
@@ -136,157 +231,9 @@ component ListBar inherits ViewBar {
         }
     }
 
-    // Which images: all / included / left out, and which of them.
-    VerticalLayout {
-        alignment: center;
-        BarChip {
-            label: "Images";
-            value: (ResultsState.list-image-state-summary != "All" ? ResultsState.list-image-state-summary + " · " : "")
-                + (ResultsState.list-image-summary == "All Images" ? "All" : ResultsState.list-image-summary);
-            active: ResultsState.list-image-state-summary != "All" || ResultsState.list-image-summary != "All Images";
-            popover-width: 340px;
-            InkSegmented {
-                label: "Images";
-                model: ["All", "Included", "Left out"];
-                selected: ResultsState.list-image-state-summary == "Included" ? 1 : ResultsState.list-image-state-summary == "Left out" ? 2 : 0;
-                picked(i) => {
-                    ResultsState.list-image-state-summary = i == 1 ? "Included" : i == 2 ? "Left out" : "All";
-                    ResultsState.list-image-state-selected(i == 1 ? "enabled" : i == 2 ? "disabled" : "all");
-                }
-            }
-            InkCheckList {
-                title: "IMAGES · " + ResultsState.list-image-summary;
-                items <=> ResultsState.list-image-items;
-                searchable: true;
-                list-height: 240px;
-                item-selected(key, value, selected) => {
-                    ResultsState.list-image-selected(key, selected);
-                }
-                select-all => {
-                    ResultsState.list-image-select-all();
-                }
-                select-none => {
-                    ResultsState.list-image-select-none();
-                }
-                filter-changed(text) => {
-                    ResultsState.list-image-filter-changed(text);
-                }
-            }
-        }
-    }
 
-    VerticalLayout {
-        alignment: center;
-        BarChip {
-            label: "Classes";
-            value: ResultsState.list-class-summary;
-            popover-width: 300px;
-            InkCheckList {
-                title: "CLASSES · " + ResultsState.list-class-summary;
-                items <=> ResultsState.list-class-items;
-                list-height: 280px;
-                item-selected(key, value, selected) => {
-                    ResultsState.list-class-selected(key, selected);
-                }
-                select-all => {
-                    ResultsState.list-class-select-all();
-                }
-                select-none => {
-                    ResultsState.list-class-select-none();
-                }
-            }
-        }
-    }
 
-    // The columns in sections, the coloc ones with their settings (design
-    // canvas "Coloc Combinations", A), Relate Objects' links.
-    VerticalLayout {
-        alignment: center;
-        BarChip {
-            label: "Columns";
-            value: ResultsState.list-columns-summary;
-            popover-width: 340px;
-            popover-max-height: 560px;
-            InkSearchField {
-                text: ResultsState.list-columns-filter;
-                placeholder: "Find a column";
-                edited(text) => {
-                    ResultsState.list-columns-filter = text;
-                    ResultsState.list-columns-filter-changed(text);
-                }
-            }
-            for section in ResultsState.list-column-sections: ColumnSectionList {
-                section: section;
-            }
-            if ResultsState.list-coloc-partner-items.length > 0: ColocColumns {
-                field-w: root.popover-field-w;
-            }
-            if ResultsState.list-children-items.length > 0: InkCheckList {
-                title: "CHILDREN · " + ResultsState.list-children-summary;
-                items <=> ResultsState.list-children-items;
-                list-height: 72px;
-                collapsible: true;
-                item-selected(key, value, selected) => {
-                    ResultsState.list-children-selected(key, selected);
-                }
-                select-all => {
-                    ResultsState.list-children-select-all(true);
-                }
-                select-none => {
-                    ResultsState.list-children-select-all(false);
-                }
-            }
-            if ResultsState.list-children-items.length > 0: InkMultiSelect {
-                label: "Of the columns";
-                summary-text: ResultsState.list-child-aggregate;
-                items <=> ResultsState.list-child-aggregation-items;
-                multi-select: true;
-                pill-width: root.popover-field-w;
-                item-selected(key, value, selected) => {
-                    ResultsState.list-child-aggregation-selected(key, selected);
-                }
-            }
-            if ResultsState.list-parent-items.length > 0: InkCheckList {
-                title: "LINKED OBJECTS · " + ResultsState.list-parent-summary;
-                items <=> ResultsState.list-parent-items;
-                list-height: 72px;
-                collapsible: true;
-                item-selected(key, value, selected) => {
-                    ResultsState.list-parent-selected(key, selected);
-                }
-                select-all => {
-                    ResultsState.list-parent-select-all(true);
-                }
-                select-none => {
-                    ResultsState.list-parent-select-all(false);
-                }
-            }
-        }
-    }
 
-    // Grouped rows: how the objects of a row are summed up.
-    if root.grouped: VerticalLayout {
-        alignment: center;
-        BarChip {
-            label: "Values";
-            value: ResultsState.list-aggregate;
-            popover-width: 260px;
-            InkCheckList {
-                title: "OF THE OBJECTS IN EACH ROW";
-                items <=> ResultsState.list-aggregation-items;
-                list-height: 200px;
-                item-selected(key, value, selected) => {
-                    ResultsState.list-aggregation-item-selected(key, selected);
-                }
-                select-all => {
-                    ResultsState.list-aggregation-select-all();
-                }
-                select-none => {
-                    ResultsState.list-aggregation-select-none();
-                }
-            }
-        }
-    }
 
     BarSpacer { }
 
@@ -316,14 +263,6 @@ component ListBar inherits ViewBar {
                 ResultsState.list-transpond-changed(ResultsState.list-transpond);
             }
         }
-        if root.grouped: InkMenuItem {
-            text: "Show classes without objects";
-            checked: ResultsState.list-empty-classes;
-            clicked => {
-                ResultsState.list-empty-classes = !ResultsState.list-empty-classes;
-                ResultsState.list-empty-classes-changed(ResultsState.list-empty-classes);
-            }
-        }
     }
 }
 
@@ -336,13 +275,28 @@ export component ResultsListView inherits Rectangle {
 
     background: Ink.ground;
 
-    // Panels on the ground: the bar on top (split with the image: in the
-    // table's head instead), the table below it.
+    property <string> row-per: ResultsState.list-group-by-summary;
+    // Rows of several objects: aggregated.
+    property <bool> grouped: root.row-per == "Images" || root.row-per == "Wells" || root.row-per == "Folders";
+    property <bool> panel-open: !ResultsState.split && ResultsState.list-panel-open;
+
+    // Panels on the ground: what is shown on the left (a chip opens it),
+    // the bar on top (split with the image: in the table's head instead),
+    // the table below it.
+    HorizontalLayout {
+    padding: 12px;
+    spacing: 12px;
+
+    if root.panel-open: ListPanel {
+        grouped: root.grouped;
+    }
+
     VerticalLayout {
-        padding: 12px;
         spacing: 12px;
 
-        if !ResultsState.split: ListBar { }
+        if !ResultsState.split: ListBar {
+            grouped: root.grouped;
+        }
 
         // -- The table --
         Rectangle {
@@ -577,21 +531,38 @@ export component ResultsListView inherits Rectangle {
 
                                 // Two lines: the name, then its unit and how it
                                 // is aggregated, small and grey ("px · mean").
-                                for header[idx] in ResultsState.list-column-headers: Rectangle {
+                                // A click sorts by the column: ▲, ▼, then as it was.
+                                for header[idx] in ResultsState.list-column-headers: head-cell := Rectangle {
+                                    property <bool> sortable: idx < ResultsState.list-column-sortable.length && ResultsState.list-column-sortable[idx];
+                                    property <bool> sorted: ResultsState.list-sort-index == idx;
+                                    property <bool> numeric: idx < ResultsState.list-column-numeric.length && ResultsState.list-column-numeric[idx];
                                     horizontal-stretch: 1;
                                     clip: true;
                                     width: ResultsState.list-column-widths[idx] * 1px;
+                                    accessible-role: button;
+                                    accessible-enabled: self.sortable;
+                                    accessible-label: "Sort by " + header;
+                                    accessible-action-default => {
+                                        ResultsState.list-sort-clicked(idx);
+                                    }
+                                    sort-ta := TouchArea {
+                                        enabled: head-cell.sortable;
+                                        mouse-cursor: self.enabled ? pointer : default;
+                                        clicked => {
+                                            ResultsState.list-sort-clicked(idx);
+                                        }
+                                    }
                                     VerticalLayout {
                                         alignment: center;
                                         spacing: 0px;
-                                        Text {
-                                            text: header;
+                                        head-name := Text {
+                                            text: header + (head-cell.sorted ? (ResultsState.list-sort-descending ? " ▼" : " ▲") : "");
+                                            color: head-cell.sorted || sort-ta.has-hover ? Ink.text : Ink.text-dim;
                                             width: ResultsState.list-column-widths[idx] * 1px;
                                             font-size: Ink.fs-secondary;
                                             font-weight: 600;
-                                            color: Ink.text-dim;
                                             overflow: elide;
-                                            horizontal-alignment: start;
+                                            horizontal-alignment: head-cell.numeric ? right : left;
                                         }
                                         if idx < ResultsState.list-column-subs.length && ResultsState.list-column-subs[idx] != "": Text {
                                             text: ResultsState.list-column-subs[idx];
@@ -599,8 +570,13 @@ export component ResultsListView inherits Rectangle {
                                             font-size: Ink.fs-caption;
                                             color: Ink.text-mute;
                                             overflow: elide;
-                                            horizontal-alignment: start;
+                                            horizontal-alignment: head-cell.numeric ? right : left;
                                         }
+                                    }
+                                    // A name cut short: whole on hover.
+                                    InkTipZone {
+                                        wanted: sort-ta.has-hover && head-name.preferred-width > head-name.width;
+                                        text: header;
                                     }
                                 }
                                 Rectangle { }
@@ -738,7 +714,7 @@ export component ResultsListView inherits Rectangle {
                                             color: row.failed ? Ink.warn : drill ? Ink.focus : Ink.text;
                                             overflow: elide;
                                             vertical-alignment: center;
-                                            horizontal-alignment: start;
+                                            horizontal-alignment: c-index < ResultsState.list-column-numeric.length && ResultsState.list-column-numeric[c-index] ? right : left;
                                         }
                                         // A children's count: down to them.
                                         if col-visible && drill: TouchArea {
@@ -852,5 +828,6 @@ export component ResultsListView inherits Rectangle {
                 }
             }
         }
+    }
     }
 }

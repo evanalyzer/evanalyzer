@@ -9,10 +9,7 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::{
-    fmt::{self},
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::fmt::{self};
 
 pub type MemorySlot = u32;
 
@@ -302,19 +299,8 @@ impl fmt::Display for ObjectId {
 }
 
 // Track ID -----------------
-#[allow(dead_code)]
-static GLOBAL_TRACK_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
-
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 pub struct TrackId(pub u64);
-
-#[allow(dead_code)]
-impl TrackId {
-    pub fn next() -> Self {
-        // Atomic increment ensures every ID is unique across all threads
-        Self(GLOBAL_TRACK_ID_COUNTER.fetch_add(1, Ordering::SeqCst))
-    }
-}
 
 impl fmt::Display for TrackId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -527,14 +513,6 @@ mod tests {
     #[test]
     fn object_id_default_is_zero() {
         assert_eq!(ObjectId::default(), ObjectId(0));
-    }
-
-    #[test]
-    fn track_id_next_increments_and_stays_distinct_across_calls() {
-        let a = TrackId::next();
-        let b = TrackId::next();
-        assert_ne!(a.0, b.0);
-        assert!(b.0 > a.0);
     }
 
     #[test]

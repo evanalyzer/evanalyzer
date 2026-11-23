@@ -21,8 +21,8 @@
 //
 // Usage: cargo run --release -p evanalyzer_app --example bench_empty_groups -- <path.evadb> [--iters N] [--only <query name>]
 
-use evanalyzer_app::backends::Backend;
-use evanalyzer_app::backends::local::LocalBackend;
+use evanalyzer_app::backend::Backend;
+use evanalyzer_app::backend::local::LocalBackend;
 use evanalyzer_app::results::Aggregation;
 use evanalyzer_app::results::BoxplotFilter;
 use evanalyzer_app::results::ColorScale;
@@ -289,6 +289,7 @@ fn main() {
             transpond_table: false,
             grouping,
             empty_classes,
+            sort: None,
         };
         report(
             label,
@@ -309,6 +310,7 @@ fn main() {
             transpond_table: transposed,
             grouping: None,
             empty_classes: true,
+            sort: None,
         };
         let label = if transposed { "transposed" } else { "normal" };
         if wanted(&format!("per-image {label}, GUI first page (500)")) {
@@ -384,6 +386,7 @@ fn main() {
                         column: Column::AreaSizePx,
                         group_by: Default::default(),
                         grouping: Default::default(),
+                        per_image: false,
                     })
                     .unwrap()
                     .boxes
@@ -402,6 +405,7 @@ fn main() {
                         object_classes: Some(vec![ObjectClass::Global(4)]),
                         column: Column::AreaSizePx,
                         bins: 50,
+                        full_range: false,
                     })
                     .unwrap()
                     .counts
@@ -426,6 +430,7 @@ fn main() {
                             after: None,
                         },
                         transpond_table: true,
+                        sort: None,
                     })
                     .unwrap()
                     .rows
@@ -497,6 +502,7 @@ fn main() {
             after: None,
         },
         transpond_table: false,
+        sort: None,
     };
     if wanted("object list intensities + coloc count") {
         let mut columns = intensity_columns.clone();

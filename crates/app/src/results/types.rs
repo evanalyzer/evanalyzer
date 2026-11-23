@@ -1,0 +1,1583 @@
+//! # results
+//!
+//! Results-database queries as front ends see them: filters, result tables,
+//! chart data and export settings. Executed by a `ResultsSource`.
+//!
+//! **Author:** Joachim Danmayr
+//! **Date:** 2026-10-10
+//!
+//! ## License
+//! Copyright 2026 Joachim Danmayr.
+//! Licensed under the **PolyForm Noncommercial License 1.0.0**.
+
+use super::column::Column;
+use evanalyzer_cfg::core_types::ObjectClass;
+use evanalyzer_cfg::settings::images_settings::ImageMarker;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::range::Range;
+
+/// How the analysis that wrote a results database ended.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RunStatus {
+    /// Every image was processed.
+    Finished,
+    /// Still being written - or the run was interrupted (crash, killed
+    /// process) and never finished: the results are incomplete.
+    NotFinished,
+    /// Stopped by the user: the results are incomplete.
+    Cancelled,
+    /// Stopped by an error: the results are incomplete.
+    Failed(String),
+    /// Written before EVAnalyzer recorded this.
+    Unknown,
+}
+
+impl RunStatus {
+    /// What to tell the user, `None` for a complete run.
+    pub fn warning(&self) -> Option<String> {
+        match self {
+            RunStatus::Finished | RunStatus::Unknown => None,
+            RunStatus::NotFinished => Some(
+                "This analysis has not finished - it is still running, or was interrupted. \
+                 The results are incomplete."
+                    .into(),
+            ),
+            RunStatus::Cancelled => {
+                Some("This analysis was cancelled - the results are incomplete.".into())
+            }
+            RunStatus::Failed(message) => Some(format!(
+                "This analysis stopped with an error - the results are incomplete. ({message})"
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub enum View {
+    List,
+    Heatmap,
+}
+
+/// The plate format - `Auto` or a fixed size. The same type the project's
+/// plate settings store.
+pub use evanalyzer_cfg::settings::plate_settings::PlateSize;
+
+/// How images are grouped into wells. Every grouping yields, per image: the
+/// well (`B03`), its plate row (`B`) and column (`03`), and the image's
+/// number inside the well (`01`) - a regex's capture groups 1 to 4.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Grouping {
+    /// The well-name pattern is detected from the image names: the first of
+    /// a list of common patterns (`A01_01.tif`, `Exp_B3_s2.tif`, ...) that
+    /// matches the most images.
+    #[default]
+    Auto,
+    /// A regex on the image name, with the capture groups described above.
+    Regex(String),
+    /// The image's folder is the well: placed on the plate when it is named
+    /// like a well (`B03/`), the image number is the last number in the file
+    /// name.
+    Folder,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WellSize {
+    pub rows: usize,
+    pub cols: usize,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum Aggregation {
+    #[default]
+    Avg,
+    Min,
+    Max,
+    Stddev,
+    Sum,
+    Median,
+    Skewness,
+}
+
+#[derive(Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ColorSchema {
+    #[default]
+    Excel,
+    Viridis,
+    Plasma,
+    Inferno,
+    Cividis,
+    Coolwarm,
+    RedBlue,
+    YlGnBu,
+    Haline,
+    Algae,
+    Thermal,
+}
+
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub enum ColorScale {
+    #[default]
+    Auto,
+    Manual(f32, f32),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlaneFilter {
+    pub z_stack: u32,
+    pub t_stack: u32,
+}
+
+/// The objects of one image of an analysis (Results › Split with image).
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ImageObjectsFilter {
+    pub image_rel_path: String,
+    pub plane: PlaneFilter,
+    /// A value per object too (Color by value) - `None`: none.
+    pub value_column: Option<Column>,
+}
+
+/// An object of an analysis, as the split image draws and lists it.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ResultObject {
+    pub object_id: String,
+    /// Its first class (-1 none).
+    pub class_id: i32,
+    /// `[xmin, ymin, xmax, ymax]` in full-image pixels.
+    pub bbox_px: [u32; 4],
+    pub centroid_px: [f32; 2],
+    pub area_px: u64,
+    /// Its mean intensity per channel (gray values).
+    pub means: Vec<f32>,
+    /// `ImageObjectsFilter::value_column`'s value.
+    pub value: Option<f64>,
+    /// Its track - `None` when not tracked.
+    pub track_id: Option<u64>,
+    /// The objects it belongs to (Relate Objects), any class.
+    pub parent_ids: Vec<String>,
+    /// Its mask as stored (run lengths, see [`ResultObject::decoded_mask`]) -
+    /// empty when the results keep none.
+    pub mask: Vec<u8>,
+}
+
+impl ResultObject {
+    /// Its mask, a bit per pixel of its box row by row - `None` when the
+    /// results keep none (or it doesn't fit the box).
+    pub fn decoded_mask(&self) -> Option<bitvec::vec::BitVec<u64, bitvec::order::Lsb0>> {
+        if self.mask.is_empty() {
+            return None;
+        }
+        let [x0, y0, x1, y1] = self.bbox_px;
+        let len = (x1.checked_sub(x0)? as usize + 1) * (y1.checked_sub(y0)? as usize + 1);
+        evanalyzer_core::decode_mask(&self.mask, len)
+    }
+}
+
+/// One image's tracks across its time points (Results › Tracks): their
+/// paths for the trails on the image and the tracks table.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ImageTracksFilter {
+    pub image_rel_path: String,
+    pub z_stack: u32,
+    /// At most this many points: beyond, a repeatable sample of the tracks
+    /// (`ImageTracks::total_tracks` says how many there are).
+    pub max_points: usize,
+}
+
+/// A point of a track: where its object was at time point `t`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TrackPoint {
+    pub t: u32,
+    /// The object's centroid, in full-image pixels.
+    pub x: f32,
+    pub y: f32,
+    pub area_px: f32,
+}
+
+/// A track: its id, class (its first object's first) and points by time.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TrackPath {
+    pub track_id: u64,
+    pub class_id: i32,
+    pub points: Vec<TrackPoint>,
+    /// The tracks it came from: one for a daughter of a division, two or
+    /// more after a fusion - empty for most (and in results without
+    /// lineage).
+    #[serde(default)]
+    pub parent_track_ids: Vec<u64>,
+    /// What Measure Track Motion measured of it - all `None` without that
+    /// step.
+    #[serde(default)]
+    pub motion: TrackMotion,
+}
+
+/// See [`ImageTracksFilter`].
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ImageTracks {
+    /// By track id.
+    pub tracks: Vec<TrackPath>,
+    /// The image's tracks - more than `tracks` when sampled.
+    pub total_tracks: usize,
+    /// nm per pixel (x) - `None` when unknown.
+    pub pixel_size_nm: Option<f64>,
+    /// Seconds between time points - `None` when unknown.
+    pub frame_interval_s: Option<f64>,
+    /// The image plane's drift as Measure Track Motion stored it: per time
+    /// point (t, x, y) how far everything moved since the first, px -
+    /// empty without drift correction. A track drawn from its start takes
+    /// it away (the values were measured so).
+    #[serde(default)]
+    pub drift: Vec<(u32, f64, f64)>,
+}
+
+/// `drift` (as [`ImageTracks::drift`]) at time point `t`: none before its
+/// first, its last after it - as Measure Track Motion takes it.
+pub fn drift_at(drift: &[(u32, f64, f64)], t: u32) -> (f64, f64) {
+    match drift.binary_search_by_key(&t, |d| d.0) {
+        Ok(i) => (drift[i].1, drift[i].2),
+        Err(0) => drift.first().map_or((0.0, 0.0), |d| (d.1, d.2)),
+        Err(i) => (drift[i - 1].1, drift[i - 1].2),
+    }
+}
+
+/// Results › Paths: a sample of the tracks `summary` picks (every
+/// image's), each from its start - see [`TrackPaths`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TrackPathsFilter {
+    pub summary: TrackSummaryFilter,
+    /// At most this many tracks - an even sample of them beyond (the same
+    /// each time).
+    pub max_tracks: usize,
+}
+
+/// See [`TrackPathsFilter`].
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TrackPaths {
+    pub tracks: Vec<TrackFromStart>,
+    /// The tracks the filter picks - more than `tracks` when sampled.
+    pub total_tracks: usize,
+}
+
+/// A track drawn from its start: its positions by time relative to its
+/// first, minus the image's stored drift (Measure Track Motion's).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TrackFromStart {
+    pub image: String,
+    /// Its well / group, empty for none.
+    pub group: String,
+    pub class_id: i32,
+    pub track_id: u64,
+    pub um_per_px: Option<f64>,
+    /// (x, y) in px from its first position, by time.
+    pub points: Vec<(f32, f32)>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Pagination {
+    pub limit: i32,
+    /// Keyset cursor: `None` fetches the first page; `Some(id)` fetches the page starting right after that `object_id`.
+    /// With a [`SortBy`]: the number of rows before the page ("500").
+    pub after: Option<String>,
+}
+
+/// A list sorted by one of its columns (a click on its head) - over all
+/// the rows, not only the page shown. Rows without a value come last.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SortBy {
+    pub column: Column,
+    /// Grouped rows: which of the column's statistics (`None`: objects).
+    pub aggregation: Option<Aggregation>,
+    pub descending: bool,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct PlateFilter {
+    pub plane: PlaneFilter,
+    pub grouping: Grouping,
+    pub aggregation: Aggregation,
+    pub object_class: ObjectClass,
+    pub column: Column,
+    pub color_schema: ColorSchema,
+    pub color_scale: ColorScale,
+    pub plate_size: PlateSize,
+}
+
+// No `Pagination` field here (unlike `ListFilter`/`GroupedByImageFilter`):
+// a plate-grouped result's row count is bounded by well count (at most
+// `PlateSize::Plate48x72` = 3456), not by object count, so it stays
+// tiny (well under a MB) even multiplied out over every `column` x
+// `aggregation` x `object_class` combination requested at once — the RAM
+// risk pagination guards against elsewhere (millions of raw objects, see
+// `get_object_list`/`get_grouped_by_image`) doesn't apply to an
+// already-aggregated-down-to-wells result.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct PlateFilterMulti {
+    pub plane: PlaneFilter,
+    pub grouping: Grouping,
+    pub aggregation: Vec<Aggregation>,
+    pub object_class: Vec<ObjectClass>,
+    pub column: Vec<Column>,
+    pub color_schema: ColorSchema,
+    pub color_scale: ColorScale,
+    pub plate_size: PlateSize,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct WellFilter {
+    pub plane: PlaneFilter,
+    // Name of the group to display
+    pub group_name: String,
+    pub grouping: Grouping,
+    pub aggregation: Aggregation,
+    pub object_class: ObjectClass,
+    pub column: Column,
+    pub color_schema: ColorSchema,
+    pub color_scale: ColorScale,
+    /// Grid dimensions to lay the well's fields out in. `None` (Auto) fits
+    /// the smallest square-ish grid that holds the highest image number
+    /// found in the well, so a missing image still leaves its gap.
+    pub well_size: Option<WellSize>,
+    /// Maps grid position -> field index for non-trivial (e.g. snake)
+    /// acquisition patterns: `well_order[position]` is the field `idx`
+    /// (the regex's 4th capture group, e.g. the "01" in "A1_01.vsi") shown
+    /// at that row-major grid position. `None` uses `idx` as the position
+    /// directly (1-based: idx 1 -> position 0, top-left).
+    pub well_order: Option<Vec<u32>>,
+}
+
+/// Same shape as `WellFilter` minus `group_name` — `get_wells_for_plate`
+/// answers for every well at once, so there's no single well to name.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct WellsBatchFilter {
+    pub plane: PlaneFilter,
+    pub grouping: Grouping,
+    pub aggregation: Aggregation,
+    pub object_class: ObjectClass,
+    pub column: Column,
+    pub color_schema: ColorSchema,
+    pub color_scale: ColorScale,
+    pub well_size: Option<WellSize>,
+    pub well_order: Option<Vec<u32>>,
+}
+
+/// Same shape as `WellFilter` minus `group_name` — `get_wells_for_plate`
+/// answers for every well at once, so there's no single well to name.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct WellsBatchFilterMulti {
+    pub plane: PlaneFilter,
+    pub grouping: Grouping,
+    pub aggregation: Vec<Aggregation>,
+    pub object_class: Vec<ObjectClass>,
+    pub column: Vec<Column>,
+    pub color_schema: ColorSchema,
+    pub color_scale: ColorScale,
+    pub well_size: Option<WellSize>,
+    pub well_order: Option<Vec<u32>>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ImageHeatmapFilter {
+    pub plane: PlaneFilter,
+    /// Image for which the heatmpa should be generated for
+    pub image_rel_path: String,
+    pub aggregation: Aggregation,
+    pub object_class: ObjectClass,
+    pub column: Column,
+    pub color_schema: ColorSchema,
+    pub color_scale: ColorScale,
+    /// Size of a heatmap element (Default 256)
+    pub square_size: Option<usize>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ListFilter {
+    pub plane: PlaneFilter,
+    pub images: Option<Vec<String>>,
+    pub object_classes: Option<Vec<ObjectClass>>,
+    pub columns: Vec<Column>,
+    pub with_coloc_details: bool,
+    /// Only the objects related to one object - a click on a children's or
+    /// a partners' count.
+    pub related_to: Option<RelatedTo>,
+    pub page: Pagination,
+    /// If true each object class is shown in a separate table instead of in rows
+    pub transpond_table: bool,
+    /// Sorted by a column; paged by row offset then (see `Pagination`).
+    pub sort: Option<SortBy>,
+}
+
+/// The objects of a list related to one object (by its id).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum RelatedTo {
+    /// Its children linked through the class (Relate Objects).
+    ChildrenOf(ObjectClass, String),
+    /// Its partners of the class (Colocalize Objects).
+    PartnersOf(ObjectClass, String),
+    /// The object a measurement's value of it names (its nearest
+    /// neighbour, its parent): the measurement's key, the object's id.
+    RelatedOf(String, String),
+    /// Its parent of the class (Relate Objects).
+    ParentOf(ObjectClass, String),
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct GroupedByImageFilter {
+    pub plane: PlaneFilter,
+    pub images: Option<Vec<String>>,
+    pub object_classes: Option<Vec<ObjectClass>>,
+    pub columns: Vec<Column>,
+    pub aggregation: Vec<Aggregation>,
+    pub page: Pagination,
+    /// If true each object class is shown in a separate table instead of in rows
+    pub transpond_table: bool,
+    /// A row per group of images instead of per image: per well (the
+    /// grouping's pattern on the image names) or per folder
+    /// (`Grouping::Folder`). `None`: a row per image.
+    pub grouping: Option<Grouping>,
+    /// Classes without objects get a row too (a real 0 count); else only
+    /// the classes with objects in a row's images.
+    pub empty_classes: bool,
+    /// Sorted by a statistic; paged by row offset then (see `Pagination`).
+    pub sort: Option<SortBy>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum CellValue {
+    Empty,
+    String(String),
+    Float(f32),
+    Integer(i32),
+    /// Object class with color
+    Class((String, u32)),
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Cell {
+    pub value: CellValue,
+    /// Cell background color
+    pub bg_color: u32,
+    /// If true this cell should be displayed in alternating color, the ui desides on itself what is alternating
+    pub alternating_color: bool,
+    /// Optional search (display name, key) (Group name of plate and image_rel_path in well view)
+    pub search_key: Option<(String, String)>,
+    /// True if this cell's value came from a disabled image
+    pub disabled: bool,
+    /// True if at least one image that contributed to is disabled
+    pub any_disabled: bool,
+    /// True if this cell's value came from an image whose analysis failed
+    /// (stopped with an error): it only holds the objects found before
+    /// the error, so its values are incomplete.
+    #[serde(default)]
+    pub failed: bool,
+    /// True if at least one image behind this cell failed - excluded from
+    /// this cell's value, like a disabled image.
+    #[serde(default)]
+    pub any_failed: bool,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ColumnEntry {
+    pub display_name: String,
+    pub key: Column,
+    pub group: String,
+    /// A coloc class's group (1, 2, ...; 0 none): the classes one
+    /// Colocalize step looked at - an object's partners are only ever of
+    /// its own group, so combinations are made within a group.
+    #[serde(default)]
+    pub coloc_group: u32,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ImageEntry {
+    pub name: String,
+    pub rel_path: PathBuf,
+    pub disabled: bool,
+    /// Why the run disabled it ("Exclude Image"); `None`: not by the run
+    /// (or enabled again by hand).
+    #[serde(default)]
+    pub disabled_reason: Option<String>,
+    /// Who left it out: "pipeline" (Exclude Image), "project" (left out in
+    /// the project before the run) or "results" (here); `None`: included or
+    /// not recorded (results from before).
+    #[serde(default)]
+    pub disabled_by: Option<String>,
+    /// The note on the image - the result's own copy.
+    #[serde(default)]
+    pub note: String,
+    #[serde(default)]
+    pub marker: Option<ImageMarker>,
+}
+
+/// A change of an image's review in the results - only there, the project
+/// keeps its own.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum ImageReviewChange {
+    Note(String),
+    Marker(Option<ImageMarker>),
+    /// Why the image is left out (it must be left out: the reason of an
+    /// included image is dropped).
+    LeftOutReason(Option<String>),
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct DatabaseResult {
+    pub column_names: Vec<String>,
+    pub row_names: Vec<String>,
+    /// One row with its colums
+    pub rows: Vec<Vec<Cell>>,
+    pub min: f32,
+    pub max: f32,
+    /// How many source rows this page's query actually matched
+    pub source_object_count: usize,
+    /// Per row, where clicking it goes: its image (rel path) and, for a row
+    /// that is an object, the object's pixel box - `None` for a row that is
+    /// an image (or a time point without objects): the whole image.
+    pub row_locations: Vec<(String, Option<[u32; 4]>)>,
+}
+/// One histogram: `column`'s value distribution across every object
+/// matching `plane`/`images`/`object_classes`, bucketed into `bins`
+/// equal-width bins — same plane/images/class scoping every other results
+/// view uses (see `ListFilter`/`PlateFilter` in results_generator.rs).
+#[derive(Clone, Serialize, Deserialize)]
+pub struct HistogramFilter {
+    pub plane: PlaneFilter,
+    /// `None` means every image in the database.
+    pub images: Option<Vec<String>>,
+    /// `None` means every object class registered in the database.
+    pub object_classes: Option<Vec<ObjectClass>>,
+    /// The measurement to bucket.
+    pub column: Column,
+    /// Number of equal-width bins to bucket `column`'s values into.
+    pub bins: usize,
+    /// The bins over every value - else over the 1st to 99th percentile,
+    /// the values beyond counted apart (a few far values would squash the
+    /// rest into one bin).
+    #[serde(default)]
+    pub full_range: bool,
+}
+
+/// How the time course is exported (`ResultExport::with_time_course`); the
+/// values are `ResultExport::columns`, wells and groups from
+/// `ResultExport::grouping`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TimeCourseExport {
+    pub lines: TimeCourseLines,
+    pub statistics: Vec<TimeCourseStat>,
+    pub normalize: TimeCourseNormalize,
+    pub layout: TimeCourseLayout,
+    /// Track lines across divisions and fusions.
+    #[serde(default)]
+    pub history: TrackHistory,
+}
+
+impl Default for TimeCourseExport {
+    fn default() -> Self {
+        Self {
+            lines: TimeCourseLines::default(),
+            statistics: TimeCourseStat::DEFAULT.to_vec(),
+            normalize: TimeCourseNormalize::default(),
+            layout: TimeCourseLayout::default(),
+            history: TrackHistory::default(),
+        }
+    }
+}
+
+/// One row per track (Results › Tracks, its export): when it was seen,
+/// how it moved, its measurements over its time points. Failed and
+/// disabled images are left out.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TrackSummaryFilter {
+    /// The well / group column's grouping.
+    pub grouping: Grouping,
+    /// Each one's `statistics` over the track's time points.
+    pub columns: Vec<Column>,
+    pub statistics: Vec<TimeCourseStat>,
+    /// `None`: every image.
+    pub images: Option<Vec<String>>,
+    /// `None`: every class (a track's class is its first object's first).
+    pub object_classes: Option<Vec<ObjectClass>>,
+    /// Tracks with fewer time points are left out.
+    pub min_points: u32,
+    /// Only tracks there from the first analysed time point.
+    pub from_start: bool,
+    /// Tracks with an object touching the image's edge are left out.
+    pub no_edge: bool,
+}
+
+impl Default for TrackSummaryFilter {
+    fn default() -> Self {
+        Self {
+            grouping: Grouping::default(),
+            columns: Vec::new(),
+            statistics: vec![TimeCourseStat::Mean],
+            images: None,
+            object_classes: None,
+            min_points: 1,
+            from_start: false,
+            no_edge: false,
+        }
+    }
+}
+
+/// A track, summed up - see [`TrackSummaryFilter`]. Lengths in pixels,
+/// times in time points: `um_per_px` and `s_per_frame` (when known) turn
+/// them into µm and seconds.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TrackSummary {
+    pub image: String,
+    /// Its well / group (`TrackSummaryFilter::grouping`), empty for none.
+    pub group: String,
+    pub z: u32,
+    pub class_id: i32,
+    pub class_name: String,
+    pub track_id: u64,
+    pub first_t: u32,
+    pub last_t: u32,
+    /// Time points it has an object on.
+    pub points: u32,
+    /// What Measure Track Motion measured of it - all `None` without that
+    /// step.
+    #[serde(default)]
+    pub motion: TrackMotion,
+    pub touches_edge: bool,
+    /// There from the first analysed time point.
+    pub from_start: bool,
+    pub um_per_px: Option<f64>,
+    pub s_per_frame: Option<f64>,
+    /// Per column, per statistic (`TrackSummaryFilter` order).
+    pub values: Vec<Option<f64>>,
+    /// Where it came from and went - all empty / 0 in results without
+    /// lineage.
+    #[serde(default)]
+    pub lineage: TrackLineage,
+}
+
+/// A track's place in its family tree (a tracking step's divisions and
+/// fusions): enough to draw the tree - the parents are its edges.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TrackLineage {
+    /// The tracks it came from: one after a division, two or more after
+    /// a fusion.
+    pub parents: Vec<u64>,
+    /// The tracks that came from it.
+    pub children: Vec<u64>,
+    /// The tree it belongs to: the lowest id of the tracks it descends
+    /// from that have no parent (its own id for one without parents).
+    pub root: u64,
+    /// Divisions and fusions since its root (0: the root).
+    pub generation: u32,
+    /// Its children are a fusion (they have other parents too), not a
+    /// division.
+    pub fuses: bool,
+}
+
+/// How a track starts or ends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineageEvent {
+    /// Appears or disappears - no parent, or no child.
+    None,
+    Division,
+    Fusion,
+}
+
+impl LineageEvent {
+    /// For the export and the table: empty for `None`.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "",
+            Self::Division => "Division",
+            Self::Fusion => "Fusion",
+        }
+    }
+}
+
+impl TrackLineage {
+    /// Out of a division (one parent) or a fusion (more).
+    pub fn starts_with(&self) -> LineageEvent {
+        match self.parents.len() {
+            0 => LineageEvent::None,
+            1 => LineageEvent::Division,
+            _ => LineageEvent::Fusion,
+        }
+    }
+
+    /// Into a division (its children have it as their only parent) or a
+    /// fusion.
+    pub fn ends_with(&self) -> LineageEvent {
+        match (self.children.is_empty(), self.fuses) {
+            (true, _) => LineageEvent::None,
+            (false, true) => LineageEvent::Fusion,
+            (false, false) => LineageEvent::Division,
+        }
+    }
+}
+
+impl TrackSummary {
+    /// Its speed (VCL: path length over its time points) in px per time
+    /// point - `None` without Measure Track Motion or with one time point.
+    pub fn speed_px_per_frame(&self) -> Option<f64> {
+        self.motion.vcl
+    }
+
+    /// Its speed (VCL) in `unit` - `None` also for µm without a pixel size
+    /// or frame interval.
+    pub fn speed_in(&self, unit: SpeedUnit) -> Option<f64> {
+        self.motion
+            .in_units(TrackMotion::VCL, unit, self.um_per_px, self.s_per_frame)
+    }
+
+    /// Distance moved over path length (LIN): 1 a straight line, near 0
+    /// wandering.
+    pub fn straightness(&self) -> Option<f64> {
+        self.motion.lin
+    }
+}
+
+/// What Measure Track Motion stored for a track (`measurements` rows with
+/// `region = 'track'`), in pixels and time points - see that step for what
+/// each is. `None`: not measured (no such step) or not measurable (one time
+/// point, too short for the MSD).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TrackMotion {
+    pub path_length: Option<f64>,
+    pub displacement: Option<f64>,
+    pub max_distance: Option<f64>,
+    pub vcl: Option<f64>,
+    pub vsl: Option<f64>,
+    pub vap: Option<f64>,
+    pub lin: Option<f64>,
+    pub str_: Option<f64>,
+    pub wob: Option<f64>,
+    pub alh: Option<f64>,
+    pub bcf: Option<f64>,
+    pub turning: Option<f64>,
+    pub turning_abs: Option<f64>,
+    pub angular_speed: Option<f64>,
+    pub msd_alpha: Option<f64>,
+    pub msd_d: Option<f64>,
+}
+
+/// What a [`TrackMotion`] value is: how it converts to the units shown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MotionKind {
+    /// Pixels: µm with a pixel size.
+    Length,
+    /// Pixels per time point: as the speed unit says.
+    Speed,
+    /// Without a unit (a ratio, the MSD exponent).
+    Ratio,
+    /// Degrees.
+    Angle,
+    /// Degrees per time point: per the speed unit's time.
+    AngularSpeed,
+    /// Events per time point: per the speed unit's time.
+    Frequency,
+    /// Square pixels per time point: µm² per the speed unit's time.
+    Diffusion,
+}
+
+impl TrackMotion {
+    /// The values: (id - the end of Measure Track Motion's keys -, name,
+    /// kind), in the order [`Self::get`] takes.
+    pub const VALUES: [(&'static str, &'static str, MotionKind); 16] = [
+        ("path_length", "Path length", MotionKind::Length),
+        ("displacement", "Moved", MotionKind::Length),
+        ("max_distance", "Max distance", MotionKind::Length),
+        ("vcl", "VCL", MotionKind::Speed),
+        ("vsl", "VSL", MotionKind::Speed),
+        ("vap", "VAP", MotionKind::Speed),
+        ("lin", "LIN", MotionKind::Ratio),
+        ("str", "STR", MotionKind::Ratio),
+        ("wob", "WOB", MotionKind::Ratio),
+        ("alh", "ALH", MotionKind::Length),
+        ("bcf", "BCF", MotionKind::Frequency),
+        ("turning", "Turning", MotionKind::Angle),
+        ("turning_abs", "Turning abs", MotionKind::Angle),
+        ("angular_speed", "Angular speed", MotionKind::AngularSpeed),
+        ("msd_alpha", "MSD alpha", MotionKind::Ratio),
+        ("msd_d", "MSD D", MotionKind::Diffusion),
+    ];
+    pub const PATH_LENGTH: usize = 0;
+    pub const DISPLACEMENT: usize = 1;
+    pub const VCL: usize = 3;
+    pub const LIN: usize = 6;
+
+    /// Its value number `index` (see [`Self::VALUES`]).
+    pub fn get(&self, index: usize) -> Option<f64> {
+        [
+            self.path_length,
+            self.displacement,
+            self.max_distance,
+            self.vcl,
+            self.vsl,
+            self.vap,
+            self.lin,
+            self.str_,
+            self.wob,
+            self.alh,
+            self.bcf,
+            self.turning,
+            self.turning_abs,
+            self.angular_speed,
+            self.msd_alpha,
+            self.msd_d,
+        ]
+        .get(index)
+        .copied()
+        .flatten()
+    }
+
+    /// Sets the value whose id (a key's end) is `id` - an unknown one is
+    /// ignored (a later version's).
+    pub fn set(&mut self, id: &str, value: Option<f64>) {
+        let slot = match id {
+            "path_length" => &mut self.path_length,
+            "displacement" => &mut self.displacement,
+            "max_distance" => &mut self.max_distance,
+            "vcl" => &mut self.vcl,
+            "vsl" => &mut self.vsl,
+            "vap" => &mut self.vap,
+            "lin" => &mut self.lin,
+            "str" => &mut self.str_,
+            "wob" => &mut self.wob,
+            "alh" => &mut self.alh,
+            "bcf" => &mut self.bcf,
+            "turning" => &mut self.turning,
+            "turning_abs" => &mut self.turning_abs,
+            "angular_speed" => &mut self.angular_speed,
+            "msd_alpha" => &mut self.msd_alpha,
+            "msd_d" => &mut self.msd_d,
+            _ => return,
+        };
+        *slot = value;
+    }
+
+    /// Any value at all: Measure Track Motion measured the track.
+    pub fn is_measured(&self) -> bool {
+        (0..Self::VALUES.len()).any(|i| self.get(i).is_some())
+    }
+
+    /// Value `index` in the units `unit` shows (lengths in µm with µm
+    /// speeds, times per minute / second / time point as its time) - `None`
+    /// also when µm or seconds are asked for but unknown.
+    pub fn in_units(
+        &self,
+        index: usize,
+        unit: SpeedUnit,
+        um_per_px: Option<f64>,
+        s_per_frame: Option<f64>,
+    ) -> Option<f64> {
+        use SpeedUnit;
+        let value = self.get(index)?;
+        let um = matches!(unit, SpeedUnit::UmPerMin | SpeedUnit::UmPerS);
+        let length = if um { um_per_px? } else { 1.0 };
+        // Frames per unit of time.
+        let per_time = match unit {
+            SpeedUnit::PxPerFrame => 1.0,
+            SpeedUnit::UmPerMin => s_per_frame?.recip() * 60.0,
+            SpeedUnit::UmPerS => s_per_frame?.recip(),
+        };
+        Some(match Self::VALUES.get(index)?.2 {
+            MotionKind::Length => value * length,
+            MotionKind::Speed => value * length * per_time,
+            MotionKind::Ratio | MotionKind::Angle => value,
+            MotionKind::AngularSpeed | MotionKind::Frequency => value * per_time,
+            MotionKind::Diffusion => value * length * length * per_time,
+        })
+    }
+}
+
+/// The tracks export (`tracks.csv` / a "Tracks" sheet) - see
+/// [`TrackSummaryFilter`] for the filters.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TrackSummaryExport {
+    pub statistics: Vec<TimeCourseStat>,
+    pub min_points: u32,
+    pub from_start: bool,
+    pub no_edge: bool,
+    /// The speed's unit - px/frame when µm can't be (no pixel size or
+    /// frame interval).
+    pub speed_unit: SpeedUnit,
+}
+
+impl Default for TrackSummaryExport {
+    fn default() -> Self {
+        Self {
+            statistics: vec![TimeCourseStat::Mean],
+            min_points: 1,
+            from_start: false,
+            no_edge: false,
+            speed_unit: SpeedUnit::UmPerMin,
+        }
+    }
+}
+
+/// The time course's tables: long - a row per time point × line - and/or
+/// wide - per value and statistic, a row per time point, a column per line.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TimeCourseLayout {
+    Long,
+    Wide,
+    #[default]
+    Both,
+}
+
+/// What one line of a time course follows: the objects of a class, of an
+/// image, of a well, of a group (both by `TimeCourseFilter::grouping`'s first
+/// capture group) or one track.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TimeCourseLines {
+    #[default]
+    Class,
+    Image,
+    Well,
+    Group,
+    Track,
+}
+
+/// What a track's line holds across a division or fusion (results with
+/// lineage) - for track lines.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TrackHistory {
+    /// Each track its own line: a mother's ends at the division, its
+    /// daughters' start there.
+    #[default]
+    Own,
+    /// A line per cell: from its first ancestor to a track without children
+    /// - a daughter's starts with its mother's track, a fused track has a
+    /// line per parent. A track's points are in every line through it.
+    WithParents,
+}
+
+/// A statistic of a time course point, over the line's objects there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TimeCourseStat {
+    Mean,
+    Sd,
+    Median,
+    Q1,
+    Q3,
+    Min,
+    Max,
+    Sum,
+}
+
+impl TimeCourseStat {
+    /// Mean and SD - median and the quartiles only when asked for.
+    pub const DEFAULT: [TimeCourseStat; 2] = [TimeCourseStat::Mean, TimeCourseStat::Sd];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            TimeCourseStat::Mean => "mean",
+            TimeCourseStat::Sd => "SD",
+            TimeCourseStat::Median => "median",
+            TimeCourseStat::Q1 => "Q1",
+            TimeCourseStat::Q3 => "Q3",
+            TimeCourseStat::Min => "min",
+            TimeCourseStat::Max => "max",
+            TimeCourseStat::Sum => "sum",
+        }
+    }
+}
+
+/// How a time course's values are shown.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TimeCourseNormalize {
+    #[default]
+    None,
+    /// In % of the line's value at its first time point with objects: each
+    /// statistic of the same statistic there - SD of the mean, Q1/Q3 of the
+    /// median.
+    RelativeToStart,
+}
+
+/// A time course: per time point (and z-plane), the statistics of a value
+/// over each line's objects - the "Over time" chart and its export.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct TimeCourseFilter {
+    pub lines: TimeCourseLines,
+    /// Which part of the image name is the well / group: capture group 1.
+    pub grouping: Grouping,
+    /// The values - aggregable columns (not `Count`: every point has its
+    /// object count anyway).
+    pub columns: Vec<Column>,
+    /// The statistics of each value, in this order.
+    pub statistics: Vec<TimeCourseStat>,
+    pub normalize: TimeCourseNormalize,
+    /// `None` means every image in the database.
+    pub images: Option<Vec<String>>,
+    /// `None` means every object class registered in the database.
+    pub object_classes: Option<Vec<ObjectClass>>,
+    /// The time points / z-planes; `None`: all the run analysed.
+    #[serde(with = "option_range_serde")]
+    pub t_stacks: Option<Range<u32>>,
+    #[serde(with = "option_range_serde")]
+    pub z_stacks: Option<Range<u32>>,
+    /// Track lines: at most this many tracks, a random but repeatable sample
+    /// (the chart's faint tracks); `None`: every track.
+    pub max_tracks: Option<usize>,
+    /// Track lines across divisions and fusions.
+    #[serde(default)]
+    pub history: TrackHistory,
+}
+
+/// One point of a time course: a line at one time point (and z-plane).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TimeCoursePoint {
+    pub t: u32,
+    pub z: u32,
+    /// Seconds since the first time point (`t` × the frame interval) - when
+    /// the images have one, the same.
+    pub time_s: Option<f64>,
+    /// The well / group / track ("#12"); empty for class lines.
+    pub line: String,
+    /// The image - of an image or a track line.
+    pub image: String,
+    pub class_id: u32,
+    pub class_name: String,
+    /// Images analysed on this plane that belong to the line.
+    pub n_images: u32,
+    pub n_objects: u64,
+    /// Distinct tracks among the objects (0 without tracking).
+    pub n_tracks: u64,
+    /// Per column, per statistic (`TimeCourseFilter` order); `None` where
+    /// there's no value (no objects, or an SD of one object).
+    pub values: Vec<Option<f64>>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TimeCourseResult {
+    /// "Value statistic" per entry of `TimeCoursePoint::values`
+    /// ("Area [px] mean").
+    pub value_names: Vec<String>,
+    /// The results have several z-planes: points are per z-plane too.
+    pub by_z: bool,
+    /// The images share one frame interval: `TimeCoursePoint::time_s` is set.
+    pub frame_interval_s: Option<f64>,
+    /// Time point by time point, then z-plane, line and class.
+    pub points: Vec<TimeCoursePoint>,
+}
+
+/// What one line of a profile chart (Charts › Profile, e.g. the Sholl
+/// profile) follows: the objects of a class, of an image, of a well (by
+/// `ProfileFilter::grouping`'s first capture group) or all of them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProfileLines {
+    #[default]
+    Class,
+    Image,
+    Well,
+    All,
+}
+
+/// A profile chart's lines: per position (e.g. a Sholl ring's radius) the
+/// statistics of a profile measurement over each line's objects. An object
+/// without a value at a position of its line counts as 0 there (a neuron
+/// not reaching a radius crosses it 0 times) - so a line's mean doesn't
+/// jump where its smaller objects end.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProfileFilter {
+    /// The profile measurement's key ("sholl_01/intersections").
+    pub key: String,
+    pub lines: ProfileLines,
+    /// Which part of the image name is the well: capture group 1.
+    pub grouping: Grouping,
+    /// `None` means every image in the database.
+    pub images: Option<Vec<String>>,
+    /// `None` means every object class registered in the database.
+    pub object_classes: Option<Vec<ObjectClass>>,
+    /// At most this many lines (the first by name); the rest are counted in
+    /// `ProfileResult::lines_total`.
+    pub max_lines: usize,
+}
+
+/// One point of a profile chart: a line at one position.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProfilePoint {
+    /// The image / well; empty for class lines and "all".
+    pub line: String,
+    /// The class of a class line (0 otherwise).
+    pub class_id: u32,
+    pub class_name: String,
+    /// The position (e.g. the ring radius in pixels).
+    pub position: f64,
+    /// The line's objects (with a value at any position).
+    pub n_objects: u64,
+    pub mean: Option<f64>,
+    /// `None` for a single object.
+    pub sd: Option<f64>,
+    pub median: Option<f64>,
+    pub q1: Option<f64>,
+    pub q3: Option<f64>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProfileResult {
+    /// Line by line (class, then name), position by position.
+    pub points: Vec<ProfilePoint>,
+    /// The lines there were in all (more than drawn with `max_lines`).
+    pub lines_total: usize,
+}
+
+/// Steps through the objects with a profile (Charts › Profile split with
+/// the image: ‹ ›), in a fixed order: by image, then top to bottom, left to
+/// right.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProfileStepFilter {
+    /// The profile measurement's key ("sholl_01/intersections").
+    pub key: String,
+    /// `None` means every object class.
+    pub object_classes: Option<Vec<ObjectClass>>,
+    /// The object stepped from (its id); `None` or not one of them: the
+    /// first (`delta` > 0) or the last (`delta` < 0).
+    pub from: Option<String>,
+    /// How many objects on (negative: back), clamped to the first and last;
+    /// 0: `from` itself (none without it).
+    pub delta: i32,
+}
+
+/// An object with a profile, where it is and what its profile was measured
+/// around.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProfileObject {
+    pub object_id: String,
+    pub image_rel_path: String,
+    /// `[xmin, ymin, xmax, ymax]` (inclusive); `None` if the object is not
+    /// in the objects table.
+    pub bbox_px: Option<[u32; 4]>,
+    /// The object the positions are measured from (e.g. Measure Object
+    /// Sholl's soma, its Centre From parent); `None`: the object itself.
+    pub centre_id: Option<String>,
+}
+
+/// Where a step landed: the object, its place (1-based) and how many there
+/// are.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProfileStep {
+    /// 1-based; 0 with no object.
+    pub position: usize,
+    pub total: usize,
+    pub object: Option<ProfileObject>,
+}
+
+/// The neuron values of Measure Filament Tree, in `TreeNeuron::values`
+/// order: (id at the end of its key, name).
+pub const TREE_NEURON_VALUES: [(&str, &str); 6] = [
+    ("total_length", "Length"),
+    ("primary_neurites", "Primary"),
+    ("branch_points", "Branch points"),
+    ("tips", "Tips"),
+    ("max_branch_level", "Highest level"),
+    ("longest_path", "Longest path"),
+];
+
+/// A traced neuron (Trace Filaments): its soma and what Measure Filament
+/// Tree measured on it - Results › Trees' list.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TreeNeuron {
+    pub soma_id: String,
+    pub image_rel_path: String,
+    pub image_name: String,
+    /// The soma's box (the split view selects it).
+    pub soma_bbox_px: [u32; 4],
+    /// Its segments.
+    pub segments: u64,
+    /// `TREE_NEURON_VALUES` (`None`: not measured).
+    pub values: Vec<Option<f64>>,
+}
+
+/// The traced neurons of the results.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TreeNeurons {
+    pub neurons: Vec<TreeNeuron>,
+    /// A Measure Filament Tree step ran (its values are there).
+    pub measured: bool,
+}
+
+/// One segment of a traced neuron and what Measure Filament Tree measured
+/// on it - Results › Trees' dendrogram.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TreeSegment {
+    pub object_id: String,
+    /// The segment it continues (`None`: it starts at the soma).
+    pub parent: Option<String>,
+    pub bbox_px: [u32; 4],
+    /// Its length: measured, else its pixel count.
+    pub length: f64,
+    pub path_distance: Option<f64>,
+    pub branch_level: Option<f64>,
+    pub strahler_order: Option<f64>,
+    pub straightness: Option<f64>,
+}
+
+/// What a profile export holds (`ResultExport::with_profile`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProfileExportContent {
+    /// The chart's lines: per line and position n, mean, SD, median, Q1, Q3.
+    #[default]
+    Lines,
+    /// Each object's profile: per object and position its value (wide: a
+    /// row per object, a column per position, a position it doesn't reach
+    /// as 0).
+    Objects,
+}
+
+/// How a profile is exported (`ResultExport::with_profile`): images,
+/// classes and wells from the export's own settings.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProfileExport {
+    /// The profile measurement's key ("sholl_01/intersections").
+    pub key: String,
+    pub lines: ProfileLines,
+    pub content: ProfileExportContent,
+    pub layout: TimeCourseLayout,
+}
+
+/// One scatter plot: every matched object's `(x_column, y_column)` pair,
+/// one point per object.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ScatterFilter {
+    pub plane: PlaneFilter,
+    /// `None` means every image in the database.
+    pub images: Option<Vec<String>>,
+    /// `None` means every object class registered in the database.
+    pub object_classes: Option<Vec<ObjectClass>>,
+    pub x_column: Column,
+    pub y_column: Column,
+    /// Caps how many points are actually plotted — a scatter of every
+    /// object in a large database is neither readable nor cheap to render.
+    /// `None` means no cap (every matched object).
+    pub max_points: Option<usize>,
+}
+
+/// One boxplot: `column`'s distribution (min/Q1/median/Q3/max, plus
+/// outliers) — one box per class in `object_classes` (or every registered
+/// class if `None`), so distributions across classes can be compared side
+/// by side in a single chart.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct BoxplotFilter {
+    pub plane: PlaneFilter,
+    /// `None` means every image in the database.
+    pub images: Option<Vec<String>>,
+    /// `None` means every object class registered in the database — one
+    /// box per class.
+    pub object_classes: Option<Vec<ObjectClass>>,
+    pub column: Column,
+    /// What a box is: a class (the default), an image, a well, a plate
+    /// row or column.
+    #[serde(default)]
+    pub group_by: BoxplotGroup,
+    /// How images are put into wells (for the well groupings).
+    #[serde(default)]
+    pub grouping: Grouping,
+    /// A value per image (the objects' count, or `column`'s mean over the
+    /// image's objects) - each image a dot - instead of a value per object.
+    #[serde(default)]
+    pub per_image: bool,
+}
+
+/// What a boxplot's box stands for.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BoxplotGroup {
+    #[default]
+    Class,
+    Image,
+    Well,
+    WellRow,
+    WellColumn,
+}
+
+/// One equal-width-binned histogram, ready for the GUI to draw straight
+/// from `bin_edges`/`counts` — `bin_edges` has `counts.len() + 1` entries
+/// (edge `i` / edge `i+1` bound bin `i`).
+#[derive(Clone, Serialize, Deserialize)]
+pub struct HistogramResult {
+    pub bin_edges: Vec<f64>,
+    pub counts: Vec<u64>,
+    pub min: f64,
+    pub max: f64,
+    /// The values below and above the bins (not `full_range`), and the
+    /// smallest and largest of all.
+    #[serde(default)]
+    pub below: u64,
+    #[serde(default)]
+    pub above: u64,
+    #[serde(default)]
+    pub data_min: f64,
+    #[serde(default)]
+    pub data_max: f64,
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+pub struct ScatterPoint {
+    pub x: f64,
+    pub y: f64,
+    /// Its object: the image (an index into `ScatterResult::images`) and
+    /// its bounding box `[xmin, ymin, xmax, ymax]` in pixels - a click on
+    /// the point opens it there.
+    pub image: u32,
+    pub bbox_px: [u32; 4],
+}
+
+/// `points` may be a random sample of `total_object_count` rather than
+/// every one of them — see `ScatterFilter::max_points`.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ScatterResult {
+    pub points: Vec<ScatterPoint>,
+    /// The points' images (relative paths), each once.
+    pub images: Vec<String>,
+    pub x_min: f64,
+    pub x_max: f64,
+    pub y_min: f64,
+    pub y_max: f64,
+    pub total_object_count: usize,
+}
+
+/// One class's box: min/Q1/median/Q3/max plus any Tukey outliers (values
+/// beyond 1.5x the interquartile range from Q1/Q3).
+#[derive(Clone, Serialize, Deserialize)]
+pub struct BoxplotBox {
+    pub label: String,
+    pub color: u32,
+    pub min: f64,
+    pub q1: f64,
+    pub median: f64,
+    pub q3: f64,
+    pub max: f64,
+    /// The furthest values within 1.5x the IQR of Q1 and Q3 - where the
+    /// whiskers end (the values beyond are `outliers`).
+    #[serde(default)]
+    pub whisker_low: f64,
+    #[serde(default)]
+    pub whisker_high: f64,
+    pub outliers: Vec<f64>,
+    pub object_count: usize,
+    /// Per image (`BoxplotFilter::per_image`): every image's value - the
+    /// dots - and how many images.
+    #[serde(default)]
+    pub image_values: Vec<f64>,
+    #[serde(default)]
+    pub image_count: usize,
+    /// The mean and the standard deviation of the box's values.
+    #[serde(default)]
+    pub mean: f64,
+    #[serde(default)]
+    pub sd: f64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct BoxplotResult {
+    pub boxes: Vec<BoxplotBox>,
+}
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExportFormat {
+    #[default]
+    XLSX,
+    CSV,
+    Parquet,
+}
+
+/// One export step/document completing — `current`/`total` describe
+/// progress *within* the step named by `message` (e.g. "Plate/Well: ch2@spot"
+/// at `current=3, total=22` for the 3rd of 22 classes), not overall export
+/// progress across List/Plate/Well/Heatmap combined, since those phases
+/// have no shared unit to make a single running percentage meaningful.
+pub type ExportProgress<'a> = &'a mut dyn FnMut(&str, usize, usize);
+
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct ResultExport {
+    /// Directory the export writes its file(s) into — created if missing.
+    /// Every document below lives directly under it (`list.xlsx`,
+    /// `plate.xlsx`, `well.xlsx`, `heatmap_{image}.xlsx`).
+    pub output_dir: PathBuf,
+
+    /// Optional prefix added to each output file name, as
+    /// `{prefix}_{name}` (e.g. `exp1_list.xlsx`). Blank means none; unsafe
+    /// characters are replaced by `_`.
+    pub outputfile_prefix: Option<String>,
+
+    pub format: ExportFormat,
+    /// The time points exported; `None`: all of them. Only the planes the
+    /// results have objects in are exported (see `get_planes`).
+    #[serde(with = "option_range_serde")]
+    pub t_stacks: Option<Range<u32>>,
+    /// The z-planes exported; `None`: all of them.
+    #[serde(with = "option_range_serde")]
+    pub z_stacks: Option<Range<u32>>,
+    /// `[]` means every image in the database (see `resolve_images`).
+    pub image_rel_paths: Vec<String>,
+
+    // Variants
+    pub columns: Vec<Column>,
+    pub color_schema: ColorSchema,
+    pub color_scale: ColorScale,
+    pub grouping: Grouping,
+    /// `[]` means every object class registered in the database (see
+    /// `export_plate_and_well`/`export_heatmap`).
+    pub object_classes: Vec<ObjectClass>,
+
+    // Matrix view options
+    pub aggregations: Vec<Aggregation>,
+    pub plate_size: PlateSize,
+    pub well_size: Option<WellSize>,
+    pub well_order: Option<Vec<u32>>,
+    pub square_size: Option<usize>,
+
+    // What to export
+    pub with_list_view: bool,
+    pub with_list_coloc_details: bool,
+    /// `list_{image}.xlsx` per image instead of one shared `list.xlsx` —
+    /// needed once a single image's own object count risks Excel's
+    /// 1,048,576-row-per-sheet limit (a large plate scan can comfortably
+    /// exceed that combined across images, even if no single image does).
+    pub with_list_one_file_per_image: bool,
+    /// `grouped_by_image.xlsx`: one row per image, one column per
+    /// (selected column × selected aggregation) combination — see
+    /// `export_grouped_by_image`. Independent of `with_list_view`: it's a
+    /// separate document, not a variant of the per-object list.
+    pub with_grouped_by_image_list: bool,
+    /// `time_course.{csv,xlsx}`: per time point, statistics of the columns
+    /// over each line's objects (see `TimeCourseExport`).
+    pub with_time_course: bool,
+    pub time_course: TimeCourseExport,
+    /// `tracks.{csv,xlsx}`: a row per track (see `TrackSummaryExport`).
+    pub with_track_summary: bool,
+    /// `measurements.{csv,xlsx}`: one row per measurement value, like the
+    /// results' `measurements` table - the measurements among `columns`
+    /// (none chosen: all), of the chosen images and planes.
+    #[serde(default)]
+    pub with_measurements: bool,
+    /// `profile_lines.{csv,xlsx}` / `profile_objects.{csv,xlsx}`: a profile
+    /// measurement (e.g. the Sholl intersections) - see `ProfileExport`.
+    #[serde(default)]
+    pub with_profile: bool,
+    #[serde(default)]
+    pub profile: ProfileExport,
+    pub track_summary: TrackSummaryExport,
+    pub with_plate_view_heatmap: bool,
+    pub with_well_view_heatmap: bool,
+    pub with_plate_view_list: bool,
+    pub with_well_view_list: bool,
+    pub with_heatmap: bool,
+    /// If true each object class is shown in a separate table instead of in rows
+    pub transpond_table: bool,
+    /// "Images with objects drawn": a PNG per image (see `DrawnImages`).
+    #[serde(default)]
+    pub drawn_images: Option<DrawnImages>,
+}
+
+/// Where the images are and how they're drawn for "Images with objects
+/// drawn" - the results database knows the objects, not the images.
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct DrawnImages {
+    /// The folder the images' relative paths are below.
+    pub image_root: PathBuf,
+    /// The series drawn.
+    pub series: i32,
+    /// The longer side at most (the pyramid level that fits is read).
+    pub max_side: u32,
+    /// Each channel's color (channel -> RGB 0..1); white when missing.
+    pub colors: std::collections::BTreeMap<i32, [f32; 3]>,
+    /// How the objects are drawn.
+    #[serde(default)]
+    pub style: DrawStyle,
+    /// Where each channel's display range comes from.
+    #[serde(default)]
+    pub brightness: DrawBrightness,
+    /// How the images are shown - the project's settings.
+    #[serde(default)]
+    pub display: ImageDisplay,
+    /// The images with settings of their own (relative path -> them), in
+    /// place of `display`.
+    #[serde(default)]
+    pub image_display: std::collections::BTreeMap<String, ImageDisplay>,
+    /// The images whose path below `image_root` isn't the one in the
+    /// results (the image folder changed since the run): results path ->
+    /// the project's. Only those - usually none.
+    #[serde(default)]
+    pub image_paths: std::collections::BTreeMap<String, String>,
+}
+
+/// How "Images with objects drawn" draws an object.
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DrawStyle {
+    /// Its contour, 1 px, in its class's color.
+    #[default]
+    Outline,
+    /// Filled half transparent, its contour opaque.
+    Filled,
+    /// Its bounding box, 2 px.
+    Box,
+}
+
+/// Where "Images with objects drawn" takes a channel's display range from.
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DrawBrightness {
+    /// The viewer's range of the channel (`ChannelDisplay::range`); auto
+    /// where it has none.
+    #[default]
+    Viewer,
+    /// Each image's own 0.5 % / 99.5 % values.
+    Auto,
+}
+
+/// How an image is shown, as the viewer shows it.
+#[derive(Default, Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ImageDisplay {
+    /// The z-projection its analysis read (`None`: plane by plane) - the
+    /// objects of a projection are on its plane 0.
+    pub z_projection: evanalyzer_cfg::core_types::ZProjection,
+    /// Per channel; a channel missing here is shown, auto-scaled.
+    pub channels: std::collections::BTreeMap<i32, ChannelDisplay>,
+}
+
+/// How a channel is shown.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChannelDisplay {
+    pub visible: bool,
+    /// The display range `(min, max)` in the read image's values - `None`:
+    /// auto-scaled.
+    pub range: Option<(f32, f32)>,
+}
+
+impl Default for ChannelDisplay {
+    fn default() -> Self {
+        Self {
+            visible: true,
+            range: None,
+        }
+    }
+}
+
+/// serde for an optional `std::range::Range` (no upstream support yet):
+/// `Option<(start, end)>`.
+mod option_range_serde {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::range::Range;
+
+    pub fn serialize<S: Serializer>(
+        range: &Option<Range<u32>>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        range
+            .map(|range| (range.start, range.end))
+            .serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<Range<u32>>, D::Error> {
+        let range = Option::<(u32, u32)>::deserialize(deserializer)?;
+        Ok(range.map(|(start, end)| Range { start, end }))
+    }
+}
+
+/// The unit a track's speed is shown in.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SpeedUnit {
+    #[default]
+    PxPerFrame,
+    UmPerMin,
+    UmPerS,
+}

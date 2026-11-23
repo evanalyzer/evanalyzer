@@ -11,11 +11,12 @@
 
 pub use evanalyzer_gui_slint::*;
 
-use evanalyzer_app::backends::{Backend, ConnectionSecurity};
-use evanalyzer_app::global::{AppHandle, ColorScheme, Frontend, InterfaceSize};
+use evanalyzer_app::backend::{Backend, ConnectionSecurity};
 use evanalyzer_app::images::ImageMeta;
 use evanalyzer_app::images::ImageSource;
+use evanalyzer_app::project::{AppHandle, Frontend};
 use evanalyzer_app::project::{ProjectOwner, ProjectWithRuntime};
+use evanalyzer_app::user::{ColorScheme, InterfaceSize};
 use evanalyzer_cfg::core_types::InternalErrors;
 pub use file_browser::{FileBrowser, FileMode, FileRequest};
 use slint::ComponentHandle;
@@ -91,7 +92,7 @@ pub struct UiState {
     /// The user's remembered preferences, loaded once from the backend (the
     /// worker's user folder in remote mode) and saved back there on every
     /// change - kept here so reading one doesn't cost a round trip.
-    app_settings: Mutex<evanalyzer_app::global::AppSettings>,
+    app_settings: Mutex<evanalyzer_app::user::AppSettings>,
     /// This computer - where "Disconnect" returns to, and where the list of
     /// recent servers is kept whatever the window is connected to.
     local_backend: Arc<dyn Backend>,
@@ -113,8 +114,8 @@ pub struct UiState {
 }
 
 /// The undo history's RAM in effect on this computer.
-fn undo_budget_bytes(settings: &evanalyzer_app::global::ViewportMemorySettings) -> u64 {
-    let (cores, total_ram) = evanalyzer_app::backends::local::cpu_ram_diagnostics();
+fn undo_budget_bytes(settings: &evanalyzer_app::user::ViewportMemorySettings) -> u64 {
+    let (cores, total_ram) = evanalyzer_app::backend::local::cpu_ram_diagnostics();
     u64::from(settings.effective_undo_history_mb(total_ram, cores)) * 1024 * 1024
 }
 
@@ -126,7 +127,7 @@ impl UiState {
             Default::default()
         });
         let local_backend: Arc<dyn Backend> = if backend.is_remote() {
-            Arc::new(evanalyzer_app::backends::local::LocalBackend::default())
+            Arc::new(evanalyzer_app::backend::local::LocalBackend::default())
         } else {
             Arc::clone(&backend)
         };
@@ -349,7 +350,7 @@ impl UiState {
 
     /// The servers connected to before, most recent first - always this
     /// computer's list.
-    pub fn recent_servers(&self) -> Vec<evanalyzer_app::global::RecentServer> {
+    pub fn recent_servers(&self) -> Vec<evanalyzer_app::user::RecentServer> {
         self.local_backend
             .load_app_settings()
             .map(|settings| settings.recent_servers)
@@ -357,7 +358,7 @@ impl UiState {
     }
 
     /// Puts `server` first in this computer's list of recent servers.
-    pub fn remember_server(&self, server: evanalyzer_app::global::RecentServer) {
+    pub fn remember_server(&self, server: evanalyzer_app::user::RecentServer) {
         let result = self
             .local_backend
             .load_app_settings()
@@ -372,7 +373,7 @@ impl UiState {
 
     /// The viewport's memory settings - always this computer's, since they
     /// are about this computer's RAM.
-    pub fn viewport_memory_settings(&self) -> evanalyzer_app::global::ViewportMemorySettings {
+    pub fn viewport_memory_settings(&self) -> evanalyzer_app::user::ViewportMemorySettings {
         self.local_backend
             .load_app_settings()
             .map(|settings| settings.viewport)
@@ -382,7 +383,7 @@ impl UiState {
     /// Saves the viewport's memory settings on this computer.
     pub fn save_viewport_memory_settings(
         &self,
-        viewport: evanalyzer_app::global::ViewportMemorySettings,
+        viewport: evanalyzer_app::user::ViewportMemorySettings,
     ) {
         // Locally the cached preferences are saved to this same file by
         // `update_app_settings` - keep them current so that doesn't write
@@ -402,7 +403,7 @@ impl UiState {
 
     /// How much of this computer EVAnalyzer may use (Settings ›
     /// Performance) - always this computer's.
-    pub fn performance_settings(&self) -> evanalyzer_app::global::PerformanceSettings {
+    pub fn performance_settings(&self) -> evanalyzer_app::user::PerformanceSettings {
         self.local_backend
             .load_app_settings()
             .map(|settings| settings.performance)
@@ -413,7 +414,7 @@ impl UiState {
     /// the next start.
     pub fn save_performance_settings(
         &self,
-        performance: evanalyzer_app::global::PerformanceSettings,
+        performance: evanalyzer_app::user::PerformanceSettings,
     ) {
         // As `save_viewport_memory_settings`: the cached preferences too.
         self.app_settings.lock().unwrap().performance = performance;
@@ -431,7 +432,7 @@ impl UiState {
 
     /// How big the GUI draws buttons and text - always this computer's
     /// setting, as it is about this computer's screen.
-    pub fn interface_size(&self) -> evanalyzer_app::global::InterfaceSize {
+    pub fn interface_size(&self) -> evanalyzer_app::user::InterfaceSize {
         self.local_backend
             .load_app_settings()
             .map(|settings| settings.interface_size)
@@ -439,7 +440,7 @@ impl UiState {
     }
 
     /// Saves the interface size on this computer.
-    pub fn save_interface_size(&self, size: evanalyzer_app::global::InterfaceSize) {
+    pub fn save_interface_size(&self, size: evanalyzer_app::user::InterfaceSize) {
         // As `save_viewport_memory_settings`: the cached preferences too.
         self.app_settings.lock().unwrap().interface_size = size;
         let result = self
@@ -463,15 +464,12 @@ impl UiState {
     }
 
     /// The user's remembered preferences (see `app_settings`).
-    pub fn load_app_settings(&self) -> evanalyzer_app::global::AppSettings {
+    pub fn load_app_settings(&self) -> evanalyzer_app::user::AppSettings {
         self.app_settings.lock().unwrap().clone()
     }
 
     /// Changes one preference and saves all of them through the backend.
-    pub fn update_app_settings(
-        &self,
-        change: impl FnOnce(&mut evanalyzer_app::global::AppSettings),
-    ) {
+    pub fn update_app_settings(&self, change: impl FnOnce(&mut evanalyzer_app::user::AppSettings)) {
         let settings = {
             let mut settings = self.app_settings.lock().unwrap();
             change(&mut settings);
@@ -626,7 +624,7 @@ impl UiState {
 
     /// The RAM the undo history may use from now on, as `settings` give it
     /// on this computer - older steps over it go with the next one.
-    pub fn set_undo_budget(&self, settings: &evanalyzer_app::global::ViewportMemorySettings) {
+    pub fn set_undo_budget(&self, settings: &evanalyzer_app::user::ViewportMemorySettings) {
         self.undo_budget_bytes
             .store(undo_budget_bytes(settings), Ordering::Relaxed);
     }
@@ -672,7 +670,7 @@ impl UiState {
     }
 
     /// Forgets the cached opened image - see
-    /// [`AppHandle::forget_image_source`](evanalyzer_app::global::AppHandle::forget_image_source).
+    /// [`AppHandle::forget_image_source`](evanalyzer_app::project::AppHandle::forget_image_source).
     pub fn forget_image_source(&self) {
         self.app.forget_image_source()
     }
@@ -847,7 +845,7 @@ fn run(
     // scale: set before the window exists, so Slint creates it at that
     // scale and ignores the screen's scale from then on. Later changes go
     // through `apply_interface_size`.
-    let interface_size = evanalyzer_app::backends::local::LocalBackend::default()
+    let interface_size = evanalyzer_app::backend::local::LocalBackend::default()
         .load_app_settings()
         .map(|settings| settings.interface_size)
         .unwrap_or_default();
@@ -1219,16 +1217,16 @@ pub(crate) fn apply_panels(ui: &AppWindow, ui_state: &UiState) {
     layout.set_stack_bar_folded(panels.image_bar_folded);
     layout.set_pipelines_list_open(panels.pipelines_list_open);
     layout.set_navigator_mode(match panels.navigator {
-        evanalyzer_app::global::NavigatorMode::Auto => 0,
-        evanalyzer_app::global::NavigatorMode::Always => 1,
-        evanalyzer_app::global::NavigatorMode::Never => 2,
+        evanalyzer_app::user::NavigatorMode::Auto => 0,
+        evanalyzer_app::user::NavigatorMode::Always => 1,
+        evanalyzer_app::user::NavigatorMode::Never => 2,
     });
     layout.set_step_values_below(panels.step_values_below);
 }
 
-fn panels_from_ui(ui: &AppWindow) -> evanalyzer_app::global::PanelSettings {
+fn panels_from_ui(ui: &AppWindow) -> evanalyzer_app::user::PanelSettings {
     let layout = ui.global::<LayoutState>();
-    evanalyzer_app::global::PanelSettings {
+    evanalyzer_app::user::PanelSettings {
         steps_open: layout.get_steps_open(),
         classes_open: layout.get_classes_open(),
         image_open: layout.get_image_open(),
@@ -1241,9 +1239,9 @@ fn panels_from_ui(ui: &AppWindow) -> evanalyzer_app::global::PanelSettings {
         image_bar_folded: layout.get_stack_bar_folded(),
         pipelines_list_open: layout.get_pipelines_list_open(),
         navigator: match layout.get_navigator_mode() {
-            1 => evanalyzer_app::global::NavigatorMode::Always,
-            2 => evanalyzer_app::global::NavigatorMode::Never,
-            _ => evanalyzer_app::global::NavigatorMode::Auto,
+            1 => evanalyzer_app::user::NavigatorMode::Always,
+            2 => evanalyzer_app::user::NavigatorMode::Never,
+            _ => evanalyzer_app::user::NavigatorMode::Auto,
         },
         step_values_below: layout.get_step_values_below(),
     }
@@ -1342,7 +1340,7 @@ mod ui_state_tests {
     fn local_backend_is_labelled_this_computer_and_shown_as_local() {
         crate::editor::test_support::ensure_slint_test_platform();
         let backend: Arc<dyn Backend> =
-            Arc::new(evanalyzer_app::backends::local::LocalBackend::default());
+            Arc::new(evanalyzer_app::backend::local::LocalBackend::default());
         assert_eq!(connection_label(backend.as_ref()), "This computer");
 
         let ui = AppWindow::new().unwrap();
@@ -1360,17 +1358,17 @@ mod ui_state_tests {
 
     #[test]
     fn the_connection_display_follows_a_switch_to_a_server_and_back() {
-        use evanalyzer_app::backends::remote::{RemoteBackend, Worker};
+        use evanalyzer_app::remote::{RemoteBackend, Worker};
         crate::editor::test_support::ensure_slint_test_platform();
         let worker = Worker::bind("127.0.0.1:0", "t".into()).unwrap();
         let addr = worker.local_addr().unwrap();
         std::thread::spawn(move || {
             worker.run(Arc::new(
-                evanalyzer_app::backends::local::LocalBackend::default(),
+                evanalyzer_app::backend::local::LocalBackend::default(),
             ))
         });
         let local: Arc<dyn Backend> =
-            Arc::new(evanalyzer_app::backends::local::LocalBackend::default());
+            Arc::new(evanalyzer_app::backend::local::LocalBackend::default());
         let remote: Arc<dyn Backend> =
             Arc::new(RemoteBackend::connect(&format!("ws://{addr}"), "t").unwrap());
         let current = Arc::new(Mutex::new(Arc::clone(&local)));
@@ -1517,7 +1515,7 @@ mod ui_state_tests {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(256);
-        ui_state.set_undo_budget(&evanalyzer_app::global::ViewportMemorySettings {
+        ui_state.set_undo_budget(&evanalyzer_app::user::ViewportMemorySettings {
             undo_history_auto: false,
             undo_history_mb: budget_mb,
             ..Default::default()
@@ -1765,7 +1763,7 @@ mod ui_state_tests {
         std::fs::create_dir_all(&folder).unwrap();
         let home = folder.join("home");
         std::fs::write(&home, "not a folder").unwrap();
-        let backend = evanalyzer_app::backends::local::LocalBackend::default()
+        let backend = evanalyzer_app::backend::local::LocalBackend::default()
             .with_home(&home)
             .expect("backend");
         let owner = ProjectOwner::with_backend(Arc::new(backend));
@@ -1796,7 +1794,7 @@ mod ui_state_tests {
         ui_state.save_viewport_memory_settings(viewport.clone());
         assert_eq!(ui_state.load_app_settings().viewport, viewport);
 
-        ui_state.remember_server(evanalyzer_app::global::RecentServer {
+        ui_state.remember_server(evanalyzer_app::user::RecentServer {
             url: "ws://localhost:7400".into(),
             user: "alice".into(),
             fingerprint: None,
@@ -2086,7 +2084,7 @@ mod ui_state_tests {
     fn reconnect_now_on_this_computer_does_nothing() {
         let ui = crate::editor::test_support::test_ui_window();
         let backend: Arc<dyn Backend> =
-            Arc::new(evanalyzer_app::backends::local::LocalBackend::default());
+            Arc::new(evanalyzer_app::backend::local::LocalBackend::default());
         let _timer = show_connection(&ui, move || Arc::clone(&backend), || {});
 
         ui.global::<ConnectionState>().invoke_reconnect_now();

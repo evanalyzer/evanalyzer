@@ -18,12 +18,11 @@ use crate::{
         viewport_controller::ViewportController,
     },
 };
-use evanalyzer_app::analysis::AnalysisRequest;
-use evanalyzer_app::analysis::ProgressEvent;
-use evanalyzer_app::preview::PreviewRequest;
-use evanalyzer_app::preview::PreviewViewport;
-use evanalyzer_app::preview::StartPreviewError;
-use evanalyzer_app::project::ProjectExt;
+use evanalyzer_app::jobs::AnalysisRequest;
+use evanalyzer_app::jobs::PreviewRequest;
+use evanalyzer_app::jobs::PreviewViewport;
+use evanalyzer_app::jobs::ProgressEvent;
+use evanalyzer_app::jobs::StartPreviewError;
 use evanalyzer_cfg::core_types::{InternalErrors, PipelineId, StepId};
 use evanalyzer_cfg::settings::pipeline_settings::StepContent;
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
@@ -181,7 +180,7 @@ impl PipelineWorker {
                 let prediction = overlay
                     .on
                     .then(|| {
-                        evanalyzer_app::ai_learning::prediction_target(
+                        evanalyzer_app::ai::learning::prediction_target(
                             &task.project_settings,
                             overlay.model.as_deref(),
                         )
@@ -840,8 +839,8 @@ mod tests {
     use crate::editor::template_controller::TemplateController;
     use crate::editor::test_support::{fixture_image_path, test_ui_window};
     use crate::helper::ui_thread::drain_ui_queue;
-    use evanalyzer_app::backends::local::LocalBackend;
-    use evanalyzer_app::project::{ProjectExt, ProjectWithRuntime};
+    use evanalyzer_app::backend::local::LocalBackend;
+    use evanalyzer_app::project::ProjectWithRuntime;
 
     struct Fixture {
         ui: AppWindow,
@@ -1004,12 +1003,12 @@ mod tests {
 
     /// A remote fixture: an in-process worker serving the local backend,
     /// and the GUI connected to it.
-    fn remote_fixture() -> (Fixture, Arc<dyn evanalyzer_app::backends::Backend>) {
-        use evanalyzer_app::backends::remote::{RemoteBackend, Worker};
+    fn remote_fixture() -> (Fixture, Arc<dyn evanalyzer_app::backend::Backend>) {
+        use evanalyzer_app::remote::{RemoteBackend, Worker};
         let worker = Worker::bind("127.0.0.1:0", "gui-test".into()).unwrap();
         let url = format!("ws://{}", worker.local_addr().unwrap());
         std::thread::spawn(move || worker.run(Arc::new(LocalBackend::default())));
-        let remote: Arc<dyn evanalyzer_app::backends::Backend> =
+        let remote: Arc<dyn evanalyzer_app::backend::Backend> =
             Arc::new(RemoteBackend::connect(&url, "gui-test").unwrap());
         let owner = evanalyzer_app::project::ProjectOwner::with_backend(Arc::clone(&remote));
         (fixture_on(owner), remote)

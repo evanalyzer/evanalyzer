@@ -7,24 +7,25 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use crate::api::AnalysisRequest;
-use crate::api::Backend;
-use crate::api::FileSystem;
-use crate::api::ImageMeta;
-use crate::api::ImageSource;
-use crate::api::PreviewRequest;
-use crate::api::ResultsSource;
-use crate::api::RunningJob;
-use crate::api::RunningTraining;
-use crate::api::StartPreviewError;
-use crate::api::StartTrainingError;
-use crate::api::SystemInfo;
-use crate::api::TemplateFolders;
-use crate::api::TrainingRequest;
-use crate::backend::LocalFileSystem;
-use crate::backend::local::image_reader::open_image_source;
-use crate::backend::local::results::LocalResults;
-use crate::workspace::settings::{self, AppSettings};
+use crate::backend::Backend;
+use crate::backend::SystemInfo;
+use crate::backend::TemplateFolders;
+use crate::files::FileSystem;
+use crate::files::LocalFileSystem;
+use crate::images::ImageMeta;
+use crate::images::ImageSource;
+use crate::images::local::open_image_source;
+use crate::jobs::AnalysisRequest;
+use crate::jobs::PreviewRequest;
+use crate::jobs::RunningJob;
+use crate::jobs::StartPreviewError;
+use crate::results::ResultsSource;
+use crate::results::local::LocalResults;
+use crate::training::RunningTraining;
+use crate::training::StartTrainingError;
+use crate::training::TrainingRequest;
+use crate::user::folder;
+use crate::user::settings::{self, AppSettings};
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_core::{ImageReader, ReadMode};
 use std::path::{Path, PathBuf};
@@ -65,7 +66,7 @@ impl LocalBackend {
     /// whose workers run as the server's account (users file, single user)
     /// can't plant templates for each other.
     pub fn with_home(mut self, home: &Path) -> Result<Self, InternalErrors> {
-        let user_folder = settings::user_folder_in(home);
+        let user_folder = folder::user_folder_in(home);
         let templates = super::templates::user_templates_folder_in(&user_folder);
         if self.files.is_restricted() {
             self.files = std::mem::take(&mut self.files).replacing_hidden(&[templates])?;
@@ -79,7 +80,7 @@ impl LocalBackend {
     fn user_folder(&self) -> PathBuf {
         self.user_folder
             .clone()
-            .unwrap_or_else(settings::get_user_folder)
+            .unwrap_or_else(folder::get_user_folder)
     }
 
     /// The paths a project makes the backend read or write.
@@ -100,7 +101,7 @@ impl LocalBackend {
         }
         // The model files the steps load (absolute: the client resolved
         // them from its project folder).
-        for path in crate::workspace::extensions::utils::command_file_paths(settings) {
+        for path in crate::project::utils::command_file_paths(settings) {
             self.files.check(&path)?;
         }
         // Each image joined onto that root stays in it.
@@ -121,13 +122,13 @@ impl Backend for LocalBackend {
     }
 
     fn load_app_settings(&self) -> Result<AppSettings, InternalErrors> {
-        Ok(settings::load_app_settings_from(
-            &settings::settings_file_in(&self.user_folder()),
-        ))
+        Ok(settings::load_app_settings_from(&folder::settings_file_in(
+            &self.user_folder(),
+        )))
     }
 
     fn save_app_settings(&self, app_settings: &AppSettings) -> Result<(), InternalErrors> {
-        let path = settings::settings_file_in(&self.user_folder());
+        let path = folder::settings_file_in(&self.user_folder());
         settings::save_app_settings_to(&path, app_settings)
             .map_err(|e| InternalErrors::Io(format!("Could not save {}: {e}", path.display())))
     }
@@ -138,7 +139,7 @@ impl Backend for LocalBackend {
 
     fn start_analysis(&self, req: AnalysisRequest) -> Result<RunningJob, InternalErrors> {
         self.check_project_paths(Some(&req.project_path), &req.settings)?;
-        super::job::start_analysis(
+        crate::jobs::local::start_analysis(
             req.settings,
             req.project_path,
             req.job_name,
@@ -149,13 +150,13 @@ impl Backend for LocalBackend {
 
     fn start_preview(&self, req: PreviewRequest) -> Result<RunningJob, StartPreviewError> {
         self.check_project_paths(Some(&req.project_path), &req.settings)?;
-        super::job::start_preview(req)
+        crate::jobs::local::start_preview(req)
     }
 
     fn start_training(&self, req: TrainingRequest) -> Result<RunningTraining, StartTrainingError> {
         self.check_project_paths(None, &req.project)
             .map_err(StartTrainingError::Failed)?;
-        super::training::start_training(&req.project, req.settings, req.pixel_params)
+        crate::training::local::start_training(&req.project, req.settings, req.pixel_params)
     }
 
     fn open_image(&self, path: &Path) -> Result<Arc<dyn ImageSource>, InternalErrors> {
@@ -227,9 +228,7 @@ mod home_tests {
         let templates = backend.template_folders().unwrap().user;
         assert_eq!(
             templates,
-            home.path()
-                .join(settings::USER_FOLDER_NAME)
-                .join("templates")
+            home.path().join(folder::USER_FOLDER_NAME).join("templates")
         );
         assert!(templates.is_dir(), "created on demand");
     }
@@ -250,7 +249,7 @@ mod home_tests {
         };
         backend.save_app_settings(&settings).unwrap();
 
-        let file = settings::settings_file_in(&settings::user_folder_in(home.path()));
+        let file = folder::settings_file_in(&folder::user_folder_in(home.path()));
         assert!(file.is_file(), "{}", file.display());
         assert_eq!(
             backend.load_app_settings().unwrap().color_scheme,

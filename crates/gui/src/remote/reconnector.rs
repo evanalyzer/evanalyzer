@@ -12,7 +12,7 @@ use std::{
     time::Duration,
 };
 
-use evanalyzer_app::backends::Backend;
+use evanalyzer_app::backend::Backend;
 use evanalyzer_gui_slint::{AppWindow, ConnectionState};
 use slint::ComponentHandle;
 
@@ -120,15 +120,15 @@ mod tests {
     use super::*;
     use crate::editor::test_support::test_ui_window;
     use crate::helper::ui_thread::drain_ui_queue;
-    use evanalyzer_app::ai_learning::{RunningTraining, StartTrainingError, TrainingRequest};
-    use evanalyzer_app::analysis::{AnalysisRequest, RunningJob};
-    use evanalyzer_app::backends::SystemInfo;
-    use evanalyzer_app::fs::FileSystem;
-    use evanalyzer_app::global::AppSettings;
+    use evanalyzer_app::backend::SystemInfo;
+    use evanalyzer_app::files::FileSystem;
     use evanalyzer_app::images::{ImageMeta, ImageSource};
-    use evanalyzer_app::preview::{PreviewRequest, StartPreviewError};
+    use evanalyzer_app::jobs::{AnalysisRequest, RunningJob};
+    use evanalyzer_app::jobs::{PreviewRequest, StartPreviewError};
     use evanalyzer_app::results::ResultsSource;
     use evanalyzer_app::templates::TemplateFolders;
+    use evanalyzer_app::training::{RunningTraining, StartTrainingError, TrainingRequest};
+    use evanalyzer_app::user::AppSettings;
     use evanalyzer_cfg::core_types::InternalErrors;
     use std::collections::VecDeque;
     use std::path::Path;

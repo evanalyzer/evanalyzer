@@ -8,7 +8,8 @@
 //
 //   ViewBar { BarChip { … popover content … } … BarSpacer { } BarCount { } BarMore { … } }
 
-import { Ink, InkIcons, InkIconButton, InkMenuFrame } from "../ink/ink.slint";
+import { Ink, InkIcons, InkIconButton, InkMenuFrame, InkSegmented } from "../ink/ink.slint";
+import { ScrollView } from "std-widgets.slint";
 
 // The bar's frame: a panel across the view, its parts in a row.
 export component ViewBar inherits Rectangle {
@@ -157,6 +158,112 @@ export component BarChip inherits Rectangle {
                 @children
             }
         }
+    }
+}
+
+// The view's left panel: what is shown (design canvas "Results rework",
+// PanelSwitch A1). On top the switch between its parts - the same control
+// as "A row per" - or with one part its `title`; ‹ folds it away (the bar
+// then shows `BarFolded`). A panel on the ground beside the view (not
+// floating: no blur); `current` is the part shown - `part` if it is one of
+// `parts`, else the first. It scrolls.
+export component ViewPanel inherits Rectangle {
+    in property <string> title;
+    in property <[string]> parts;
+    in property <string> part;
+    callback part-picked(string);
+    callback fold;
+    property <int> index: root.parts[0] == root.part ? 0 : root.parts[1] == root.part ? 1
+        : root.parts[2] == root.part ? 2 : root.parts[3] == root.part ? 3 : root.parts[4] == root.part ? 4 : 0;
+    out property <string> current: root.parts[root.index];
+
+    width: 400px;
+    background: Ink.panel;
+    border-radius: Ink.radius-lg;
+    border-width: 1px;
+    border-color: Ink.border;
+    clip: true;
+
+    VerticalLayout {
+        HorizontalLayout {
+            padding-left: 14px;
+            padding-right: 8px;
+            padding-top: 10px;
+            padding-bottom: 10px;
+            spacing: 8px;
+            if root.parts.length > 1: VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 1;
+                InkSegmented {
+                    equal: true;
+                    label: "Show";
+                    model: root.parts;
+                    selected: root.index;
+                    picked(i) => {
+                        root.part-picked(root.parts[i]);
+                    }
+                }
+            }
+            if root.parts.length <= 1: Text {
+                horizontal-stretch: 1;
+                text: root.title;
+                font-size: Ink.fs-heading;
+                font-weight: 600;
+                color: Ink.text;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            InkIconButton {
+                size: 26px;
+                icon: InkIcons.caret-left;
+                label: "Fold the panel away";
+                clicked => {
+                    root.fold();
+                }
+            }
+        }
+        Rectangle {
+            height: 1px;
+            background: Ink.border-soft;
+        }
+        ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                padding: 14px;
+                spacing: 12px;
+                alignment: start;
+                @children
+            }
+        }
+    }
+}
+
+// First in the bar while the view's panel is folded away: the button that
+// brings it back, and what it shows in a grey line ("All images · all
+// classes · 6 columns").
+export component BarFolded inherits HorizontalLayout {
+    in property <string> summary;
+    callback unfold;
+    spacing: 8px;
+    horizontal-stretch: 0;
+    VerticalLayout {
+        alignment: center;
+        InkIconButton {
+            size: 26px;
+            icon: InkIcons.image-controls;
+            label: "Show the settings panel";
+            clicked => {
+                root.unfold();
+            }
+        }
+    }
+    Text {
+        max-width: 420px;
+        text: root.summary;
+        font-size: Ink.fs-secondary;
+        color: Ink.text-mute;
+        vertical-alignment: center;
+        overflow: elide;
     }
 }
 

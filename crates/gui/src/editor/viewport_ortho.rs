@@ -26,7 +26,6 @@ use crate::editor::viewport_worker::{
 use evanalyzer_app::images::{
     ImageChannel, ImageContainer, ImageSource, ManagedImage, TileRequest,
 };
-use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::core_types::{ImageDimensionality, ImageTile, InternalErrors, ZProjection};
 use kornia_image::{Image, ImageSize};
 use log::{debug, warn};
@@ -414,6 +413,7 @@ impl ViewportWorker {
 mod tests {
     use super::*;
     use evanalyzer_app::images::{ImageInfo, ImageMeta, PyramidInfo};
+    use evanalyzer_app::project::GlobalImageSettingsExt;
     use std::collections::BTreeMap;
     use std::sync::Mutex;
 
@@ -915,6 +915,8 @@ mod tests {
         let mut w = window_on(project_with_fixture_image(), 0);
         w.app_state
             .get_project_write()
+            .images
+            .settings
             .set_global_pixel_size_settings(0.5, 0.5, None);
         w.render();
         assert_eq!(w.view().get_ortho_aniso(), 1.0);

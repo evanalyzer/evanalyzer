@@ -22,7 +22,6 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 use crate::{AppWindow, UiState};
 use evanalyzer_app::project::ImageListExt;
-use evanalyzer_app::project::ProjectExt;
 use evanalyzer_app::project::ProjectOwner;
 use evanalyzer_app::project::ProjectWithRuntime;
 use evanalyzer_cfg::settings::images_settings::{
@@ -56,7 +55,7 @@ pub(crate) fn test_project_owner() -> ProjectOwner {
         remove_homes_of_earlier_runs(&root);
     }
     let home = root.join(format!("{}-{index}", std::process::id()));
-    let backend = evanalyzer_app::backends::local::LocalBackend::default()
+    let backend = evanalyzer_app::backend::local::LocalBackend::default()
         .with_home(&home)
         .expect("temporary home");
     ProjectOwner::with_backend(Arc::new(backend))
@@ -93,7 +92,7 @@ pub(crate) fn test_ui_state_with_project(project: ProjectWithRuntime) -> Arc<UiS
 /// A minimal project with one 2x2, 2-channel image set as "current" (i.e.
 /// what `get_current_image_settings`/`with_current_series_mut` resolve to) -
 /// mirrors the equivalent private helper in
-/// `evanalyzer_app::workspace::extensions::project_ext`'s own test module, since
+/// `evanalyzer_app::project::project_ext`'s own test module, since
 /// several controller methods only do anything when a "current image" is
 /// set.
 pub(crate) fn project_with_one_image() -> ProjectWithRuntime {

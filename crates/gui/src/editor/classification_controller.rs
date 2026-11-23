@@ -15,8 +15,7 @@ use crate::{
     AppWindow, ClassItemData, ClassResultsKind, ClassSettingsSlint, ClassificationSettingsState,
     ClassificationState, ObjectListState,
 };
-use evanalyzer_app::prelude::classification_ext::ClassificationExt;
-use evanalyzer_app::project::{AnnotationsExt, ProjectExt};
+use evanalyzer_app::project::classes::ClassificationExt;
 use evanalyzer_app::project::{free_class_ids, next_class_id};
 use evanalyzer_cfg::AssignObjectClass;
 use evanalyzer_cfg::core_types::ObjectClass;
@@ -214,7 +213,7 @@ impl ClassificationController {
             ui.global::<ClassificationState>()
                 .on_class_auto_add_and_replace(move || {
                     let mut project = manager.app_state.get_project_write();
-                    project.delete_all_classes();
+                    project.classification.delete_all_classes();
                     project.auto_add_classes_based_on_image_meta();
                     manager.sync_classification_to_slint();
                     manager.object_list_controller.sync_objects_to_slint();
@@ -256,7 +255,7 @@ impl ClassificationController {
             ui.global::<ClassificationState>()
                 .on_class_delete_all(move || {
                     let mut project = manager.app_state.get_project_write();
-                    project.delete_all_classes();
+                    project.classification.delete_all_classes();
                     project.set_selected_object_class(ObjectClass::Unset);
                     manager.sync_classification_to_slint();
                     manager.object_list_controller.sync_objects_to_slint();

@@ -102,8 +102,8 @@ fn main() {
     let mut args: Vec<String> = std::env::args().collect();
     if args.get(2).is_some_and(|a| a == "--max-ram") {
         let mb: u64 = args[3].parse().expect("--max-ram MB");
-        evanalyzer_app::backends::local::set_resource_limits(
-            evanalyzer_app::backends::local::ResourceLimits {
+        evanalyzer_app::backend::local::set_resource_limits(
+            evanalyzer_app::backend::local::ResourceLimits {
                 max_threads: None,
                 max_ram_mb: Some(mb),
             },

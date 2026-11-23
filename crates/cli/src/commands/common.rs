@@ -20,7 +20,7 @@ use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 
 /// Resolves `--image` names into the `image_rel_path`s the results engine
 /// actually filters on. `[]` (no `--image` given) stays `[]`, which every
-/// `*Filter`/`ResultExport` in `evanalyzer_app::result` already treats as
+/// `*Filter`/`ResultExport` in `evanalyzer_app::results` already treats as
 /// "every image", so callers don't need their own empty-means-all check.
 pub fn resolve_image_rel_paths(
     db: &dyn ResultsSource,

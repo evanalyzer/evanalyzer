@@ -11,8 +11,8 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::args::AttachArgs;
-use evanalyzer_app::analysis::{JobInfo, JobState};
-use evanalyzer_app::backends::Backend;
+use evanalyzer_app::backend::Backend;
+use evanalyzer_app::jobs::{JobInfo, JobState};
 use evanalyzer_cfg::core_types::InternalErrors;
 use std::time::SystemTime;
 
@@ -100,7 +100,7 @@ fn ago(at: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use evanalyzer_app::backends::local::LocalBackend;
+    use evanalyzer_app::backend::local::LocalBackend;
     use std::time::Duration;
 
     #[test]

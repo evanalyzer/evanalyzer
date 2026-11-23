@@ -10,7 +10,6 @@
 use crate::UiState;
 use crate::editor::viewport_controller::ViewportController;
 use crate::{AppWindow, HistogramState};
-use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::settings::images_settings::HistogramSettings;
 use log::warn;
 use slint::ComponentHandle;

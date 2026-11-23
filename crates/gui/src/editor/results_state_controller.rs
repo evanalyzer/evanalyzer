@@ -11,8 +11,12 @@ use crate::editor::images_list_controller::ImagesListController;
 use crate::editor::viewport_controller::ViewportController;
 use crate::helper::delayed_indicator::DelayedIndicator;
 use crate::helper::number_format::{NO_VALUE, format_number};
+use evanalyzer_app::project::PlateSettingsExt;
 
+mod chart_draw;
+mod chart_export;
 mod coloc;
+mod column_panel;
 mod paths;
 pub(crate) mod split;
 mod tracks;
@@ -196,6 +200,9 @@ struct ListFilter {
     pub group_by: ListGroupBy,
     /// Grouped rows: classes without objects get a row too.
     pub empty_classes: bool,
+    /// Sorted by a column (a click on its head) - for the session, not
+    /// part of the view.
+    pub sort: Option<evanalyzer_app::results::SortBy>,
     /// Unused in Objects mode.
     pub aggregations: Vec<Aggregation>,
     /// The Children group: (parent class, child class) links shown.
@@ -219,6 +226,7 @@ struct ListQuery {
     transpond_table: bool,
     group_by: ListGroupBy,
     empty_classes: bool,
+    sort: Option<evanalyzer_app::results::SortBy>,
     drill: Option<Drill>,
     aggregations: Vec<Aggregation>,
 }
@@ -239,6 +247,7 @@ impl ListQuery {
                 after,
             },
             transpond_table: self.transpond_table,
+            sort: self.sort.clone(),
         })
     }
 }
@@ -264,6 +273,8 @@ enum ChartKind {
     OverTime,
     /// A profile measurement over its position (e.g. the Sholl profile).
     Profile,
+    /// A group's mean with its error bar (the boxplot's data).
+    Bar,
 }
 
 #[derive(Clone)]
@@ -276,11 +287,15 @@ struct ChartFilter {
     /// `None` means no class filter (every object) — doesn't apply to
     /// Boxplot, which always groups by every class present regardless.
     pub object_class: Option<ObjectClass>,
-    /// Boxplot: a box per class, image, well, plate row or column.
+    /// Boxplot: a box per class, image, well, plate row or column; a value
+    /// per image (each image a dot), else per object.
     pub group_by: BoxplotGroup,
-    /// Histogram: its bins, its counts on a log scale.
+    pub per_image: bool,
+    /// Histogram: its bins, its counts on a log scale, over every value
+    /// (else the 1st to 99th percentile).
     pub bins: usize,
     pub log_counts: bool,
+    pub full_range: bool,
     /// Scatter: at most this many points drawn (`None`: all).
     pub max_points: Option<usize>,
     /// Over time: a line per class / image / well / track; median + IQR
@@ -309,8 +324,10 @@ impl Default for ChartFilter {
             y_column: Column::default(),
             object_class: None,
             group_by: BoxplotGroup::default(),
+            per_image: false,
             bins: CHART_HISTOGRAM_BINS,
             log_counts: false,
+            full_range: false,
             max_points: Some(CHART_SCATTER_MAX_POINTS),
             time_lines: TimeCourseLines::Class,
             time_median: false,
@@ -604,6 +621,19 @@ pub struct ResultsStateController {
     column_sections_open: Mutex<HashMap<String, bool>>,
     /// The sidebar's column search.
     column_filter: Mutex<String>,
+    /// The Plate's value picker's search.
+    matrix_column_filter: Mutex<String>,
+    /// The Charts' value picker's search, and whether it picks scatter's Y
+    /// (else X / the value).
+    chart_column_filter: Mutex<String>,
+    chart_value_y: Mutex<bool>,
+    /// The boxplot's last boxes, the chart area and the charts' look - what
+    /// `draw_chart` draws from.
+    chart_data: Mutex<chart_draw::ChartData>,
+    /// Where the drawn chart's marks lie (the scatter's dots) - for clicks.
+    chart_marks: Mutex<Vec<evanalyzer_app::charts::Hit>>,
+    chart_canvas: Mutex<chart_draw::ChartCanvas>,
+    chart_look: Mutex<chart_draw::ChartLook>,
     /// The results' profile measurements (Charts › Profile, its export).
     profile_columns: Mutex<Vec<MeasurementColumn>>,
     /// Charts › Profile's selected object's circles on the split view.
@@ -628,6 +658,10 @@ pub struct ResultsStateController {
     // refreshes that well's fields instead of the (hidden) plate grid. See
     // `refresh_active_matrix_view`.
     current_well: Mutex<Option<String>>,
+    /// The image folder the open results' run analysed (its project copy):
+    /// their images are found in the project from it, also when the
+    /// project's image folder changed since.
+    run_image_root: Mutex<Option<PathBuf>>,
     // Same idea one level further down: the image (by `image_rel_path`)
     // currently drilled into, if any, so a toolbar control change while at
     // the Object level refreshes that image's heatmap.
@@ -642,6 +676,9 @@ pub struct ResultsStateController {
     list_row_ids: Mutex<Vec<String>>,
     /// The list's columns as shown (sorted, the related ones included).
     list_columns_shown: Mutex<Vec<Column>>,
+    /// Per column head of the List: what a click sorts by (column, its
+    /// statistic for grouped rows) - `None`: not sortable.
+    list_head_sorts: Mutex<Vec<Option<(Column, Option<Aggregation>)>>>,
     /// The list's ticked rows (this page), and the last one ticked - a
     /// Shift-click ticks every row from it.
     list_checked: Mutex<(BTreeSet<usize>, Option<usize>)>,
@@ -730,6 +767,13 @@ impl ResultsStateController {
             coloc_settings: Mutex::new(coloc::ColocSettings::default()),
             column_sections_open: Mutex::new(HashMap::new()),
             column_filter: Mutex::new(String::new()),
+            matrix_column_filter: Mutex::new(String::new()),
+            chart_column_filter: Mutex::new(String::new()),
+            chart_value_y: Mutex::new(false),
+            chart_data: Mutex::new(chart_draw::ChartData::None),
+            chart_marks: Mutex::new(Vec::new()),
+            chart_canvas: Mutex::new(chart_draw::ChartCanvas::default()),
+            chart_look: Mutex::new(chart_draw::ChartLook::default()),
             profile_columns: Mutex::new(Vec::new()),
             profile_rings: Mutex::new(None),
             profile_pos: Mutex::new((0, 0)),
@@ -737,10 +781,12 @@ impl ResultsStateController {
             well_cells: Mutex::new(HashMap::new()),
             image_heatmap_cells: Mutex::new(HashMap::new()),
             current_well: Mutex::new(None),
+            run_image_root: Mutex::new(None),
             current_image: Mutex::new(None),
             list_row_locations: Mutex::new(Vec::new()),
             list_row_ids: Mutex::new(Vec::new()),
             list_columns_shown: Mutex::new(Vec::new()),
+            list_head_sorts: Mutex::new(Vec::new()),
             list_checked: Mutex::new((BTreeSet::new(), None)),
             view_unavailable: Mutex::new(None),
             scatter_points: Mutex::new(Vec::new()),
@@ -770,6 +816,9 @@ impl ResultsStateController {
             self.attach_split_callbacks(&ui);
             self.attach_views_callbacks(&ui);
             self.attach_coloc_callbacks(&ui);
+            self.attach_column_panel_callbacks(&ui);
+            self.attach_chart_draw_callbacks(&ui);
+            self.attach_chart_export_callbacks(&ui);
             self.attach_tracks_callbacks(&ui);
             self.attach_tracks_all_callbacks(&ui);
             self.attach_paths_callbacks(&ui);
@@ -1103,6 +1152,42 @@ impl ResultsStateController {
                     manager.set_images_disabled(images, disable);
                 });
 
+            // A click on a column's head: ascending, descending, unsorted.
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_list_sort_clicked(move |index| {
+                    let head = manager
+                        .list_head_sorts
+                        .lock()
+                        .expect("Poisoned")
+                        .get(index.max(0) as usize)
+                        .cloned()
+                        .flatten();
+                    let Some((column, aggregation)) = head else {
+                        return;
+                    };
+                    {
+                        let mut filter = manager.list_filter.lock().expect("Poisened");
+                        filter.sort = match &filter.sort {
+                            Some(sort)
+                                if sort.column == column && sort.aggregation == aggregation =>
+                            {
+                                (!sort.descending).then(|| evanalyzer_app::results::SortBy {
+                                    column,
+                                    aggregation,
+                                    descending: true,
+                                })
+                            }
+                            _ => Some(evanalyzer_app::results::SortBy {
+                                column,
+                                aggregation,
+                                descending: false,
+                            }),
+                        };
+                    }
+                    manager.refresh_list();
+                });
+
             let manager = self.clone();
             ui.global::<ResultsState>()
                 .on_list_empty_classes_changed(move |on| {
@@ -1287,9 +1372,13 @@ impl ResultsStateController {
                     let Some((rel_path, bbox_px)) = hit else {
                         return;
                     };
+                    let Some(image) = manager.project_image(&rel_path) else {
+                        manager.image_not_in_project(&rel_path);
+                        return;
+                    };
                     manager
                         .image_list_controller
-                        .open_image_and_highlight_object(&PathBuf::from(&rel_path), bbox_px, false);
+                        .open_image_and_highlight_object(&image, bbox_px, false);
                     let name = std::path::Path::new(&rel_path)
                         .file_name()
                         .map(|n| n.to_string_lossy().into_owned())
@@ -1316,7 +1405,10 @@ impl ResultsStateController {
                     }
                     // An object row: marked on its image; an image row: the
                     // image.
-                    let rel_path = PathBuf::from(rel_path);
+                    let Some(rel_path) = manager.project_image(&rel_path) else {
+                        manager.image_not_in_project(&rel_path);
+                        return;
+                    };
                     match bbox_px {
                         Some(bbox_px) => manager
                             .image_list_controller
@@ -2016,9 +2108,13 @@ impl ResultsStateController {
                         warn!("Unrecognized heatmap tile key: {key}");
                         return;
                     };
+                    let Some(image) = manager.project_image(&rel_path) else {
+                        manager.image_not_in_project(&rel_path);
+                        return;
+                    };
                     manager
                         .image_list_controller
-                        .open_image_and_highlight_object(&PathBuf::from(rel_path), bbox_px, true);
+                        .open_image_and_highlight_object(&image, bbox_px, true);
                     manager.peek(-1, format!("Tile {key}"), false);
                 });
             ui.global::<ResultsState>()
@@ -2038,8 +2134,16 @@ impl ResultsStateController {
                         ResultsChartKind2::Boxplot => ChartKind::Boxplot,
                         ResultsChartKind2::OverTime => ChartKind::OverTime,
                         ResultsChartKind2::Profile => ChartKind::Profile,
+                        ResultsChartKind2::Bar => ChartKind::Bar,
                     };
-                    manager.chart_filter.lock().expect("Poisened").kind = kind;
+                    {
+                        let mut chart = manager.chart_filter.lock().expect("Poisened");
+                        chart.kind = kind;
+                        let available = manager.available_columns.lock().expect("Poisoned");
+                        count_only_per_image(&mut chart, &available);
+                    }
+                    manager.push_chart_picker();
+                    manager.push_chart_value_summary();
                     manager.refresh_charts();
                 });
 
@@ -2054,6 +2158,7 @@ impl ResultsStateController {
                         let mut filter = manager.chart_filter.lock().expect("Poisened");
                         filter.bins = state.get_chart_bins().clamp(5, 200) as usize;
                         filter.log_counts = state.get_chart_log_counts();
+                        filter.full_range = state.get_chart_full_range();
                         filter.max_points = scatter_points_limit(state.get_chart_points_index());
                     }
                     manager.refresh_charts();
@@ -2104,6 +2209,20 @@ impl ResultsStateController {
                     _ => manager.export_chart_time_course(),
                 }
             });
+
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_chart_per_image_changed(move |per_image| {
+                    {
+                        let mut chart = manager.chart_filter.lock().expect("Poisoned");
+                        chart.per_image = per_image;
+                        let available = manager.available_columns.lock().expect("Poisoned");
+                        count_only_per_image(&mut chart, &available);
+                    }
+                    manager.push_chart_picker();
+                    manager.push_chart_value_summary();
+                    manager.refresh_charts();
+                });
 
             let manager = self.clone();
             ui.global::<ResultsState>()
@@ -2857,6 +2976,37 @@ impl ResultsStateController {
         });
     }
 
+    /// The project's image (its path in the project) the results name
+    /// `results_rel` - found also when the project's image folder changed
+    /// since the run.
+    pub(super) fn project_image(&self, results_rel: &str) -> Option<PathBuf> {
+        let run_root = self.run_image_root.lock().expect("Poisoned").clone();
+        self._app_state
+            .get_project()
+            .find_results_image(Path::new(results_rel), run_root.as_deref())
+    }
+
+    /// An image of the results the project doesn't have: said, instead of
+    /// marking the object on another image.
+    pub(super) fn image_not_in_project(&self, results_rel: &str) {
+        let message = format!(
+            "{results_rel} is not among the project's images. Its folder may have moved: \
+             select the folder the images are in now (Images › folder)."
+        );
+        let ui = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui.upgrade() {
+                let warning = ui.global::<crate::WarningState>();
+                warning.set_info(false);
+                warning.set_title("Image not in the project".into());
+                warning.set_message(message.into());
+                ui.global::<crate::GlobalAppState>()
+                    .set_active_dialog(crate::DialogType::Warning);
+            }
+        })
+        .ok();
+    }
+
     fn peek(&self, row: i32, label: String, can_step: bool) {
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
@@ -2976,6 +3126,7 @@ impl ResultsStateController {
 
     fn close_database_now(&self) {
         *self.result_generator.lock().expect("Poisoned") = None;
+        *self.run_image_root.lock().expect("Poisoned") = None;
         *self.view_unavailable.lock().expect("Poisoned") = None;
         // Another project (or none): its views.
         self.push_views_in_slint();
@@ -3003,6 +3154,7 @@ impl ResultsStateController {
         *self.current_image.lock().expect("Poisoned") = None;
         self.list_row_locations.lock().expect("Poisoned").clear();
         self.scatter_points.lock().expect("Poisoned").clear();
+        self.clear_chart();
         *self.export_populated.lock().expect("Poisoned") = false;
         self.export_image_selection
             .lock()
@@ -3028,6 +3180,8 @@ impl ResultsStateController {
             state.set_peek_label("".into());
             state.set_peek_can_step(false);
             state.set_split_title("".into());
+            state.set_split_well("".into());
+            state.set_split_missing("".into());
             state.set_split_image_key("".into());
             state.set_split_pos(0);
             state.set_split_total(0);
@@ -3049,6 +3203,11 @@ impl ResultsStateController {
         let db = self._app_state.backend().open_results(&path);
         match db {
             Ok(results) => {
+                *self.run_image_root.lock().expect("Poisoned") =
+                    evanalyzer_app::project::run_image_root(
+                        self._app_state.backend().files(),
+                        &path,
+                    );
                 // Nothing written into the view before it's applied.
                 *self.view_unavailable.lock().expect("Poisoned") = None;
                 *self.export_populated.lock().expect("Poisened") = false;
@@ -3203,6 +3362,7 @@ impl ResultsStateController {
                     transpond: false,
                     group_by: ListGroupBy::Objects,
                     empty_classes: false,
+                    sort: None,
                     aggregations: vec![Aggregation::Avg],
                     children: Vec::new(),
                     child_aggregations: vec![Aggregation::Avg],
@@ -3520,6 +3680,7 @@ impl ResultsStateController {
                     object_classes,
                     column: chart_filter.column,
                     bins: chart_filter.bins.max(1),
+                    full_range: chart_filter.full_range,
                 }) {
                     Ok(histogram) => {
                         self.push_histogram_in_slint(&histogram, chart_filter.log_counts)
@@ -3540,20 +3701,24 @@ impl ResultsStateController {
                     Err(err) => self.push_chart_error(err.to_string()),
                 }
             }
-            ChartKind::Boxplot => {
+            ChartKind::Boxplot | ChartKind::Bar => {
                 match db.boxplot(&BoxplotFilter {
                     plane,
                     images: None,
-                    // Boxplot always groups by every class present —
-                    // the CLASS dropdown doesn't gate it the way it
-                    // does Histogram/Scatter (see `ChartFilter::object_class`'s
-                    // doc comment).
-                    object_classes: None,
+                    // A box per class: every class. A box per image, well,
+                    // ...: the objects of the class picked.
+                    object_classes: match chart_filter.group_by {
+                        BoxplotGroup::Class => None,
+                        _ => chart_filter.object_class.map(|class| vec![class]),
+                    },
                     column: chart_filter.column,
                     group_by: chart_filter.group_by,
                     grouping: self.current_grouping(),
+                    per_image: chart_filter.per_image,
                 }) {
-                    Ok(boxplot) => self.push_boxplot_in_slint(&boxplot.boxes),
+                    // Bars: the same groups, drawn (once) as bars.
+                    Ok(boxplot) => self
+                        .push_boxplot_in_slint(boxplot.boxes, chart_filter.kind == ChartKind::Bar),
                     Err(err) => self.push_chart_error(err.to_string()),
                 }
             }
@@ -3860,6 +4025,34 @@ impl ResultsStateController {
             format!("{} px", format_chart_value(x_hi)),
         );
         let (y_min, y_max) = ("0".to_string(), format_chart_value(high));
+        // Drawn by the chart module.
+        self.set_lines(chart_draw::LinesSpec {
+            series: series
+                .iter()
+                .map(|(label, color, points)| chart_draw::LineSeries {
+                    label: label.clone(),
+                    color: evanalyzer_app::charts::Rgb(*color & 0x00ff_ffff),
+                    points: points.clone(),
+                })
+                .collect(),
+            highlight: curve.to_vec(),
+            marker: match (filter.profile_mark, peak) {
+                (true, Some((p, v))) => Some((
+                    p,
+                    format!(
+                        "highest {} at {}",
+                        format_chart_value(v),
+                        format_chart_value(p)
+                    ),
+                )),
+                _ => None,
+            },
+            x_title: "Position (px)".to_string(),
+            y_title: label.to_string(),
+            from_zero: true,
+            note: note.clone(),
+            ..chart_draw::LinesSpec::default()
+        });
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
@@ -4012,6 +4205,61 @@ impl ResultsStateController {
             format!("{}{unit}", format_chart_value(low)),
             format!("{}{unit}", format_chart_value(high)),
         );
+
+        // Drawn by the chart module: time in s, min or h, values in µm.
+        {
+            let (x_title, per) = match result.frame_interval_s {
+                Some(interval) => match f64::from(t_max) * interval {
+                    span if span >= 7200.0 => ("Time (h)".to_string(), interval / 3600.0),
+                    span if span >= 120.0 => ("Time (min)".to_string(), interval / 60.0),
+                    _ => ("Time (s)".to_string(), interval),
+                },
+                None => ("Time point".to_string(), 1.0),
+            };
+            let factor = if filter.time_relative {
+                1.0
+            } else {
+                chart_draw::unit_factor(&column)
+            };
+            let scale = |v: Option<f64>| v.map(|v| v * factor);
+            let spec = chart_draw::LinesSpec {
+                series: shown
+                    .iter()
+                    .map(|(label, color, points)| chart_draw::LineSeries {
+                        label: label.clone(),
+                        color: evanalyzer_app::charts::Rgb(*color & 0x00ff_ffff),
+                        points: points
+                            .iter()
+                            .map(|(t, c, l, h)| {
+                                (f64::from(*t) * per, scale(*c), scale(*l), scale(*h))
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+                faint: faint
+                    .iter()
+                    .map(|(_, _, points)| {
+                        points
+                            .iter()
+                            .map(|(t, c, _, _)| (f64::from(*t) * per, scale(*c)))
+                            .collect()
+                    })
+                    .collect(),
+                x_title,
+                y_title: format!(
+                    "{}{}",
+                    coloc::picker_label(&column),
+                    if filter.time_relative {
+                        " · % of the first time point"
+                    } else {
+                        ""
+                    }
+                ),
+                note: note.clone(),
+                ..chart_draw::LinesSpec::default()
+            };
+            self.set_lines(spec);
+        }
 
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
@@ -4222,7 +4470,7 @@ impl ResultsStateController {
                     BoxplotGroup::WellRow => 2,
                     _ => 3,
                 };
-                picked_images = evanalyzer_app::images::texts_in_group(&refs, &regex, part, label)
+                picked_images = evanalyzer_app::project::texts_in_group(&refs, &regex, part, label)
                     .into_iter()
                     .map(|i| images[i].rel_path.clone())
                     .collect();
@@ -4262,6 +4510,7 @@ impl ResultsStateController {
     }
 
     fn push_chart_error(&self, message: String) {
+        self.clear_chart();
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
@@ -4290,6 +4539,8 @@ impl ResultsStateController {
     }
 
     fn push_histogram_in_slint(&self, result: &HistogramResult, log_counts: bool) {
+        // Drawn by the chart module; the bins below say whether there are any.
+        self.set_histogram(result.clone());
         let max_count = result.counts.iter().copied().max().unwrap_or(0).max(1);
         let bins: Vec<f32> = result
             .counts
@@ -4317,6 +4568,9 @@ impl ResultsStateController {
     }
 
     fn push_scatter_in_slint(&self, result: &ScatterResult) {
+        // Drawn by the chart module; the points below say whether there are
+        // any.
+        self.set_scatter(result.clone());
         let x_range = (result.x_max - result.x_min).max(f64::EPSILON);
         let y_range = (result.y_max - result.y_min).max(f64::EPSILON);
         let points: Vec<ChartScatterPoint> = result
@@ -4369,13 +4623,17 @@ impl ResultsStateController {
         .ok();
     }
 
-    fn push_boxplot_in_slint(&self, boxes: &[BoxplotBox]) {
+    /// `as_bars`: the groups drawn as bars instead of boxes.
+    fn push_boxplot_in_slint(&self, boxes: Vec<BoxplotBox>, as_bars: bool) {
+        // Drawn by the chart module; the boxes below say whether there are
+        // any (and serve the tests). The rows first: the boxes move into
+        // the chart's data.
         // Every box normalized against the combined min/max across *all*
         // boxes, so they stay comparable to each other on one shared axis
         // rather than each box silently rescaling to its own range.
         let mut min = f64::INFINITY;
         let mut max = f64::NEG_INFINITY;
-        for b in boxes {
+        for b in &boxes {
             min = min
                 .min(b.min)
                 .min(b.outliers.iter().copied().fold(b.min, f64::min));
@@ -4412,6 +4670,11 @@ impl ResultsStateController {
                 )
             })
             .collect();
+        if as_bars {
+            self.set_bars(boxes);
+        } else {
+            self.set_boxplot_boxes(boxes);
+        }
 
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
@@ -4523,6 +4786,13 @@ impl ResultsStateController {
         if group_by == ListGroupBy::Objects {
             columns.retain(|c| *c != Column::Count);
         }
+        // ... and by a column still shown.
+        let sort = list_filter.sort.clone().filter(|sort| {
+            !with_coloc_details
+                && !transpond_table
+                && drill.is_none()
+                && columns.contains(&sort.column)
+        });
         ListQuery {
             plane,
             images,
@@ -4532,6 +4802,9 @@ impl ResultsStateController {
             transpond_table,
             group_by,
             empty_classes: list_filter.empty_classes,
+            // Pairs, classes side by side, one object's children: as they
+            // come.
+            sort,
             drill,
             aggregations: list_filter.aggregations.clone(),
         }
@@ -4581,6 +4854,48 @@ impl ResultsStateController {
         // object and the columns are as sorted.
         let mut ordered_columns = query.columns.clone();
         ordered_columns.sort();
+        // What a click on each head sorts by - the heads in the order the
+        // results name them.
+        let sortable = !query.with_coloc_details && !query.transpond_table && query.drill.is_none();
+        let head_sorts: Vec<Option<(Column, Option<Aggregation>)>> = if !sortable {
+            Vec::new()
+        } else if query.group_by == ListGroupBy::Objects {
+            ordered_columns
+                .iter()
+                .map(|c| object_sortable(c).then(|| (c.clone(), None)))
+                .collect()
+        } else {
+            let mut columns: Vec<Column> = query
+                .columns
+                .iter()
+                .filter(|c| c.is_aggregable())
+                .cloned()
+                .collect();
+            columns.sort();
+            // The image (well, folder) and the class, then a head per
+            // (column x statistic).
+            [None, None]
+                .into_iter()
+                .chain(columns.iter().flat_map(|c| {
+                    query
+                        .aggregations
+                        .iter()
+                        .map(move |a| Some((c.clone(), Some(a.clone()))))
+                }))
+                .collect()
+        };
+        let sort_head = query.sort.as_ref().and_then(|sort| {
+            head_sorts
+                .iter()
+                .position(|h| {
+                    h.as_ref().is_some_and(|(c, a)| {
+                        *c == sort.column && (sort.aggregation.is_none() || *a == sort.aggregation)
+                    })
+                })
+                .map(|i| (i as i32, sort.descending))
+        });
+        let head_sortable: Vec<bool> = head_sorts.iter().map(Option::is_some).collect();
+        *self.list_head_sorts.lock().expect("Poisoned") = head_sorts;
         let drillable: Vec<bool> = ordered_columns
             .iter()
             .map(|c| {
@@ -4617,6 +4932,7 @@ impl ResultsStateController {
             .cloned()
             .flatten();
 
+        let sorted = query.sort.is_some();
         let result = match query.object_filter(cursor.clone()) {
             Some(filter) => db.get_object_list(&filter),
             // Non-aggregable columns (Object ID/Image/Class) don't mean
@@ -4635,6 +4951,7 @@ impl ResultsStateController {
                     transpond_table,
                     group_by,
                     empty_classes,
+                    sort,
                     ..
                 } = query;
                 let columns = columns.into_iter().filter(Column::is_aggregable).collect();
@@ -4652,6 +4969,7 @@ impl ResultsStateController {
                     transpond_table: transpond_table && group_by.grouping().is_none(),
                     grouping: group_by.grouping(),
                     empty_classes,
+                    sort,
                 })
             }
         };
@@ -4668,7 +4986,11 @@ impl ResultsStateController {
         if let Some(last_id) = result.row_names.last() {
             let mut cursors = self.list_page_cursors.lock().expect("Poisned");
             if cursors.len() == page + 1 {
-                cursors.push(Some(last_id.clone()));
+                // Sorted: the next page starts after this many rows.
+                cursors.push(Some(match sorted {
+                    true => ((page + 1) * LIST_PAGE_SIZE as usize).to_string(),
+                    false => last_id.clone(),
+                }));
             }
         }
 
@@ -4679,6 +5001,12 @@ impl ResultsStateController {
                 let state = ui.global::<ResultsState>();
                 state.set_list_column_drill(ModelRc::from(Rc::new(VecModel::from(drillable))));
                 state.set_list_drill_label(drill_label.into());
+                state.set_list_column_sortable(ModelRc::from(Rc::new(VecModel::from(
+                    head_sortable,
+                ))));
+                let (index, descending) = sort_head.unwrap_or((-1, false));
+                state.set_list_sort_index(index);
+                state.set_list_sort_descending(descending);
             }
         })
         .ok();
@@ -4689,11 +5017,15 @@ impl ResultsStateController {
     // filter change stays cheap no matter how large the underlying database is.
     pub fn set_objects_list_in_slint(&self, result: &DatabaseResult) {
         let ui_weak = self.ui.clone();
+        // Lengths and areas in nm shown in µm (the stored values stay nm).
+        let mut scales: Vec<f64> = Vec::with_capacity(result.column_names.len());
         let (headers, header_subs): (Vec<slint::SharedString>, Vec<slint::SharedString>) = result
             .column_names
             .iter()
             .map(|name| {
                 let (name, sub) = split_header(name);
+                let (sub, scale) = in_micrometers(&sub);
+                scales.push(scale);
                 (name.into(), sub.into())
             })
             .unzip();
@@ -4757,7 +5089,15 @@ impl ResultsStateController {
                     false => String::new(),
                 };
                 (
-                    row.iter().map(cell_to_string).collect(),
+                    row.iter()
+                        .enumerate()
+                        .map(|(i, cell)| match (&cell.value, scales.get(i)) {
+                            (CellValue::Float(v), Some(scale)) if *scale != 1.0 => {
+                                format_number(f64::from(*v) * scale).into()
+                            }
+                            _ => cell_to_string(cell),
+                        })
+                        .collect(),
                     alternating,
                     disabled,
                     failed,
@@ -4767,6 +5107,9 @@ impl ResultsStateController {
                 )
             })
             .collect();
+        // Number columns right-aligned (digits under digits): those whose
+        // filled cells on this page are all numbers.
+        let numeric = numeric_columns(&result.rows, headers.len());
         let mut column_widths = list_column_widths(
             &headers,
             row_cells.iter().map(|(cells, ..)| cells.as_slice()),
@@ -4804,6 +5147,7 @@ impl ResultsStateController {
                 state.set_list_column_headers(ModelRc::from(Rc::new(VecModel::from(headers))));
                 state.set_list_column_subs(ModelRc::from(Rc::new(VecModel::from(header_subs))));
                 state.set_list_column_widths(ModelRc::from(Rc::new(VecModel::from(column_widths))));
+                state.set_list_column_numeric(ModelRc::from(Rc::new(VecModel::from(numeric))));
                 state.set_list_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
                 state.set_list_checked_images(0);
                 state.set_list_checked_rows(0);
@@ -4926,6 +5270,7 @@ impl ResultsStateController {
     /// `refresh_active_matrix_view` for a known `level` - callable off the
     /// UI thread.
     fn refresh_matrix_view_at(&self, level: MatrixLevel) {
+        self.push_matrix_picker();
         if level == MatrixLevel::Object {
             if let Some(image_rel_path) = self.current_image.lock().expect("Poisned").clone() {
                 self.update_image_heatmap_view(&image_rel_path);
@@ -5723,6 +6068,7 @@ impl ResultsStateController {
                 display_name: column.display_label(&classes),
                 key: column.clone(),
                 group: group.into(),
+                coloc_group: 0,
             });
         }
         let column_items_vec = column_items(&dialog_columns, &classes, |key| columns.contains(key));
@@ -5879,10 +6225,32 @@ impl ResultsStateController {
     /// series, the channels' colors and how the viewer shows the images
     /// (the database knows only the objects), and the dialog's choices.
     fn drawn_images(&self, state: &ExportDialogState) -> evanalyzer_app::results::DrawnImages {
-        use evanalyzer_app::project::ProjectExt;
         use evanalyzer_app::results::{DrawBrightness, DrawStyle};
+        let results_images: Vec<String> = self
+            .images
+            .lock()
+            .expect("Poisoned")
+            .iter()
+            .map(|image| image.rel_path.to_string_lossy().into_owned())
+            .collect();
+        let run_root = self.run_image_root.lock().expect("Poisoned").clone();
         let project = self._app_state.get_project();
         let (display, image_display) = project.drawn_image_display();
+        // The images the project has below another path than the results
+        // (its image folder changed since the run) - usually none.
+        let finder = evanalyzer_app::project::ResultsImageFinder::new(
+            &project.images.list,
+            project.images.root.as_deref(),
+            run_root.as_deref(),
+        );
+        let image_paths = results_images
+            .into_iter()
+            .filter_map(|rel| {
+                let image = finder.find(Path::new(&rel))?;
+                let image = image.to_string_lossy().into_owned();
+                (image != rel).then_some((rel, image))
+            })
+            .collect();
         evanalyzer_app::results::DrawnImages {
             image_root: project.images.root.clone().unwrap_or_default(),
             series: project.images.settings.selected_series.unwrap_or(0),
@@ -5903,6 +6271,7 @@ impl ResultsStateController {
             },
             display,
             image_display,
+            image_paths,
         }
     }
 
@@ -6236,6 +6605,22 @@ impl ResultsStateController {
 
 // Shared "N of M <noun>" text for the images/classes/columns dropdown pills
 // (e.g. "3 of 12 Columns").
+/// Whether a row per object can be sorted by `column` (the results sort
+/// by its value per object).
+fn object_sortable(column: &Column) -> bool {
+    !matches!(
+        column,
+        Column::Count
+            | Column::ObjectId
+            | Column::ObjectClass
+            | Column::TrackId
+            | Column::Measurement(_)
+            | Column::MeasurementObject(_)
+            | Column::Children(_)
+            | Column::Parent(_)
+    )
+}
+
 /// A List chip's value: "All", "None" or "3 of 22" - the chip names what.
 fn chip_summary(selected: usize, total: usize) -> slint::SharedString {
     match selected {
@@ -6262,6 +6647,43 @@ fn image_summary_text(selected: usize, total: usize) -> slint::SharedString {
     } else {
         list_summary(selected, total, "Images")
     }
+}
+
+/// Per column of `rows` (`count` of them): whether it holds numbers - at
+/// least one, and no text or class.
+fn numeric_columns(rows: &[Vec<Cell>], count: usize) -> Vec<bool> {
+    (0..count)
+        .map(|i| {
+            let mut any = false;
+            for row in rows {
+                match row.get(i).map(|cell| &cell.value) {
+                    Some(CellValue::Float(_) | CellValue::Integer(_)) => any = true,
+                    Some(CellValue::String(_) | CellValue::Class(_)) => return false,
+                    Some(CellValue::Empty) | None => {}
+                }
+            }
+            any
+        })
+        .collect()
+}
+
+/// A head's unit line (`split_header`'s) with nm, nm² and nm³ as µm, µm²
+/// and µm³ - and the factor turning the values into that unit.
+fn in_micrometers(sub: &str) -> (String, f64) {
+    let (unit, rest) = sub
+        .split_once(" · ")
+        .map_or((sub, None), |(u, r)| (u, Some(r)));
+    let (unit, scale) = match unit {
+        "nm" => ("µm", 1e-3),
+        "nm²" => ("µm²", 1e-6),
+        "nm³" => ("µm³", 1e-9),
+        other => (other, 1.0),
+    };
+    let sub = match rest {
+        Some(rest) => format!("{unit} · {rest}"),
+        None => unit.to_string(),
+    };
+    (sub, scale)
 }
 
 /// A list column's name as the head shows it, in two lines: the name
@@ -6372,6 +6794,21 @@ fn column_for_key(key: &str, classes: &[Class], available: &[ColumnEntry]) -> Op
 /// measurement, so charting it doesn't mean anything the way it does for
 /// Images-mode's own per-image counts. Neither is an image measurement (a
 /// value per image, see `Column::is_image_measurement`).
+/// Objects per image is a value only of a per-image boxplot or bar chart:
+/// any other chart (or per object) shows the first chartable column
+/// instead.
+fn count_only_per_image(chart: &mut ChartFilter, available: &[ColumnEntry]) {
+    let counts = chart.per_image && matches!(chart.kind, ChartKind::Boxplot | ChartKind::Bar);
+    if chart.column == Column::Count
+        && !counts
+        && let Some(first) = available
+            .iter()
+            .find(|entry| is_chartable_column(&entry.key))
+    {
+        chart.column = first.key.clone();
+    }
+}
+
 fn is_chartable_column(column: &Column) -> bool {
     !matches!(
         column,
@@ -7013,7 +7450,15 @@ fn nearest_point(
 
 #[cfg(test)]
 mod split_header_tests {
-    use super::split_header;
+    use super::{in_micrometers, split_header};
+
+    #[test]
+    fn nanometres_are_shown_in_micrometres() {
+        assert_eq!(in_micrometers("nm² · mean"), ("µm² · mean".into(), 1e-6));
+        assert_eq!(in_micrometers("nm"), ("µm".into(), 1e-3));
+        assert_eq!(in_micrometers("px · sum"), ("px · sum".into(), 1.0));
+        assert_eq!(in_micrometers(""), (String::new(), 1.0));
+    }
 
     #[test]
     fn a_header_is_its_name_then_unit_and_aggregate() {
@@ -8579,7 +9024,7 @@ pub(crate) mod tests {
                 (
                     "Coloc · exactly".to_string(),
                     vec![
-                        "Coloc with exactly ClassB".to_string(),
+                        "Coloc exactly ClassB".to_string(),
                         "Coloc with no class".to_string()
                     ]
                 ),
@@ -8613,10 +9058,7 @@ pub(crate) mod tests {
         // counting partners.
         state.invoke_list_columns_section_select("Coloc · exactly".into(), true);
         drain_ui_queue();
-        assert_eq!(
-            headers(),
-            ["Coloc with ClassB", "Coloc with exactly ClassB"]
-        );
+        assert_eq!(headers(), ["Coloc with ClassB", "Coloc exactly ClassB"]);
 
         // Without ClassB as a partner class, no coloc column is left.
         state.invoke_list_coloc_partner_toggled("2".into());
@@ -8912,6 +9354,28 @@ pub(crate) mod tests {
         let rows = controller.list_row_locations.lock().unwrap().len();
         assert!(rows > 1, "{rows} rows");
 
+        // Not among the project's images: said - not marked on another.
+        state.invoke_list_row_clicked(1);
+        drain_ui_queue();
+        assert!(!state.get_peek());
+        assert_eq!(
+            ui.global::<crate::GlobalAppState>().get_active_dialog(),
+            crate::DialogType::Warning
+        );
+
+        // The project's images.
+        {
+            use evanalyzer_cfg::settings::images_settings::ImageEntry;
+            let locations = controller.list_row_locations.lock().unwrap().clone();
+            let mut project = controller._app_state.get_project_write();
+            project.images.root = Some(PathBuf::from("/data/images"));
+            for (rel_path, _) in locations {
+                project
+                    .images
+                    .list
+                    .insert(PathBuf::from(&rel_path), ImageEntry::default());
+            }
+        }
         state.invoke_list_row_clicked(1);
         drain_ui_queue();
 
@@ -10512,6 +10976,7 @@ pub(crate) mod tests {
                         after: None,
                     },
                     transpond_table: false,
+                    sort: None,
                 })
                 .unwrap();
             all.rows.len()
@@ -11319,7 +11784,7 @@ pub(crate) mod tests {
     /// Tracks view's unit.
     #[test]
     fn the_export_dialog_exports_tracks() {
-        use evanalyzer_app::global::SpeedUnit;
+        use evanalyzer_app::results::SpeedUnit;
         let o = opened_time_series();
         let export = o.export();
         o.controller.populate_export_defaults(&o.ui);
@@ -11759,6 +12224,33 @@ pub(crate) mod tests {
         assert_eq!(matrix_filter_value(&o, |f| f.column.clone()), column);
     }
 
+    /// Objects per image only stays the value of a per-image boxplot or
+    /// bar chart.
+    #[test]
+    fn the_count_goes_when_its_chart_can_not_show_it() {
+        let available = [Column::ObjectId, Column::AreaSizePx].map(|key| ColumnEntry {
+            display_name: String::new(),
+            key,
+            group: String::new(),
+            coloc_group: 0,
+        });
+        let chart = |kind, per_image| {
+            let mut chart = ChartFilter {
+                kind,
+                per_image,
+                column: Column::Count,
+                ..ChartFilter::default()
+            };
+            count_only_per_image(&mut chart, &available);
+            chart.column
+        };
+        assert_eq!(chart(ChartKind::Boxplot, true), Column::Count);
+        assert_eq!(chart(ChartKind::Bar, true), Column::Count);
+        assert_eq!(chart(ChartKind::Boxplot, false), Column::AreaSizePx);
+        assert_eq!(chart(ChartKind::Histogram, true), Column::AreaSizePx);
+        assert_eq!(chart(ChartKind::Scatter, true), Column::AreaSizePx);
+    }
+
     /// A measurement's picker key resolves to its column among the open
     /// results' (its name isn't in the key); other keys as before.
     #[test]
@@ -11774,6 +12266,7 @@ pub(crate) mod tests {
             display_name: pearson.display_label(&[]),
             key: pearson.clone(),
             group: "Measurements".into(),
+            coloc_group: 0,
         }];
         let key = pearson.as_key(&[]);
         assert_eq!(column_for_key(&key, &[], &available), Some(pearson));
@@ -12071,6 +12564,42 @@ pub(crate) mod tests {
         }
         ui.global::<ResultsState>().set_split(true);
         (ui, controller)
+    }
+
+    /// The project's image folder changed since the run: its images are
+    /// found from the run's; one the project lacks is said, not shown.
+    #[test]
+    fn split_finds_an_image_of_a_moved_folder_and_says_a_missing_one() {
+        let (ui, controller) = split_controller();
+        let state = ui.global::<ResultsState>();
+        {
+            // The run analysed /data/images/run1; the project is on /data.
+            let mut project = controller._app_state.get_project_write();
+            project.images.root = Some(PathBuf::from("/data"));
+            let list = std::mem::take(&mut project.images.list);
+            for (path, entry) in list.0.iter() {
+                if path != Path::new("A2_01.tif") {
+                    project
+                        .images
+                        .list
+                        .insert(Path::new("images/run1").join(path), entry.as_ref().clone());
+                }
+            }
+        }
+        *controller.run_image_root.lock().unwrap() = Some(PathBuf::from("/data/images/run1"));
+        assert_eq!(
+            controller.project_image("A1_01.tif"),
+            Some(PathBuf::from("images/run1/A1_01.tif"))
+        );
+
+        controller.split_show_image_named("A2_01.tif");
+        drain_ui_queue();
+        assert_eq!(state.get_split_missing(), "A2_01.tif", "not in the project");
+        assert!(controller.viewport().results_overlay().is_none());
+
+        controller.split_show_image_named("A1_01.tif");
+        drain_ui_queue();
+        assert_eq!(state.get_split_missing(), "", "found");
     }
 
     #[test]
@@ -12518,6 +13047,15 @@ pub(crate) mod tests {
             Some("A1_02.tif"),
             "not in the well: stays"
         );
+        // The well opened: its tiles' card holds the image's key - the
+        // title still names the well.
+        *controller.current_well.lock().unwrap() = Some("A1".into());
+        state.set_active_well("A1_01.tif".into());
+        controller.split_show_image_named("A1_01.tif");
+        drain_ui_queue();
+        assert_eq!(state.get_split_title(), "Well A1 · A1_01.tif");
+        state.invoke_split_show_image("A1_02.tif".into());
+        drain_ui_queue();
 
         // "Open in Images" from the plate: its title on the bar, no ‹ ›.
         state.invoke_split_open_in_images();
@@ -13135,7 +13673,7 @@ pub(crate) mod tests {
                 .load_app_settings()
                 .results_split
                 .speed_unit,
-            evanalyzer_app::global::SpeedUnit::PxPerFrame
+            evanalyzer_app::results::SpeedUnit::PxPerFrame
         );
         // A row past the table: nothing.
         s.invoke_track_row_clicked(9);
@@ -13225,7 +13763,7 @@ pub(crate) mod tests {
     /// setting.
     #[test]
     fn tracks_trails_follow_the_trail_settings() {
-        use evanalyzer_app::global::TrailMode;
+        use evanalyzer_app::user::TrailMode;
         let o = tracked_split();
         let s = o.state();
         let trails = || {

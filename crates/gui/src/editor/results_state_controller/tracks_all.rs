@@ -15,7 +15,7 @@
 use super::tracks::{TRACK_PALETTE, area_curve};
 use super::*;
 use crate::{MultiSelectItem, TrackAllRow, TrackColumnHead, TrackDetail, TrackFrame};
-use evanalyzer_app::global::SpeedUnit;
+use evanalyzer_app::results::SpeedUnit;
 use evanalyzer_app::results::{
     ImageTracks, ImageTracksFilter, MotionKind, TrackMotion, TrackPoint, TrackSummary,
     TrackSummaryFilter, drift_at,

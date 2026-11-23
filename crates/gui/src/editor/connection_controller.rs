@@ -19,8 +19,8 @@
 
 use crate::editor::project_controller::ProjectController;
 use crate::{AppWindow, ConnectState, DialogType, GlobalAppState, RecentServerRow, UiState};
-use evanalyzer_app::backends::remote::{RemoteBackend, TlsTrust, server_certificate};
-use evanalyzer_app::global::RecentServer;
+use evanalyzer_app::remote::{RemoteBackend, TlsTrust, server_certificate};
+use evanalyzer_app::user::RecentServer;
 use log::info;
 use slint::ComponentHandle;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -239,7 +239,7 @@ impl ConnectionController {
             Err(e) => return self.failed(attempt, &e.to_string()),
         };
         if self.attempt.load(Ordering::SeqCst) != attempt {
-            use evanalyzer_app::backends::Backend;
+            use evanalyzer_app::backend::Backend;
             remote.disconnect();
             return;
         }
@@ -306,7 +306,7 @@ mod tests {
     use super::*;
     use crate::editor::test_support::{test_ui_window, ui_state_with_window};
     use crate::helper::ui_thread::drain_ui_queue;
-    use evanalyzer_app::backends::remote::Worker;
+    use evanalyzer_app::remote::Worker;
     use std::io;
     use std::net::{Shutdown, TcpListener, TcpStream};
     use std::time::Duration;
@@ -321,7 +321,7 @@ mod tests {
         let worker_addr = worker.local_addr().unwrap();
         std::thread::spawn(move || {
             worker.run(Arc::new(
-                evanalyzer_app::backends::local::LocalBackend::default(),
+                evanalyzer_app::backend::local::LocalBackend::default(),
             ))
         });
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();

@@ -335,7 +335,7 @@ impl GlobalPipelineCache {
 
     /// Resolves every registered channel image into flat pixel slices ready
     /// for direct-index sampling, paired with whether each is RGB (needing
-    /// luminance conversion via [`sample_channel_pixel`]). Used by
+    /// its gray value via [`sample_channel_pixel`]). Used by
     /// `ExtractObjects`, which only ever has one tile's worth of channels
     /// loaded at a time (see `prepare_pipeline_cache`) - "every registered
     /// entry" and "everything relevant" are the same set there, so there's
@@ -430,12 +430,14 @@ pub fn channel_pixel_slice(container: &ImageContainer) -> Option<&[f32]> {
     }
 }
 
-/// Samples one pixel from a channel view resolved by [`GlobalPipelineCache::resolve_channel_views`],
-/// converting RGB to perceptual luminance (BT.709) when `is_rgb` is set.
+/// Samples one pixel from a channel view resolved by [`GlobalPipelineCache::resolve_channel_views`].
+/// A colour pixel (`is_rgb`) as its gray value: the mean of red, green and
+/// blue, (R + G + B) / 3 - as ImageJ measures an RGB image; a gray image
+/// stored as RGB (R = G = B) keeps its value.
 pub fn sample_channel_pixel(is_rgb: bool, slice: &[f32], sample: usize) -> f32 {
     if is_rgb {
         let idx = sample * 3;
-        (0.2126 * slice[idx] + 0.7152 * slice[idx + 1] + 0.0722 * slice[idx + 2]).max(0.0)
+        ((slice[idx] + slice[idx + 1] + slice[idx + 2]) / 3.0).max(0.0)
     } else {
         slice[sample]
     }
@@ -745,13 +747,19 @@ mod cache_tests {
     // ---- sample_channel_pixel ----
 
     #[test]
-    fn sample_channel_pixel_rgb_uses_bt709_luminance() {
+    fn sample_channel_pixel_rgb_is_the_mean_of_red_green_and_blue() {
         let slice = [10.0f32, 20.0, 30.0];
-        let expected = 0.2126 * 10.0 + 0.7152 * 20.0 + 0.0722 * 30.0;
 
         let result = sample_channel_pixel(true, &slice, 0);
 
-        assert!((result - expected).abs() < 1e-6);
+        assert!((result - 20.0).abs() < 1e-6, "{result}");
+    }
+
+    #[test]
+    fn sample_channel_pixel_keeps_a_gray_pixel_stored_as_rgb() {
+        let slice = [0.4f32, 0.4, 0.4];
+
+        assert_eq!(sample_channel_pixel(true, &slice, 0), 0.4);
     }
 
     #[test]

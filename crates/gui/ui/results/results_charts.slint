@@ -6,7 +6,8 @@
 // chart rendering (bars/points/boxes, driven by the data Rust computes in
 // `ResultsGenerator::get_histogram`/`get_scatter`/`get_boxplot` and pushes
 // into `ResultsState.chart-*`) in the stretch area below.
-import { ResultsChartKind2, ResultsState } from "../api/results.slint";
+import { ChartHit, ResultsChartKind2, ResultsState } from "../api/results.slint";
+import { InkScheme } from "../ink/palette.slint";
 import { InkSegmented, InkHint, InkNumberField, InkSwitch, InkButton, InkButtonKind } from "../ink/ink.slint";
 import { ColocCountRow, SettingsGroup } from "results_common.slint";
 import { ComboBox } from "../ink/std_compat.slint";
@@ -14,7 +15,9 @@ import { ComboBox } from "../ink/std_compat.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Ink } from "../ink/palette.slint";
 
-import { InkMultiSelect } from "../ink/ink.slint";
+import { InkMultiSelect, InkIcons } from "../ink/ink.slint";
+import { ViewBar, BarChip, BarLabel, BarSpacer, BarFolded, ViewPanel } from "results_view_bar.slint";
+import { ColumnPicker, ChoiceList, IndexChoiceList } from "results_panel.slint";
 
 component ChartErrorOrEmpty inherits Text {
     text: ResultsState.chart-error;
@@ -26,144 +29,235 @@ component ChartErrorOrEmpty inherits Text {
 }
 
 component HistogramChart inherits Rectangle {
+    // Drawn by the chart module at the area's size and scheme.
+    function ask() {
+        ResultsState.chart-resized(self.width / 1px, self.height / 1px, Ink.scheme != InkScheme.light);
+    }
+    init => {
+        root.ask();
+    }
+    changed width => {
+        root.ask();
+    }
+    changed height => {
+        root.ask();
+    }
+
     if ResultsState.chart-error != "": ChartErrorOrEmpty { }
 
-    if ResultsState.chart-error == "": VerticalLayout {
-        padding: 24px;
-        spacing: 8px;
+    if ResultsState.chart-error == "" && ResultsState.chart-histogram-bins.length == 0: Text {
+        text: "No data for the selected filters";
+        color: Ink.text-mute;
+        font-size: Ink.fs-body;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
 
-        Text {
-            text: ResultsState.chart-histogram-object-count + " objects";
-            font-size: Ink.fs-secondary;
-            color: Ink.text-mute;
-        }
-
-        bars := HorizontalLayout {
-            vertical-stretch: 1;
-            spacing: 2px;
-
-            for bin in ResultsState.chart-histogram-bins: Rectangle {
-                horizontal-stretch: 1;
-
-                Rectangle {
-                    y: parent.height - self.height;
-                    width: parent.width;
-                    height: parent.height * bin;
-                    background: Ink.focus;
-                    border-radius: 2px;
-                }
-            }
-
-            if ResultsState.chart-histogram-bins.length == 0: Text {
-                text: "No data for the selected filters";
-                color: Ink.text-mute;
-                font-size: Ink.fs-body;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-        }
-
-        HorizontalLayout {
-            Text {
-                text: ResultsState.chart-histogram-min-label;
-                font-size: Ink.fs-caption;
-                color: Ink.text-mute;
-            }
-            Rectangle {
-                horizontal-stretch: 1;
-            }
-            Text {
-                text: ResultsState.chart-histogram-max-label;
-                font-size: Ink.fs-caption;
-                color: Ink.text-mute;
-            }
-        }
+    if ResultsState.chart-error == "" && ResultsState.chart-histogram-bins.length > 0: Image {
+        width: parent.width;
+        height: parent.height;
+        source: ResultsState.chart-picture;
+        image-fit: fill;
+        accessible-role: image;
+        accessible-label: "Histogram of " + ResultsState.chart-column-summary;
     }
 }
 
 component ScatterChart inherits Rectangle {
+    // Drawn by the chart module at the area's size and scheme.
+    function ask() {
+        ResultsState.chart-resized(self.width / 1px, self.height / 1px, Ink.scheme != InkScheme.light);
+    }
+    init => {
+        root.ask();
+    }
+    changed width => {
+        root.ask();
+    }
+    changed height => {
+        root.ask();
+    }
+
     if ResultsState.chart-error != "": ChartErrorOrEmpty { }
 
-    if ResultsState.chart-error == "": VerticalLayout {
-        padding: 24px;
-        spacing: 8px;
+    if ResultsState.chart-error == "" && ResultsState.chart-scatter-points.length == 0: Text {
+        text: "No data for the selected filters";
+        color: Ink.text-mute;
+        font-size: Ink.fs-body;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
 
-        Text {
-            text: ResultsState.chart-scatter-shown-count + " of " + ResultsState.chart-scatter-total-count + " objects plotted";
-            font-size: Ink.fs-secondary;
-            color: Ink.text-mute;
-        }
-
-        plot-area := Rectangle {
-            vertical-stretch: 1;
-            background: Ink.raised;
-            border-radius: 4px;
-            clip: true;
-
-            for pt in ResultsState.chart-scatter-points: Rectangle {
-                width: 5px;
-                height: 5px;
-                border-radius: 2.5px;
-                background: Ink.focus.with-alpha(0.65);
-                x: pt.x * (plot-area.width - self.width);
-                y: (1.0 - pt.y) * (plot-area.height - self.height);
-            }
-
-            // A click on a point: its object on its image.
-            TouchArea {
-                mouse-cursor: pointer;
-                clicked => {
-                    ResultsState.chart-scatter-clicked(
-                        (self.mouse-x - 2.5px) / max(1px, plot-area.width - 5px),
-                        1.0 - (self.mouse-y - 2.5px) / max(1px, plot-area.height - 5px),
-                        (plot-area.width - 5px) / 1px,
-                        (plot-area.height - 5px) / 1px);
-                }
-            }
-
-            if ResultsState.chart-scatter-points.length == 0: Text {
-                text: "No data for the selected filters";
-                color: Ink.text-mute;
-                font-size: Ink.fs-body;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-
-            Text {
-                x: 4px;
-                y: 2px;
-                text: ResultsState.chart-scatter-y-max-label;
-                font-size: Ink.fs-caption;
-                color: Ink.text-mute;
-            }
-            Text {
-                x: 4px;
-                y: parent.height - self.height - 2px;
-                text: ResultsState.chart-scatter-y-min-label;
-                font-size: Ink.fs-caption;
-                color: Ink.text-mute;
-            }
-        }
-
-        HorizontalLayout {
-            Text {
-                text: ResultsState.chart-scatter-x-min-label;
-                font-size: Ink.fs-caption;
-                color: Ink.text-mute;
-            }
-            Rectangle {
-                horizontal-stretch: 1;
-            }
-            Text {
-                text: ResultsState.chart-scatter-x-max-label;
-                font-size: Ink.fs-caption;
-                color: Ink.text-mute;
+    if ResultsState.chart-error == "" && ResultsState.chart-scatter-points.length > 0: Image {
+        width: parent.width;
+        height: parent.height;
+        source: ResultsState.chart-picture;
+        image-fit: fill;
+        accessible-role: image;
+        accessible-label: "Scatter of " + ResultsState.chart-column-summary + " and " + ResultsState.chart-y-column-summary;
+        // A click on a dot: its object on its image.
+        TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                ResultsState.chart-picture-clicked(self.mouse-x / 1px, self.mouse-y / 1px);
             }
         }
     }
 }
 
+/// The boxplot's numbers under it (design canvas "Results rework",
+/// ChartBox): a row per box, foldable, copied as a table.
+component BoxStats inherits Rectangle {
+    property <length> name-w: 180px;
+    property <length> cell-w: 84px;
+    background: Ink.panel;
+    height: stats-body.preferred-height;
+    Rectangle {
+        y: 0;
+        height: 1px;
+        background: Ink.border-soft;
+    }
+    stats-body := VerticalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        padding-top: 6px;
+        padding-bottom: 6px;
+        spacing: 4px;
+        HorizontalLayout {
+            spacing: 8px;
+            height: 22px;
+            Rectangle {
+                width: 12px;
+                Image {
+                    source: ResultsState.chart-stats-open ? InkIcons.caret-down : InkIcons.caret-right;
+                    width: 10px;
+                    height: 10px;
+                    colorize: Ink.text-mute;
+                }
+            }
+            Text {
+                text: "NUMBERS";
+                font-size: Ink.fs-caption;
+                font-weight: 600;
+                letter-spacing: 0.6px;
+                color: fold-ta.has-hover ? Ink.text : Ink.text-mute;
+                vertical-alignment: center;
+                fold-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    accessible-role: button;
+                    accessible-label: "Numbers";
+                    accessible-expandable: true;
+                    accessible-expanded: ResultsState.chart-stats-open;
+                    clicked => {
+                        ResultsState.chart-stats-open = !ResultsState.chart-stats-open;
+                    }
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: root.copied ? "Copied" : "Copy table";
+                font-size: Ink.fs-secondary;
+                color: copy-ta.has-hover ? Ink.text : Ink.focus;
+                vertical-alignment: center;
+                copy-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    accessible-role: button;
+                    accessible-label: "Copy the table";
+                    clicked => {
+                        clipboard.text = ResultsState.chart-stats-tsv;
+                        clipboard.select-all();
+                        clipboard.copy();
+                        clipboard.clear-selection();
+                        root.copied = true;
+                    }
+                }
+            }
+        }
+        if ResultsState.chart-stats-open: HorizontalLayout {
+            spacing: 0px;
+            alignment: start;
+            for head[i] in ResultsState.chart-stats-head: Text {
+                width: i == 0 ? root.name-w : root.cell-w;
+                text: head;
+                font-size: Ink.fs-caption;
+                font-weight: 600;
+                color: Ink.text-dim;
+                horizontal-alignment: i == 0 ? left : right;
+            }
+        }
+        if ResultsState.chart-stats-open: ScrollView {
+            height: min(ResultsState.chart-stats-rows.length * 22px, 132px);
+            VerticalLayout {
+                alignment: start;
+                for row in ResultsState.chart-stats-rows: HorizontalLayout {
+                    height: 22px;
+                    spacing: 0px;
+                    alignment: start;
+                    for cell[i] in row.cells: HorizontalLayout {
+                        width: i == 0 ? root.name-w : root.cell-w;
+                        spacing: 6px;
+                        if i == 0: VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 8px;
+                                height: 8px;
+                                border-radius: 2px;
+                                background: row.color;
+                            }
+                        }
+                        Text {
+                            horizontal-stretch: 1;
+                            text: cell;
+                            font-size: Ink.fs-secondary;
+                            font-family: i == 0 ? Ink.font-sans : Ink.font-mono;
+                            color: Ink.text;
+                            horizontal-alignment: i == 0 ? left : right;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    property <bool> copied: false;
+    property <string> tsv: ResultsState.chart-stats-tsv;
+    changed tsv => {
+        root.copied = false;
+    }
+    clipboard := TextInput {
+        visible: false;
+        width: 0px;
+        height: 0px;
+        read-only: true;
+    }
+}
+
 component BoxplotChart inherits Rectangle {
+    // The box whose numbers show (-1 none) - new boxes, none.
+    property <int> picked: -1;
+    property <[ChartHit]> hits: ResultsState.chart-hits;
+    // Other boxes: none picked (a new colour keeps it open).
+    property <int> box-count: root.hits.length;
+    changed box-count => {
+        root.picked = -1;
+    }
+    // The drawing follows the area's size and the scheme.
+    function ask() {
+        ResultsState.chart-resized(self.width / 1px, self.height / 1px, Ink.scheme != InkScheme.light);
+    }
+    init => {
+        root.ask();
+    }
+    changed width => {
+        root.ask();
+    }
+    changed height => {
+        root.ask();
+    }
+
     if ResultsState.chart-error != "": ChartErrorOrEmpty { }
 
     if ResultsState.chart-error == "" && ResultsState.chart-boxplot-boxes.length == 0: Text {
@@ -174,144 +268,136 @@ component BoxplotChart inherits Rectangle {
         vertical-alignment: center;
     }
 
-    // A box per class can easily be more than fit the panel at once (a
-    // database can register dozens of classes) — a plain `ScrollView`
-    // (not `ListView`) is fine here since every box is always instantiated
-    // (no virtualization needed at this scale), so its own auto-inferred
-    // scrollable width just works.
-    if ResultsState.chart-error == "" && ResultsState.chart-boxplot-boxes.length > 0: ScrollView {
-        HorizontalLayout {
-            padding: 24px;
-            spacing: 16px;
-
-            // A click on a box: its objects in the List.
-            for box in ResultsState.chart-boxplot-boxes: Rectangle {
-                width: 90px;
-                border-radius: Ink.radius-md;
-                background: box-ta.has-hover ? Ink.hover : transparent;
-                box-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        ResultsState.chart-box-clicked(box.label);
-                    }
+    if ResultsState.chart-error == "" && ResultsState.chart-boxplot-boxes.length > 0: Rectangle {
+        Image {
+            width: parent.width;
+            height: parent.height;
+            source: ResultsState.chart-picture;
+            image-fit: fill;
+            accessible-role: image;
+            accessible-label: "Boxplot of " + ResultsState.chart-column-summary;
+        }
+        // A click on a box: its numbers; a double-click: its objects in
+        // the List.
+        for hit[i] in ResultsState.chart-hits: Rectangle {
+            x: hit.x * 1px;
+            y: hit.y * 1px;
+            width: hit.width * 1px;
+            height: hit.height * 1px;
+            background: box-ta.has-hover || i == root.picked ? Ink.hover.with-alpha(0.35) : transparent;
+            border-radius: Ink.radius-sm;
+            accessible-role: button;
+            accessible-label: hit.label;
+            accessible-action-default => {
+                root.picked = i == root.picked ? -1 : i;
+            }
+            box-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.picked = i == root.picked ? -1 : i;
                 }
-            VerticalLayout {
+                double-clicked => {
+                    ResultsState.chart-box-clicked(hit.label);
+                }
+            }
+        }
+
+        // The picked box's numbers, beside it (floating: blurred).
+        if root.picked >= 0 && root.picked < root.hits.length: tip := Rectangle {
+            property <ChartHit> hit: root.hits[root.picked];
+            width: 240px;
+            height: tip-body.preferred-height;
+            x: (self.hit.x + self.hit.width) * 1px + 8px + self.width > parent.width
+                ? max(0px, self.hit.x * 1px - self.width - 8px)
+                : (self.hit.x + self.hit.width) * 1px + 8px;
+            y: max(8px, min(parent.height - self.height - 8px, self.hit.y * 1px + 40px));
+            background: Ink.panel-blur ? Ink.glass : Ink.panel;
+            backdrop-blur: Ink.backdrop;
+            border-width: 1px;
+            border-color: Ink.border;
+            border-radius: Ink.radius-md;
+            drop-shadow-color: Ink.shadow;
+            drop-shadow-blur: 16px;
+            drop-shadow-offset-y: 4px;
+            // Clicks on it stay in it.
+            TouchArea { }
+            tip-body := VerticalLayout {
+                padding: 12px;
                 spacing: 4px;
-
-                plot := Rectangle {
-                    vertical-stretch: 1;
-
-                    // whisker: min -> max
-                    Rectangle {
-                        x: (parent.width - self.width) / 2;
-                        width: 1.5px;
-                        y: parent.height * (1.0 - box.max);
-                        height: max(0px, parent.height * (box.max - box.min));
-                        background: box.color;
-                    }
-
-                    // box: Q1 -> Q3
-                    Rectangle {
-                        x: parent.width * 0.2;
-                        width: parent.width * 0.6;
-                        y: parent.height * (1.0 - box.q3);
-                        height: max(1px, parent.height * (box.q3 - box.q1));
-                        background: box.color.with-alpha(0.35);
-                        border-width: 1.5px;
-                        border-color: box.color;
-                        border-radius: 2px;
-                    }
-
-                    // median line
-                    Rectangle {
-                        x: parent.width * 0.2;
-                        width: parent.width * 0.6;
-                        y: parent.height * (1.0 - box.median) - 1px;
-                        height: 2px;
-                        background: box.color;
-                    }
-
-                    for outlier in box.outliers: Rectangle {
-                        width: 4px;
-                        height: 4px;
-                        border-radius: 2px;
-                        background: box.color;
-                        x: (parent.width - self.width) / 2;
-                        y: parent.height * (1.0 - outlier) - self.height / 2;
-                    }
-                }
-
                 Text {
-                    text: box.label;
-                    font-size: Ink.fs-caption;
-                    color: Ink.text-mute;
-                    horizontal-alignment: center;
+                    text: tip.hit.label;
+                    font-size: Ink.fs-body;
+                    font-weight: 600;
+                    color: Ink.text;
                     overflow: elide;
                 }
+                for line in tip.hit.lines: HorizontalLayout {
+                    spacing: 8px;
+                    Text {
+                        horizontal-stretch: 1;
+                        text: line.label;
+                        font-size: Ink.fs-secondary;
+                        color: Ink.text-dim;
+                    }
+                    Text {
+                        text: line.value;
+                        font-size: Ink.fs-secondary;
+                        font-family: Ink.font-mono;
+                        color: Ink.text;
+                        horizontal-alignment: right;
+                    }
+                }
+                // Its own colour.
+                HorizontalLayout {
+                    spacing: 4px;
+                    padding-top: 6px;
+                    for swatch[k] in ResultsState.chart-box-palette: Rectangle {
+                        width: 14px;
+                        height: 14px;
+                        border-radius: 3px;
+                        background: swatch;
+                        border-width: swatch-ta.has-hover ? 2px : 0px;
+                        border-color: Ink.text;
+                        accessible-role: button;
+                        accessible-label: "Colour " + (k + 1);
+                        swatch-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                ResultsState.chart-box-color-picked(tip.hit.label, k);
+                            }
+                        }
+                    }
+                }
                 Text {
-                    text: box.object-count + " objects";
+                    text: "Reset its colour";
                     font-size: Ink.fs-caption;
-                    color: Ink.text-mute;
-                    horizontal-alignment: center;
+                    color: reset-ta.has-hover ? Ink.text : Ink.text-mute;
+                    reset-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        accessible-role: button;
+                        accessible-label: "Reset its colour";
+                        clicked => {
+                            ResultsState.chart-box-color-picked(tip.hit.label, -1);
+                        }
+                    }
+                }
+                Rectangle {
+                    height: 4px;
+                }
+                Text {
+                    text: "Its objects in the List ›";
+                    font-size: Ink.fs-secondary;
+                    color: list-ta.has-hover ? Ink.text : Ink.focus;
+                    list-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        accessible-role: button;
+                        accessible-label: "Its objects in the List";
+                        clicked => {
+                            ResultsState.chart-box-clicked(tip.hit.label);
+                        }
+                    }
                 }
             }
-            }
-        }
-    }
-}
-
-// A chart kind to pick: its drawn picture above its name. Every tile gets
-// its width from the grid (all equal); selected shows by border and tint
-// only, so the name keeps its weight and nothing moves.
-component ChartTile inherits Rectangle {
-    // The picture as path commands on a 28 × 18 grid.
-    in property <string> icon;
-    // Filled (the scatter's dots) instead of stroked lines.
-    in property <bool> icon-filled;
-    in property <string> text;
-    in property <bool> selected;
-    callback clicked;
-
-    height: 58px;
-    border-radius: Ink.radius-md;
-    border-width: 1px;
-    border-color: root.selected ? Ink.focus : Ink.border;
-    background: root.selected ? Ink.info-tint : ta.has-hover ? Ink.hover : Ink.panel;
-    accessible-role: button;
-    accessible-label: root.text;
-    accessible-checked: root.selected;
-
-    VerticalLayout {
-        alignment: center;
-        spacing: 4px;
-        HorizontalLayout {
-            alignment: center;
-            Path {
-                width: 28px;
-                height: 18px;
-                viewbox-width: 28;
-                viewbox-height: 18;
-                commands: root.icon;
-                fill: root.icon-filled ? (root.selected ? Ink.focus : Ink.text-dim) : transparent;
-                stroke: root.icon-filled ? transparent : (root.selected ? Ink.focus : Ink.text-dim);
-                stroke-width: root.icon-filled ? 0px : 1.6px;
-                stroke-line-cap: round;
-                stroke-line-join: round;
-            }
-        }
-        Text {
-            text: root.text;
-            font-size: Ink.fs-secondary;
-            color: Ink.text;
-            horizontal-alignment: center;
-            overflow: elide;
-        }
-    }
-
-    ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => {
-            root.clicked();
         }
     }
 }
@@ -356,146 +442,35 @@ component OverTimeChart inherits Rectangle {
             }
         }
 
-        // The legend.
-        HorizontalLayout {
-            spacing: 14px;
-            alignment: start;
-            for line in ResultsState.chart-time-data: HorizontalLayout {
-                spacing: 6px;
-                VerticalLayout {
-                    alignment: center;
-                    Rectangle {
-                        width: 14px;
-                        height: 3px;
-                        background: line.color;
-                    }
-                }
-                Text {
-                    text: line.label;
-                    font-size: Ink.fs-secondary;
-                    color: Ink.text-dim;
-                }
-            }
-        }
-
-        HorizontalLayout {
+        // Lines, bands, the legend and both axes: drawn by the chart
+        // module at the area's size and scheme.
+        time-plot := Rectangle {
             vertical-stretch: 1;
-            spacing: 6px;
-            VerticalLayout {
-                width: 64px;
-                Text {
-                    text: ResultsState.chart-time-y-max;
-                    font-size: Ink.fs-caption;
-                    font-family: Ink.font-mono;
-                    color: Ink.text-mute;
-                    horizontal-alignment: right;
-                }
-                Rectangle {
-                    vertical-stretch: 1;
-                }
-                Text {
-                    text: ResultsState.chart-time-y-min;
-                    font-size: Ink.fs-caption;
-                    font-family: Ink.font-mono;
-                    color: Ink.text-mute;
-                    horizontal-alignment: right;
-                }
+            function ask() {
+                ResultsState.chart-resized(self.width / 1px, self.height / 1px, Ink.scheme != InkScheme.light);
             }
-            plot := Rectangle {
-                border-width: 1px;
-                border-color: Ink.border-soft;
+            init => {
+                self.ask();
+            }
+            changed width => {
+                self.ask();
+            }
+            changed height => {
+                self.ask();
+            }
+            Image {
+                width: parent.width;
+                height: parent.height;
+                source: ResultsState.chart-picture;
+                image-fit: fill;
                 accessible-role: image;
                 accessible-label: ResultsState.chart-time-y-title;
-                for faint in ResultsState.chart-time-faint: Path {
-                    width: plot.width;
-                    height: plot.height;
-                    viewbox-width: 1000;
-                    viewbox-height: 1000;
-                    // Stretched to the plot (the box isn't square).
-                    fit: fill;
-                    commands: faint;
-                    stroke: Ink.text-mute;
-                    stroke-width: 1px;
-                    opacity: 0.25;
-                }
-                for line in ResultsState.chart-time-data: Path {
-                    width: plot.width;
-                    height: plot.height;
-                    viewbox-width: 1000;
-                    viewbox-height: 1000;
-                    // Stretched to the plot (the box isn't square).
-                    fit: fill;
-                    commands: line.band != "" ? line.band : "M 0 0";
-                    fill: line.color;
-                    opacity: line.band != "" ? 0.16 : 0;
-                }
-                for line in ResultsState.chart-time-data: Path {
-                    width: plot.width;
-                    height: plot.height;
-                    viewbox-width: 1000;
-                    viewbox-height: 1000;
-                    // Stretched to the plot (the box isn't square).
-                    fit: fill;
-                    commands: line.line != "" ? line.line : "M 0 0";
-                    stroke: line.color;
-                    stroke-width: 2px;
-                }
-                // Profile: the marker (the selected curve's highest value)
-                // and the selected object's own curve on top.
-                if ResultsState.chart-time-marker != "": Path {
-                    width: plot.width;
-                    height: plot.height;
-                    viewbox-width: 1000;
-                    viewbox-height: 1000;
-                    fit: fill;
-                    commands: ResultsState.chart-time-marker;
-                    stroke: Ink.focus;
-                    stroke-width: 1px;
-                    opacity: 0.7;
-                }
-                if ResultsState.chart-time-highlight != "": Path {
-                    width: plot.width;
-                    height: plot.height;
-                    viewbox-width: 1000;
-                    viewbox-height: 1000;
-                    fit: fill;
-                    commands: ResultsState.chart-time-highlight;
-                    stroke: Ink.focus;
-                    stroke-width: 2.5px;
-                }
-                if ResultsState.chart-time-marker-label != "": Text {
-                    x: 8px;
-                    y: 6px;
-                    text: ResultsState.chart-time-marker-label;
-                    font-size: Ink.fs-caption;
-                    font-family: Ink.font-mono;
-                    color: Ink.focus;
-                }
-            }
-        }
-
-        HorizontalLayout {
-            padding-left: 70px;
-            Text {
-                text: ResultsState.chart-time-x-min;
-                font-size: Ink.fs-caption;
-                font-family: Ink.font-mono;
-                color: Ink.text-mute;
-            }
-            Rectangle {
-                horizontal-stretch: 1;
-            }
-            Text {
-                text: ResultsState.chart-time-x-max;
-                font-size: Ink.fs-caption;
-                font-family: Ink.font-mono;
-                color: Ink.text-mute;
             }
         }
 
         // Profile: the selected object's values.
         if ResultsState.chart-profile-cards.length > 0: HorizontalLayout {
-            padding-left: 70px;
+            padding-left: 16px;
             spacing: 10px;
             alignment: start;
             for card in ResultsState.chart-profile-cards: Rectangle {
@@ -520,337 +495,580 @@ component OverTimeChart inherits Rectangle {
     }
 }
 
+/// The Charts' left panel (design canvas "Results rework", PanelViews):
+/// the part the bar's chip names - Value (the List's column picker, one
+/// choice; X and Y for a scatter), Class, Groups (a box / a line per), Look.
+component ChartsPanel inherits ViewPanel {
+    property <ResultsChartKind2> kind: ResultsState.chart-kind;
+    // A box or a bar per group.
+    property <bool> grouped: root.kind == ResultsChartKind2.boxplot || root.kind == ResultsChartKind2.bar;
+    property <bool> has-class: !root.grouped
+        && !(root.kind == ResultsChartKind2.over-time && ResultsState.chart-time-lines == 0)
+        && !(root.kind == ResultsChartKind2.profile && ResultsState.chart-profile-lines == 0);
+    // The parts this kind has.
+    parts: root.grouped ? (ResultsState.chart-group == 0 ? ["Value", "Groups", "Look"] : ["Value", "Class", "Groups", "Look"])
+        : root.kind == ResultsChartKind2.histogram || root.kind == ResultsChartKind2.scatter ? ["Value", "Class", "Look"]
+        : root.has-class ? ["Value", "Class", "Groups", "Look"] : ["Value", "Groups", "Look"];
+    part: ResultsState.chart-panel-part;
+    part-picked(part) => {
+        ResultsState.chart-panel-part = part;
+    }
+    fold => {
+        ResultsState.chart-panel-open = false;
+    }
+
+    if root.current == "Value" && root.kind == ResultsChartKind2.profile: IndexChoiceList {
+        title: "PROFILE";
+        model: ResultsState.chart-profile-names;
+        current: ResultsState.chart-profile-index;
+        picked(i) => {
+            ResultsState.chart-profile-index = i;
+            ResultsState.chart-profile-selected(i);
+        }
+    }
+    if root.current == "Value" && root.kind == ResultsChartKind2.scatter: InkSegmented {
+        label: "Axis";
+        model: ["X axis", "Y axis"];
+        selected: ResultsState.chart-value-slot;
+        picked(i) => {
+            ResultsState.chart-value-slot = i;
+            ResultsState.chart-value-slot-changed(i);
+        }
+    }
+    if root.current == "Value" && root.kind != ResultsChartKind2.profile: ColumnPicker {
+        single: true;
+        placeholder: "Find a value - area, mean, coloc…";
+        filter: ResultsState.chart-columns-filter;
+        sections: ResultsState.chart-column-sections;
+        intensity-title: ResultsState.chart-intensity-title;
+        intensity-open: ResultsState.chart-intensity-open;
+        intensity-channels: ResultsState.list-intensity-channels;
+        intensity-stats: ResultsState.list-intensity-stats;
+        intensity-cells: ResultsState.chart-intensity-cells;
+        has-coloc: ResultsState.list-coloc-partner-items.length > 0;
+        coloc-groups: ResultsState.chart-coloc-groups;
+        filter-edited(text) => {
+            ResultsState.chart-columns-filter = text;
+            ResultsState.chart-columns-filter-changed(text);
+        }
+        picked(key, on) => {
+            ResultsState.chart-value-picked(key);
+        }
+        section-toggled(group, open) => {
+            if group == "intensity" {
+                ResultsState.chart-intensity-open = open;
+            }
+            ResultsState.chart-columns-section-toggled(group, open);
+        }
+    }
+
+    if root.current == "Class": ChoiceList {
+        title: "THE OBJECTS OF";
+        items: ResultsState.chart-class-items;
+        chosen: ResultsState.chart-class-summary;
+        picked(key, value) => {
+            ResultsState.chart-class-summary = value;
+            ResultsState.chart-class-selected(key, true);
+        }
+    }
+
+    if root.current == "Groups" && root.grouped: VerticalLayout {
+        spacing: 12px;
+        IndexChoiceList {
+            title: root.kind == ResultsChartKind2.bar ? "A BAR PER" : "A BOX PER";
+            model: ["Class", "Image", "Well", "Plate row", "Plate column"];
+            current: ResultsState.chart-group;
+            picked(i) => {
+                ResultsState.chart-group = i;
+                ResultsState.chart-group-selected(i);
+            }
+        }
+        IndexChoiceList {
+            title: "A VALUE PER";
+            model: ["Object", "Image - a dot each"];
+            current: ResultsState.chart-per-image ? 1 : 0;
+            picked(i) => {
+                ResultsState.chart-per-image = i == 1;
+                ResultsState.chart-per-image-changed(i == 1);
+            }
+        }
+        InkHint {
+            text: ResultsState.chart-per-image
+                ? "Each image one value: its objects' count, or the mean of the value over them - images compared, not objects."
+                : "Each object one value.";
+        }
+    }
+    if root.current == "Groups" && root.kind == ResultsChartKind2.over-time: IndexChoiceList {
+        model: ["Class", "Image", "Well", "Track"];
+        current: ResultsState.chart-time-lines;
+        picked(i) => {
+            ResultsState.chart-time-lines = i;
+            ResultsState.chart-time-changed();
+        }
+    }
+    if root.current == "Groups" && root.kind == ResultsChartKind2.profile: IndexChoiceList {
+        model: ["Class", "Image", "Well", "Plate"];
+        current: ResultsState.chart-profile-lines;
+        picked(i) => {
+            ResultsState.chart-profile-lines = i;
+            ResultsState.chart-time-changed();
+        }
+    }
+
+    if root.current == "Look" && root.grouped: VerticalLayout {
+        spacing: 12px;
+        if root.kind == ResultsChartKind2.bar: IndexChoiceList {
+            title: "ERROR BAR";
+            model: ["± SD", "± SEM", "95 % CI (Student's t)"];
+            current: ResultsState.chart-box-look.error;
+            picked(i) => {
+                ResultsState.chart-box-look.error = i;
+                ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
+            }
+        }
+        if root.kind == ResultsChartKind2.boxplot: InkSwitch {
+            text: "Log scale";
+            checked: ResultsState.chart-box-look.log;
+            toggled(on) => {
+                ResultsState.chart-box-look.log = on;
+                ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
+            }
+        }
+        InkSwitch {
+            text: "Grid lines";
+            checked: ResultsState.chart-box-look.grid;
+            toggled(on) => {
+                ResultsState.chart-box-look.grid = on;
+                ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
+            }
+        }
+        if ResultsState.chart-per-image: InkSwitch {
+            text: "A dot per image";
+            checked: ResultsState.chart-box-look.dots;
+            toggled(on) => {
+                ResultsState.chart-box-look.dots = on;
+                ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
+            }
+        }
+        if root.kind == ResultsChartKind2.boxplot: InkSwitch {
+            text: "Mean (◇)";
+            checked: ResultsState.chart-box-look.mean;
+            toggled(on) => {
+                ResultsState.chart-box-look.mean = on;
+                ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
+            }
+        }
+        InkSwitch {
+            text: root.kind == ResultsChartKind2.bar ? "n under each bar" : "n under each box";
+            checked: ResultsState.chart-box-look.show-n;
+            toggled(on) => {
+                ResultsState.chart-box-look.show-n = on;
+                ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
+            }
+        }
+        InkSwitch {
+            text: root.kind == ResultsChartKind2.bar ? "% of control (the first bar)" : "% of control (the first box)";
+            checked: ResultsState.chart-box-look.relative;
+            toggled(on) => {
+                ResultsState.chart-box-look.relative = on;
+                ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
+            }
+        }
+        if root.kind == ResultsChartKind2.boxplot: IndexChoiceList {
+            title: "WHISKERS";
+            model: ["To 1.5 × IQR - the values beyond as dots", "Min - max"];
+            current: ResultsState.chart-box-look.min-max ? 1 : 0;
+            picked(i) => {
+                ResultsState.chart-box-look.min-max = i == 1;
+                ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
+            }
+        }
+        IndexChoiceList {
+            title: "COLOURS";
+            model: ["A colour per group", "One colour", "Control dark, the others grey"];
+            current: ResultsState.chart-box-look.colors;
+            picked(i) => {
+                ResultsState.chart-box-look.colors = i;
+                ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
+            }
+        }
+        InkHint {
+            text: root.kind == ResultsChartKind2.boxplot
+                ? "Far values that would squash the boxes are counted at the axis' edge. Saved with the view; the export draws the same."
+                : "Saved with the view; the export draws the same.";
+        }
+    }
+    if root.current == "Look" && !root.grouped: VerticalLayout {
+        spacing: 12px;
+            if ResultsState.chart-kind == ResultsChartKind2.histogram: HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    horizontal-stretch: 1;
+                    text: "Bins";
+                    font-size: Ink.fs-secondary;
+                    color: Ink.text;
+                    vertical-alignment: center;
+                }
+                InkNumberField {
+                    width: 110px;
+                    label: "Bins";
+                    value: ResultsState.chart-bins;
+                    min: 5;
+                    max: 200;
+                    step: 1;
+                    changed(v) => {
+                        ResultsState.chart-bins = clamp(round(v.to-float()), 5, 200);
+                        ResultsState.chart-display-changed();
+                    }
+                }
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.histogram: InkSwitch {
+                text: "Counts on a log scale";
+                checked: ResultsState.chart-log-counts;
+                toggled(on) => {
+                    ResultsState.chart-log-counts = on;
+                    ResultsState.chart-display-changed();
+                }
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.histogram: InkSwitch {
+                text: "Grid lines";
+                checked: ResultsState.chart-box-look.grid;
+                toggled(on) => {
+                    ResultsState.chart-box-look.grid = on;
+                    ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
+                }
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.histogram: InkSwitch {
+                text: "Whole range";
+                checked: ResultsState.chart-full-range;
+                toggled(on) => {
+                    ResultsState.chart-full-range = on;
+                    ResultsState.chart-display-changed();
+                }
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.histogram: InkHint {
+                text: ResultsState.chart-full-range
+                    ? "The bins span every value."
+                    : "The bins span the 1st to 99th percentile; the values beyond are counted at the edges.";
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.scatter: InkSegmented {
+                label: "Points drawn";
+                model: ["500", "2 000", "10 000", "All"];
+                selected: ResultsState.chart-points-index;
+                picked(i) => {
+                    ResultsState.chart-points-index = i;
+                    ResultsState.chart-display-changed();
+                }
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.scatter: InkSwitch {
+                text: "X on a log scale";
+                checked: ResultsState.chart-box-look.log-x;
+                toggled(on) => {
+                    ResultsState.chart-box-look.log-x = on;
+                    ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
+                }
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.scatter: InkSwitch {
+                text: "Y on a log scale";
+                checked: ResultsState.chart-box-look.log-y;
+                toggled(on) => {
+                    ResultsState.chart-box-look.log-y = on;
+                    ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
+                }
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.scatter: InkSwitch {
+                text: "Grid lines";
+                checked: ResultsState.chart-box-look.grid;
+                toggled(on) => {
+                    ResultsState.chart-box-look.grid = on;
+                    ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
+                }
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.scatter: InkHint {
+                text: "Click a point to see its object on its image. A log scale needs values above 0.";
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.over-time || ResultsState.chart-kind == ResultsChartKind2.profile: InkSegmented {
+                label: "Summary";
+                model: ["Mean ± SD", "Median + IQR"];
+                tips: ["Mean ± standard deviation", "Median and interquartile range"];
+                tip-details: [
+                    "The line is the average of the objects at each time point; the band reaches one standard deviation above and below it - how far the values typically spread. A few very large or small objects pull both.",
+                    "The line is the middle value: half of the objects lie above it, half below. The band holds the middle half of the objects (25th to 75th percentile). Robust to outliers and skewed values such as sizes or intensities.",
+                ];
+                selected: ResultsState.chart-time-summary;
+                picked(i) => {
+                    ResultsState.chart-time-summary = i;
+                    ResultsState.chart-time-changed();
+                }
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.over-time || ResultsState.chart-kind == ResultsChartKind2.profile: InkSwitch {
+                text: "Grid lines";
+                checked: ResultsState.chart-box-look.grid;
+                toggled(on) => {
+                    ResultsState.chart-box-look.grid = on;
+                    ResultsState.chart-box-look-changed(ResultsState.chart-box-look);
+                }
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.profile: InkSwitch {
+                text: "The selected object's curve";
+                checked: ResultsState.chart-profile-curve;
+                toggled(on) => {
+                    ResultsState.chart-profile-curve = on;
+                    ResultsState.chart-time-changed();
+                }
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.profile: InkSwitch {
+                text: "Mark its highest value";
+                checked: ResultsState.chart-profile-mark;
+                toggled(on) => {
+                    ResultsState.chart-profile-mark = on;
+                    ResultsState.chart-time-changed();
+                }
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.profile: InkHint {
+                text: ResultsState.split
+                    ? "Click an object on the image - or use ‹ › - to see its curve and its circles. A position an object doesn't reach counts as 0."
+                    : "Split with image to pick an object and see its curve and its circles. A position an object doesn't reach counts as 0.";
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.over-time: InkSwitch {
+                text: "Relative to the first time point";
+                checked: ResultsState.chart-time-relative;
+                toggled(on) => {
+                    ResultsState.chart-time-relative = on;
+                    ResultsState.chart-time-changed();
+                }
+            }
+            if ResultsState.chart-kind == ResultsChartKind2.over-time: InkSwitch {
+                text: "Individual tracks, faint";
+                checked: ResultsState.chart-time-tracks;
+                toggled(on) => {
+                    ResultsState.chart-time-tracks = on;
+                    ResultsState.chart-time-changed();
+                }
+            }
+            // Across divisions and fusions - where tracks are drawn.
+            if ResultsState.chart-kind == ResultsChartKind2.over-time && ResultsState.has-lineage
+                && (ResultsState.chart-time-lines == 3 || ResultsState.chart-time-tracks): InkSegmented {
+                label: "History";
+                model: ["Own track", "With parents'"];
+                tips: ["Each track its own line", "A line per cell, from its first ancestor"];
+                tip-details: [
+                    "Each track is its own line: a mother's ends at the division, its daughters' start there.",
+                    "Each daughter's line starts with its mother's track; a fused track has a line per parent. The parents' time points count once per line - in Mean ± SD, relative to the first time point and the export.",
+                ];
+                selected: ResultsState.chart-time-history;
+                picked(i) => {
+                    ResultsState.chart-time-history = i;
+                    ResultsState.chart-time-changed();
+                }
+            }
+            }
+}
+
+/// The Charts' bar: the kind of chart, then what it draws - the value, the
+/// class, a box or a line per, the look - as chips that open the left
+/// panel on their part.
+component ChartsBar inherits ViewBar {
+    property <ResultsChartKind2> kind: ResultsState.chart-kind;
+    property <bool> grouped: root.kind == ResultsChartKind2.boxplot || root.kind == ResultsChartKind2.bar;
+    property <bool> has-class: !root.grouped
+        && !(root.kind == ResultsChartKind2.over-time && ResultsState.chart-time-lines == 0)
+        && !(root.kind == ResultsChartKind2.profile && ResultsState.chart-profile-lines == 0);
+
+    if !ResultsState.chart-panel-open: BarFolded {
+        summary: (root.kind == ResultsChartKind2.profile ? ResultsState.chart-profile-names[ResultsState.chart-profile-index]
+                : root.kind == ResultsChartKind2.scatter ? ResultsState.chart-column-summary + " × " + ResultsState.chart-y-column-summary
+                : ResultsState.chart-column-summary)
+            + (root.has-class ? " · " + ResultsState.chart-class-summary : "");
+        unfold => {
+            ResultsState.chart-panel-open = true;
+        }
+    }
+    BarLabel {
+        text: "Chart";
+    }
+    VerticalLayout {
+        alignment: center;
+        horizontal-stretch: 0;
+        InkSegmented {
+            horizontal-stretch: 0;
+            label: "Chart";
+            model: ResultsState.has-profiles ? ["Histogram", "Boxplot", "Bar", "Scatter", "Over time", "Profile"] : ["Histogram", "Boxplot", "Bar", "Scatter", "Over time"];
+            selected: root.kind == ResultsChartKind2.boxplot ? 1 : root.kind == ResultsChartKind2.bar ? 2 : root.kind == ResultsChartKind2.scatter ? 3
+                : root.kind == ResultsChartKind2.over-time ? 4 : root.kind == ResultsChartKind2.profile ? 5 : 0;
+            picked(i) => {
+                ResultsState.chart-kind = i == 1 ? ResultsChartKind2.boxplot : i == 2 ? ResultsChartKind2.bar : i == 3 ? ResultsChartKind2.scatter
+                    : i == 4 ? ResultsChartKind2.over-time : i == 5 ? ResultsChartKind2.profile : ResultsChartKind2.histogram;
+                ResultsState.chart-kind-selected(ResultsState.chart-kind);
+                // Only a scatter has a Y to pick.
+                if ResultsState.chart-kind != ResultsChartKind2.scatter && ResultsState.chart-value-slot != 0 {
+                    ResultsState.chart-value-slot = 0;
+                    ResultsState.chart-value-slot-changed(0);
+                }
+            }
+        }
+    }
+    BarSpacer { }
+    InkHint {
+        vertical-alignment: center;
+        horizontal-stretch: 0;
+        text: ResultsState.chart-export-message != "" ? ResultsState.chart-export-message
+            : root.kind == ResultsChartKind2.boxplot ? "Click a box for its numbers · double-click: its objects in the List"
+            : root.kind == ResultsChartKind2.bar ? "Click a bar for its numbers · double-click: its objects in the List"
+            : root.kind == ResultsChartKind2.scatter ? "Click a point to see its object on its image." : "";
+    }
+    VerticalLayout {
+        alignment: center;
+        InkButton {
+            small: true;
+            text: "Save chart…";
+            tip: "The chart as PNG or SVG - as on screen, sized for a paper - or its numbers as CSV";
+            clicked => {
+                export-popup.show();
+            }
+        }
+    }
+    export-popup := PopupWindow {
+        x: root.width - self.width - 8px;
+        y: root.height + 4px;
+        width: 380px;
+        height: export-body.preferred-height;
+        close-policy: close-on-click-outside;
+        // Floating: blurred.
+        Rectangle {
+            background: Ink.panel-blur ? Ink.glass : Ink.panel;
+            backdrop-blur: Ink.backdrop;
+            border-width: 1px;
+            border-color: Ink.border;
+            border-radius: Ink.radius-md;
+            drop-shadow-color: Ink.shadow;
+            drop-shadow-blur: 24px;
+            drop-shadow-offset-y: 8px;
+        }
+        TouchArea { }
+        export-body := VerticalLayout {
+            padding: 14px;
+            spacing: 12px;
+            Text {
+                text: "Save the chart";
+                font-size: Ink.fs-heading;
+                font-weight: 600;
+                color: Ink.text;
+            }
+            InkSegmented {
+                equal: true;
+                label: "Format";
+                model: ["PNG", "SVG", "CSV data"];
+                selected: ResultsState.chart-export-format;
+                picked(i) => {
+                    ResultsState.chart-export-format = i;
+                }
+            }
+            if ResultsState.chart-export-format != 2: VerticalLayout {
+                spacing: 8px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    InkNumberField {
+                        label: "Width";
+                        unit: "cm";
+                        value: ResultsState.chart-export-width;
+                        min: 3;
+                        max: 60;
+                        step: 0.5;
+                        changed(v) => {
+                            ResultsState.chart-export-width = clamp(v.to-float(), 3, 60);
+                        }
+                    }
+                    Text {
+                        text: "×";
+                        color: Ink.text-dim;
+                        vertical-alignment: center;
+                    }
+                    InkNumberField {
+                        label: "Height";
+                        unit: "cm";
+                        value: ResultsState.chart-export-height;
+                        min: 3;
+                        max: 60;
+                        step: 0.5;
+                        changed(v) => {
+                            ResultsState.chart-export-height = clamp(v.to-float(), 3, 60);
+                        }
+                    }
+                }
+                InkSegmented {
+                    equal: true;
+                    label: "Size";
+                    model: ["One column", "Two columns", "As on screen"];
+                    selected: ResultsState.chart-export-width == 8.5 ? 0 : ResultsState.chart-export-width == 17.5 ? 1 : -1;
+                    picked(i) => {
+                        if i == 0 {
+                            ResultsState.chart-export-width = 8.5;
+                            ResultsState.chart-export-height = 6;
+                        } else if i == 1 {
+                            ResultsState.chart-export-width = 17.5;
+                            ResultsState.chart-export-height = 10;
+                        } else {
+                            ResultsState.chart-export-width = 26;
+                            ResultsState.chart-export-height = 16;
+                        }
+                    }
+                }
+                if ResultsState.chart-export-format == 0: InkSegmented {
+                    equal: true;
+                    label: "Resolution";
+                    model: ["150 dpi", "300 dpi", "600 dpi"];
+                    selected: ResultsState.chart-export-dpi == 150 ? 0 : ResultsState.chart-export-dpi == 600 ? 2 : 1;
+                    picked(i) => {
+                        ResultsState.chart-export-dpi = i == 0 ? 150 : i == 2 ? 600 : 300;
+                    }
+                }
+                InkSwitch {
+                    text: "Transparent ground";
+                    checked: ResultsState.chart-export-transparent;
+                    toggled(on) => {
+                        ResultsState.chart-export-transparent = on;
+                    }
+                }
+            }
+            InkHint {
+                text: ResultsState.chart-export-format == 2
+                    ? "The plotted numbers: a row per image (a dot each), box, bin, point or position."
+                    : "Exactly the chart on screen - the same look, light colours. Text is about 8 pt.";
+            }
+            HorizontalLayout {
+                alignment: end;
+                InkButton {
+                    kind: InkButtonKind.primary;
+                    text: "Save…";
+                    clicked => {
+                        export-popup.close();
+                        ResultsState.chart-export-save();
+                    }
+                }
+            }
+        }
+    }
+}
+
 export component ResultsChartsView inherits Rectangle {
-    property <length> side-w: 280px;
-    property <length> field-w: root.side-w - 2 * Ink.pad-panel;
-    property <length> kind-gap: 6px;
-    property <int> kind-columns: ResultsState.has-profiles ? 3 : 2;
-    property <length> kind-tile-w: (root.field-w - (root.kind-columns - 1) * root.kind-gap) / root.kind-columns;
+    property <bool> panel-open: ResultsState.chart-panel-open;
 
     background: Ink.ground;
 
-    // Panels on the ground (boards H, L, M): the settings left, the content
-    // beside them.
+    // Panels on the ground: what is drawn on the left (a chip opens it),
+    // the bar over the chart.
     HorizontalLayout {
         padding: 12px;
         spacing: 12px;
 
-        // -- The chart and what it shows --
-        Rectangle {
-            width: root.side-w;
-            background: Ink.panel;
-            border-radius: Ink.radius-lg;
-            border-width: 1px;
-            border-color: Ink.border;
-            clip: true;
+        if root.panel-open: ChartsPanel { }
 
+        VerticalLayout {
+        spacing: 12px;
+        horizontal-stretch: 1;
 
-            VerticalLayout {
-                padding: Ink.pad-panel;
-                spacing: 16px;
-                alignment: start;
-
-                SettingsGroup {
-                    title: "CHART";
-                    // The kinds as one grid of equal tiles, each with a drawn
-                    // picture: 3 columns with Profile (a value per radius, with
-                    // profile measurements in the results), 2 without.
-                    VerticalLayout {
-                        spacing: root.kind-gap;
-                        HorizontalLayout {
-                            spacing: root.kind-gap;
-                            alignment: start;
-                            ChartTile {
-                                width: root.kind-tile-w;
-                                icon: "M 2 17 H 26 M 5 17 V 13 H 9 V 17 M 10 17 V 7 H 14 V 17 M 15 17 V 3 H 19 V 17 M 20 17 V 11 H 24 V 17";
-                                text: "Histogram";
-                                selected: ResultsState.chart-kind == ResultsChartKind2.histogram;
-                                clicked => {
-                                    ResultsState.chart-kind = ResultsChartKind2.histogram;
-                                    ResultsState.chart-kind-selected(ResultsState.chart-kind);
-                                }
-                            }
-                            ChartTile {
-                                width: root.kind-tile-w;
-                                icon: "M 2 9 H 8 M 20 9 H 26 M 2 5 V 13 M 26 5 V 13 M 8 4 H 20 V 14 H 8 Z M 14 4 V 14";
-                                text: "Boxplot";
-                                selected: ResultsState.chart-kind == ResultsChartKind2.boxplot;
-                                clicked => {
-                                    ResultsState.chart-kind = ResultsChartKind2.boxplot;
-                                    ResultsState.chart-kind-selected(ResultsState.chart-kind);
-                                }
-                            }
-                            if ResultsState.has-profiles: ChartTile {
-                                width: root.kind-tile-w;
-                                icon: "M 3.2 13 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 8.2 9 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 11.2 14 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 15.2 6 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 19.2 9 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 22.2 3 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0";
-                                icon-filled: true;
-                                text: "Scatter";
-                                selected: ResultsState.chart-kind == ResultsChartKind2.scatter;
-                                clicked => {
-                                    ResultsState.chart-kind = ResultsChartKind2.scatter;
-                                    ResultsState.chart-kind-selected(ResultsState.chart-kind);
-                                }
-                            }
-                        }
-                        HorizontalLayout {
-                            spacing: root.kind-gap;
-                            alignment: start;
-                            if !ResultsState.has-profiles: ChartTile {
-                                width: root.kind-tile-w;
-                                icon: "M 3.2 13 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 8.2 9 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 11.2 14 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 15.2 6 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 19.2 9 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0 M 22.2 3 a 1.8 1.8 0 1 0 3.6 0 a 1.8 1.8 0 1 0 -3.6 0";
-                                icon-filled: true;
-                                text: "Scatter";
-                                selected: ResultsState.chart-kind == ResultsChartKind2.scatter;
-                                clicked => {
-                                    ResultsState.chart-kind = ResultsChartKind2.scatter;
-                                    ResultsState.chart-kind-selected(ResultsState.chart-kind);
-                                }
-                            }
-                            ChartTile {
-                                width: root.kind-tile-w;
-                                icon: "M 2 14 L 8 7 L 13 12 L 19 3 L 26 9";
-                                text: "Over time";
-                                selected: ResultsState.chart-kind == ResultsChartKind2.over-time;
-                                clicked => {
-                                    ResultsState.chart-kind = ResultsChartKind2.over-time;
-                                    ResultsState.chart-kind-selected(ResultsState.chart-kind);
-                                }
-                            }
-                            if ResultsState.has-profiles: ChartTile {
-                                width: root.kind-tile-w;
-                                icon: "M 2 17 C 4 4 7 3 9 6 C 11 9 13 16 17 16 C 21 16 23 15 26 15";
-                                text: "Profile";
-                                selected: ResultsState.chart-kind == ResultsChartKind2.profile;
-                                clicked => {
-                                    ResultsState.chart-kind = ResultsChartKind2.profile;
-                                    ResultsState.chart-kind-selected(ResultsState.chart-kind);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                SettingsGroup {
-                    title: "VALUE";
-                    // Only profile measurements (a value per radius).
-                    if ResultsState.chart-kind == ResultsChartKind2.profile: VerticalLayout {
-                        spacing: 4px;
-                        Text {
-                            text: "Profile";
-                            font-size: Ink.fs-caption;
-                            color: Ink.text-dim;
-                        }
-                        ComboBox {
-                            model: ResultsState.chart-profile-names;
-                            current-index: ResultsState.chart-profile-index;
-                            selected(v) => {
-                                ResultsState.chart-profile-index = self.current-index;
-                                ResultsState.chart-profile-selected(self.current-index);
-                            }
-                        }
-                    }
-                    if ResultsState.chart-kind != ResultsChartKind2.profile: InkMultiSelect {
-                        label: ResultsState.chart-kind == ResultsChartKind2.scatter ? "X" : "Property";
-                        summary-text: ResultsState.chart-column-summary;
-                        items <=> ResultsState.chart-column-items;
-                        multi-select: false;
-                        groups: ResultsState.list-columns-groups;
-                        pill-width: root.field-w;
-                        item-selected(key, value, selected) => {
-                            ResultsState.chart-column-summary = value;
-                            ResultsState.chart-column-selected(key);
-                        }
-                    }
-                    if ResultsState.chart-kind == ResultsChartKind2.scatter: InkMultiSelect {
-                        label: "Y";
-                        summary-text: ResultsState.chart-y-column-summary;
-                        items <=> ResultsState.chart-y-column-items;
-                        multi-select: false;
-                        groups: ResultsState.list-columns-groups;
-                        pill-width: root.field-w;
-                        item-selected(key, value, selected) => {
-                            ResultsState.chart-y-column-summary = value;
-                            ResultsState.chart-y-column-selected(key);
-                        }
-                    }
-                    if ResultsState.chart-kind != ResultsChartKind2.profile && ResultsState.list-coloc-partner-items.length > 0: ColocCountRow {
-                        text: "Coloc counts";
-                    }
-                    if ResultsState.chart-kind == ResultsChartKind2.boxplot: VerticalLayout {
-                        spacing: 4px;
-                        Text {
-                            text: "A box per";
-                            font-size: Ink.fs-caption;
-                            color: Ink.text-dim;
-                        }
-                        ComboBox {
-                            model: ["Class", "Image", "Well", "Plate row", "Plate column"];
-                            current-index: ResultsState.chart-group;
-                            selected(v) => {
-                                ResultsState.chart-group = self.current-index;
-                                ResultsState.chart-group-selected(self.current-index);
-                            }
-                        }
-                    }
-                    // Over time and Profile: one box, their own choices.
-                    if ResultsState.chart-kind == ResultsChartKind2.over-time || ResultsState.chart-kind == ResultsChartKind2.profile: VerticalLayout {
-                        spacing: 4px;
-                        Text {
-                            text: "A line per";
-                            font-size: Ink.fs-caption;
-                            color: Ink.text-dim;
-                        }
-                        ComboBox {
-                            model: ResultsState.chart-kind == ResultsChartKind2.profile
-                                ? ["Class", "Image", "Well", "Plate"]
-                                : ["Class", "Image", "Well", "Track"];
-                            current-index: ResultsState.chart-kind == ResultsChartKind2.profile
-                                ? ResultsState.chart-profile-lines : ResultsState.chart-time-lines;
-                            selected(v) => {
-                                if ResultsState.chart-kind == ResultsChartKind2.profile {
-                                    ResultsState.chart-profile-lines = self.current-index;
-                                } else {
-                                    ResultsState.chart-time-lines = self.current-index;
-                                }
-                                ResultsState.chart-time-changed();
-                            }
-                        }
-                    }
-                    // A line per class: every class - else the class picked.
-                    if ResultsState.chart-kind != ResultsChartKind2.boxplot
-                        && !(ResultsState.chart-kind == ResultsChartKind2.over-time && ResultsState.chart-time-lines == 0)
-                        && !(ResultsState.chart-kind == ResultsChartKind2.profile && ResultsState.chart-profile-lines == 0): InkMultiSelect {
-                        label: "Class";
-                        summary-text: ResultsState.chart-class-summary;
-                        items <=> ResultsState.chart-class-items;
-                        multi-select: false;
-                        pill-width: root.field-w;
-                        item-selected(key, value, selected) => {
-                            ResultsState.chart-class-summary = value;
-                            ResultsState.chart-class-selected(key, selected);
-                        }
-                    }
-                }
-
-                // How it's drawn.
-                if ResultsState.chart-kind != ResultsChartKind2.boxplot: SettingsGroup {
-                    title: "DISPLAY";
-                    if ResultsState.chart-kind == ResultsChartKind2.histogram: HorizontalLayout {
-                        spacing: 8px;
-                        Text {
-                            horizontal-stretch: 1;
-                            text: "Bins";
-                            font-size: Ink.fs-secondary;
-                            color: Ink.text;
-                            vertical-alignment: center;
-                        }
-                        InkNumberField {
-                            width: 110px;
-                            label: "Bins";
-                            value: ResultsState.chart-bins;
-                            min: 5;
-                            max: 200;
-                            step: 1;
-                            changed(v) => {
-                                ResultsState.chart-bins = clamp(round(v.to-float()), 5, 200);
-                                ResultsState.chart-display-changed();
-                            }
-                        }
-                    }
-                    if ResultsState.chart-kind == ResultsChartKind2.histogram: InkSwitch {
-                        text: "Counts on a log scale";
-                        checked: ResultsState.chart-log-counts;
-                        toggled(on) => {
-                            ResultsState.chart-log-counts = on;
-                            ResultsState.chart-display-changed();
-                        }
-                    }
-                    if ResultsState.chart-kind == ResultsChartKind2.scatter: InkSegmented {
-                        label: "Points drawn";
-                        model: ["500", "2 000", "10 000", "All"];
-                        selected: ResultsState.chart-points-index;
-                        picked(i) => {
-                            ResultsState.chart-points-index = i;
-                            ResultsState.chart-display-changed();
-                        }
-                    }
-                    if ResultsState.chart-kind == ResultsChartKind2.scatter: InkHint {
-                        text: "Click a point to see its object on its image.";
-                    }
-                    if ResultsState.chart-kind == ResultsChartKind2.over-time || ResultsState.chart-kind == ResultsChartKind2.profile: InkSegmented {
-                        label: "Summary";
-                        model: ["Mean ± SD", "Median + IQR"];
-                        tips: ["Mean ± standard deviation", "Median and interquartile range"];
-                        tip-details: [
-                            "The line is the average of the objects at each time point; the band reaches one standard deviation above and below it - how far the values typically spread. A few very large or small objects pull both.",
-                            "The line is the middle value: half of the objects lie above it, half below. The band holds the middle half of the objects (25th to 75th percentile). Robust to outliers and skewed values such as sizes or intensities.",
-                        ];
-                        selected: ResultsState.chart-time-summary;
-                        picked(i) => {
-                            ResultsState.chart-time-summary = i;
-                            ResultsState.chart-time-changed();
-                        }
-                    }
-                    if ResultsState.chart-kind == ResultsChartKind2.profile: InkSwitch {
-                        text: "The selected object's curve";
-                        checked: ResultsState.chart-profile-curve;
-                        toggled(on) => {
-                            ResultsState.chart-profile-curve = on;
-                            ResultsState.chart-time-changed();
-                        }
-                    }
-                    if ResultsState.chart-kind == ResultsChartKind2.profile: InkSwitch {
-                        text: "Mark its highest value";
-                        checked: ResultsState.chart-profile-mark;
-                        toggled(on) => {
-                            ResultsState.chart-profile-mark = on;
-                            ResultsState.chart-time-changed();
-                        }
-                    }
-                    if ResultsState.chart-kind == ResultsChartKind2.profile: InkHint {
-                        text: ResultsState.split
-                            ? "Click an object on the image - or use ‹ › - to see its curve and its circles. A position an object doesn't reach counts as 0."
-                            : "Split with image to pick an object and see its curve and its circles. A position an object doesn't reach counts as 0.";
-                    }
-                    if ResultsState.chart-kind == ResultsChartKind2.over-time: InkSwitch {
-                        text: "Relative to the first time point";
-                        checked: ResultsState.chart-time-relative;
-                        toggled(on) => {
-                            ResultsState.chart-time-relative = on;
-                            ResultsState.chart-time-changed();
-                        }
-                    }
-                    if ResultsState.chart-kind == ResultsChartKind2.over-time: InkSwitch {
-                        text: "Individual tracks, faint";
-                        checked: ResultsState.chart-time-tracks;
-                        toggled(on) => {
-                            ResultsState.chart-time-tracks = on;
-                            ResultsState.chart-time-changed();
-                        }
-                    }
-                    // Across divisions and fusions - where tracks are drawn.
-                    if ResultsState.chart-kind == ResultsChartKind2.over-time && ResultsState.has-lineage
-                        && (ResultsState.chart-time-lines == 3 || ResultsState.chart-time-tracks): InkSegmented {
-                        label: "History";
-                        model: ["Own track", "With parents'"];
-                        tips: ["Each track its own line", "A line per cell, from its first ancestor"];
-                        tip-details: [
-                            "Each track is its own line: a mother's ends at the division, its daughters' start there.",
-                            "Each daughter's line starts with its mother's track; a fused track has a line per parent. The parents' time points count once per line - in Mean ± SD, relative to the first time point and the export.",
-                        ];
-                        selected: ResultsState.chart-time-history;
-                        picked(i) => {
-                            ResultsState.chart-time-history = i;
-                            ResultsState.chart-time-changed();
-                        }
-                    }
-                }
-
-                if ResultsState.chart-kind == ResultsChartKind2.boxplot: InkHint {
-                    text: "Click a box to see its objects in the List.";
-                }
-            }
-        }
+        ChartsBar { }
 
         // The content, a panel beside them.
         Rectangle {
@@ -868,14 +1086,18 @@ export component ResultsChartsView inherits Rectangle {
                 if ResultsState.chart-kind == ResultsChartKind2.scatter: ScatterChart {
                     vertical-stretch: 1;
                 }
-                if ResultsState.chart-kind == ResultsChartKind2.boxplot: BoxplotChart {
+                // Boxes and bars: the same picture, tooltip and numbers.
+                if ResultsState.chart-kind == ResultsChartKind2.boxplot || ResultsState.chart-kind == ResultsChartKind2.bar: BoxplotChart {
                     vertical-stretch: 1;
                 }
+                if (ResultsState.chart-kind == ResultsChartKind2.boxplot || ResultsState.chart-kind == ResultsChartKind2.bar) && ResultsState.chart-error == ""
+                    && ResultsState.chart-boxplot-boxes.length > 0: BoxStats { }
                 // One chart for both: lines over a position (time or radius).
                 if ResultsState.chart-kind == ResultsChartKind2.over-time || ResultsState.chart-kind == ResultsChartKind2.profile: OverTimeChart {
                     vertical-stretch: 1;
                 }
             }
         }
+    }
     }
 }

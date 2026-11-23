@@ -2,7 +2,7 @@
 //!
 //! The selected object's card (`ui/editor/object_details.slint`), by
 //! section: size and shape (from its mask; area and circularity as tiles), intensity per channel (a colour
-//! image: one row, its brightness), the values the preview's Measure steps
+//! image: one row, its gray value), the values the preview's Measure steps
 //! gave it, and its relations. Built for the selected object only, when it
 //! is selected - nothing for the other objects.
 //!
@@ -14,7 +14,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::{CardFact, CardIntensityRow, CardStepGroup, ObjectCardSlint};
-use evanalyzer_app::project::{ProjectExt, ProjectWithRuntime};
+use evanalyzer_app::project::ProjectWithRuntime;
 use evanalyzer_cfg::core_types::{
     MeasurementUnit, MeasurementValues, PipelineMeasurements, max_gray_value,
 };
@@ -117,8 +117,7 @@ fn circularity_tile(object: &ObjectMetricSettings) -> (String, f32) {
 fn shape(object: &ObjectMetricSettings, um: Option<(f64, f64)>) -> Vec<CardFact> {
     let mut facts = Vec::new();
     let ellipse = ellipse(object);
-    let outline =
-        (object.area > 0).then(|| evanalyzer_app::object_shape::stored_object_shape(object));
+    let outline = (object.area > 0).then(|| evanalyzer_app::results::stored_object_shape(object));
     if let Some(outline) = outline {
         facts.push(fact("Solidity", format!("{:.2}", outline.solidity), ""));
     }
@@ -246,11 +245,12 @@ fn channel_colors(project: &ProjectWithRuntime) -> std::collections::BTreeMap<i3
                 .collect()
         })
         .unwrap_or_default();
-    evanalyzer_app::prelude::utils::wavelength_colors(&channels)
+    evanalyzer_app::project::utils::wavelength_colors(&channels)
 }
 
 /// The intensity per channel, in the image's gray values: a colour image
-/// one row (its brightness, as it is measured), else one per channel.
+/// one row (its gray value (R + G + B) / 3, as it is measured), else one
+/// per channel.
 fn intensity_rows(
     object: &ObjectMetricSettings,
     project: &ProjectWithRuntime,
@@ -273,7 +273,7 @@ fn intensity_rows(
                 .map(|(idx, c)| {
                     (
                         *idx,
-                        evanalyzer_app::utils::channel_display_name(&c.name, *idx),
+                        evanalyzer_app::project::utils::channel_display_name(&c.name, *idx),
                     )
                 })
                 .collect()
@@ -444,9 +444,9 @@ mod tests {
 
     #[test]
     fn the_channel_colours_stay_in_grayscale_mode() {
-        use evanalyzer_app::backends::Backend;
+        use evanalyzer_app::backend::Backend;
         let path = crate::editor::test_support::fixture_image_path();
-        let meta = evanalyzer_app::backends::local::LocalBackend::default()
+        let meta = evanalyzer_app::backend::local::LocalBackend::default()
             .read_image_meta(&path)
             .unwrap();
         let mut project = ProjectWithRuntime::default();

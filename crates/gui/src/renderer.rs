@@ -16,7 +16,7 @@
 //! and "Slow drawing" in the status bar (`RendererState`).
 
 use crate::{AppWindow, RendererState};
-use evanalyzer_app::backends::Backend;
+use evanalyzer_app::backend::Backend;
 use slint::{ComponentHandle, GraphicsAPI, RenderingState, SetRenderingNotifierError};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -54,7 +54,7 @@ pub(crate) fn choose() -> Request {
     if std::env::var_os("SLINT_BACKEND").is_some() {
         return Request::SlintBackend;
     }
-    let software = evanalyzer_app::backends::local::LocalBackend::default()
+    let software = evanalyzer_app::backend::local::LocalBackend::default()
         .load_app_settings()
         .map(|settings| settings.viewport.software_renderer)
         .unwrap_or(false);

@@ -38,10 +38,10 @@
 // (channels 0 and 1, threshold 15 %, Costes "Faster"). `--voronoi-radius R`
 // (default 50 px; 0: no limit - the cells cover the whole slide).
 
-use evanalyzer_app::analysis::AnalysisRequest;
-use evanalyzer_app::backends::Backend;
-use evanalyzer_app::backends::local::LocalBackend;
-use evanalyzer_app::project::{ImageListExt, ProjectExt, ProjectWithRuntime};
+use evanalyzer_app::backend::Backend;
+use evanalyzer_app::backend::local::LocalBackend;
+use evanalyzer_app::jobs::AnalysisRequest;
+use evanalyzer_app::project::{ImageListExt, ProjectWithRuntime};
 use evanalyzer_cfg::core_types::{
     ImageAddress, ImageChannelIdx, MemoryId, ObjectClass, PipelineId, SegmentationClass, SizeUnits,
     StepId,
@@ -145,8 +145,8 @@ fn main() {
     let workdir = PathBuf::from(std::env::args().nth(2).expect("work dir"));
     let threads = arg("--threads", 0);
     let trace = arg("--trace", 0) == 1;
-    evanalyzer_app::backends::local::set_resource_limits(
-        evanalyzer_app::backends::local::ResourceLimits {
+    evanalyzer_app::backend::local::set_resource_limits(
+        evanalyzer_app::backend::local::ResourceLimits {
             max_threads: Some(arg("--max-threads", 0)).filter(|&n| n > 0),
             max_ram_mb: Some(arg("--max-ram", 0) as u64).filter(|&mb| mb > 0),
         },

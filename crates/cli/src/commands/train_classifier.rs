@@ -8,13 +8,13 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::args::{TrainClassifierArgs, ZStackHandlingArg};
-use evanalyzer_app::ai_learning::PixelTrainingParams;
-use evanalyzer_app::ai_learning::StartTrainingError;
-use evanalyzer_app::ai_learning::TrainingItems;
-use evanalyzer_app::ai_learning::TrainingRequest;
-use evanalyzer_app::ai_learning::save_trained_model;
-use evanalyzer_app::backends::Backend;
+use evanalyzer_app::ai::learning::save_trained_model;
+use evanalyzer_app::backend::Backend;
 use evanalyzer_app::project::load_project;
+use evanalyzer_app::training::PixelTrainingParams;
+use evanalyzer_app::training::StartTrainingError;
+use evanalyzer_app::training::TrainingItems;
+use evanalyzer_app::training::TrainingRequest;
 use evanalyzer_cfg::core_types::{InternalErrors, TrainingProgressEvent};
 use evanalyzer_cfg::settings::ai_learning_settings::AiLearningSettings;
 use evanalyzer_cfg::settings::images_settings::ZStackHandling;
@@ -66,7 +66,7 @@ pub fn run(args: TrainClassifierArgs, backend: &dyn Backend) -> Result<(), Inter
             project: project.settings.clone(),
             settings,
             pixel_params,
-            save_to: Some(evanalyzer_app::ai_learning::ModelDestination {
+            save_to: Some(evanalyzer_app::training::ModelDestination {
                 project_dir: project_dir.clone(),
                 model_name: model_name.clone(),
             }),
@@ -181,7 +181,7 @@ fn print_training_progress(event: TrainingProgressEvent) {
 mod tests {
     use super::*;
     use crate::commands::test_support::TempProjectFile;
-    use evanalyzer_app::backends::local::LocalBackend;
+    use evanalyzer_app::backend::local::LocalBackend;
     use evanalyzer_app::project::ImageListExt;
     use evanalyzer_cfg::settings::ai_learning_object_settings::AiLearningObjectFeatureSettings;
 

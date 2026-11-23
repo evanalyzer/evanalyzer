@@ -41,6 +41,10 @@ duckdb = "1.1.3"
 env_logger = "0.11"
 fast-uuid-v7 = "0.1.11"
 image = "0.25.10"
+# Charts as PNG (the SVG of the chart module). The features Slint already
+# builds it with - one build of it for both.
+resvg = { version = "0.49", default-features = false, features = ["gif", "image-webp", "raster-images", "svgz", "text"] }
+png = "0.18"
 indexmap = "2.14.2"
 kornia-image = "0.2.0"
 kornia-imgproc = "0.2.0"

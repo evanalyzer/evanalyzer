@@ -17,12 +17,11 @@ use crate::{
     ChannelState, ClassSelectionRowSlint, DialogType, FeatureGridRowSlint, GlobalAppState,
     ToggleRowSlint, TrainingImageRowSlint, TrainingObjectRowSlint,
 };
-use evanalyzer_app::ai_learning::CancelHandle;
-use evanalyzer_app::ai_learning::PixelTrainingParams;
-use evanalyzer_app::ai_learning::TrainingRequest;
+use evanalyzer_app::jobs::CancelHandle;
 use evanalyzer_app::project::ImageEntryExt;
 use evanalyzer_app::project::ImageListExt;
-use evanalyzer_app::project::ProjectExt;
+use evanalyzer_app::training::PixelTrainingParams;
+use evanalyzer_app::training::TrainingRequest;
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::core_types::TrainingProgressEvent;
 use evanalyzer_cfg::settings::ai_learning_object_settings::{
@@ -598,7 +597,7 @@ impl AiLearningController {
             return;
         };
 
-        let loaded = match evanalyzer_app::ai_learning::load_classifier_settings(
+        let loaded = match evanalyzer_app::ai::learning::load_classifier_settings(
             self.app_state.backend().files(),
             &path,
         ) {
@@ -684,7 +683,7 @@ impl AiLearningController {
 
     /// Builds an `AiLearningSettings` from the dialog's state, gathers
     /// training data from the project (every object with an assigned class -
-    /// see `evanalyzer_app::backend::local::training::start_training`'s doc comment;
+    /// see `evanalyzer_app`'s `training::local::start_training`'s doc comment;
     /// `training_images`/`training_objects` aren't needed here since labels
     /// already live on the project's objects via `assign_object_class`, not
     /// in Slint-only state), then runs training on a background thread and
@@ -783,7 +782,7 @@ impl AiLearningController {
             project: project_settings,
             settings: ai_settings,
             pixel_params,
-            save_to: Some(evanalyzer_app::ai_learning::ModelDestination {
+            save_to: Some(evanalyzer_app::training::ModelDestination {
                 project_dir: project_dir.clone(),
                 model_name: model_name.clone(),
             }),
@@ -829,7 +828,7 @@ impl AiLearningController {
                         .as_ref()
                         .map(format_training_stats)
                         .unwrap_or_default();
-                    match evanalyzer_app::ai_learning::save_trained_model(
+                    match evanalyzer_app::ai::learning::save_trained_model(
                         manager.app_state.backend().files(),
                         &classifier,
                         &project_dir,
@@ -838,7 +837,7 @@ impl AiLearningController {
                         Ok(path) => {
                             info!("Classifier training completed: {}", path.display());
                             manager.app_state.model_saved();
-                            let used = evanalyzer_app::ai_learning::model_is_used(
+                            let used = evanalyzer_app::ai::learning::model_is_used(
                                 &manager.app_state.get_project().settings,
                                 &path,
                             );
@@ -905,7 +904,7 @@ impl AiLearningController {
         let (id, name) = {
             let mut project = self.app_state.get_project_write();
             let id = project.pipelines.iter().map(|p| p.id.0).max().unwrap_or(0) + 1;
-            let pipeline = evanalyzer_app::ai_learning::pipeline_for_model(
+            let pipeline = evanalyzer_app::ai::learning::pipeline_for_model(
                 &project,
                 &model,
                 &classifier,
@@ -1017,7 +1016,7 @@ impl AiLearningController {
                 return;
             };
             let project = app_state.get_project();
-            let used = evanalyzer_app::ai_learning::used_object_classes(&project.settings);
+            let used = evanalyzer_app::ai::learning::used_object_classes(&project.settings);
             // Hand-drawn objects per class, and the images that have any.
             let mut counts: std::collections::HashMap<_, i32> = std::collections::HashMap::new();
             let mut annotated_images = 0;
@@ -1401,7 +1400,7 @@ fn build_ai_learning_settings(
         AiLearningClassifierSettings::Pixel {
             feature_spec: pixel_features,
             input_color: Default::default(),
-            class_labels: evanalyzer_app::ai_learning::pixel_class_labels_from_project(
+            class_labels: evanalyzer_app::ai::learning::pixel_class_labels_from_project(
                 project,
                 selected_classes,
             ),
@@ -1412,7 +1411,7 @@ fn build_ai_learning_settings(
                 metrics: object_metrics,
                 ring_width: settings.ring_width.max(1) as u32,
             },
-            class_labels: evanalyzer_app::ai_learning::object_class_labels_from_project(
+            class_labels: evanalyzer_app::ai::learning::object_class_labels_from_project(
                 project,
                 selected_classes,
             ),
@@ -1846,7 +1845,6 @@ mod tests {
     use crate::editor::test_support::{
         project_with_one_image, test_ui_state_with_project, test_ui_window,
     };
-    use evanalyzer_app::project::ProjectExt;
     use evanalyzer_cfg::core_types::ObjectId;
     use evanalyzer_cfg::settings::classification_settings::Class;
 
@@ -2640,7 +2638,7 @@ mod tests {
             "cells.{}",
             evanalyzer_cfg::EVANALYZER_TRAINED_AI_MODELS
         )));
-        assert!(evanalyzer_app::ai_learning::model_is_used(
+        assert!(evanalyzer_app::ai::learning::model_is_used(
             &project.settings,
             &step.model_path
         ));
