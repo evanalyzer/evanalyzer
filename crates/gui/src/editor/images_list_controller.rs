@@ -533,12 +533,17 @@ impl ImagesListController {
                     manager.toggle_folder(PathBuf::from(folder.as_str()));
                 });
 
-            // A folder's box: analyse / skip its images
+            // A head's box: analyse / skip its folder's or group's images
             let manager = Arc::clone(self);
             ui.global::<ImagesListState>()
                 .on_folder_skip_toggled(move |folder| {
                     manager.toggle_folder_skipped(PathBuf::from(folder.as_str()));
                 });
+
+            // Tick every head of the open tab, or untick them all
+            let manager = Arc::clone(self);
+            ui.global::<ImagesListState>()
+                .on_tick_all(move || manager.tick_all());
 
             // The image chip's quick picker searched
             let manager = Arc::clone(self);
@@ -722,8 +727,20 @@ impl ImagesListController {
 
     /// Skips the images right in `folder` (relative to the image folder)
     /// in an analysis, or analyses them again - saved in the project, one
-    /// undo step.
+    /// undo step. A group's head (`group:` path): unticks the group or
+    /// ticks it again - this project's session only, not saved, no undo.
     pub fn toggle_folder_skipped(&self, folder: PathBuf) {
+        if let Some(name) = folder.to_string_lossy().strip_prefix(GROUP_HEAD_PREFIX) {
+            {
+                let mut project = self.app_state.get_project_runtime_write();
+                let skipped = &mut project.tmp_settings.skipped_groups;
+                if !skipped.remove(name) {
+                    skipped.insert(name.to_string());
+                }
+            }
+            self.sync_image_list_to_slint();
+            return;
+        }
         self.app_state.begin_undo_step();
         {
             let mut project = self.app_state.get_project_write();
@@ -733,6 +750,58 @@ impl ImagesListController {
             }
         }
         self.app_state.mark_dirty();
+        self.sync_image_list_to_slint();
+        let image_path = self.app_state.get_project().get_current_image_path_cloned();
+        if let Some(image_path) = image_path {
+            self.set_selected_image_index_in_slint_images_list(image_path, false);
+        }
+    }
+
+    /// Unticks every head of the open tab - its folders, or its groups -
+    /// or ticks them all when one is unticked. Folders: saved in the
+    /// project like a single box (one undo step); groups: this project's
+    /// session only.
+    pub fn tick_all(&self) {
+        let by_groups = self
+            .image_controller_state
+            .by_groups
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if by_groups {
+            let mut project = self.app_state.get_project_runtime_write();
+            let names: std::collections::BTreeSet<String> = {
+                let paths: Vec<&std::path::Path> =
+                    project.images.list.0.keys().map(PathBuf::as_path).collect();
+                image_groups(&paths, &project.plate)
+                    .into_iter()
+                    .map(|(name, _)| name)
+                    .collect()
+            };
+            let skipped = &mut project.tmp_settings.skipped_groups;
+            *skipped = if names.iter().any(|name| skipped.contains(name)) {
+                Default::default()
+            } else {
+                names
+            };
+        } else {
+            self.app_state.begin_undo_step();
+            {
+                let mut project = self.app_state.get_project_write();
+                let folders: std::collections::BTreeSet<PathBuf> = project
+                    .images
+                    .list
+                    .0
+                    .keys()
+                    .map(|p| p.parent().map(PathBuf::from).unwrap_or_default())
+                    .collect();
+                let skipped = &mut project.images.skipped_folders;
+                *skipped = if folders.iter().any(|folder| skipped.contains(folder)) {
+                    Default::default()
+                } else {
+                    folders
+                };
+            }
+            self.app_state.mark_dirty();
+        }
         self.sync_image_list_to_slint();
         let image_path = self.app_state.get_project().get_current_image_path_cloned();
         if let Some(image_path) = image_path {
@@ -836,7 +905,7 @@ impl ImagesListController {
                     .collapsed_groups
                     .lock()
                     .expect("Poisoned"),
-                &project.images.skipped_folders,
+                &project.tmp_settings.skipped_groups,
             )
         } else {
             build_image_list_items(
@@ -859,7 +928,15 @@ impl ImagesListController {
                 .values()
                 .any(|entry| entry.review.marker.is_some());
         let total_images = images_guard.0.len();
-        let run_images = if project.images.skipped_folders.is_empty() {
+        let run_images = if by_groups {
+            total_images
+                - group_skipped_images(
+                    images_guard,
+                    &project.plate,
+                    &project.tmp_settings.skipped_groups,
+                )
+                .len()
+        } else if project.images.skipped_folders.is_empty() {
             total_images
         } else {
             images_guard
@@ -868,6 +945,8 @@ impl ImagesListController {
                 .filter(|path| !project.images.is_skipped(path))
                 .count()
         };
+        // Every head of the open tab ticked: the button unticks them all.
+        let all_ticked = run_images == total_images;
         drop(project);
 
         // The final assignment goes into the event loop
@@ -882,6 +961,7 @@ impl ImagesListController {
                     images_state.set_marker_filter(i32::from(marker_filter));
                     images_state.set_total_images(total_images as i32);
                     images_state.set_run_images(run_images as i32);
+                    images_state.set_all_ticked(all_ticked);
                 }else{
                     warn!("Failed to upgrade UI handle in sync_image_list_to_slint, cannot update image list!");
                 }
@@ -1085,11 +1165,14 @@ fn is_listed(
 /// A group head's row path: the prefix, then the group's name - told
 /// apart from a folder's when it is clicked.
 const GROUP_HEAD_PREFIX: &str = "group:";
+/// The group of the images no well was found for.
+const NO_GROUP: &str = "No group";
 
 /// The listed images by group: the wells the project's "Grouping" finds in
 /// the names (as the results' plate does), a head per well in plate order,
 /// then the images no well was found for. A folded head (`collapsed`, by
-/// name; not while searching) keeps only itself.
+/// name; not while searching) keeps only itself. The heads of
+/// `skipped_groups` and their images are marked skipped.
 #[allow(clippy::too_many_arguments)]
 fn build_group_rows(
     images: &evanalyzer_cfg::settings::images_settings::ImageList,
@@ -1099,7 +1182,7 @@ fn build_group_rows(
     states: &ImageStates,
     image_root: &std::path::Path,
     collapsed: &std::collections::BTreeSet<String>,
-    skipped: &std::collections::BTreeSet<PathBuf>,
+    skipped_groups: &std::collections::BTreeSet<String>,
 ) -> (Vec<ImageItemData>, usize) {
     let matching: Vec<_> = images
         .values()
@@ -1107,43 +1190,10 @@ fn build_group_rows(
         .collect();
     let paths: Vec<&std::path::Path> = matching.iter().map(|e| e.rel_path.as_path()).collect();
     let folder_of = |i: usize| paths[i].parent().unwrap_or(std::path::Path::new(""));
-    // Auto finds the name pattern per folder: folders named differently
-    // each get theirs. The same well from several folders is one group.
-    let parts: Vec<Vec<usize>> =
-        if plate.grouping_mode == evanalyzer_cfg::settings::plate_settings::GroupingMode::Auto {
-            let mut by_folder: Vec<(&std::path::Path, Vec<usize>)> = Vec::new();
-            for i in 0..paths.len() {
-                match by_folder.iter_mut().find(|(f, _)| *f == folder_of(i)) {
-                    Some((_, members)) => members.push(i),
-                    None => by_folder.push((folder_of(i), vec![i])),
-                }
-            }
-            by_folder.into_iter().map(|(_, members)| members).collect()
-        } else {
-            vec![(0..paths.len()).collect()]
-        };
-    // (row, col) -> (name, images)
-    let mut wells: std::collections::BTreeMap<(usize, usize), (String, Vec<usize>)> =
-        Default::default();
-    let mut placed = vec![false; matching.len()];
-    for part in parts {
-        let part_paths: Vec<&std::path::Path> = part.iter().map(|&i| paths[i]).collect();
-        let layout = evanalyzer_app::project::plate_layout(&part_paths, plate);
-        for well in layout.wells {
-            let entry = wells
-                .entry((well.row, well.col))
-                .or_insert_with(|| (well.name.clone(), Vec::new()));
-            for k in well.images {
-                placed[part[k]] = true;
-                entry.1.push(part[k]);
-            }
-        }
-    }
-    let mut groups: Vec<(String, Vec<usize>)> = wells.into_values().collect();
-    let unplaced: Vec<usize> = (0..matching.len()).filter(|&i| !placed[i]).collect();
-    if !unplaced.is_empty() {
-        groups.push(("No group".to_string(), unplaced));
-    }
+    let groups = image_groups(&paths, plate);
+    // The images an analysis leaves out: by the groups of all the images,
+    // not only those the search finds.
+    let left_out = group_skipped_images(images, plate, skipped_groups);
     let searching = !filter_text_lowercase.is_empty() || marker_filter != 0;
     let mut rows = Vec::with_capacity(matching.len() + groups.len());
     for (name, indices) in groups {
@@ -1165,6 +1215,7 @@ fn build_group_rows(
             count: indices.len() as i32,
             analysed: analysed as i32,
             collapsed: folded,
+            skipped: skipped_groups.contains(&name),
             head,
             ..Default::default()
         });
@@ -1172,8 +1223,7 @@ fn build_group_rows(
             rows.extend(indices.into_iter().map(|i| {
                 let entry = matching[i];
                 ImageItemData {
-                    skipped: skipped
-                        .contains(entry.rel_path.parent().unwrap_or(std::path::Path::new(""))),
+                    skipped: left_out.contains(entry.rel_path.as_path()),
                     head,
                     ..image_list_item(entry, states, image_root)
                 }
@@ -1181,6 +1231,107 @@ fn build_group_rows(
         }
     }
     (rows, matching.len())
+}
+
+/// Groups `paths` (relative to the image folder) by the project's
+/// "Grouping" into wells: each group's name ("C3") and its images (indices
+/// into `paths`), in plate order, then "No group" for the images no well
+/// was found for. Auto finds the name pattern per folder: folders named
+/// differently each get theirs. The same well from several folders is one
+/// group.
+fn image_groups(
+    paths: &[&std::path::Path],
+    plate: &evanalyzer_cfg::settings::plate_settings::PlateSettings,
+) -> Vec<(String, Vec<usize>)> {
+    let folder_of = |i: usize| paths[i].parent().unwrap_or(std::path::Path::new(""));
+    let parts: Vec<Vec<usize>> =
+        if plate.grouping_mode == evanalyzer_cfg::settings::plate_settings::GroupingMode::Auto {
+            let mut by_folder: Vec<(&std::path::Path, Vec<usize>)> = Vec::new();
+            for i in 0..paths.len() {
+                match by_folder.iter_mut().find(|(f, _)| *f == folder_of(i)) {
+                    Some((_, members)) => members.push(i),
+                    None => by_folder.push((folder_of(i), vec![i])),
+                }
+            }
+            by_folder.into_iter().map(|(_, members)| members).collect()
+        } else {
+            vec![(0..paths.len()).collect()]
+        };
+    // (row, col) -> (name, images)
+    let mut wells: std::collections::BTreeMap<(usize, usize), (String, Vec<usize>)> =
+        Default::default();
+    let mut placed = vec![false; paths.len()];
+    for part in parts {
+        let part_paths: Vec<&std::path::Path> = part.iter().map(|&i| paths[i]).collect();
+        let layout = evanalyzer_app::project::plate_layout(&part_paths, plate);
+        for well in layout.wells {
+            let entry = wells
+                .entry((well.row, well.col))
+                .or_insert_with(|| (well.name.clone(), Vec::new()));
+            for k in well.images {
+                placed[part[k]] = true;
+                entry.1.push(part[k]);
+            }
+        }
+    }
+    let mut groups: Vec<(String, Vec<usize>)> = wells.into_values().collect();
+    let unplaced: Vec<usize> = (0..paths.len()).filter(|&i| !placed[i]).collect();
+    if !unplaced.is_empty() {
+        groups.push((NO_GROUP.to_string(), unplaced));
+    }
+    groups
+}
+
+/// The images (relative paths) of `images` that lie in one of the
+/// `skipped` groups - grouped as [`image_groups`] does, over all of them.
+/// Nothing unticked: nothing grouped.
+fn group_skipped_images<'a>(
+    images: &'a evanalyzer_cfg::settings::images_settings::ImageList,
+    plate: &evanalyzer_cfg::settings::plate_settings::PlateSettings,
+    skipped: &std::collections::BTreeSet<String>,
+) -> std::collections::HashSet<&'a std::path::Path> {
+    if skipped.is_empty() {
+        return Default::default();
+    }
+    let paths: Vec<&std::path::Path> = images.0.keys().map(PathBuf::as_path).collect();
+    image_groups(&paths, plate)
+        .into_iter()
+        .filter(|(name, _)| skipped.contains(name))
+        .flat_map(|(_, indices)| indices)
+        .map(|i| paths[i])
+        .collect()
+}
+
+/// Narrows the settings of a run to what the images list's open tab says:
+/// listed by groups, the images of the unticked `skipped_groups` stay out
+/// and the saved skipped folders don't count; listed by folders, nothing
+/// changes (the run leaves the skipped folders out itself).
+pub(crate) fn apply_group_ticks(
+    settings: &mut evanalyzer_cfg::settings::project_settings::ProjectSettings,
+    by_groups: bool,
+    skipped_groups: &std::collections::BTreeSet<String>,
+) {
+    if !by_groups {
+        return;
+    }
+    settings.images.skipped_folders.clear();
+    let left_out: std::collections::HashSet<PathBuf> =
+        group_skipped_images(&settings.images.list, &settings.plate, skipped_groups)
+            .into_iter()
+            .map(std::path::Path::to_path_buf)
+            .collect();
+    if left_out.is_empty() {
+        return;
+    }
+    let kept: indexmap::IndexMap<_, _> = settings
+        .images
+        .list
+        .0
+        .iter()
+        .filter(|(path, _)| !left_out.contains(path.as_path()))
+        .map(|(path, entry)| (path.clone(), Arc::clone(entry)))
+        .collect();
+    settings.images.list = evanalyzer_cfg::settings::images_settings::ImageList(Arc::new(kept));
 }
 
 /// Builds the Slint-facing row list for `sync_image_list_to_slint`: applies
@@ -2380,6 +2531,141 @@ mod tests {
             ],
             "not its subfolders"
         );
+    }
+
+    /// An unticked group: its head and its images are marked skipped -
+    /// also while a search finds only some of them.
+    #[test]
+    fn an_unticked_groups_head_and_images_are_marked_skipped() {
+        let images = image_list_of(&["A/A01_01.tif", "B/A01_02.tif", "A/B03_01.tif"]);
+        let skipped = ["A1".to_string()].into_iter().collect();
+        let build = |search: &str| {
+            build_group_rows(
+                &images,
+                &Default::default(),
+                search,
+                0,
+                &ImageStates::default(),
+                std::path::Path::new("/data"),
+                &Default::default(),
+                &skipped,
+            )
+        };
+        let marks = |rows: &[ImageItemData]| -> Vec<(String, bool)> {
+            row_names(rows)
+                .into_iter()
+                .zip(rows.iter().map(|row| row.skipped))
+                .collect()
+        };
+        let (rows, _) = build("");
+        assert_eq!(
+            marks(&rows),
+            [
+                ("▸ A1 (2)".to_string(), true),
+                ("A01_01.tif".to_string(), true),
+                ("A01_02.tif".to_string(), true),
+                ("▸ B3 (1)".to_string(), false),
+                ("B03_01.tif".to_string(), false),
+            ]
+        );
+        let (rows, _) = build("a01_02");
+        assert_eq!(
+            marks(&rows),
+            [
+                ("▸ A1 (1)".to_string(), true),
+                ("A01_02.tif".to_string(), true),
+            ]
+        );
+    }
+
+    /// Listed by groups, a run takes only the ticked groups' images and
+    /// the saved skipped folders don't count; listed by folders, the run's
+    /// settings stay as they are.
+    #[test]
+    fn a_run_listed_by_groups_takes_only_the_ticked_groups() {
+        let mut settings = evanalyzer_cfg::settings::project_settings::ProjectSettings::default();
+        settings.images.list = image_list_of(&[
+            "A/A01_01.tif",
+            "B/A01_02.tif",
+            "A/B03_01.tif",
+            "A/notes.tif",
+        ]);
+        settings.images.skipped_folders = [PathBuf::from("A")].into_iter().collect();
+        let skipped: std::collections::BTreeSet<String> =
+            ["A1".to_string(), "No group".to_string()]
+                .into_iter()
+                .collect();
+
+        let mut by_folders = settings.clone();
+        apply_group_ticks(&mut by_folders, false, &skipped);
+        assert_eq!(by_folders.images.list.0.len(), 4);
+        assert_eq!(by_folders.images.skipped_folders.len(), 1);
+
+        let mut all_ticked = settings.clone();
+        apply_group_ticks(&mut all_ticked, true, &Default::default());
+        assert_eq!(all_ticked.images.list.0.len(), 4);
+        assert!(all_ticked.images.skipped_folders.is_empty());
+
+        apply_group_ticks(&mut settings, true, &skipped);
+        let kept: Vec<&PathBuf> = settings.images.list.0.keys().collect();
+        assert_eq!(kept, [&PathBuf::from("A/B03_01.tif")]);
+        assert!(settings.images.skipped_folders.is_empty());
+    }
+
+    /// Tick all: by groups it unticks every group, then ticks them all
+    /// again - not saved, no unsaved change; by folders it skips every
+    /// folder, then none - saved, one undo step.
+    #[test]
+    fn tick_all_unticks_every_head_then_ticks_them_again() {
+        let controller = make_controller();
+        let state = controller.app_state.clone();
+        {
+            let mut project = state.get_project_write();
+            for path in ["Serum/A01_01.tif", "Plasma/B02_01.tif"] {
+                project.images.list.insert(
+                    PathBuf::from(path),
+                    ImageEntry {
+                        rel_path: PathBuf::from(path),
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+        state.clear_dirty();
+        let groups = || {
+            state
+                .get_project()
+                .tmp_settings
+                .skipped_groups
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        controller
+            .image_controller_state
+            .by_groups
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        controller.tick_all();
+        assert_eq!(groups(), ["A1", "B2"]);
+        controller.toggle_folder_skipped(PathBuf::from("group:A1"));
+        assert_eq!(groups(), ["B2"], "one group ticked again");
+        controller.tick_all();
+        assert!(groups().is_empty(), "one unticked: all ticked");
+        controller.toggle_folder_skipped(PathBuf::from("group:B2"));
+        assert_eq!(groups(), ["B2"]);
+        assert!(!state.is_dirty(), "group ticks are not saved");
+        assert!(state.get_project().images.skipped_folders.is_empty());
+
+        controller
+            .image_controller_state
+            .by_groups
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        controller.tick_all();
+        assert_eq!(state.get_project().images.skipped_folders.len(), 2);
+        assert!(state.is_dirty());
+        assert_eq!(groups(), ["B2"], "the group ticks stay");
+        controller.tick_all();
+        assert!(state.get_project().images.skipped_folders.is_empty());
     }
 
     #[test]

@@ -30,8 +30,8 @@ export struct ImageItemData {
     analysed: int,
     // Folded: its images are not listed (never while searching).
     collapsed: bool,
-    // An analysis leaves it out: a skipped folder (head) or an image right
-    // in one. Shown faded, still viewable.
+    // An analysis leaves it out: a skipped folder or an unticked group
+    // (head), or an image in one. Shown faded, still viewable.
     skipped: bool,
     // The row of its folder's head (a head: its own row); -1 without heads.
     // The list pins that head on top while the folder's images scroll by.
@@ -42,7 +42,7 @@ export struct ImageItemData {
     has_note: bool,
     left_out: bool,
     // A group's head (listed by groups: the project's "Grouping"), not a
-    // folder's: no analyse box.
+    // folder's: its box is ticked for this session only, not saved.
     group_head: bool,
     // A group's head: how many folders its images lie in ("2 folders"
     // when more than one).
@@ -92,10 +92,17 @@ export global ImagesListState {
     in property <int> image-count: 0;
     // A folder's head row clicked: fold or unfold it (by its path).
     callback folder_toggled(string);
-    // A folder's box: analyse its images or skip them (by its path).
+    // A head's box: analyse its images or skip them (by its path; a
+    // group's head: by its `group:` path).
     callback folder_skip_toggled(string);
+    // Every head of the open tab is ticked: the button unticks them all.
+    in property <bool> all-ticked: true;
+    // Unticks every head of the open tab, or ticks them all when one is
+    // unticked.
+    callback tick-all();
     // All the project's images, and those an analysis runs on (not in a
-    // skipped folder) - the search doesn't change these.
+    // skipped folder; listed by groups: in a ticked group) - the search
+    // doesn't change these.
     in property <int> total-images: 0;
     in property <int> run-images: 0;
 

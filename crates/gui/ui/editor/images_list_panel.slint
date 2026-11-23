@@ -211,13 +211,13 @@ component FolderRow inherits Rectangle {
             colorize: Ink.text-dim;
             accessible-role: none;
         }
-        // Analyse this folder's images (unticked: skipped by Run) - a
-        // folder's head only, not a group's.
-        if !root.data.group_head: VerticalLayout {
+        // Analyse this folder's / group's images (unticked: skipped by
+        // Run). A group's tick is for this session only.
+        VerticalLayout {
             alignment: center;
             InkCheckbox {
                 checked: !root.data.skipped;
-                accessible-label: "Analyse folder " + root.data.name;
+                accessible-label: (root.data.group_head ? "Analyse group " : "Analyse folder ") + root.data.name;
                 toggled => {
                     root.skip-toggled();
                 }
@@ -423,7 +423,8 @@ export component ImagesListPanel inherits Rectangle {
             padding-bottom: 4px;
         }
 
-        // What the dots in the rows mean - and, with heads, fold them all.
+        // What the dots in the rows mean - and, with heads, tick or fold
+        // them all.
         if ImagesListState.images_list.length > 0: HorizontalLayout {
             height: 22px;
             padding-left: Ink.pad-panel + 2px;
@@ -449,13 +450,27 @@ export component ImagesListPanel inherits Rectangle {
                 }
             }
             Rectangle { horizontal-stretch: 1; }
-            if ImagesListState.images_list[0].folder: InkIconButton {
-                y: (parent.height - self.height) / 2;
-                size: 22px;
-                icon: ImagesListState.all-folded ? InkIcons.expand : InkIcons.collapse;
-                label: ImagesListState.all-folded ? "Unfold all" : (ImagesListState.by-groups ? "Fold all groups" : "Fold all folders");
-                clicked => {
-                    ImagesListState.fold-all();
+            if ImagesListState.images_list[0].folder: HorizontalLayout {
+                spacing: 2px;
+                InkIconButton {
+                    y: (parent.height - self.height) / 2;
+                    size: 22px;
+                    icon: ImagesListState.all-ticked ? InkIcons.tick-none : InkIcons.tick-all;
+                    label: ImagesListState.all-ticked
+                        ? (ImagesListState.by-groups ? "Untick all groups" : "Untick all folders")
+                        : (ImagesListState.by-groups ? "Tick all groups" : "Tick all folders");
+                    clicked => {
+                        ImagesListState.tick-all();
+                    }
+                }
+                InkIconButton {
+                    y: (parent.height - self.height) / 2;
+                    size: 22px;
+                    icon: ImagesListState.all-folded ? InkIcons.expand : InkIcons.collapse;
+                    label: ImagesListState.all-folded ? "Unfold all" : (ImagesListState.by-groups ? "Fold all groups" : "Fold all folders");
+                    clicked => {
+                        ImagesListState.fold-all();
+                    }
                 }
             }
         }

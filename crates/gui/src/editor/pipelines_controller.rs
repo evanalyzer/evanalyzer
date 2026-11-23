@@ -3388,6 +3388,19 @@ impl PipelinesController {
 
         let mut project_settings = project.settings.clone();
         Self::force_all_t_stacks(&mut project_settings);
+        // Listed by groups: only the ticked groups' images (not a dataset
+        // run - it analyses no image).
+        if base_results.is_none() {
+            let by_groups = self
+                .ui
+                .upgrade()
+                .is_some_and(|ui| ui.global::<crate::ImagesListState>().get_by_groups());
+            crate::editor::images_list_controller::apply_group_ticks(
+                &mut project_settings,
+                by_groups,
+                &project.tmp_settings.skipped_groups,
+            );
+        }
 
         // User settings from app settings if available
         if let Some(user_info) = &self.app_state.app_settings.lock().expect("Poisened").author {

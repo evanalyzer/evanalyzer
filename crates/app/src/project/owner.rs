@@ -103,6 +103,11 @@ pub struct ProjectTmpSettings {
     /// Pipeline focus overlay - see [`PipelineFocus`]. `None` = the user's
     /// own visibility settings apply.
     pub pipeline_focus: Option<PipelineFocus>,
+
+    /// Groups (by name, the project's "Grouping") the user unticked in the
+    /// images list: while it lists by groups, a run leaves their images
+    /// out. Kept until another project opens, never saved.
+    pub skipped_groups: BTreeSet<String>,
 }
 
 impl Default for ProjectTmpSettings {
@@ -116,6 +121,7 @@ impl Default for ProjectTmpSettings {
             preview_measurements: Vec::new(),
             selected_object: None,
             pipeline_focus: None,
+            skipped_groups: BTreeSet::new(),
         }
     }
 }
