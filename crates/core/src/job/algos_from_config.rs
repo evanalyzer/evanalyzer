@@ -609,6 +609,17 @@ impl From<SegmentationWatershedSeedSourceSettings> for SeedSource {
     }
 }
 
+impl From<MathSubtractReferenceChannelSharpnessSettings> for Sharpness {
+    fn from(_s: MathSubtractReferenceChannelSharpnessSettings) -> Self {
+        match _s {
+            MathSubtractReferenceChannelSharpnessSettings::Manual => Sharpness::Manual,
+            MathSubtractReferenceChannelSharpnessSettings::Auto { max_sigma } => Sharpness::Auto {
+                max_sigma: max_sigma.clamp(0.5, 20.0),
+            },
+        }
+    }
+}
+
 impl From<MathSubtractReferenceChannelShiftInterpolationSettings> for ShiftInterpolation {
     fn from(_s: MathSubtractReferenceChannelShiftInterpolationSettings) -> Self {
         match _s {
@@ -1611,6 +1622,7 @@ impl From<SubtractReferenceChannelSettings> for SubtractReferenceChannel {
             interpolation: ShiftInterpolation::from(_s.interpolation),
             background: Background::from(_s.background),
             smoothing_sigma: _s.smoothing_sigma.clamp(0.0, 20.0),
+            sharpness: Sharpness::from(_s.sharpness),
             target_extra_sigma: _s.target_extra_sigma.clamp(0.0, 20.0),
             reference_extra_sigma: _s.reference_extra_sigma.clamp(0.0, 20.0),
             camera_offset: CameraOffset::from(_s.camera_offset),

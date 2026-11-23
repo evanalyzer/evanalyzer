@@ -2320,6 +2320,45 @@
         }
       ]
     },
+    "MathSubtractReferenceChannelSharpnessSettings": {
+      "description": "How [`SubtractReferenceChannel`] matches the sharpness of target and\nreference.",
+      "oneOf": [
+        {
+          "description": "The extra blurs set by hand (Target / Reference Extra Sigma).",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "MANUAL"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Estimated per image, after the alignment: how much blurrier one\nchannel is than the other (their cross-spectrum over the\nreference's spectrum, see `libs::blur_matching`), and the sharper\none blurred by the difference - for channels whose focus differs\nfrom image to image. Without an estimate (too little structure in\nthe target) the extra blurs set by hand are used. With Factor Robust\nFit the estimate is used only where the factor fits at least as\nwell (R²) as with the blurs set by hand: structures of different\ncolour ratio at different scales (e.g. coarse serum and fine beads)\ncan read as a blur difference.",
+          "type": "object",
+          "properties": {
+            "maxSigma": {
+              "description": "Larger differences (σ, px) are not believed: the extra blurs set\nby hand are used.",
+              "type": "number",
+              "format": "float",
+              "maximum": 20,
+              "minimum": 0.5
+            },
+            "type": {
+              "type": "string",
+              "const": "AUTO"
+            }
+          },
+          "required": [
+            "type",
+            "maxSigma"
+          ]
+        }
+      ]
+    },
     "MathSubtractReferenceChannelShiftInterpolationSettings": {
       "description": "How [`SubtractReferenceChannel`] interpolates the shifted reference.",
       "oneOf": [
@@ -5854,7 +5893,7 @@
       ]
     },
     "SubtractReferenceChannelSettings": {
-      "description": "Removes a signal from the image with a channel that shows only that\nsignal (the reference) - e.g. serum filaments or autofluorescence in an\nEV spot channel: `residual = S − (a · align(T) + b)`. The scale `a`, the\noffset `b` and the shift are set by hand or estimated from the image.\nTypically the first step of a pipeline, before the spot detection.\n\n**Order:** camera offset → background (both channels) → alignment (the\nreference shifted onto the target - before the fit: a wrong shift gives\na wrong `a` and leaves a relief) → extra blur of the sharper channel →\nthe same smoothing of both (unsmoothed, noise in the reference biases\n`a` low) → factor → subtraction (by default only where the reference is\nbrighter than its background).\n\n**Assumption:** estimating the factor from the image assumes the target's\nown signal is not correlated with the reference. If it binds the\nreference structure (e.g. a protein on the filaments), use a Fixed\nfactor measured on single-stain controls.\n\n**Reading the residual:** a relief (bright on one side, dark on the\nother) → alignment. A bright centre line with dark sides → raise the\ntarget's extra blur; a dark centre line with bright sides → raise the\nreference's. The whole structure too bright or too dark → Factor scale.\n\n**Spot detection afterwards:** leftovers of the structure that one\nfactor can't remove (e.g. channels focused differently) and the higher\nphoton noise of bright regions look like spots to a global cut-off.\nOutput Significance divides the residual by its local noise, so a\ncut-off (e.g. 5 in a threshold) means the same everywhere.\n\nMeasures per image: the factor, offset, shift, alignment quality, R²,\nthe parts of fit and saturated pixels and whether a fallback was used\n(on an image split into tiles: the median over the tiles). Exclude\nImage can leave images out by them - e.g. \"Fallback used\" above 0.5.\n\nRuns per tile, the whole image up to 4096 px: on a larger image each\ntile has its own estimates for now (Image scope logs a warning), and the\nshift pads the tile borders with their edge pixels (no overlap with the\nneighbouring tiles).\n\nThe EV-in-serum assay - spots in the current image, the serum channel 4,\neverything else at its default:\n\n```json\n{ \"type\": \"SUBTRACT_REFERENCE_CHANNEL\", \"id\": \"reference\", \"referenceChannel\": 4 }\n```",
+      "description": "Removes a signal from the image with a channel that shows only that\nsignal (the reference) - e.g. serum filaments or autofluorescence in an\nEV spot channel: `residual = S − (a · align(T) + b)`. The scale `a`, the\noffset `b` and the shift are set by hand or estimated from the image.\nTypically the first step of a pipeline, before the spot detection.\n\n**Order:** camera offset → background (both channels) → alignment (the\nreference shifted onto the target - before the fit: a wrong shift gives\na wrong `a` and leaves a relief) → extra blur of the sharper channel (set\nby hand or estimated per image, see [`Sharpness`]) →\nthe same smoothing of both (unsmoothed, noise in the reference biases\n`a` low) → factor → subtraction (by default only where the reference is\nbrighter than its background).\n\n**Assumption:** estimating the factor from the image assumes the target's\nown signal is not correlated with the reference. If it binds the\nreference structure (e.g. a protein on the filaments), use a Fixed\nfactor measured on single-stain controls.\n\n**Reading the residual:** a relief (bright on one side, dark on the\nother) → alignment. A bright centre line with dark sides → raise the\ntarget's extra blur; a dark centre line with bright sides → raise the\nreference's. The whole structure too bright or too dark → Factor scale.\n\n**Spot detection afterwards:** leftovers of the structure that one\nfactor can't remove (e.g. channels focused differently) and the higher\nphoton noise of bright regions look like spots to a global cut-off.\nOutput Significance divides the residual by its local noise, so a\ncut-off (e.g. 5 in a threshold) means the same everywhere.\n\nMeasures per image: the factor, offset, shift, alignment quality, R²,\nthe parts of fit and saturated pixels, whether a fallback was used (for\nthe shift or the factor) and with Sharpness Auto the extra blurs used (on an image split into tiles: the median over the\ntiles). Exclude\nImage can leave images out by them - e.g. \"Fallback used\" above 0.5.\n\nRuns per tile, the whole image up to 4096 px: on a larger image each\ntile has its own estimates for now (Image scope logs a warning), and the\nshift pads the tile borders with their edge pixels (no overlap with the\nneighbouring tiles).\n\nThe EV-in-serum assay - spots in the current image, the serum channel 4,\neverything else at its default:\n\n```json\n{ \"type\": \"SUBTRACT_REFERENCE_CHANNEL\", \"id\": \"reference\", \"referenceChannel\": 4 }\n```",
       "type": "object",
       "properties": {
         "alignment": {
@@ -5950,7 +5989,7 @@
           "default": 1
         },
         "referenceExtraSigma": {
-          "description": "Extra blur (σ, px) for the reference if it is sharper than the\ntarget (0 = off).",
+          "description": "Extra blur (σ, px) for the reference if it is sharper than the\ntarget (0 = off). With Sharpness Auto: used when no estimate is\nmade.",
           "type": "number",
           "format": "float",
           "default": 0.0,
@@ -5962,6 +6001,13 @@
           "$ref": "#/$defs/MathSubtractReferenceChannelSaturationSettings",
           "default": {
             "type": "AUTO"
+          }
+        },
+        "sharpness": {
+          "description": "How the sharper channel is blurred to the other's sharpness before\nthe fit: by the extra blurs set below, or estimated per image.",
+          "$ref": "#/$defs/MathSubtractReferenceChannelSharpnessSettings",
+          "default": {
+            "type": "MANUAL"
           }
         },
         "smoothingSigma": {
@@ -5980,7 +6026,7 @@
           }
         },
         "targetExtraSigma": {
-          "description": "Extra blur (σ, px) for the target if it is sharper than the\nreference (0 = off).",
+          "description": "Extra blur (σ, px) for the target if it is sharper than the\nreference (0 = off). With Sharpness Auto: used when no estimate is\nmade.",
           "type": "number",
           "format": "float",
           "default": 0.0,

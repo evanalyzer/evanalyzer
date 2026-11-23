@@ -29,6 +29,7 @@
 //! image up to 4096 px (see [`EstimationScope`]).
 
 use crate::algos::filters::rank_filter::{RankFilter, RankFilterType};
+use crate::algos::libs::blur_matching::{ReferenceShift, estimate_blur_difference};
 use crate::algos::libs::phase_correlation::{GUIZAR_SICAIROS_2008, estimate_shift};
 use crate::algos::libs::robust_stats::{MAD_TO_SIGMA, median_in_place};
 use crate::algos::libs::scale_space::{convolve_separable, discrete_gaussian};
@@ -58,7 +59,8 @@ use std::sync::Arc;
 ///
 /// **Order:** camera offset → background (both channels) → alignment (the
 /// reference shifted onto the target - before the fit: a wrong shift gives
-/// a wrong `a` and leaves a relief) → extra blur of the sharper channel →
+/// a wrong `a` and leaves a relief) → extra blur of the sharper channel (set
+/// by hand or estimated per image, see [`Sharpness`]) →
 /// the same smoothing of both (unsmoothed, noise in the reference biases
 /// `a` low) → factor → subtraction (by default only where the reference is
 /// brighter than its background).
@@ -80,8 +82,9 @@ use std::sync::Arc;
 /// cut-off (e.g. 5 in a threshold) means the same everywhere.
 ///
 /// Measures per image: the factor, offset, shift, alignment quality, R²,
-/// the parts of fit and saturated pixels and whether a fallback was used
-/// (on an image split into tiles: the median over the tiles). Exclude
+/// the parts of fit and saturated pixels, whether a fallback was used (for
+/// the shift or the factor) and with Sharpness Auto the extra blurs used (on an image split into tiles: the median over the
+/// tiles). Exclude
 /// Image can leave images out by them - e.g. "Fallback used" above 0.5.
 ///
 /// Runs per tile, the whole image up to 4096 px: on a larger image each
@@ -136,8 +139,14 @@ pub struct SubtractReferenceChannel {
     )]
     pub smoothing_sigma: f32,
 
+    /// How the sharper channel is blurred to the other's sharpness before
+    /// the fit: by the extra blurs set below, or estimated per image.
+    #[cmdsmeta(section = "Background & smoothing", default = Sharpness::Manual)]
+    pub sharpness: Sharpness,
+
     /// Extra blur (σ, px) for the target if it is sharper than the
-    /// reference (0 = off).
+    /// reference (0 = off). With Sharpness Auto: used when no estimate is
+    /// made.
     #[cmdsmeta(
         section = "Background & smoothing",
         default = 0.0,
@@ -148,7 +157,8 @@ pub struct SubtractReferenceChannel {
     pub target_extra_sigma: f32,
 
     /// Extra blur (σ, px) for the reference if it is sharper than the
-    /// target (0 = off).
+    /// target (0 = off). With Sharpness Auto: used when no estimate is
+    /// made.
     #[cmdsmeta(
         section = "Background & smoothing",
         default = 0.0,
@@ -297,6 +307,30 @@ pub enum Alignment {
     None,
 }
 
+/// How [`SubtractReferenceChannel`] matches the sharpness of target and
+/// reference.
+#[derive(Clone, Copy, PartialEq, Debug, CommandsMeta)]
+pub enum Sharpness {
+    /// The extra blurs set by hand (Target / Reference Extra Sigma).
+    Manual,
+    /// Estimated per image, after the alignment: how much blurrier one
+    /// channel is than the other (their cross-spectrum over the
+    /// reference's spectrum, see `libs::blur_matching`), and the sharper
+    /// one blurred by the difference - for channels whose focus differs
+    /// from image to image. Without an estimate (too little structure in
+    /// the target) the extra blurs set by hand are used. With Factor Robust
+    /// Fit the estimate is used only where the factor fits at least as
+    /// well (R²) as with the blurs set by hand: structures of different
+    /// colour ratio at different scales (e.g. coarse serum and fine beads)
+    /// can read as a blur difference.
+    Auto {
+        /// Larger differences (σ, px) are not believed: the extra blurs set
+        /// by hand are used.
+        #[cmdsmeta(default = 3.0, min = 0.5, max = 20.0, step = 0.5)]
+        max_sigma: f32,
+    },
+}
+
 /// How [`SubtractReferenceChannel`] interpolates the shifted reference.
 #[derive(Clone, Copy, PartialEq, Debug, CommandsMeta)]
 pub enum ShiftInterpolation {
@@ -369,6 +403,47 @@ pub enum Factor {
     },
 }
 
+/// The settings of a fitted factor (Robust Fit).
+#[derive(Clone, Copy, Debug)]
+struct FitParams {
+    noise_factor: f32,
+    min_percentile: f32,
+    outlier_k: f32,
+    fit_offset: bool,
+    max_uncertainty: f32,
+    fallback: f32,
+    min_value: f32,
+    max_value: f32,
+}
+
+impl Factor {
+    /// The fit's settings; `None` for a factor that isn't fitted.
+    fn fit_params(&self) -> Option<FitParams> {
+        match *self {
+            Factor::RobustFit {
+                noise_factor,
+                min_percentile,
+                outlier_k,
+                fit_offset,
+                max_uncertainty,
+                fallback,
+                min_value,
+                max_value,
+            } => Some(FitParams {
+                noise_factor,
+                min_percentile,
+                outlier_k,
+                fit_offset,
+                max_uncertainty,
+                fallback,
+                min_value,
+                max_value,
+            }),
+            Factor::Fixed { .. } | Factor::ExposureRatio { .. } => None,
+        }
+    }
+}
+
 /// The area the shift and factor are estimated over.
 #[derive(Clone, Copy, PartialEq, Debug, CommandsMeta)]
 pub enum EstimationScope {
@@ -406,6 +481,8 @@ const MIN_FIT_PIXELS: usize = 1000;
 const HUBER_K: f64 = 1.345;
 /// Rounds of the fit; it settles within about 10 - 30 on real images.
 const MAX_ITERATIONS: usize = 100;
+/// The longest cycle of rounds a fit settles on (see `robust_fit`).
+const MAX_CYCLE: usize = 4;
 /// Leverage limit of the fit: a pixel further than this many times the
 /// spread (MAD) from the fit pixels' median reference pulls the line only
 /// with weight `LEVERAGE_K · spread / distance` (Mallows' GM-estimator,
@@ -580,7 +657,7 @@ impl ImageAlgorithm for SubtractReferenceChannel {
         {
             papers.push(&KEYS_1981);
         }
-        if matches!(self.factor, Factor::RobustFit { .. }) {
+        if self.factor.fit_params().is_some() {
             papers.push(&HUBER_1964);
             papers.push(&HAMPEL_1986);
         }
@@ -597,7 +674,7 @@ impl ImageAlgorithm for SubtractReferenceChannel {
 
     fn measurement_outputs(&self) -> Vec<MeasurementInfo> {
         let outputs = Outputs::of(&self.id);
-        vec![
+        let mut infos = vec![
             outputs.image("factor", "Factor", MeasurementUnit::None),
             outputs.image("offset", "Offset", MeasurementUnit::Intensity),
             outputs.image("shift_x", "Shift X", MeasurementUnit::Pixels),
@@ -624,7 +701,21 @@ impl ImageAlgorithm for SubtractReferenceChannel {
                 "Residual noise",
                 MeasurementUnit::Intensity,
             ),
-        ]
+        ];
+        // The estimated blurs only where they are estimated.
+        if matches!(self.sharpness, Sharpness::Auto { .. }) {
+            infos.push(outputs.image(
+                "target_extra_sigma",
+                "Target extra blur",
+                MeasurementUnit::Pixels,
+            ));
+            infos.push(outputs.image(
+                "reference_extra_sigma",
+                "Reference extra blur",
+                MeasurementUnit::Pixels,
+            ));
+        }
+        infos
     }
 }
 
@@ -660,11 +751,14 @@ struct PlaneEstimate {
     /// Only with the Significance output: the residual's typical local
     /// noise (median).
     residual_noise: f64,
+    /// The extra blurs (σ, px) used for the target and the reference.
+    target_sigma: f64,
+    reference_sigma: f64,
 }
 
 /// The planes' (and so a tile's) values in the order of the measurement
 /// outputs: their medians.
-fn median_of(estimates: &[PlaneEstimate]) -> [f64; 10] {
+fn median_of(estimates: &[PlaneEstimate]) -> [f64; 12] {
     let median = |f: &dyn Fn(&PlaneEstimate) -> f64| -> f64 {
         let mut values: Vec<f64> = estimates.iter().map(f).filter(|v| v.is_finite()).collect();
         if values.is_empty() {
@@ -690,6 +784,8 @@ fn median_of(estimates: &[PlaneEstimate]) -> [f64; 10] {
         // Any plane falling back counts.
         estimates.iter().any(|e| e.fallback) as u8 as f64,
         median(&|e| e.residual_noise),
+        median(&|e| e.target_sigma),
+        median(&|e| e.reference_sigma),
     ]
 }
 
@@ -777,51 +873,73 @@ impl SubtractReferenceChannel {
                  {w} x {h} px tile"
             )));
         }
+        let interpolation = match self.interpolation {
+            ShiftInterpolation::Cubic => Interpolation::Cubic,
+            ShiftInterpolation::Linear => Interpolation::Linear,
+        };
+        // Sharpness Auto compares the reference as it will be shifted (see
+        // `libs::blur_matching`), before the plane-sized buffers below.
+        let mut blur_estimate = matches!(self.sharpness, Sharpness::Auto { .. }).then(|| {
+            estimate_blur_difference(
+                &s,
+                &t,
+                w,
+                h,
+                Some(ReferenceShift {
+                    dy,
+                    dx,
+                    interpolation,
+                }),
+            )
+        });
         let mut work = vec![0f32; len];
         if dy != 0.0 || dx != 0.0 {
-            let interpolation = match self.interpolation {
-                ShiftInterpolation::Cubic => Interpolation::Cubic,
-                ShiftInterpolation::Linear => Interpolation::Linear,
-            };
             Translation::new(dy, dx, interpolation, Padding::Replicate, w, h)
                 .apply::<1>(&t, &mut work, 1, 0.0);
             std::mem::swap(&mut t, &mut work);
         }
 
         // 4. Sharpness matching, 5. the same smoothing of both.
-        let mut tmp = vec![0f32; len];
-        gaussian(
-            &mut s,
-            &mut work,
-            &mut tmp,
-            input.size,
-            self.target_extra_sigma,
-        );
-        gaussian(
-            &mut t,
-            &mut work,
-            &mut tmp,
-            input.size,
-            self.reference_extra_sigma,
-        );
-        gaussian(
-            &mut s,
-            &mut work,
-            &mut tmp,
-            input.size,
-            self.smoothing_sigma,
-        );
-        gaussian(
-            &mut t,
-            &mut work,
-            &mut tmp,
-            input.size,
-            self.smoothing_sigma,
-        );
-        drop(tmp);
+        let manual = (self.target_extra_sigma, self.reference_extra_sigma);
+        let (mut target_sigma, mut reference_sigma) = match self.sharpness {
+            Sharpness::Manual => manual,
+            Sharpness::Auto { max_sigma } => {
+                let estimate = blur_estimate.take().flatten();
+                match estimate.map(|e| e.extra_sigmas()) {
+                    Some((target, reference)) if target.max(reference) <= max_sigma as f64 => {
+                        (target as f32, reference as f32)
+                    }
+                    found => {
+                        warn!(
+                            "{}: Subtract Reference Channel: sharpness difference ({}) not \
+                             believed (largest {max_sigma} px) - using the extra blurs set by \
+                             hand ({}, {})",
+                            image_name(),
+                            found.map_or(
+                                "too little structure to estimate".to_string(),
+                                |(t, r)| { format!("target {t:.2}, reference {r:.2} px") }
+                            ),
+                            self.target_extra_sigma,
+                            self.reference_extra_sigma,
+                        );
+                        // Not counted as a fallback: the shift and the
+                        // factor are what Exclude Image rules judge by.
+                        manual
+                    }
+                }
+            }
+        };
+        // An estimated blur must fit at least as well as the blurs set by
+        // hand (R² of the factor fit): the estimate sees every structure of
+        // the reference at once, and structures of different colour ratio
+        // at different scales (e.g. coarse serum and fine beads) read as a
+        // blur difference. Without a fit (fixed factor) it is used as it is.
+        let fit_params = self.factor.fit_params();
+        let compare_with_manual = matches!(self.sharpness, Sharpness::Auto { .. })
+            && fit_params.is_some()
+            && (target_sigma, reference_sigma) != manual;
 
-        // 6. Factor - not from saturated pixels nor the strip the shift
-        // padded.
+        // Not fitted: saturated pixels and the strip the shift padded.
         let margin = if dy != 0.0 || dx != 0.0 {
             dy.abs().max(dx.abs()).ceil() as usize + 1
         } else {
@@ -829,11 +947,14 @@ impl SubtractReferenceChannel {
         };
         let saturated = (0..len).filter(|&i| input.saturated(i)).count();
         // The blurs spread a saturated value into its neighbours, the shift
-        // moves the reference's: those are left out too.
+        // moves the reference's: those are left out too (as far as the
+        // larger of both compared blurs reaches).
         let blur = |extra: f32| (extra * extra + self.smoothing_sigma.powi(2)).sqrt();
-        let reach = (3.0 * blur(self.target_extra_sigma).max(blur(self.reference_extra_sigma)))
-            .ceil() as usize
-            + margin;
+        let mut widest = blur(target_sigma).max(blur(reference_sigma));
+        if compare_with_manual {
+            widest = widest.max(blur(manual.0)).max(blur(manual.1));
+        }
+        let reach = (3.0 * widest).ceil() as usize + margin;
         let near_saturated = (saturated > 0).then(|| {
             let mask: Vec<bool> = (0..len).map(|i| input.saturated(i)).collect();
             dilate(&mask, w, h, reach)
@@ -846,6 +967,54 @@ impl SubtractReferenceChannel {
                 && y + margin < h
                 && !near_saturated.as_ref().is_some_and(|m| m[i])
         };
+
+        let mut tmp = vec![0f32; len];
+        // The pair with the blurs set by hand, while both are compared.
+        let mut by_hand = compare_with_manual.then(|| (s.clone(), t.clone()));
+        let smoothing = self.smoothing_sigma;
+        let mut blur_pair = |s: &mut Vec<f32>, t: &mut Vec<f32>, extra: (f32, f32)| {
+            gaussian(s, &mut work, &mut tmp, input.size, extra.0);
+            gaussian(t, &mut work, &mut tmp, input.size, extra.1);
+            gaussian(s, &mut work, &mut tmp, input.size, smoothing);
+            gaussian(t, &mut work, &mut tmp, input.size, smoothing);
+        };
+        blur_pair(&mut s, &mut t, (target_sigma, reference_sigma));
+        if let Some((hs, ht)) = by_hand.as_mut() {
+            blur_pair(hs, ht, manual);
+        }
+        drop(tmp);
+
+        // 6. Factor.
+        let fit_with = |s: &[f32], t: &[f32], work: &mut Vec<f32>| {
+            robust_fit(
+                s,
+                t,
+                &usable,
+                work,
+                fit_params.expect("only with a fitted factor"),
+            )
+        };
+        let mut chosen_fit: Option<Option<Fit>> = None;
+        if let Some((hs, ht)) = by_hand.take() {
+            let estimated = fit_with(&s, &t, &mut work);
+            let set_by_hand = fit_with(&hs, &ht, &mut work);
+            let r2 = |fit: &Option<Fit>| fit.as_ref().map_or(f64::NEG_INFINITY, |f| f.r2);
+            if r2(&estimated) >= r2(&set_by_hand) {
+                chosen_fit = Some(estimated);
+            } else {
+                debug!(
+                    "{}: Subtract Reference Channel: the estimated blurs (target {target_sigma:.2}, \
+                     reference {reference_sigma:.2} px) fit worse than those set by hand (R² \
+                     {:.3} < {:.3}) - using those",
+                    image_name(),
+                    r2(&estimated),
+                    r2(&set_by_hand)
+                );
+                (s, t) = (hs, ht);
+                (target_sigma, reference_sigma) = manual;
+                chosen_fit = Some(set_by_hand);
+            }
+        }
         let (mut a, b, r2, fit_fraction) = match self.factor {
             Factor::Fixed { factor } => (factor as f64, 0.0, f64::NAN, f64::NAN),
             Factor::ExposureRatio {
@@ -858,26 +1027,18 @@ impl SubtractReferenceChannel {
                 f64::NAN,
                 f64::NAN,
             ),
-            Factor::RobustFit {
-                noise_factor,
-                min_percentile,
-                outlier_k,
-                fit_offset,
-                max_uncertainty,
-                fallback: fallback_value,
-                min_value,
-                max_value,
-            } => {
-                let fit = robust_fit(
-                    &s,
-                    &t,
-                    &usable,
-                    &mut work,
-                    noise_factor,
-                    min_percentile,
-                    outlier_k,
-                    fit_offset,
-                );
+            Factor::RobustFit { .. } => {
+                let FitParams {
+                    max_uncertainty,
+                    fallback: fallback_value,
+                    min_value,
+                    max_value,
+                    ..
+                } = fit_params.expect("a fitted factor");
+                let fit = match chosen_fit.take() {
+                    Some(fit) => fit,
+                    None => fit_with(&s, &t, &mut work),
+                };
                 let fraction = fit.as_ref().map_or(0.0, |f| f.kept as f64 / len as f64);
                 // A precise negative factor: nothing of the reference in the
                 // target (subtracting it would add the reference).
@@ -994,6 +1155,8 @@ impl SubtractReferenceChannel {
             saturated_fraction: saturated as f64 / len as f64,
             fallback,
             residual_noise,
+            target_sigma: target_sigma as f64,
+            reference_sigma: reference_sigma as f64,
         })
     }
 
@@ -1309,17 +1472,20 @@ fn robust_noise(values: &mut [f32]) -> Option<f64> {
 /// The Huber fit of `s ≈ a·t + b` over the structure's pixels (see
 /// [`Factor::RobustFit`]); `None` without any. `work`: a plane-sized
 /// buffer.
-#[allow(clippy::too_many_arguments)]
 fn robust_fit(
     s: &[f32],
     t: &[f32],
     usable: &dyn Fn(usize) -> bool,
     work: &mut Vec<f32>,
-    noise_factor: f32,
-    min_percentile: f32,
-    outlier_k: f32,
-    fit_offset: bool,
+    params: FitParams,
 ) -> Option<Fit> {
+    let FitParams {
+        noise_factor,
+        min_percentile,
+        outlier_k,
+        fit_offset,
+        ..
+    } = params;
     let level = structure_level(t, usable, work, noise_factor, min_percentile)?;
 
     let pairs: Vec<(f32, f32)> = (0..t.len())
@@ -1360,6 +1526,9 @@ fn robust_fit(
     };
 
     let mut settled = false;
+    // `a` and `b` of the last rounds, newest last: a short cycle (pixels
+    // flipping in and out at the cut) settles too.
+    let mut history: Vec<(f64, f64)> = Vec::with_capacity(MAX_CYCLE);
     for _ in 0..MAX_ITERATIONS {
         // Robust sigma of the residuals.
         work.clear();
@@ -1414,7 +1583,11 @@ fn robust_fit(
         // Settled once a round moves `a` by a small part of its own
         // uncertainty and `b` by a small part of the noise: a few pixels
         // flipping in and out at the cut keep changing both a little
-        // forever, far below what could matter.
+        // forever, far below what could matter. Also settled when a round
+        // comes back to the state of up to `MAX_CYCLE` rounds ago (a pixel
+        // flipping in and out at the cut moves `a` back and forth by more
+        // than that part of its uncertainty): then the mean of the cycle's
+        // states.
         let c = if fit_offset { st / sw } else { 0.0 };
         let swd2 = stt - 2.0 * c * st + c * c * sw;
         let sw2d2 = (sw2tt - 2.0 * c * sw2t + c * c * sw2).max(0.0);
@@ -1423,10 +1596,34 @@ fn robust_fit(
         } else {
             0.0
         };
-        let done = (new_a - a).abs()
-            <= (TOLERANCE * new_a.abs().max(1e-12)).max(SETTLE_FRACTION * a_uncertainty)
-            && (new_b - b).abs()
-                <= (TOLERANCE * new_b.abs().max(scale).max(1e-12)).max(SETTLE_FRACTION * sigma);
+        let close = |new_a: f64, new_b: f64, (a, b): (f64, f64)| {
+            (new_a - a).abs()
+                <= (TOLERANCE * new_a.abs().max(1e-12)).max(SETTLE_FRACTION * a_uncertainty)
+                && (new_b - b).abs()
+                    <= (TOLERANCE * new_b.abs().max(scale).max(1e-12)).max(SETTLE_FRACTION * sigma)
+        };
+        let done = close(new_a, new_b, (a, b));
+        if history.len() == MAX_CYCLE {
+            history.remove(0);
+        }
+        history.push((a, b));
+        // The state the new one repeats (not the last: that is `done`).
+        let repeated = (!done)
+            .then(|| {
+                history[..history.len() - 1]
+                    .iter()
+                    .rposition(|&before| close(new_a, new_b, before))
+            })
+            .flatten();
+        if let Some(start) = repeated {
+            // The repeated state and those after it.
+            let cycle = &history[start..];
+            let n = cycle.len() as f64;
+            a = cycle.iter().map(|s| s.0).sum::<f64>() / n;
+            b = cycle.iter().map(|s| s.1).sum::<f64>() / n;
+            settled = true;
+            break;
+        }
         a = new_a;
         b = new_b;
         if done {
@@ -1593,6 +1790,7 @@ mod tests {
                     names(&[
                         "background",
                         "smoothing_sigma",
+                        "sharpness",
                         "target_extra_sigma",
                         "reference_extra_sigma",
                         "camera_offset",
@@ -1615,6 +1813,45 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    /// A pixel flipping in and out at the outlier cut moves the line back
+    /// and forth by more than the settling tolerance: such a fit settles
+    /// too (between both states) instead of being taken for one that
+    /// didn't - with the fallback factor. Noisy lines with EVs above and
+    /// dots below them, many random draws: every fit settles.
+    #[test]
+    fn a_fit_flipping_one_pixel_at_the_cut_settles() {
+        use crate::algos::libs::phase_correlation::test_support::Lcg;
+        let params = FitParams {
+            noise_factor: 4.0,
+            min_percentile: 50.0,
+            outlier_k: 3.0,
+            fit_offset: true,
+            max_uncertainty: 0.25,
+            fallback: 0.0,
+            min_value: 0.0,
+            max_value: 100.0,
+        };
+        let n = 4000;
+        let mut work = Vec::new();
+        for seed in 0..300u64 {
+            let mut rng = Lcg(seed);
+            let (mut s, mut t) = (vec![0f32; n], vec![0f32; n]);
+            for i in 0..n {
+                let structure = 50.0 * rng.next() * rng.next();
+                t[i] = structure + 0.5 * rng.normal();
+                s[i] = 0.4 * structure + 3.0 + 1.5 * rng.normal();
+                // EVs above the line, dots in the reference only below it.
+                match (rng.next() * 50.0) as u32 {
+                    0 => s[i] += 15.0 + 20.0 * rng.next(),
+                    1 => t[i] += 20.0 + 30.0 * rng.next(),
+                    _ => {}
+                }
+            }
+            let fit = robust_fit(&s, &t, &|_| true, &mut work, params).unwrap();
+            assert!(fit.settled, "seed {seed}: did not settle (a {:.4})", fit.a);
+        }
     }
 
     /// The reduced median background follows the full-resolution one: on

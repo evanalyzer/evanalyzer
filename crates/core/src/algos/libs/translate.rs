@@ -166,6 +166,21 @@ impl AxisKernel {
     }
 }
 
+/// The frequency response of a shift of `shift` px along one axis as
+/// [`Translation`] interpolates it, at `f` cycles per pixel: `Σ w_k ·
+/// e^(2πi f (first + k))` (`output(i) = Σ w_k · input(i + first + k)`) -
+/// the shift's phase and the interpolation's damping of high frequencies.
+pub(crate) fn axis_response(shift: f64, interpolation: Interpolation, f: f64) -> (f64, f64) {
+    let kernel = AxisKernel::new(shift, interpolation);
+    let (mut re, mut im) = (0.0f64, 0.0f64);
+    for k in 0..kernel.taps {
+        let phase = 2.0 * std::f64::consts::PI * f * (kernel.first + k as isize) as f64;
+        re += kernel.weights[k] as f64 * phase.cos();
+        im += kernel.weights[k] as f64 * phase.sin();
+    }
+    (re, im)
+}
+
 /// Keys' cubic convolution kernel with a = −0.5 (Catmull-Rom).
 fn keys(d: f64) -> f64 {
     const A: f64 = -0.5;

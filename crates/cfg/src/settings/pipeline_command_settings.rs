@@ -1169,6 +1169,40 @@ pub enum SegmentationWatershedSeedSourceSettings {
     Intensity,
 }
 
+/// How [`SubtractReferenceChannel`] matches the sharpness of target and
+/// reference.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MathSubtractReferenceChannelSharpnessSettings {
+    /// The extra blurs set by hand (Target / Reference Extra Sigma).
+    #[serde(alias = "manual")]
+    Manual,
+    /// Estimated per image, after the alignment: how much blurrier one
+    /// channel is than the other (their cross-spectrum over the
+    /// reference's spectrum, see `libs::blur_matching`), and the sharper
+    /// one blurred by the difference - for channels whose focus differs
+    /// from image to image. Without an estimate (too little structure in
+    /// the target) the extra blurs set by hand are used. With Factor Robust
+    /// Fit the estimate is used only where the factor fits at least as
+    /// well (R²) as with the blurs set by hand: structures of different
+    /// colour ratio at different scales (e.g. coarse serum and fine beads)
+    /// can read as a blur difference.
+    #[serde(rename_all = "camelCase")]
+    #[serde(alias = "auto")]
+    Auto {
+        /// Larger differences (σ, px) are not believed: the extra blurs set
+        /// by hand are used.
+        #[schemars(range(min = 0.5, max = 20))]
+        max_sigma: f32,
+    },
+}
+
+impl Default for MathSubtractReferenceChannelSharpnessSettings {
+    fn default() -> Self {
+        Self::Manual {}
+    }
+}
+
 /// How [`SubtractReferenceChannel`] interpolates the shifted reference.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -2403,7 +2437,8 @@ pub struct StructureTensorSettings {
 ///
 /// **Order:** camera offset → background (both channels) → alignment (the
 /// reference shifted onto the target - before the fit: a wrong shift gives
-/// a wrong `a` and leaves a relief) → extra blur of the sharper channel →
+/// a wrong `a` and leaves a relief) → extra blur of the sharper channel (set
+/// by hand or estimated per image, see [`Sharpness`]) →
 /// the same smoothing of both (unsmoothed, noise in the reference biases
 /// `a` low) → factor → subtraction (by default only where the reference is
 /// brighter than its background).
@@ -2425,8 +2460,9 @@ pub struct StructureTensorSettings {
 /// cut-off (e.g. 5 in a threshold) means the same everywhere.
 ///
 /// Measures per image: the factor, offset, shift, alignment quality, R²,
-/// the parts of fit and saturated pixels and whether a fallback was used
-/// (on an image split into tiles: the median over the tiles). Exclude
+/// the parts of fit and saturated pixels, whether a fallback was used (for
+/// the shift or the factor) and with Sharpness Auto the extra blurs used (on an image split into tiles: the median over the
+/// tiles). Exclude
 /// Image can leave images out by them - e.g. "Fallback used" above 0.5.
 ///
 /// Runs per tile, the whole image up to 4096 px: on a larger image each
@@ -2461,12 +2497,17 @@ pub struct SubtractReferenceChannelSettings {
     /// off).
     #[schemars(range(min = 0, max = 20))]
     pub smoothing_sigma: f32,
+    /// How the sharper channel is blurred to the other's sharpness before
+    /// the fit: by the extra blurs set below, or estimated per image.
+    pub sharpness: MathSubtractReferenceChannelSharpnessSettings,
     /// Extra blur (σ, px) for the target if it is sharper than the
-    /// reference (0 = off).
+    /// reference (0 = off). With Sharpness Auto: used when no estimate is
+    /// made.
     #[schemars(range(min = 0, max = 20))]
     pub target_extra_sigma: f32,
     /// Extra blur (σ, px) for the reference if it is sharper than the
-    /// target (0 = off).
+    /// target (0 = off). With Sharpness Auto: used when no estimate is
+    /// made.
     #[schemars(range(min = 0, max = 20))]
     pub reference_extra_sigma: f32,
     /// Camera offset subtracted from target and reference before anything
@@ -2510,6 +2551,7 @@ impl Default for SubtractReferenceChannelSettings {
             interpolation: MathSubtractReferenceChannelShiftInterpolationSettings::Cubic,
             background: MathSubtractReferenceChannelBackgroundSettings::default(),
             smoothing_sigma: 1.0f32,
+            sharpness: MathSubtractReferenceChannelSharpnessSettings::Manual,
             target_extra_sigma: 0.0f32,
             reference_extra_sigma: 0.0f32,
             camera_offset: MathSubtractReferenceChannelCameraOffsetSettings::default(),

@@ -19,7 +19,7 @@ use crate::algos::TranslateImage;
 use crate::algos::libs::phase_correlation::test_support::{Lcg, fourier_blur, fourier_shift};
 use crate::algos::{
     Alignment, Background, EstimationScope, Factor, ImageAlgorithm, Interpolation, OutputImage,
-    Padding, SubtractReferenceChannel,
+    Padding, Sharpness, SubtractReferenceChannel,
 };
 use crate::image::{ImageContainer, ManagedImage};
 use crate::pipeline::pipeline_cache::{CacheAddress, GlobalPipelineCache};
@@ -870,5 +870,137 @@ fn significance_keeps_the_evs_and_drops_the_leftovers() {
     assert!(
         (0.7..1.4).contains(&spread),
         "spread beside the structure {spread:.2}"
+    );
+}
+
+/// With the target out of focus (σ 1.5 px more than the reference),
+/// Sharpness Auto finds the reference's extra blur. Unmatched, the sharper
+/// reference's peaks don't fit the target's and pull the factor low (0.27
+/// for the true 0.37); matched, it is about as close as with the blur set
+/// by hand (a little less blur: the estimate counts the damping of the
+/// reference's cubic shift too), and the fit tighter.
+#[test]
+fn auto_sharpness_matches_an_out_of_focus_target() {
+    let scene = scene(Recipe {
+        target_blur: 1.5,
+        ..Default::default()
+    });
+    let mut cmd = command();
+    let unmatched = run(&cmd, &scene);
+    cmd.reference_extra_sigma = 1.5;
+    let by_hand = run(&cmd, &scene);
+    cmd.reference_extra_sigma = 0.0;
+    cmd.sharpness = Sharpness::Auto { max_sigma: 3.0 };
+    let auto = run(&cmd, &scene);
+    let reference_sigma = auto.value("reference_extra_sigma");
+    assert!(
+        (reference_sigma - 1.5).abs() < 0.3 && auto.value("target_extra_sigma") == 0.0,
+        "{:?}",
+        auto.values
+    );
+    let error = |run: &Run| (run.value("factor") - A as f64).abs();
+    assert!(
+        error(&auto) < 0.6 * error(&unmatched) && error(&auto) < error(&by_hand) + 0.03,
+        "factor (true {A}): unmatched {:.3}, by hand {:.3}, auto {:.3} (reference blur {reference_sigma:.2})",
+        unmatched.value("factor"),
+        by_hand.value("factor"),
+        auto.value("factor")
+    );
+    assert!(
+        auto.value("r2") > unmatched.value("r2"),
+        "{:?}",
+        auto.values
+    );
+}
+
+/// An estimated blur is only used where the factor fits at least as well
+/// as with the blurs set by hand - also with dots in the reference only,
+/// fine bright structure the target lacks (as beads of another colour
+/// ratio), which can read as a blur difference.
+#[test]
+fn auto_sharpness_never_fits_worse_than_by_hand() {
+    for recipe in [
+        Recipe::default(),
+        Recipe {
+            target_blur: 1.0,
+            ..Default::default()
+        },
+        Recipe {
+            reference_dots: 40,
+            ..Default::default()
+        },
+    ] {
+        let scene = scene(recipe);
+        let mut cmd = command();
+        let by_hand = run(&cmd, &scene);
+        cmd.sharpness = Sharpness::Auto { max_sigma: 3.0 };
+        let auto = run(&cmd, &scene);
+        assert!(
+            auto.value("r2") >= by_hand.value("r2") - 1e-9,
+            "target blur {}, dots {}: R² by hand {:.4}, auto {:.4} ({:?})",
+            recipe.target_blur,
+            recipe.reference_dots,
+            by_hand.value("r2"),
+            auto.value("r2"),
+            auto.values
+        );
+    }
+}
+
+/// Without the reference's structure in the target there is nothing to
+/// compare: the extra blurs set by hand are used.
+#[test]
+fn auto_sharpness_without_structure_uses_the_blurs_set_by_hand() {
+    let scene = scene(Recipe {
+        target_network: false,
+        ..Default::default()
+    });
+    let mut cmd = command();
+    cmd.sharpness = Sharpness::Auto { max_sigma: 3.0 };
+    cmd.reference_extra_sigma = 0.4;
+    let result = run(&cmd, &scene);
+    assert_eq!(result.value("reference_extra_sigma"), 0.4f32 as f64);
+    assert_eq!(result.value("target_extra_sigma"), 0.0);
+}
+
+/// No sharpness estimate is no fallback: the blurs set by hand are a fine
+/// default, and "Fallback used" stays about the shift and the factor.
+#[test]
+fn a_missing_sharpness_estimate_is_no_fallback() {
+    let scene = scene(Recipe {
+        target_blur: 1.0,
+        ..Default::default()
+    });
+    let mut cmd = command();
+    // Too small a largest blur: the estimate isn't believed.
+    cmd.sharpness = Sharpness::Auto { max_sigma: 0.0 };
+    let result = run(&cmd, &scene);
+    assert_eq!(result.value("fallback_used"), 0.0, "{:?}", result.values);
+}
+
+/// Manual adds no measurements; a project file without the setting is
+/// Manual (as before it existed), Auto loads with its largest blur.
+#[test]
+fn manual_sharpness_is_the_default_and_measures_nothing_new() {
+    use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+    let result = run(&command(), &scene(Recipe::default()));
+    assert!(!result.values.contains_key("target_extra_sigma"));
+    assert!(!result.values.contains_key("reference_extra_sigma"));
+    let parse = |json: &str| match serde_json::from_str::<PipelineCommand>(json).unwrap() {
+        PipelineCommand::SubtractReferenceChannel(settings) => {
+            SubtractReferenceChannel::from(settings).sharpness
+        }
+        _ => panic!("a Subtract Reference Channel step"),
+    };
+    assert_eq!(
+        parse(r#"{ "type": "SUBTRACT_REFERENCE_CHANNEL", "referenceExtraSigma": 0.9 }"#),
+        Sharpness::Manual
+    );
+    assert_eq!(
+        parse(
+            r#"{ "type": "SUBTRACT_REFERENCE_CHANNEL",
+                 "sharpness": { "type": "AUTO", "maxSigma": 2.5 } }"#
+        ),
+        Sharpness::Auto { max_sigma: 2.5 }
     );
 }

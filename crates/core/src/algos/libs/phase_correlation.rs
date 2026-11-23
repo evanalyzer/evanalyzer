@@ -156,7 +156,7 @@ fn refine(before: f64, centre: f64, after: f64) -> (f64, f64) {
 }
 
 /// `k` of `n` frequencies as cycles per pixel, from -0.5 to 0.5.
-fn signed_frequency(k: usize, n: usize) -> f64 {
+pub(crate) fn signed_frequency(k: usize, n: usize) -> f64 {
     signed_index(k, n) as f64 / n as f64
 }
 
@@ -171,12 +171,12 @@ fn signed_index(k: usize, n: usize) -> isize {
 
 /// The frequency response of a Gaussian of `sigma` px at `f²` (cycles per
 /// pixel, squared).
-fn gaussian_response(sigma: f64, f2: f64) -> f64 {
+pub(crate) fn gaussian_response(sigma: f64, f2: f64) -> f64 {
     (-2.0 * PI * PI * sigma * sigma * f2).exp()
 }
 
 /// Forward and inverse 2D FFTs of a `w × h` row-major buffer.
-struct Fft2 {
+pub(crate) struct Fft2 {
     w: usize,
     h: usize,
     row: (Arc<dyn Fft<f32>>, Arc<dyn Fft<f32>>),
@@ -184,7 +184,7 @@ struct Fft2 {
 }
 
 impl Fft2 {
-    fn new(w: usize, h: usize) -> Self {
+    pub(crate) fn new(w: usize, h: usize) -> Self {
         let mut planner = FftPlanner::<f32>::new();
         Fft2 {
             w,
@@ -195,7 +195,7 @@ impl Fft2 {
     }
 
     /// Transforms `data` in place (unnormalized both ways, as rustfft).
-    fn transform(&self, data: &mut [Complex<f32>], inverse: bool) {
+    pub(crate) fn transform(&self, data: &mut [Complex<f32>], inverse: bool) {
         let (w, h) = (self.w, self.h);
         let (row, column) = if inverse {
             (&self.row.1, &self.column.1)

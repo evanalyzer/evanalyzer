@@ -3370,6 +3370,7 @@ mod full_run_integration_tests {
                 background: Background::None,
                 alignment: Alignment::None,
                 interpolation: ShiftInterpolation::Linear,
+                sharpness: Sharpness::Manual,
                 target_extra_sigma: 0.0,
                 reference_extra_sigma: 0.0,
                 smoothing_sigma: 0.0,
