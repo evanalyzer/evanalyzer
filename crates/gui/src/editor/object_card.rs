@@ -111,8 +111,9 @@ fn circularity_tile(object: &ObjectMetricSettings) -> (String, f32) {
 }
 
 /// Size and shape below the tiles, from the mask: solidity, aspect ratio,
-/// perimeter, max and min Feret, the fitted ellipse, centre, box, plane -
-/// µm beside px once the pixel size is known. Solidity, aspect ratio and
+/// eccentricity, perimeter, equivalent diameter, max and min Feret, the
+/// fitted ellipse, centre, box, plane - µm beside px once the pixel size is
+/// known. Solidity, aspect ratio, eccentricity, equivalent diameter and
 /// Feret as the results columns compute them.
 fn shape(object: &ObjectMetricSettings, um: Option<(f64, f64)>) -> Vec<CardFact> {
     let mut facts = Vec::new();
@@ -121,13 +122,18 @@ fn shape(object: &ObjectMetricSettings, um: Option<(f64, f64)>) -> Vec<CardFact>
     if let Some(outline) = outline {
         facts.push(fact("Solidity", format!("{:.2}", outline.solidity), ""));
     }
-    if let Some((major, minor, _)) = ellipse {
+    if let Some((major, minor, eccentricity)) = ellipse {
         // As `Object::get_aspect_ratio` (the results column): 1 for a line.
         let aspect_ratio = if minor > 0.0 { major / minor } else { 1.0 };
         facts.push(fact(
             "Aspect ratio",
             format!("{aspect_ratio:.2}"),
             "major / minor",
+        ));
+        facts.push(fact(
+            "Eccentricity",
+            format!("{eccentricity:.2}"),
+            "0 circle · 1 line",
         ));
     }
     if object.perimeter > 0.0 {
@@ -136,6 +142,17 @@ fn shape(object: &ObjectMetricSettings, um: Option<(f64, f64)>) -> Vec<CardFact>
             "Perimeter",
             format!("{} px", number(p)),
             um.map(|(x, y)| format!("{} µm", number(p * (x + y) / 2.0)))
+                .unwrap_or_default(),
+        ));
+    }
+    if object.area > 0 {
+        // The diameter of the circle with the object's area, as the results
+        // column (`sqrt(4 · area / π)`).
+        let d = (4.0 * object.area as f64 / std::f64::consts::PI).sqrt();
+        facts.push(fact(
+            "Equiv. diameter",
+            format!("{} px", number(d)),
+            um.map(|(x, y)| format!("{} µm", number(d * (x + y) / 2.0)))
                 .unwrap_or_default(),
         ));
     }
@@ -154,11 +171,14 @@ fn shape(object: &ObjectMetricSettings, um: Option<(f64, f64)>) -> Vec<CardFact>
             ));
         }
     }
-    if let Some((major, minor, eccentricity)) = ellipse {
+    if let Some((major, minor, _)) = ellipse {
+        let um_per_px = um.map(|(x, y)| (x + y) / 2.0);
         facts.push(fact(
             "Ellipse",
             format!("{} × {} px", number(major), number(minor)),
-            format!("ecc. {eccentricity:.2}"),
+            um_per_px
+                .map(|u| format!("{} × {} µm", number(major * u), number(minor * u)))
+                .unwrap_or_default(),
         ));
     }
     if object.area > 0 {
@@ -520,7 +540,9 @@ mod tests {
             [
                 "Solidity",
                 "Aspect ratio",
+                "Eccentricity",
                 "Perimeter",
+                "Equiv. diameter",
                 "Max Feret",
                 "Min Feret",
                 "Ellipse",
@@ -532,7 +554,7 @@ mod tests {
     }
 
     #[test]
-    fn the_rows_have_solidity_aspect_ratio_feret_perimeter_ellipse_centre_and_box() {
+    fn the_rows_have_shape_size_ellipse_centre_and_box() {
         let facts = shape(&square(10), None);
         let get = |label: &str| facts.iter().find(|f| f.label == label).cloned().unwrap();
         assert_eq!(get("Solidity").value, "1.00", "a square is convex");
@@ -544,16 +566,19 @@ mod tests {
         assert_eq!(get("Perimeter").value, "40.0 px");
         assert_eq!(get("Centre").value, "x 4 · y 4");
         assert_eq!(get("Box").value, "10 × 10 px");
-        assert!(
-            get("Ellipse").extra.contains("ecc. 0.00"),
-            "a square: round"
-        );
+        assert_eq!(get("Eccentricity").value, "0.00", "a square: round");
+        // sqrt(4 · 100 / π) = 11.28.
+        assert_eq!(get("Equiv. diameter").value, "11.3 px");
+        assert_eq!(get("Equiv. diameter").extra, "");
+        assert_eq!(get("Ellipse").extra, "");
 
         let facts = shape(&square(10), Some((0.5, 0.5)));
         let get = |label: &str| facts.iter().find(|f| f.label == label).cloned().unwrap();
         assert_eq!(get("Max Feret").extra, "6.36 µm");
         assert_eq!(get("Min Feret").extra, "4.50 µm");
         assert_eq!(get("Perimeter").extra, "20.0 µm");
+        assert_eq!(get("Equiv. diameter").extra, "5.64 µm");
+        assert!(get("Ellipse").extra.ends_with(" µm"));
     }
 
     #[test]
