@@ -311,6 +311,9 @@ pub struct BoxLook {
     /// A colour picked for a box (by its name, `0xRRGGBB`) - over the
     /// colours above.
     pub box_colors: std::collections::BTreeMap<String, u32>,
+    /// The boxes / bars left out (by name) - the others shown, new ones
+    /// too.
+    pub hidden_boxes: std::collections::BTreeSet<String>,
 }
 
 impl Default for BoxLook {
@@ -328,6 +331,7 @@ impl Default for BoxLook {
             log_x: false,
             log_y: false,
             box_colors: Default::default(),
+            hidden_boxes: Default::default(),
         }
     }
 }

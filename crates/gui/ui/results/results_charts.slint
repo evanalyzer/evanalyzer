@@ -17,7 +17,7 @@ import { Ink } from "../ink/palette.slint";
 
 import { InkMultiSelect, InkIcons } from "../ink/ink.slint";
 import { ViewBar, BarChip, BarLabel, BarSpacer, BarFolded, ViewPanel } from "results_view_bar.slint";
-import { ColumnPicker, ChoiceList, IndexChoiceList } from "results_panel.slint";
+import { ColumnPicker, ChoiceList, IndexChoiceList, TickList } from "results_panel.slint";
 
 component ChartErrorOrEmpty inherits Text {
     text: ResultsState.chart-error;
@@ -596,6 +596,20 @@ component ChartsPanel inherits ViewPanel {
             text: ResultsState.chart-per-image
                 ? "Each image one value: its objects' count, or the mean of the value over them - images compared, not objects."
                 : "Each object one value.";
+        }
+        if ResultsState.chart-group-items.length > 0: TickList {
+            title: root.kind == ResultsChartKind2.bar ? "BARS SHOWN" : "BOXES SHOWN";
+            items: ResultsState.chart-group-items;
+            all-none: true;
+            picked(key, on) => {
+                ResultsState.chart-group-shown(key, on);
+            }
+            select-all => {
+                ResultsState.chart-groups-all(true);
+            }
+            select-none => {
+                ResultsState.chart-groups-all(false);
+            }
         }
     }
     if root.current == "Groups" && root.kind == ResultsChartKind2.over-time: IndexChoiceList {

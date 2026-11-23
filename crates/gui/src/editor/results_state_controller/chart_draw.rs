@@ -767,13 +767,43 @@ impl ResultsStateController {
             manager.draw_chart();
         });
         let manager = self.clone();
+        state.on_chart_group_shown(move |label, on| {
+            {
+                let mut look = manager.chart_look.lock().expect("Poisoned");
+                if on {
+                    look.hidden_boxes.remove(label.as_str());
+                } else {
+                    look.hidden_boxes.insert(label.to_string());
+                }
+            }
+            manager.refresh_charts();
+        });
+        let manager = self.clone();
+        let ui_weak = self.ui.clone();
+        state.on_chart_groups_all(move |on| {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            // The groups of this chart; those of another grouping stay.
+            let items = ui.global::<ResultsState>().get_chart_group_items();
+            {
+                let mut look = manager.chart_look.lock().expect("Poisoned");
+                for item in items.iter() {
+                    if on {
+                        look.hidden_boxes.remove(item.key.as_str());
+                    } else {
+                        look.hidden_boxes.insert(item.key.to_string());
+                    }
+                }
+            }
+            manager.refresh_charts();
+        });
+        let manager = self.clone();
         state.on_chart_box_look_changed(move |look| {
-            let box_colors = manager
-                .chart_look
-                .lock()
-                .expect("Poisoned")
-                .box_colors
-                .clone();
+            let (box_colors, hidden_boxes) = {
+                let current = manager.chart_look.lock().expect("Poisoned");
+                (current.box_colors.clone(), current.hidden_boxes.clone())
+            };
             *manager.chart_look.lock().expect("Poisoned") = ChartLook {
                 log: look.log,
                 grid: look.grid,
@@ -787,6 +817,7 @@ impl ResultsStateController {
                 log_x: look.log_x,
                 log_y: look.log_y,
                 box_colors,
+                hidden_boxes,
             };
             manager.remember_view();
             manager.draw_chart();

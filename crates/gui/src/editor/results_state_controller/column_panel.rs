@@ -709,6 +709,7 @@ impl ResultsStateController {
                 chart.y_column = column;
             } else {
                 chart.column = column;
+                chart.count_set_aside = false;
             }
         }
         self.push_chart_picker();

@@ -183,7 +183,8 @@ impl ResultCharts {
 
     /// A box per class, image, well, plate row or column of a value per
     /// image: the count of the wanted classes' objects (`Column::Count` -
-    /// images without any count 0) or `filter.column`'s mean over them
+    /// images without any count 0, as every class of the results without
+    /// any) or `filter.column`'s mean over them
     /// (images without any have none). Each box keeps its images' values,
     /// the dots.
     fn paint_per_image_boxplot(
@@ -271,7 +272,18 @@ impl ResultCharts {
         // A value per image; counting, also the images without objects.
         let per_image = if count {
             let boxes = if by_class {
-                match &wanted {
+                let every: Vec<u32>;
+                let ids = match &wanted {
+                    Some(ids) => Some(ids.as_slice()),
+                    // Every class of the results (the intermediate ones
+                    // aren't), those without objects too: a box of 0s.
+                    None if !classes.is_empty() => {
+                        every = classes.iter().map(|class| class.id).collect();
+                        Some(every.as_slice())
+                    }
+                    None => None,
+                };
+                match ids {
                     Some(ids) => format!(
                         "(SELECT CAST(unnest([{}]) AS VARCHAR) AS g)",
                         class_ids(ids)
@@ -1203,6 +1215,14 @@ mod tests {
             ObjectSpec::new("img2.tif", "ClassB", 2, 70),
         ];
         let generator = open(&objects);
+        // A class without objects (asked for before the classes are read).
+        generator
+            .connection()
+            .execute(
+                "INSERT INTO classes (class_id, name, color) VALUES (3, 'ClassC', 0)",
+                [],
+            )
+            .unwrap();
         let boxplot = |column: Column| {
             ResultCharts {}
                 .paint_boxplot(
@@ -1220,7 +1240,13 @@ mod tests {
                 .expect("boxplot")
         };
         let counts = boxplot(Column::Count);
-        assert_eq!(counts.boxes.len(), 2);
+        // ClassC has no objects: a box of 0s, as an image without any.
+        assert_eq!(counts.boxes.len(), 3);
+        let c = &counts.boxes[2];
+        assert_eq!(
+            (c.label.as_str(), c.image_values.clone(), c.object_count),
+            ("ClassC", vec![0.0, 0.0], 0)
+        );
         let (a, b) = (&counts.boxes[0], &counts.boxes[1]);
         assert_eq!(
             (a.label.as_str(), a.image_count, a.object_count),
@@ -1265,7 +1291,7 @@ mod tests {
             .iter()
             .map(|b| b.image_values.clone())
             .collect();
-        assert_eq!(values, [vec![2.0], vec![0.0]]);
+        assert_eq!(values, [vec![2.0], vec![0.0], vec![0.0]]);
     }
 
     #[test]

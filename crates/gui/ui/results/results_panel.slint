@@ -227,16 +227,25 @@ export component IndexChoiceList inherits VerticalLayout {
     }
 }
 
-/// Items to tick (`items`' `selected`), without All / None.
+/// Items to tick (`items`' `selected`), All / None only with `all-none`.
 export component TickList inherits VerticalLayout {
     in property <string> title;
     in property <[MultiSelectItem]> items;
+    in property <bool> all-none: false;
     callback picked(string, bool);
+    callback select-all;
+    callback select-none;
     spacing: 4px;
     if root.title != "": PartHead {
         title: root.title;
         foldable: false;
-        all-none: false;
+        all-none: root.all-none;
+        select-all => {
+            root.select-all();
+        }
+        select-none => {
+            root.select-none();
+        }
     }
     Rectangle {
         border-radius: Ink.radius-sm;
@@ -247,6 +256,7 @@ export component TickList inherits VerticalLayout {
             for item in root.items: PickRow {
                 text: item.value;
                 on: item.selected;
+                swatch: item.color.alpha > 0 ? item.color : transparent;
                 clicked => {
                     root.picked(item.key, !item.selected);
                 }

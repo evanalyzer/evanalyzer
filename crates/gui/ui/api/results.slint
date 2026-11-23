@@ -1062,6 +1062,11 @@ export global ResultsState {
     // normalized the same way, rendered as individual dots above/below the
     // whiskers.
     in-out property <[ChartBoxplotBox]> chart-boxplot-boxes: [];
+    // The boxplot's / bars' groups to show (ticked) or leave out - every
+    // group of the query, the choice saved with the view.
+    in-out property <[MultiSelectItem]> chart-group-items: [];
+    callback chart-group-shown(string, bool);
+    callback chart-groups-all(bool);
     // The chart drawn by the app's chart module (an SVG, the same as an
     // export) and where its marks lie; `chart-resized` asks for it at the
     // chart area's size and scheme.

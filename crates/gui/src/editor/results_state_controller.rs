@@ -314,6 +314,10 @@ struct ChartFilter {
     pub profile_lines: ProfileLines,
     pub profile_curve: bool,
     pub profile_mark: bool,
+    /// Objects per image was picked, but the chart can't show it now (per
+    /// object, or a histogram/scatter): `column` stands in for it until
+    /// the chart can again.
+    pub count_set_aside: bool,
 }
 
 impl Default for ChartFilter {
@@ -338,6 +342,7 @@ impl Default for ChartFilter {
             profile_lines: ProfileLines::Class,
             profile_curve: true,
             profile_mark: true,
+            count_set_aside: false,
         }
     }
 }
@@ -2250,7 +2255,11 @@ impl ResultsStateController {
                         return;
                     };
                     drop(classes);
-                    manager.chart_filter.lock().expect("Poisened").column = column;
+                    {
+                        let mut chart = manager.chart_filter.lock().expect("Poisened");
+                        chart.column = column;
+                        chart.count_set_aside = false;
+                    }
                     manager.refresh_charts();
                 });
 
@@ -3393,6 +3402,7 @@ impl ResultsStateController {
                         y_column: default_chart_column.clone(),
                         object_class: None,
                         group_by: BoxplotGroup::Class,
+                        count_set_aside: false,
                         ..filter.clone()
                     };
                 }
@@ -4625,7 +4635,19 @@ impl ResultsStateController {
     }
 
     /// `as_bars`: the groups drawn as bars instead of boxes.
-    fn push_boxplot_in_slint(&self, boxes: Vec<BoxplotBox>, as_bars: bool) {
+    fn push_boxplot_in_slint(&self, mut boxes: Vec<BoxplotBox>, as_bars: bool) {
+        // Every group to pick from; those left out not drawn (nor saved).
+        let hidden = self
+            .chart_look
+            .lock()
+            .expect("Poisoned")
+            .hidden_boxes
+            .clone();
+        let group_items: Vec<(String, u32, bool)> = boxes
+            .iter()
+            .map(|b| (b.label.clone(), b.color, !hidden.contains(&b.label)))
+            .collect();
+        boxes.retain(|b| !hidden.contains(&b.label));
         // Drawn by the chart module; the boxes below say whether there are
         // any (and serve the tests). The rows first: the boxes move into
         // the chart's data.
@@ -4703,6 +4725,21 @@ impl ResultsStateController {
                     .collect();
                 state.set_chart_error("".into());
                 state.set_chart_boxplot_boxes(ModelRc::from(Rc::new(VecModel::from(boxes))));
+                let items: Vec<MultiSelectItem> = group_items
+                    .into_iter()
+                    .map(|(label, color, shown)| MultiSelectItem {
+                        key: label.as_str().into(),
+                        value: label.into(),
+                        color: if color == 0 {
+                            Color::default()
+                        } else {
+                            bg_color_to_slint(color)
+                        },
+                        group: Default::default(),
+                        selected: shown,
+                    })
+                    .collect();
+                state.set_chart_group_items(ModelRc::from(Rc::new(VecModel::from(items))));
             } else {
                 warn!("Failed to upgrade UI handle, cannot update boxplot chart!");
             }
@@ -6797,16 +6834,21 @@ fn column_for_key(key: &str, classes: &[Class], available: &[ColumnEntry]) -> Op
 /// value per image, see `Column::is_image_measurement`).
 /// Objects per image is a value only of a per-image boxplot or bar chart:
 /// any other chart (or per object) shows the first chartable column
-/// instead.
+/// instead - and the count again once the chart can show it.
 fn count_only_per_image(chart: &mut ChartFilter, available: &[ColumnEntry]) {
     let counts = chart.per_image && matches!(chart.kind, ChartKind::Boxplot | ChartKind::Bar);
-    if chart.column == Column::Count
-        && !counts
+    if counts {
+        if chart.count_set_aside {
+            chart.column = Column::Count;
+            chart.count_set_aside = false;
+        }
+    } else if chart.column == Column::Count
         && let Some(first) = available
             .iter()
             .find(|entry| is_chartable_column(&entry.key))
     {
         chart.column = first.key.clone();
+        chart.count_set_aside = true;
     }
 }
 
@@ -12256,6 +12298,129 @@ pub(crate) mod tests {
         assert_eq!(matrix_filter_value(&o, |f| f.column.clone()), column);
     }
 
+    /// The boxes shown are picked: one left out isn't drawn, the choice
+    /// saved with the view; All brings every one back.
+    #[test]
+    fn boxes_left_out_are_not_drawn_and_stay_with_the_view() {
+        let o = opened();
+        let s = o.state();
+        s.invoke_view_selected(view_id(&o, "Charts"));
+        drain_ui_queue();
+        s.set_chart_kind(ResultsChartKind2::Boxplot);
+        s.invoke_chart_kind_selected(ResultsChartKind2::Boxplot);
+        drain_ui_queue();
+        let groups = |s: &ResultsState| -> Vec<(String, bool)> {
+            s.get_chart_group_items()
+                .iter()
+                .map(|item| (item.key.to_string(), item.selected))
+                .collect()
+        };
+        let drawn = |s: &ResultsState| -> Vec<String> {
+            s.get_chart_boxplot_boxes()
+                .iter()
+                .map(|b| b.label.to_string())
+                .collect()
+        };
+        let all = groups(&s);
+        assert!(all.len() >= 2, "{all:?}");
+        assert!(all.iter().all(|(_, shown)| *shown));
+        let first = all[0].0.clone();
+
+        s.invoke_chart_group_shown(first.as_str().into(), false);
+        drain_ui_queue();
+        assert!(!drawn(&s).contains(&first));
+        assert_eq!(groups(&s).len(), all.len(), "still offered");
+        assert_eq!(
+            active_view(&o).settings["chart"]["boxLook"]["hiddenBoxes"][0],
+            first.as_str()
+        );
+        s.invoke_view_selected(view_id(&o, "List"));
+        drain_ui_queue();
+        s.invoke_view_selected(view_id(&o, "Charts"));
+        drain_ui_queue();
+        assert!(!drawn(&s).contains(&first), "view back");
+
+        // The look changed: the boxes left out stay out.
+        let look = s.get_chart_box_look();
+        s.invoke_chart_box_look_changed(look);
+        drain_ui_queue();
+        assert!(!drawn(&s).contains(&first), "look");
+
+        s.invoke_chart_groups_all(false);
+        drain_ui_queue();
+        assert!(drawn(&s).is_empty());
+        assert!(groups(&s).iter().all(|(_, shown)| !*shown));
+        s.invoke_chart_groups_all(true);
+        drain_ui_queue();
+        assert_eq!(drawn(&s).len(), all.len());
+    }
+    /// Objects per image stays the chart's value while its class, groups
+    /// and look change, and comes back after a value per object.
+    #[test]
+    fn the_count_stays_while_class_groups_and_look_change() {
+        let o = opened();
+        let s = o.state();
+        s.invoke_view_selected(view_id(&o, "Charts"));
+        drain_ui_queue();
+        s.set_chart_kind(ResultsChartKind2::Boxplot);
+        s.invoke_chart_kind_selected(ResultsChartKind2::Boxplot);
+        s.set_chart_per_image(true);
+        s.invoke_chart_per_image_changed(true);
+        s.invoke_chart_value_picked("count".into());
+        drain_ui_queue();
+        let column = || o.controller.chart_filter.lock().unwrap().column.clone();
+        assert_eq!(column(), Column::Count);
+        s.invoke_chart_class_selected("ClassA".into(), true);
+        drain_ui_queue();
+        assert_eq!(column(), Column::Count, "class");
+        s.set_chart_group(1);
+        s.invoke_chart_group_selected(1);
+        drain_ui_queue();
+        assert_eq!(column(), Column::Count, "group");
+        let look = s.get_chart_box_look();
+        s.invoke_chart_box_look_changed(look);
+        drain_ui_queue();
+        assert_eq!(column(), Column::Count, "look");
+        assert_eq!(active_view(&o).settings["chart"]["column"], "count");
+        assert_eq!(s.get_chart_column_summary(), "Objects per image");
+        s.invoke_view_selected(view_id(&o, "List"));
+        drain_ui_queue();
+        s.invoke_view_selected(view_id(&o, "Charts"));
+        drain_ui_queue();
+        assert_eq!(column(), Column::Count, "view back");
+        assert_eq!(
+            s.get_chart_column_summary(),
+            "Objects per image",
+            "view back label"
+        );
+
+        // A value per object can't count: Area meanwhile, the count back
+        // per image - also through a saved view.
+        s.set_chart_per_image(false);
+        s.invoke_chart_per_image_changed(false);
+        drain_ui_queue();
+        assert_eq!(column(), Column::AreaSizePx, "per object");
+        assert_eq!(active_view(&o).settings["chart"]["column"], "count");
+        s.invoke_view_selected(view_id(&o, "List"));
+        drain_ui_queue();
+        s.invoke_view_selected(view_id(&o, "Charts"));
+        drain_ui_queue();
+        assert_eq!(column(), Column::AreaSizePx, "per object, view back");
+        s.set_chart_per_image(true);
+        s.invoke_chart_per_image_changed(true);
+        drain_ui_queue();
+        assert_eq!(column(), Column::Count, "per image again");
+        assert_eq!(s.get_chart_column_summary(), "Objects per image");
+
+        // Another value picked meanwhile: that one stays.
+        s.set_chart_per_image(false);
+        s.invoke_chart_per_image_changed(false);
+        s.invoke_chart_value_picked("area_px".into());
+        s.set_chart_per_image(true);
+        s.invoke_chart_per_image_changed(true);
+        drain_ui_queue();
+        assert_eq!(column(), Column::AreaSizePx, "picked meanwhile");
+    }
     /// Objects per image only stays the value of a per-image boxplot or
     /// bar chart.
     #[test]
@@ -12281,6 +12446,25 @@ pub(crate) mod tests {
         assert_eq!(chart(ChartKind::Boxplot, false), Column::AreaSizePx);
         assert_eq!(chart(ChartKind::Histogram, true), Column::AreaSizePx);
         assert_eq!(chart(ChartKind::Scatter, true), Column::AreaSizePx);
+
+        // Set aside, not forgotten: back when the chart can show it.
+        let mut chart = ChartFilter {
+            kind: ChartKind::Boxplot,
+            per_image: true,
+            column: Column::Count,
+            ..ChartFilter::default()
+        };
+        chart.per_image = false;
+        count_only_per_image(&mut chart, &available);
+        assert_eq!(chart.column, Column::AreaSizePx);
+        chart.per_image = true;
+        count_only_per_image(&mut chart, &available);
+        assert_eq!(chart.column, Column::Count);
+        chart.kind = ChartKind::Histogram;
+        count_only_per_image(&mut chart, &available);
+        chart.kind = ChartKind::Bar;
+        count_only_per_image(&mut chart, &available);
+        assert_eq!(chart.column, Column::Count, "via another chart");
     }
 
     /// A measurement's picker key resolves to its column among the open

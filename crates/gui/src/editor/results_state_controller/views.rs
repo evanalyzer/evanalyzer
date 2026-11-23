@@ -538,7 +538,12 @@ impl ResultsStateController {
             let filter = self.chart_filter.lock().expect("Poisoned");
             ChartView {
                 kind: chart_kind_key(filter.kind).into(),
-                column: Some(kept(&unavailable.chart_column, key(&filter.column))),
+                // The count set aside is what the view keeps.
+                column: Some(if filter.count_set_aside {
+                    key(&Column::Count)
+                } else {
+                    kept(&unavailable.chart_column, key(&filter.column))
+                }),
                 y_column: Some(kept(&unavailable.chart_y_column, key(&filter.y_column))),
                 class: filter
                     .object_class
@@ -984,7 +989,7 @@ impl ResultsStateController {
             })
             .collect();
         let chart_ui = (
-            chart.column.display_label(&classes),
+            super::column_panel::chart_value_label(&chart.column, chart.per_image, &classes),
             chart.y_column.display_label(&classes),
             chart
                 .object_class
