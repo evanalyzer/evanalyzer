@@ -218,9 +218,17 @@ component ObjectRow inherits Rectangle {
     callback clicked;
     // ⤢ Details, or a double click: the details panel.
     callback details;
+    // A colour image is measured as one channel, 0: its brightness (as in
+    // the pipeline and the object card) - not its red, green and blue.
+    property <bool> rgb: ImageMetaData.is-rgb;
+    // A channel's column in the table: picked in ⋯, and of a colour image
+    // only channel 0.
+    function ch-shown(idx: int) -> bool {
+        return TableCols.shown("ch\{idx}") && (!root.rgb || idx == 0);
+    }
     // Selected in the list: the row opened in place - the line, the mean
     // intensity per channel, its buttons.
-    out property <length> open-height: Ink.row-h + max(0, ChannelState.channels.length - 1) * 18px + 34px;
+    out property <length> open-height: Ink.row-h + max(0, (root.rgb ? 1 : ChannelState.channels.length) - 1) * 18px + 34px;
 
     // The list: color, id, then area and circularity in columns under the
     // head's units (no unit in every row).
@@ -292,8 +300,8 @@ component ObjectRow inherits Rectangle {
             padding-bottom: 8px;
             spacing: 0px;
             for ch in ChannelState.channels: HorizontalLayout {
-                height: ch.idx == root.ch-idx ? 0px : 18px;
-                visible: ch.idx != root.ch-idx;
+                height: ch.idx == root.ch-idx || root.rgb ? 0px : 18px;
+                visible: ch.idx != root.ch-idx && !root.rgb;
                 spacing: 6px;
                 VerticalLayout {
                     alignment: center;
@@ -424,9 +432,9 @@ component ObjectRow inherits Rectangle {
             }
 
             for ch in ChannelState.channels: NumberCell {
-                horizontal-stretch: TableCols.shown("ch\{ch.idx}") ? 1 : 0;
-                min-width: TableCols.shown("ch\{ch.idx}") ? 40px : 0px;
-                max-width: TableCols.shown("ch\{ch.idx}") ? 100000px : 0px;
+                horizontal-stretch: root.ch-shown(ch.idx) ? 1 : 0;
+                min-width: root.ch-shown(ch.idx) ? 40px : 0px;
+                max-width: root.ch-shown(ch.idx) ? 100000px : 0px;
                 text: root.data.intensity_avgs.length > ch.idx && root.data.intensity_avgs[ch.idx] != "" ? root.data.intensity_avgs[ch.idx] : "–";
             }
             Rectangle {
@@ -468,9 +476,21 @@ export component ObjectListPanel inherits Rectangle {
             root.select(ObjectListState.object_list[k]);
         }
     }
-    // The channel picked in Image: its mean in the list's first column.
-    property <int> ch-idx: ChannelState.selected_channel_index < ChannelState.channels.length ? ChannelState.channels[ChannelState.selected_channel_index].idx : 0;
-    property <string> ch-name: ChannelState.selected_channel_index < ChannelState.channels.length ? ChannelState.channels[ChannelState.selected_channel_index].name : "";
+    // A colour image is measured as one channel, 0: its brightness (as in
+    // the pipeline and the object card) - not its red, green and blue.
+    property <bool> rgb: ImageMetaData.is-rgb;
+    // The channel picked in Image: its mean in the list's first column (of
+    // a colour image always its brightness).
+    property <int> ch-idx: root.rgb ? 0 : ChannelState.selected_channel_index < ChannelState.channels.length ? ChannelState.channels[ChannelState.selected_channel_index].idx : 0;
+    property <string> ch-name: root.rgb ? "Brightness" : ChannelState.selected_channel_index < ChannelState.channels.length ? ChannelState.channels[ChannelState.selected_channel_index].name : "";
+    // A channel's column in the table: picked in ⋯, and of a colour image
+    // only channel 0.
+    function ch-shown(idx: int) -> bool {
+        return TableCols.shown("ch\{idx}") && (!root.rgb || idx == 0);
+    }
+    function ch-label(name: string) -> string {
+        return root.rgb ? "Brightness" : name;
+    }
     // The details panel's ↑ ↓.
     property <int> step-seq: ObjectListState.step-seq;
     changed step-seq => {
@@ -598,10 +618,10 @@ export component ObjectListPanel inherits Rectangle {
                 }
 
                 for ch in ChannelState.channels: HeadCell {
-                    horizontal-stretch: TableCols.shown("ch\{ch.idx}") ? 1 : 0;
-                    min-width: TableCols.shown("ch\{ch.idx}") ? 40px : 0px;
-                    max-width: TableCols.shown("ch\{ch.idx}") ? 100000px : 0px;
-                    text: ch.name.to-uppercase();
+                    horizontal-stretch: root.ch-shown(ch.idx) ? 1 : 0;
+                    min-width: root.ch-shown(ch.idx) ? 40px : 0px;
+                    max-width: root.ch-shown(ch.idx) ? 100000px : 0px;
+                    text: root.ch-label(ch.name).to-uppercase();
                     horizontal-alignment: right;
                 }
                 // Fills the line when there are no channel columns.
@@ -758,10 +778,11 @@ export component ObjectListPanel inherits Rectangle {
                     TableCols.toggle("circ");
                 }
             }
+            // A colour image: only its brightness (channel 0).
             for ch in ChannelState.channels: InkMenuItem {
-                visible: root.table;
-                height: root.table ? 28px : 0px;
-                text: "Mean " + ch.name;
+                visible: root.table && (!root.rgb || ch.idx == 0);
+                height: root.table && (!root.rgb || ch.idx == 0) ? 28px : 0px;
+                text: root.rgb ? "Mean brightness" : "Mean " + ch.name;
                 checked: TableCols.shown("ch\{ch.idx}");
                 clicked => {
                     TableCols.toggle("ch\{ch.idx}");

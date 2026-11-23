@@ -13,10 +13,12 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use crate::images::{ImageSource, TileRequest};
+use crate::images::{ImageChannel, ImageSource, TileRequest};
 use evanalyzer_cfg::core_types::{InternalErrors, ZProjection};
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
-use evanalyzer_core::measure_on_planes;
+use evanalyzer_core::{ImageContainer, ManagedImage, measure_on_planes};
+use kornia_image::Image;
+use std::sync::Arc;
 
 /// Measures `objects` (annotations of `series`) on `source`, each on its own
 /// image - its plane, or the z-projection it was drawn on, of its frame:
@@ -41,21 +43,74 @@ pub fn measure_on_source(
         full.width as usize,
         full.height as usize,
         |z_projection, z, t, tile| {
-            source.read_tile(&TileRequest {
-                series,
-                resolution_idx: 0,
-                z_projection,
-                // A projection over every plane, as the pipeline reads it.
-                z_range: (z_projection == ZProjection::None).then_some(z..=z),
-                t_stack: t,
-                tile,
-            })
+            source
+                .read_tile(&TileRequest {
+                    series,
+                    resolution_idx: 0,
+                    z_projection,
+                    // A projection over every plane, as the pipeline reads it.
+                    z_range: (z_projection == ZProjection::None).then_some(z..=z),
+                    t_stack: t,
+                    tile,
+                })
+                .map(as_analyses_read)
         },
     )?;
     for (object, sum) in objects.iter_mut().zip(sums) {
         object.intensities = sum.finish_settings();
     }
     Ok(())
+}
+
+/// A colour image as analyses read it. The viewer's source reads it split
+/// (red, green and blue as channels 0-2, each flagged `is_rgb`), analyses
+/// as one colour channel 0. Measured, that channel is the image's
+/// brightness, as in a pipeline, the AI training and the object card; so
+/// an annotation's channel 0 means the same as a detected object's, not
+/// its red. Anything else is returned as it is.
+fn as_analyses_read(channels: Vec<ImageChannel>) -> Vec<ImageChannel> {
+    let [r, g, b] = channels.as_slice() else {
+        return channels;
+    };
+    if !(r.is_rgb && g.is_rgb && b.is_rgb) || (r.c_stack, g.c_stack, b.c_stack) != (0, 1, 2) {
+        return channels;
+    }
+    let (
+        ImageContainer::F32Gray(red),
+        ImageContainer::F32Gray(green),
+        ImageContainer::F32Gray(blue),
+    ) = (r.image.as_ref(), g.image.as_ref(), b.image.as_ref())
+    else {
+        return channels;
+    };
+    if red.size() != green.size() || red.size() != blue.size() {
+        return channels;
+    }
+    let mut rgb = Vec::with_capacity(red.as_slice().len() * 3);
+    for ((&r, &g), &b) in red
+        .as_slice()
+        .iter()
+        .zip(green.as_slice())
+        .zip(blue.as_slice())
+    {
+        rgb.extend_from_slice(&[r, g, b]);
+    }
+    let Ok(data) = Image::<f32, 3>::new(red.size(), rgb) else {
+        return channels;
+    };
+    vec![ImageChannel {
+        image: Arc::new(ImageContainer::F32Rgb(ManagedImage {
+            data,
+            tile_offset: red.tile_offset,
+            plane: red.plane,
+            dimensionality: red.dimensionality,
+        })),
+        color: r.color,
+        is_visible: r.is_visible,
+        c_stack: 0,
+        name: r.name.clone(),
+        is_rgb: true,
+    }]
 }
 
 #[cfg(test)]
@@ -402,5 +457,38 @@ mod tests {
                 rss()
             );
         }
+    }
+
+    /// A colour annotation is measured as analyses measure it: one channel
+    /// 0, the brightness - the same values as on the image read packed (as
+    /// the pipeline and the AI training read it), not red/green/blue.
+    #[test]
+    fn a_colour_annotation_is_measured_as_its_brightness_like_in_analyses() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("rgb.tif");
+        image::RgbImage::from_fn(32, 24, |x, y| {
+            image::Rgb([(x * 8) as u8, (y * 10) as u8, ((x + y) * 3) as u8])
+        })
+        .save(&path)
+        .unwrap();
+        let split = open_image_source(&path).unwrap();
+        assert!(
+            split.meta().series[&0].resolutions[&0].is_rgb,
+            "the test image is a colour image"
+        );
+        let packed =
+            evanalyzer_core::ImageReader::new(&path, evanalyzer_core::ReadMode::Default).unwrap();
+
+        let mut on_split = vec![square(&split)];
+        let mut on_packed = on_split.clone();
+        measure_on_source(&split, 0, &mut on_split).unwrap();
+        measure_on_source(&packed, 0, &mut on_packed).unwrap();
+
+        assert_eq!(
+            on_split[0].intensities.keys().copied().collect::<Vec<_>>(),
+            vec![0],
+            "one channel, as analyses measure a colour image"
+        );
+        assert_eq!(json(&on_split[0]), json(&on_packed[0]));
     }
 }
