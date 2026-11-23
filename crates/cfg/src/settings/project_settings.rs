@@ -18,6 +18,7 @@ use crate::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
 /// How close two tile-edge object fragments must be, in pixel connectivity
 /// terms, to be considered the same real-world object - see [`TileMergeSettings`].
@@ -235,6 +236,16 @@ pub struct EditorSettings {
     /// Results.
     #[serde(default)]
     pub analysed_images: Vec<std::path::PathBuf>,
+    /// Classes whose objects the viewer doesn't draw (their eye is off).
+    /// Only how the image is shown - no effect on an analysis; changing it
+    /// marks the project unsaved but takes no undo step. Never holds the
+    /// pipeline focus's view, only the user's own.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub hidden_classes: BTreeSet<ObjectClass>,
+    /// Objects without any class drawn (shown in red as "Unclassified") -
+    /// off by default. Kept like `hidden_classes`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub show_unclassified_objects: bool,
 }
 
 /// A setting pinned into the Tuning panel: in which pipeline, which step

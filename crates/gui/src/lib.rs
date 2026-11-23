@@ -568,10 +568,15 @@ impl UiState {
         {
             let mut project = self.app.get_project_write();
             views_changed = project.settings.results_views != prev.results_views;
-            // Folding the images list is no edit: it stays as it is.
+            // Folding the images list and the class eyes are no edits:
+            // they stay as they are.
             let folded = std::mem::take(&mut project.settings.images.collapsed_folders);
+            let hidden = std::mem::take(&mut project.settings.editor.hidden_classes);
+            let unclassified = project.settings.editor.show_unclassified_objects;
             project.settings = prev;
             project.settings.images.collapsed_folders = folded;
+            project.settings.editor.hidden_classes = hidden;
+            project.settings.editor.show_unclassified_objects = unclassified;
             // The restored settings may no longer contain the previously
             // selected object (or contain a different one reusing the same
             // list position) - drop the selection rather than risk it
@@ -604,9 +609,15 @@ impl UiState {
         {
             let mut project = self.app.get_project_write();
             views_changed = project.settings.results_views != next.results_views;
+            // Folding the images list and the class eyes are no edits:
+            // they stay as they are.
             let folded = std::mem::take(&mut project.settings.images.collapsed_folders);
+            let hidden = std::mem::take(&mut project.settings.editor.hidden_classes);
+            let unclassified = project.settings.editor.show_unclassified_objects;
             project.settings = next;
             project.settings.images.collapsed_folders = folded;
+            project.settings.editor.hidden_classes = hidden;
+            project.settings.editor.show_unclassified_objects = unclassified;
             project.set_selected_object(None);
         }
         self.force_next_checkpoint.store(true, Ordering::Relaxed);

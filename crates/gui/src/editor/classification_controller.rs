@@ -215,6 +215,7 @@ impl ClassificationController {
                     let mut project = manager.app_state.get_project_write();
                     project.classification.delete_all_classes();
                     project.auto_add_classes_based_on_image_meta();
+                    project.forget_hidden_classes_not_defined();
                     manager.sync_classification_to_slint();
                     manager.object_list_controller.sync_objects_to_slint();
                 });
@@ -247,6 +248,7 @@ impl ClassificationController {
                         .classification
                         .delete_class(AssignObjectClass!(class_id));
                     project.set_selected_object_class(ObjectClass::Unset);
+                    project.forget_hidden_classes_not_defined();
                     manager.sync_classification_to_slint();
                 });
 
@@ -257,6 +259,7 @@ impl ClassificationController {
                     let mut project = manager.app_state.get_project_write();
                     project.classification.delete_all_classes();
                     project.set_selected_object_class(ObjectClass::Unset);
+                    project.forget_hidden_classes_not_defined();
                     manager.sync_classification_to_slint();
                     manager.object_list_controller.sync_objects_to_slint();
                 });
@@ -297,10 +300,15 @@ impl ClassificationController {
             let manager = self.clone();
             ui.global::<ClassificationState>()
                 .on_class_visibility_toggled(move |class_id| {
-                    manager
+                    // Saved in the project, but no edit: no undo step - an
+                    // unsaved change, though (not for the focus overlay).
+                    let saved = manager
                         .app_state
-                        .get_project_write()
+                        .get_project_runtime_write()
                         .toggle_class_visibility(AssignObjectClass!(class_id));
+                    if saved {
+                        manager.app_state.mark_dirty();
+                    }
                     manager.sync_classification_to_slint();
                     manager.viewport_controller.trigger_image_redraw_objects();
                 });
@@ -309,10 +317,12 @@ impl ClassificationController {
             let manager = self.clone();
             ui.global::<ClassificationState>()
                 .on_hide_unclassified_toggled(move || {
+                    // Kept like a class's eye: no undo step, unsaved.
                     manager
                         .app_state
-                        .get_project_write()
+                        .get_project_runtime_write()
                         .toggle_hide_unclassified_objects();
+                    manager.app_state.mark_dirty();
                     manager.sync_classification_to_slint();
                     manager.object_list_controller.sync_objects_to_slint();
                     manager.viewport_controller.trigger_image_redraw_objects();
@@ -1089,6 +1099,34 @@ mod tests {
                 .get_project()
                 .is_class_visible(&ObjectClass::Global(1))
         );
+    }
+
+    /// A class's eye is kept with the project but is no edit: an unsaved
+    /// change, no undo step, and an undo of an edit leaves it as it is.
+    #[test]
+    fn a_class_eye_is_unsaved_but_takes_no_undo_step() {
+        let ui = test_ui_window();
+        let (ui_state, controller) = make_controller_with_ui(ui.as_weak());
+        controller.update_class_settings_in_project(settings(-1, "Nuclei"));
+        controller.attach_callbacks();
+        ui_state.begin_undo_step();
+        ui_state.get_project_write().meta.name = "renamed".into();
+        ui_state.clear_dirty();
+
+        ui.global::<ClassificationState>()
+            .invoke_class_visibility_toggled(1);
+        ui.global::<ClassificationState>()
+            .invoke_hide_unclassified_toggled();
+
+        assert!(ui_state.is_dirty());
+        assert!(ui_state.undo(), "the rename is undone");
+        assert_ne!(ui_state.get_project().meta.name, "renamed");
+        let project = ui_state.get_project();
+        assert!(
+            !project.is_class_visible(&ObjectClass::Global(1)),
+            "still hidden"
+        );
+        assert!(!project.hide_unclassified_objects(), "still shown");
     }
 
     #[test]

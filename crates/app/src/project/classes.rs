@@ -232,8 +232,9 @@ impl ProjectWithRuntime {
         if tmp.selected_object_class == old {
             tmp.selected_object_class = new;
         }
-        if tmp.hidden_classes.remove(&old) {
-            tmp.hidden_classes.insert(new);
+        let hidden = &mut self.settings.editor.hidden_classes;
+        if hidden.remove(&old) {
+            hidden.insert(new);
         }
         if let Some(focus) = &mut tmp.pipeline_focus
             && focus.visible_classes.remove(&old)
@@ -243,33 +244,54 @@ impl ProjectWithRuntime {
         Ok(change)
     }
 
-    pub fn toggle_class_visibility(&mut self, class_id: ObjectClass) {
+    /// Shows a hidden class, hides a shown one. While a pipeline is
+    /// focused, only the focus overlay changes.
+    ///
+    /// # Returns
+    /// Whether the saved settings changed (`false`: the focus overlay).
+    pub fn toggle_class_visibility(&mut self, class_id: ObjectClass) -> bool {
         if let Some(focus) = &mut self.tmp_settings.pipeline_focus {
             if !focus.visible_classes.remove(&class_id) {
                 focus.visible_classes.insert(class_id);
             }
-            return;
+            return false;
         }
-        if self.tmp_settings.hidden_classes.contains(&class_id) {
-            self.tmp_settings.hidden_classes.remove(&class_id);
-        } else {
-            self.tmp_settings.hidden_classes.insert(class_id);
+        let hidden = &mut self.settings.editor.hidden_classes;
+        if !hidden.remove(&class_id) {
+            hidden.insert(class_id);
         }
+        true
+    }
+
+    /// Forgets the hidden classes the project no longer has - a class
+    /// added later under a deleted one's id starts visible.
+    pub fn forget_hidden_classes_not_defined(&mut self) {
+        let defined: std::collections::HashSet<ObjectClass> = self
+            .classification
+            .classes()
+            .iter()
+            .map(|c| c.global())
+            .collect();
+        self.settings
+            .editor
+            .hidden_classes
+            .retain(|class| defined.contains(class));
     }
 
     pub fn is_class_visible(&self, class_id: &ObjectClass) -> bool {
         match &self.tmp_settings.pipeline_focus {
             Some(focus) => focus.visible_classes.contains(class_id),
-            None => !self.tmp_settings.hidden_classes.contains(class_id),
+            None => !self.settings.editor.hidden_classes.contains(class_id),
         }
     }
 
     pub fn toggle_hide_unclassified_objects(&mut self) {
-        self.tmp_settings.hide_unclassified_objects = !self.tmp_settings.hide_unclassified_objects;
+        let show = &mut self.settings.editor.show_unclassified_objects;
+        *show = !*show;
     }
 
     pub fn hide_unclassified_objects(&self) -> bool {
-        self.tmp_settings.hide_unclassified_objects
+        !self.settings.editor.show_unclassified_objects
     }
 }
 

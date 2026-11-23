@@ -836,6 +836,14 @@
             "type": "string"
           }
         },
+        "hiddenClasses": {
+          "description": "Classes whose objects the viewer doesn't draw (their eye is off).\nOnly how the image is shown - no effect on an analysis; changing it\nmarks the project unsaved but takes no undo step. Never holds the\npipeline focus's view, only the user's own.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ObjectClass"
+          },
+          "uniqueItems": true
+        },
         "pins": {
           "description": "Settings pinned into the Tuning panel.",
           "type": "array",
@@ -851,6 +859,10 @@
           "items": {
             "type": "string"
           }
+        },
+        "showUnclassifiedObjects": {
+          "description": "Objects without any class drawn (shown in red as \"Unclassified\") -\noff by default. Kept like `hidden_classes`.",
+          "type": "boolean"
         }
       }
     },

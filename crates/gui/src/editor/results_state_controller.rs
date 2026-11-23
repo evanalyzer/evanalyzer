@@ -3278,7 +3278,8 @@ impl ResultsStateController {
                             classes.iter().map(|class| class.global()).collect();
                         *self.classes.lock().expect("Poisened") = classes.clone();
                         self.set_object_classes_in_slint(&classes);
-                        // Another analysis: every class drawn again.
+                        // Another analysis: no class selected. The classes
+                        // drawn come with the view (`apply_active_view`).
                         {
                             let mut split = self.split.lock().expect("Poisoned");
                             split.hidden_classes.clear();
@@ -7491,6 +7492,7 @@ pub(crate) mod tests {
     use crate::editor::test_support::{test_ui_state, test_ui_window};
     use crate::editor::viewport_controller::ViewportController;
     use evanalyzer_app::project::ImageListExt;
+    use evanalyzer_app::results::view_settings::ViewSettings;
 
     mod bench_list_jump {
         //! Benchmark (not run by default): the List's paging and the split
@@ -9117,6 +9119,36 @@ pub(crate) mod tests {
         state.invoke_split_class_toggled(1);
         drain_ui_queue();
         assert!(controller.split.lock().unwrap().hidden_classes.is_empty());
+    }
+
+    /// The split drawer's eyes are kept in the view shown: written into it,
+    /// and back when the view is applied again (another analysis, a switch).
+    #[test]
+    fn the_split_drawers_hidden_classes_are_kept_in_the_view() {
+        let (ui, controller) = controller_with_open_database();
+        drain_ui_queue();
+        let state = ui.global::<ResultsState>();
+
+        state.invoke_split_class_toggled(2);
+        drain_ui_queue();
+        let stored = {
+            let project = controller._app_state.get_project();
+            let views = &project.results_views;
+            let view = views.views.iter().find(|view| view.id == views.active);
+            view.map(|view| ViewSettings::read(&view.settings).split.hidden_classes)
+        };
+        assert_eq!(stored, Some(vec![2]));
+
+        controller.split.lock().unwrap().hidden_classes.clear();
+        controller.apply_active_view();
+        drain_ui_queue();
+        assert!(controller.split.lock().unwrap().hidden_classes.contains(&2));
+        let visible: Vec<bool> = state
+            .get_split_classes()
+            .iter()
+            .map(|class| class.visible)
+            .collect();
+        assert_eq!(visible, [true, false]);
     }
 
     /// The split image's objects in the editor's layers: the list's first
