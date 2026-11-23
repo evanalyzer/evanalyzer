@@ -390,6 +390,28 @@ cargo install slint-viewer    # live preview of .slint files
 To show the GUI from inside a dev container, allow X11 forwarding on the host
 first: `xhost +local:docker`.
 
+### Toolchain image
+
+[.devcontainer/Dockerfile](.devcontainer/Dockerfile) is the image
+`joda001/evanalyzer-toolchain`: the dev container and the CI/release jobs
+build in it. Every tool in it is pinned to a version. Built for amd64 and
+arm64 into one tag with Docker buildx (Docker Desktop has it; on Linux
+`apt install docker-buildx-plugin`, or `docker-buildx` with the
+distribution's Docker):
+
+```sh
+docker buildx create --name multi --use                           # once
+docker run --privileged --rm tonistiigi/binfmt --install arm64    # once, x86 Linux without Docker Desktop only
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t joda001/evanalyzer-toolchain:<version> --push .devcontainer
+docker buildx imagetools inspect joda001/evanalyzer-toolchain:<version>
+```
+
+On an x86 machine the arm64 half runs emulated (QEMU) and can take an hour
+or more. The last command prints the image's `Digest:` (one for both
+architectures). Put a new version into `.devcontainer/devcontainer.json` and
+the workflows in `.github/workflows/`.
+
 ### Coverage, audit, SBOM and licenses
 
 | What | Locally | In CI |

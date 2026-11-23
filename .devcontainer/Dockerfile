@@ -43,7 +43,10 @@ RUN apt-get update && apt-get install -y zip unzip p7zip-full xz-utils \
 
 # Cross build
 RUN cargo install --locked cargo-xwin --version 0.23.1
-RUN apt-get update && apt-get install -y clang llvm gcc-aarch64-linux-gnu build-essential binutils lld mold \
+# gcc-aarch64-linux-gnu (linker for the arm64 Linux target) only on amd64:
+# on arm64 the native gcc already is that.
+RUN apt-get update && apt-get install -y clang llvm build-essential binutils lld mold \
+    && if [ "$(dpkg --print-architecture)" = amd64 ]; then apt-get install -y gcc-aarch64-linux-gnu; fi \
     && rm -rf /var/lib/apt/lists/*
 RUN rustup target add x86_64-pc-windows-msvc aarch64-pc-windows-msvc aarch64-unknown-linux-gnu
 RUN ldconfig
