@@ -30,6 +30,7 @@ pub(crate) mod results_images;
 mod tests;
 pub mod utils;
 
+pub use cite::{cite_project, command_citations};
 pub use frontend::Frontend;
 pub use owner::{
     AppHandle, FocusChannels, PipelineFocus, ProjectOwner, ProjectTmpSettings, ProjectWithRuntime,

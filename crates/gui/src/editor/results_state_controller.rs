@@ -11784,7 +11784,7 @@ pub(crate) mod tests {
     /// Tracks view's unit.
     #[test]
     fn the_export_dialog_exports_tracks() {
-        use evanalyzer_app::global::SpeedUnit;
+        use evanalyzer_app::results::SpeedUnit;
         let o = opened_time_series();
         let export = o.export();
         o.controller.populate_export_defaults(&o.ui);
@@ -13673,7 +13673,7 @@ pub(crate) mod tests {
                 .load_app_settings()
                 .results_split
                 .speed_unit,
-            evanalyzer_app::global::SpeedUnit::PxPerFrame
+            evanalyzer_app::results::SpeedUnit::PxPerFrame
         );
         // A row past the table: nothing.
         s.invoke_track_row_clicked(9);
@@ -13763,7 +13763,7 @@ pub(crate) mod tests {
     /// setting.
     #[test]
     fn tracks_trails_follow_the_trail_settings() {
-        use evanalyzer_app::global::TrailMode;
+        use evanalyzer_app::user::TrailMode;
         let o = tracked_split();
         let s = o.state();
         let trails = || {

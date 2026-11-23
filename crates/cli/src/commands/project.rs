@@ -8,10 +8,10 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::args::{CiteArgs, ProjectInfoArgs, ProjectNewArgs, ValidateArgs};
-use evanalyzer_app::analysis::check_pipeline_channels;
-use evanalyzer_app::backends::Backend;
-use evanalyzer_app::exporter::cite_project;
+use evanalyzer_app::backend::Backend;
+use evanalyzer_app::jobs::check_pipeline_channels;
 use evanalyzer_app::modules::{ModuleProblem, Severity, check_project};
+use evanalyzer_app::project::cite_project;
 use evanalyzer_app::project::load_project;
 use evanalyzer_app::project::{ImageListExt, ProjectWithRuntime};
 use evanalyzer_cfg::PROJECT_FILE_EXTENSIONS;
@@ -112,7 +112,7 @@ pub fn run_validate(args: ValidateArgs, backend: &dyn Backend) -> Result<(), Int
         return evanalyzer_app::modules::validate_templates(
             &args.project,
             args.image.as_deref(),
-            &evanalyzer_app::backends::local::LocalBackend::default(),
+            &evanalyzer_app::backend::local::LocalBackend::default(),
         );
     }
     if args.image.is_some() {
@@ -295,7 +295,7 @@ mod tests {
     fn run_validate(args: ValidateArgs) -> Result<(), InternalErrors> {
         super::run_validate(args, &LocalBackend::default())
     }
-    use evanalyzer_app::backends::local::LocalBackend;
+    use evanalyzer_app::backend::local::LocalBackend;
     use evanalyzer_cfg::settings::images_settings::ImageEntry;
     use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 
@@ -464,7 +464,7 @@ mod tests {
     /// A backend whose user folder (settings) is in `home`, with `author`
     /// saved in its settings.
     fn user_with(home: &std::path::Path, author: Option<(&str, &str)>) -> LocalBackend {
-        use evanalyzer_app::global::{AppSettings, UserInformation};
+        use evanalyzer_app::user::{AppSettings, UserInformation};
         let backend = LocalBackend::default().with_home(home).unwrap();
         let mut settings = AppSettings::default();
         settings.author = author.map(|(full_name, organization)| UserInformation {

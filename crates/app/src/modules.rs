@@ -47,5 +47,15 @@ pub use crate::templates::checks::{
 pub use evanalyzer_core::module_parameters;
 pub use evanalyzer_core::module_steps_with_values;
 pub use evanalyzer_core::set_module_parameter;
+/// A step's settings as the editor shows and changes them - the generated
+/// ones, and a Script step's `param`s (declared in its script).
+pub use evanalyzer_core::{
+    HsvBounds, apply_command_param, command_parameters, declared_script_params, hsv_range_around,
+    script_syntax_error,
+};
 /// What a step does at its place in the pipeline, and what may follow.
 pub use evanalyzer_core::{RoleTracker, step_roles, tracker_after};
+pub use measurement_choices::{
+    MeasurementChoice, measurement_choices, measurement_setting_text, module_measurement_choices,
+    show_measurement_choices,
+};

@@ -15,7 +15,7 @@ use crate::{
     AppWindow, ClassItemData, ClassResultsKind, ClassSettingsSlint, ClassificationSettingsState,
     ClassificationState, ObjectListState,
 };
-use evanalyzer_app::prelude::classification_ext::ClassificationExt;
+use evanalyzer_app::project::classes::ClassificationExt;
 use evanalyzer_app::project::{free_class_ids, next_class_id};
 use evanalyzer_cfg::AssignObjectClass;
 use evanalyzer_cfg::core_types::ObjectClass;

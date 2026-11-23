@@ -28,9 +28,9 @@ use crate::editor::project_settings_controller::ProjectSettingsController;
 use crate::editor::results_list_controller::ResultsListController;
 use crate::editor::start_page_controller as start_page;
 use crate::editor::template_controller::TemplateController;
-use evanalyzer_app::backends::Backend;
-use evanalyzer_app::exporter::cite_project;
+use evanalyzer_app::backend::Backend;
 use evanalyzer_app::project::SaveProjectActions;
+use evanalyzer_app::project::cite_project;
 use evanalyzer_app::templates::load_project_template_from_file;
 use evanalyzer_app::templates::load_project_templates;
 use evanalyzer_cfg::MODULE_TEMPLATE_EXTENSION;
@@ -1499,12 +1499,12 @@ pub(crate) mod tests {
 
     /// A worker on a free port serving this machine, and a client of it.
     fn remote_backend() -> Arc<dyn Backend> {
-        use evanalyzer_app::backends::remote::{RemoteBackend, Worker};
+        use evanalyzer_app::remote::{RemoteBackend, Worker};
         let worker = Worker::bind("127.0.0.1:0", "t".into()).unwrap();
         let url = format!("ws://{}", worker.local_addr().unwrap());
         std::thread::spawn(move || {
             worker.run(Arc::new(
-                evanalyzer_app::backends::local::LocalBackend::default(),
+                evanalyzer_app::backend::local::LocalBackend::default(),
             ))
         });
         Arc::new(RemoteBackend::connect(&url, "t").unwrap())
@@ -2076,7 +2076,7 @@ pub(crate) mod tests {
         let w = with_window(project_with_pipeline("Mine"));
         let path = w.saved_project("ev.evaproj", &project_with_pipeline("Recent"));
         w.ui_state.update_app_settings(|s| {
-            s.remember_project(evanalyzer_app::global::RecentProject {
+            s.remember_project(evanalyzer_app::user::RecentProject {
                 path: path.clone(),
                 name: "Recent".into(),
                 images: 0,
@@ -2119,7 +2119,7 @@ pub(crate) mod tests {
         let w = with_window(ProjectWithRuntime::default());
         let path = w.saved_project("last.evaproj", &project_with_pipeline("Last"));
         let gone = w.dir.path().join("gone.evaproj");
-        let entry = |path: &PathBuf| evanalyzer_app::global::RecentProject {
+        let entry = |path: &PathBuf| evanalyzer_app::user::RecentProject {
             path: path.clone(),
             name: "x".into(),
             images: 0,
@@ -2173,7 +2173,7 @@ pub(crate) mod tests {
     fn remember_as_last(w: &Window, path: &PathBuf) {
         w.ui_state.update_app_settings(|s| {
             s.open_last_project = true;
-            s.remember_project(evanalyzer_app::global::RecentProject {
+            s.remember_project(evanalyzer_app::user::RecentProject {
                 path: path.clone(),
                 name: "x".into(),
                 images: 0,
@@ -2591,7 +2591,7 @@ pub(crate) mod tests {
             .pipelines_controller
             .analysis_running
             .store(true, Ordering::SeqCst);
-        let cancel = evanalyzer_app::analysis::CancelHandle::with_callback(|| {});
+        let cancel = evanalyzer_app::jobs::CancelHandle::with_callback(|| {});
         *w.controller
             .pipelines_controller
             .pipeline_cancel_flag
@@ -2726,7 +2726,7 @@ pub(crate) mod tests {
             .pipelines_controller
             .analysis_running
             .store(true, Ordering::SeqCst);
-        let cancel = evanalyzer_app::analysis::CancelHandle::with_callback(|| {});
+        let cancel = evanalyzer_app::jobs::CancelHandle::with_callback(|| {});
         *w.controller
             .pipelines_controller
             .pipeline_cancel_flag

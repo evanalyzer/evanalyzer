@@ -16,8 +16,8 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use evanalyzer_app::global::ViewportMemorySettings;
 use evanalyzer_app::project::ImageListExt;
+use evanalyzer_app::user::ViewportMemorySettings;
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 use std::collections::VecDeque;
 

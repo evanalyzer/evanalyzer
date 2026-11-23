@@ -16,11 +16,9 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use evanalyzer_app::modules::{apply_command_param, measurement_choices, measurement_setting_text};
 use evanalyzer_app::modules::{set_module_parameter, step_setting, step_settings};
 use evanalyzer_app::project::ProjectWithRuntime;
-use evanalyzer_app::settings_of::{
-    apply_command_param, measurement_choices, measurement_setting_text,
-};
 use evanalyzer_cfg::closest_name;
 use evanalyzer_cfg::core_types::{InternalErrors, ModuleParamKey};
 use evanalyzer_cfg::settings::parameter_def::{ParamType, ParameterDef};

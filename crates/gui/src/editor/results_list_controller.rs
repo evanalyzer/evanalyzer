@@ -10,7 +10,7 @@
 use crate::AppWindow;
 use crate::editor::results_state_controller::ResultsStateController;
 use crate::{PipelineRunningState, ResultItemData, ResultsListState, UiState};
-use evanalyzer_app::fs::FileSystem;
+use evanalyzer_app::files::FileSystem;
 use evanalyzer_app::results::{AnalysisFolder, analysis_folder, delete_analysis};
 use evanalyzer_cfg::RESULTS_FILE_EXTENSION;
 use log::warn;
@@ -528,7 +528,7 @@ fn extract_name_from_path(path: &PathBuf) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use evanalyzer_app::{fs::LocalFileSystem, project::ProjectWithRuntime};
+    use evanalyzer_app::{files::LocalFileSystem, project::ProjectWithRuntime};
 
     use crate::editor::{
         histogram_controller::HistogramController, image_meta_controller::ImageMetaController,

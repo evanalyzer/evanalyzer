@@ -11,26 +11,26 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use evanalyzer_app::ai_learning::PixelTrainingParams;
-use evanalyzer_app::ai_learning::StartTrainingError;
-use evanalyzer_app::ai_learning::TrainingItems;
-use evanalyzer_app::ai_learning::TrainingRequest;
-use evanalyzer_app::ai_learning::save_trained_model;
-use evanalyzer_app::analysis::AnalysisRequest;
-use evanalyzer_app::analysis::ProgressEvent;
-use evanalyzer_app::analysis::RunningJob;
-use evanalyzer_app::backends::Backend;
-use evanalyzer_app::backends::ConnectionSecurity;
-use evanalyzer_app::backends::local::LocalBackend;
-use evanalyzer_app::backends::remote::RemoteBackend;
-use evanalyzer_app::backends::remote::TlsTrust;
-use evanalyzer_app::backends::remote::Worker;
+use evanalyzer_app::ai::learning::save_trained_model;
+use evanalyzer_app::backend::Backend;
+use evanalyzer_app::backend::ConnectionSecurity;
+use evanalyzer_app::backend::local::LocalBackend;
 use evanalyzer_app::images::ImageSource;
 use evanalyzer_app::images::TileRequest;
-use evanalyzer_app::preview::PreviewRequest;
-use evanalyzer_app::preview::PreviewViewport;
+use evanalyzer_app::jobs::AnalysisRequest;
+use evanalyzer_app::jobs::PreviewRequest;
+use evanalyzer_app::jobs::PreviewViewport;
+use evanalyzer_app::jobs::ProgressEvent;
+use evanalyzer_app::jobs::RunningJob;
 use evanalyzer_app::project::ImageListExt;
 use evanalyzer_app::project::ProjectWithRuntime;
+use evanalyzer_app::remote::RemoteBackend;
+use evanalyzer_app::remote::TlsTrust;
+use evanalyzer_app::remote::Worker;
+use evanalyzer_app::training::PixelTrainingParams;
+use evanalyzer_app::training::StartTrainingError;
+use evanalyzer_app::training::TrainingItems;
+use evanalyzer_app::training::TrainingRequest;
 use evanalyzer_cfg::core_types::{
     ImageTile, InternalErrors, ObjectClass, TrainingProgressEvent, ZProjection,
 };
@@ -137,7 +137,7 @@ fn app_settings_are_kept_in_the_worker_s_user_home() {
         .collect();
     let expected = home
         .path()
-        .join(evanalyzer_app::global::USER_FOLDER_NAME)
+        .join(evanalyzer_app::user::USER_FOLDER_NAME)
         .join("settings.json");
     assert_eq!(saved, [expected]);
 }
@@ -450,7 +450,7 @@ fn a_remotely_trained_model_comes_back_and_saves_like_a_local_one() {
     let dir = tempfile::tempdir().unwrap();
     let path = save_trained_model(remote.files(), &model, dir.path(), "remote").unwrap();
     let settings =
-        evanalyzer_app::ai_learning::load_classifier_settings(remote.files(), &path).unwrap();
+        evanalyzer_app::ai::learning::load_classifier_settings(remote.files(), &path).unwrap();
     assert_eq!(
         serde_json::to_value(&settings).unwrap(),
         serde_json::to_value(two_class_object_settings()).unwrap()

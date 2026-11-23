@@ -11,8 +11,8 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-pub(crate) mod bioimageio;
-pub(crate) mod learning;
+pub mod bioimageio;
+pub mod learning;
 
 pub use evanalyzer_core::ai_devices::AiDeviceOptions;
 pub use evanalyzer_core::ai_devices::AiDeviceSelection;

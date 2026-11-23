@@ -171,8 +171,8 @@ impl PerformanceSettings {
         &self,
         max_threads: Option<usize>,
         max_ram_mb: Option<u64>,
-    ) -> crate::backends::local::ResourceLimits {
-        crate::backends::local::ResourceLimits {
+    ) -> evanalyzer_core::memory::ResourceLimits {
+        evanalyzer_core::memory::ResourceLimits {
             max_threads: max_threads.or(self.max_threads.map(|n| n as usize)),
             max_ram_mb: max_ram_mb.or(self.max_ram_mb.map(u64::from)),
         }

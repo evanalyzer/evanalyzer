@@ -11,6 +11,14 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 pub mod crash_log;
-pub(crate) mod folder;
-pub(crate) mod recent;
-pub(crate) mod settings;
+pub mod folder;
+pub mod recent;
+pub mod settings;
+
+pub use folder::USER_FOLDER_NAME;
+pub use recent::{RecentProject, RecentServer};
+pub use settings::{
+    AppSettings, ColorScheme, InterfaceSize, NavigatorMode, PanelSettings, PerformanceSettings,
+    PredictionOverlayPrefs, ResultsSplitSettings, TrailMode, UserInformation,
+    ViewportMemorySettings,
+};

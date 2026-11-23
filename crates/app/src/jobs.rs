@@ -15,3 +15,9 @@ pub(crate) mod local;
 mod types;
 
 pub use types::*;
+
+pub use evanalyzer_core::check_pipeline_channels;
+pub use evanalyzer_core::random_job_name;
+pub use evanalyzer_core::{
+    ObjectPredictionCapture, PredictedClass, PredictedObjectClass, PredictionCapture,
+};

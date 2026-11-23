@@ -30,9 +30,9 @@
 use crate::{
     FileBrowserCrumb, FileBrowserEntry, FileBrowserMode, FileBrowserPlace, FileBrowserState,
 };
-use evanalyzer_app::backends::Backend;
-use evanalyzer_app::fs::DirEntry;
-use evanalyzer_app::fs::{Place, PlaceKind};
+use evanalyzer_app::backend::Backend;
+use evanalyzer_app::files::DirEntry;
+use evanalyzer_app::files::{Place, PlaceKind};
 use evanalyzer_cfg::{
     EVANALYZER_TRAINED_AI_MODELS, MODULE_TEMPLATE_EXTENSION, PROJECT_FILE_EXTENSIONS,
     PROJECT_FILE_TEMPLATE_EXTENSIONS, RESULTS_FILE_EXTENSION,
@@ -1075,7 +1075,7 @@ mod tests {
     use crate::AppWindow;
     use crate::editor::test_support::test_ui_window;
     use crate::helper::ui_thread::drain_ui_queue;
-    use evanalyzer_app::backends::local::LocalBackend;
+    use evanalyzer_app::backend::local::LocalBackend;
     use slint::Model;
     use std::sync::mpsc;
 

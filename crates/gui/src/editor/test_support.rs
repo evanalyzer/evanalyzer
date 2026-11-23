@@ -55,7 +55,7 @@ pub(crate) fn test_project_owner() -> ProjectOwner {
         remove_homes_of_earlier_runs(&root);
     }
     let home = root.join(format!("{}-{index}", std::process::id()));
-    let backend = evanalyzer_app::backends::local::LocalBackend::default()
+    let backend = evanalyzer_app::backend::local::LocalBackend::default()
         .with_home(&home)
         .expect("temporary home");
     ProjectOwner::with_backend(Arc::new(backend))

@@ -935,7 +935,7 @@ mod tests {
         .unwrap();
         let pending = read_image_geojson(
             &project,
-            &evanalyzer_app::fs::LocalFileSystem::default(),
+            &evanalyzer_app::files::LocalFileSystem::default(),
             &file,
             Path::new("a.tif"),
             0,

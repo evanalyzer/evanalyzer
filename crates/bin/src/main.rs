@@ -14,9 +14,9 @@ use env_logger::Builder;
 use evanalyzer_app::ai::{
     AiDeviceOptions, AiDeviceSelection, DEFAULT_GPU_SLOTS, configure_ai_devices,
 };
-use evanalyzer_app::backends::Backend;
-use evanalyzer_app::backends::local::{LocalBackend, ResourceLimits, set_resource_limits};
-use evanalyzer_app::backends::remote::TlsTrust;
+use evanalyzer_app::backend::Backend;
+use evanalyzer_app::backend::local::{LocalBackend, ResourceLimits, set_resource_limits};
+use evanalyzer_app::remote::TlsTrust;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cli::CliCommand;
 use evanalyzer_server::{ServerConfig, serve};
@@ -26,8 +26,8 @@ use std::{path::PathBuf, sync::Arc};
 /// The system allocator, counting the large allocations: how much RAM the
 /// steps take, and a crash log line when it runs out.
 #[global_allocator]
-static ALLOCATOR: evanalyzer_app::global::AccountingAllocator =
-    evanalyzer_app::global::AccountingAllocator;
+static ALLOCATOR: evanalyzer_app::memory::AccountingAllocator =
+    evanalyzer_app::memory::AccountingAllocator;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Startup times (log level debug) are measured from here.
@@ -129,7 +129,7 @@ fn generate_backend(
     password: Option<String>,
     trust: TlsTrust,
 ) -> Result<Arc<dyn Backend>, Box<dyn std::error::Error>> {
-    use evanalyzer_app::backends::remote::RemoteBackend;
+    use evanalyzer_app::remote::RemoteBackend;
     match &remote {
         None => Ok(Arc::new(LocalBackend::default())),
         Some(url) => {
@@ -167,7 +167,7 @@ fn start_gui(
     project: Option<std::path::PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // GUI mode (default)
-    use evanalyzer_app::global::Frontend;
+    use evanalyzer_app::project::Frontend;
     use evanalyzer_app::project::ProjectOwner;
     let owner = ProjectOwner::with_backend(backend);
     let frontend: Box<dyn Frontend> = Box::new(evanalyzer_gui::create().with_project(project));
@@ -220,13 +220,13 @@ fn start_worker(
     let token = match token {
         Some(token) => token,
         None => {
-            let token = evanalyzer_app::backends::remote::generate_token()?;
+            let token = evanalyzer_app::remote::generate_token()?;
             info!("No token given - generated one for this session:\n\n  {token}\n");
             eprintln!("Clients connect with --remote-token set to this value.");
             token
         }
     };
-    let mut worker = evanalyzer_app::backends::remote::Worker::bind(&listen, token)?;
+    let mut worker = evanalyzer_app::remote::Worker::bind(&listen, token)?;
     if let Some(minutes) = idle_timeout_minutes {
         info!("Stopping after {minutes} min without client and analysis");
         worker = worker.with_idle_timeout(std::time::Duration::from_secs(minutes * 60));
@@ -344,8 +344,8 @@ fn start_server(config: ServerConfig) -> Result<(), Box<dyn std::error::Error>> 
 /// Init the logger with `log_level` (env_logger filter syntax, from
 /// `--log-level`) on top of the noisy-crate defaults.
 fn init_logger(log_level: &str) {
-    evanalyzer_app::global::crash_log::install_panic_hook();
-    evanalyzer_app::global::crash_log::install_out_of_memory_log();
+    evanalyzer_app::user::crash_log::install_panic_hook();
+    evanalyzer_app::user::crash_log::install_out_of_memory_log();
     let mut builder = Builder::new();
     builder.filter_level(LevelFilter::Debug);
     builder
@@ -415,8 +415,7 @@ mod tests {
 
     #[test]
     fn remote_with_a_token_connects_to_the_worker_directly() {
-        let worker =
-            evanalyzer_app::backends::remote::Worker::bind("127.0.0.1:0", "token".into()).unwrap();
+        let worker = evanalyzer_app::remote::Worker::bind("127.0.0.1:0", "token".into()).unwrap();
         let url = format!("ws://{}", worker.local_addr().unwrap());
         std::thread::spawn(move || worker.run(Arc::new(LocalBackend::default())));
 

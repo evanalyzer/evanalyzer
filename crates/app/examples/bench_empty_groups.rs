@@ -21,8 +21,8 @@
 //
 // Usage: cargo run --release -p evanalyzer_app --example bench_empty_groups -- <path.evadb> [--iters N] [--only <query name>]
 
-use evanalyzer_app::backends::Backend;
-use evanalyzer_app::backends::local::LocalBackend;
+use evanalyzer_app::backend::Backend;
+use evanalyzer_app::backend::local::LocalBackend;
 use evanalyzer_app::results::Aggregation;
 use evanalyzer_app::results::BoxplotFilter;
 use evanalyzer_app::results::ColorScale;

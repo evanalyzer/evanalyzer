@@ -1565,10 +1565,10 @@ pub(crate) fn histogram_to_svg_fast(
 mod tests {
     use super::*;
     use crate::helper::size_formater::BYTES_PER_MB;
-    use evanalyzer_app::global::ViewportMemorySettings;
     use evanalyzer_app::images::ManagedImage;
     use evanalyzer_app::images::Point2d;
     use evanalyzer_app::project::GlobalImageSettingsExt;
+    use evanalyzer_app::user::ViewportMemorySettings;
     use evanalyzer_cfg::core_types::ImageDimensionality;
     use evanalyzer_cfg::core_types::ImagePlane;
     use kornia_image::{Image, ImageSize};
@@ -2798,7 +2798,7 @@ mod tests {
         use crate::editor::prediction_overlay::{
             BACKGROUND_RGB, PredictionOverlaySettings, PredictionTile,
         };
-        use evanalyzer_app::analysis::{PredictedClass, PredictionCapture};
+        use evanalyzer_app::jobs::{PredictedClass, PredictionCapture};
         let mut r = render_fixture(project_with_fixture_image());
         r.draw(TaskDispatch::HighRes, new_image_task());
         set_view(&r, 1.0, 0.0, 0.0);
@@ -2921,7 +2921,7 @@ mod tests {
     #[test]
     fn an_object_prediction_draws_objects_as_strong_as_they_are_sure() {
         use crate::editor::prediction_overlay::PredictionOverlaySettings;
-        use evanalyzer_app::analysis::{ObjectPredictionCapture, PredictedObjectClass};
+        use evanalyzer_app::jobs::{ObjectPredictionCapture, PredictedObjectClass};
         use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
         use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
         let mut r = render_fixture(project_with_fixture_image());

@@ -368,7 +368,7 @@ impl ViewPortObjectController {
         };
         picks.1.push(rgb);
         state.set_color_picks(picks.1.len() as i32);
-        let Some(range) = evanalyzer_app::settings_of::hsv_range_around(&picks.1) else {
+        let Some(range) = evanalyzer_app::modules::hsv_range_around(&picks.1) else {
             return true;
         };
         drop(picks);
@@ -966,8 +966,8 @@ mod tests {
     use evanalyzer_app::images::ImageChannel;
     use evanalyzer_app::images::ManagedImage;
     use evanalyzer_app::images::Point2d;
-    use evanalyzer_app::prelude::classification_ext::ClassificationExt;
     use evanalyzer_app::project::GlobalImageSettingsExt;
+    use evanalyzer_app::project::classes::ClassificationExt;
     use evanalyzer_cfg::core_types::ImageDimensionality;
     use evanalyzer_cfg::core_types::ObjectId;
     use evanalyzer_cfg::settings::classification_settings::Class;
@@ -1470,7 +1470,7 @@ mod tests {
         let ui = test_ui_window();
         let ui_state = ui_state_with_window(&ui, project_with_one_image());
         let nuclei = {
-            use evanalyzer_app::prelude::classification_ext::ClassificationExt;
+            use evanalyzer_app::project::classes::ClassificationExt;
             let mut project = ui_state.get_project_write();
             let id = project.classification.add_class(
                 evanalyzer_cfg::settings::classification_settings::Class {

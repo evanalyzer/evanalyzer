@@ -35,4 +35,7 @@ pub use local::{colorize, colorize_thumbnail};
 /// A track's MSD over lag as Measure Track Motion fits it (the details
 /// panel's plot: the same points the step fitted).
 pub use evanalyzer_core::{MotionPoint, msd_curve};
+/// One stored object's solidity and Feret diameters, as the results
+/// columns compute them - for the selected object's card.
+pub use evanalyzer_core::{StoredObjectShape, stored_object_shape};
 pub use folders::{AnalysisFolder, analysis_folder, delete_analysis};

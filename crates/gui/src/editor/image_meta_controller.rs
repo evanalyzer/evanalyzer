@@ -15,9 +15,9 @@ use crate::{
     AppWindow, ChannelInfo, ChannelState, ImageMetaData, IntensityProjection, SeriesInfo,
     WavelengthOption,
 };
-use evanalyzer_app::prelude::utils::wavelength_colors;
 use evanalyzer_app::project::GlobalImageSettingsExt;
-use evanalyzer_app::utils::{channel_display_name, wavelength_to_rgb_float};
+use evanalyzer_app::project::utils::wavelength_colors;
+use evanalyzer_app::project::utils::{channel_display_name, wavelength_to_rgb_float};
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::images_settings::ZStackHandling;
 use log::warn;
@@ -1523,9 +1523,9 @@ mod tests {
     #[test]
     fn the_grayscale_switch_shows_one_white_channel_and_back_in_colour() {
         // The project knows the file's real channels, as after adding it.
-        use evanalyzer_app::backends::Backend;
+        use evanalyzer_app::backend::Backend;
         let path = crate::editor::test_support::fixture_image_path();
-        let meta = evanalyzer_app::backends::local::LocalBackend::default()
+        let meta = evanalyzer_app::backend::local::LocalBackend::default()
             .read_image_meta(&path)
             .unwrap();
         let mut project = evanalyzer_app::project::ProjectWithRuntime::default();

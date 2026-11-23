@@ -17,8 +17,8 @@ use crate::{
     ImagePixelInfo, IntensityProjection, LayoutState, ViewportMemoryState,
     ViewportState as ViewportSlintState, WarningState,
 };
-use evanalyzer_app::global::{PerformanceSettings, ViewportMemorySettings};
 use evanalyzer_app::project::GlobalImageSettingsExt;
+use evanalyzer_app::user::{PerformanceSettings, ViewportMemorySettings};
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::images_settings::{
     TStackHandling, TStackSettings, ZStackHandling, ZStackSettings,
@@ -124,7 +124,7 @@ impl ViewportImageController {
             state.set_breakpoint_tiles_auto(settings.breakpoint_tiles_auto);
             state.set_software_renderer(settings.software_renderer);
             state.set_breakpoint_tiles(settings.effective_breakpoint_tiles(ram) as i32);
-            let cores = evanalyzer_app::backends::local::cpu_ram_diagnostics().0;
+            let cores = evanalyzer_app::backend::local::cpu_ram_diagnostics().0;
             state.set_auto_undo_history_note(
                 format!(
                     "{gb:.0} GB RAM, {cores} cores: {} MB",
@@ -144,7 +144,7 @@ impl ViewportImageController {
     fn show_performance_settings(&self, performance: &PerformanceSettings) {
         if let Some(ui) = self.ui.upgrade() {
             let state = ui.global::<ViewportMemoryState>();
-            let (cores, ram) = evanalyzer_app::backends::local::cpu_ram_diagnostics();
+            let (cores, ram) = evanalyzer_app::backend::local::cpu_ram_diagnostics();
             let ram_mb = (ram / (1024 * 1024)) as u32;
             state.set_resources_note(
                 format!(
@@ -678,7 +678,7 @@ impl ViewportImageController {
                             crate::editor::view_channel::raw_value(raw_val, ctx.bit_depth);
                         // An image without channel names: the names the
                         // channels panel shows ("Channel 0").
-                        let name = evanalyzer_app::utils::channel_display_name(
+                        let name = evanalyzer_app::project::utils::channel_display_name(
                             &channel.name,
                             channel.c_stack,
                         );
