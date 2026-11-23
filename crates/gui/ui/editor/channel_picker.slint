@@ -15,8 +15,9 @@ import { InkPickerField, InkPickerRow, InkSwatchName } from "../ink/ink.slint";
 
 // Color swatch + name of channel `idx`; collapses to nothing for a channel
 // the open image doesn't define. A colour (RGB) image is one channel in an
-// analysis - channel 0, read as its brightness - so it isn't listed as red,
-// green and blue: channel 0 is "RGB · brightness", the others aren't there.
+// analysis - channel 0, read as its gray value (R + G + B) / 3 - so it isn't
+// listed as red, green and blue: channel 0 is "RGB · gray", the others aren't
+// there.
 component ChannelLabel inherits Rectangle {
     in property <int> idx;
     in property <length> font-size: Ink.fs-body;
@@ -43,7 +44,7 @@ component ChannelLabel inherits Rectangle {
             }
         }
         Text {
-            text: root.idx == 0 ? "RGB · brightness" : "not in this image";
+            text: root.idx == 0 ? "RGB · gray" : "not in this image";
             font-size: root.font-size;
             color: root.idx == 0 ? Ink.text : Ink.text-faint;
             vertical-alignment: center;

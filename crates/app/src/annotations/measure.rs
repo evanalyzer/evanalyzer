@@ -64,10 +64,10 @@ pub fn measure_on_source(
 
 /// A colour image as analyses read it. The viewer's source reads it split
 /// (red, green and blue as channels 0-2, each flagged `is_rgb`), analyses
-/// as one colour channel 0. Measured, that channel is the image's
-/// brightness, as in a pipeline, the AI training and the object card; so
-/// an annotation's channel 0 means the same as a detected object's, not
-/// its red. Anything else is returned as it is.
+/// as one colour channel 0. Measured, that channel is the image's gray
+/// value (R + G + B) / 3, as in a pipeline, the AI training and the object
+/// card; so an annotation's channel 0 means the same as a detected
+/// object's, not its red. Anything else is returned as it is.
 fn as_analyses_read(channels: Vec<ImageChannel>) -> Vec<ImageChannel> {
     let [r, g, b] = channels.as_slice() else {
         return channels;
@@ -460,10 +460,10 @@ mod tests {
     }
 
     /// A colour annotation is measured as analyses measure it: one channel
-    /// 0, the brightness - the same values as on the image read packed (as
+    /// 0, the gray value - the same values as on the image read packed (as
     /// the pipeline and the AI training read it), not red/green/blue.
     #[test]
-    fn a_colour_annotation_is_measured_as_its_brightness_like_in_analyses() {
+    fn a_colour_annotation_is_measured_as_its_gray_value_like_in_analyses() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("rgb.tif");
         image::RgbImage::from_fn(32, 24, |x, y| {

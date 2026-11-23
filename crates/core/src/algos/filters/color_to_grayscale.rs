@@ -12,7 +12,6 @@
 //! image passes through unchanged, so one pipeline works for both.
 use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
 use crate::image::ImageContainer;
-use crate::pipeline::pipeline_cache::sample_channel_pixel;
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use macros::CommandsMeta;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
@@ -22,8 +21,7 @@ use rayon::slice::ParallelSlice;
 #[derive(CommandsMeta, Debug, Clone, Copy, PartialEq)]
 pub enum GrayscaleMethod {
     /// The brightness as the eye sees it: 0.2126 R + 0.7152 G + 0.0722 B
-    /// (ITU-R BT.709) - the same value intensities of a colour image are
-    /// measured with.
+    /// (ITU-R BT.709).
     #[cmdsmeta(display_name = "Brightness")]
     Brightness,
     /// The red channel alone.
@@ -35,7 +33,8 @@ pub enum GrayscaleMethod {
     /// The blue channel alone.
     #[cmdsmeta(display_name = "Blue")]
     Blue,
-    /// (R + G + B) / 3.
+    /// (R + G + B) / 3 - the gray value intensities of a colour image are
+    /// measured with, as in ImageJ.
     #[cmdsmeta(display_name = "Average")]
     Average,
     /// The brightest of R, G and B per pixel (HSV value, as Color Filter
@@ -48,19 +47,25 @@ pub enum GrayscaleMethod {
     Darkness,
 }
 
+/// The brightness as the eye sees it (ITU-R BT.709), each value 0-1.
+#[inline]
+fn bt709(r: f32, g: f32, b: f32) -> f32 {
+    (0.2126 * r + 0.7152 * g + 0.0722 * b).max(0.0)
+}
+
 impl GrayscaleMethod {
     /// The gray value of one pixel's red, green and blue (each 0-1).
     #[inline]
     fn gray(self, rgb: &[f32]) -> f32 {
         let (r, g, b) = (rgb[0], rgb[1], rgb[2]);
         match self {
-            Self::Brightness => sample_channel_pixel(true, rgb, 0),
+            Self::Brightness => bt709(r, g, b),
             Self::Red => r,
             Self::Green => g,
             Self::Blue => b,
             Self::Average => (r + g + b) / 3.0,
             Self::Maximum => r.max(g).max(b),
-            Self::Darkness => 1.0 - sample_channel_pixel(true, rgb, 0),
+            Self::Darkness => 1.0 - bt709(r, g, b),
         }
     }
 }
@@ -186,15 +191,16 @@ mod tests {
         );
     }
 
-    /// Brightness is the value intensities of a colour image are measured
+    /// Average is the value intensities of a colour image are measured
     /// with, so a threshold on it and a measurement agree.
     #[test]
-    fn brightness_matches_how_a_colour_image_is_measured() {
+    fn average_matches_how_a_colour_image_is_measured() {
+        use crate::pipeline::pipeline_cache::sample_channel_pixel;
         let flat: Vec<f32> = PIXELS.iter().flatten().copied().collect();
         let measured: Vec<f32> = (0..2)
             .map(|i| sample_channel_pixel(true, &flat, i))
             .collect();
-        close(&run(GrayscaleMethod::Brightness, &PIXELS), &measured);
+        close(&run(GrayscaleMethod::Average, &PIXELS), &measured);
     }
 
     #[test]

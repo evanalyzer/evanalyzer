@@ -994,7 +994,7 @@
       "description": "How the red, green and blue of a pixel become one gray value.",
       "oneOf": [
         {
-          "description": "The brightness as the eye sees it: 0.2126 R + 0.7152 G + 0.0722 B\n(ITU-R BT.709) - the same value intensities of a colour image are\nmeasured with.",
+          "description": "The brightness as the eye sees it: 0.2126 R + 0.7152 G + 0.0722 B\n(ITU-R BT.709).",
           "type": "string",
           "const": "BRIGHTNESS"
         },
@@ -1014,7 +1014,7 @@
           "const": "BLUE"
         },
         {
-          "description": "(R + G + B) / 3.",
+          "description": "(R + G + B) / 3 - the gray value intensities of a colour image are\nmeasured with, as in ImageJ.",
           "type": "string",
           "const": "AVERAGE"
         },

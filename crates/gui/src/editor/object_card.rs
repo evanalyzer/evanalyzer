@@ -2,7 +2,7 @@
 //!
 //! The selected object's card (`ui/editor/object_details.slint`), by
 //! section: size and shape (from its mask; area and circularity as tiles), intensity per channel (a colour
-//! image: one row, its brightness), the values the preview's Measure steps
+//! image: one row, its gray value), the values the preview's Measure steps
 //! gave it, and its relations. Built for the selected object only, when it
 //! is selected - nothing for the other objects.
 //!
@@ -249,7 +249,8 @@ fn channel_colors(project: &ProjectWithRuntime) -> std::collections::BTreeMap<i3
 }
 
 /// The intensity per channel, in the image's gray values: a colour image
-/// one row (its brightness, as it is measured), else one per channel.
+/// one row (its gray value (R + G + B) / 3, as it is measured), else one
+/// per channel.
 fn intensity_rows(
     object: &ObjectMetricSettings,
     project: &ProjectWithRuntime,
