@@ -4328,11 +4328,7 @@ impl ResultsStateController {
             Some(_) => ListGroupBy::Objects,
             None => list_filter.group_by,
         };
-        // Classes as columns: per object and image only here (the menu item
-        // is greyed for wells and folders, its tick kept).
-        let transpond_table = list_filter.transpond
-            && drill.is_none()
-            && matches!(group_by, ListGroupBy::Objects | ListGroupBy::Images);
+        let transpond_table = list_filter.transpond && drill.is_none();
         // A row per object: Count would be 1 in every row - it means
         // something per image or well only.
         let mut columns = columns;
@@ -4518,8 +4514,8 @@ impl ResultsStateController {
                         limit: LIST_PAGE_SIZE,
                         after: cursor,
                     },
-                    // Classes as columns: per image only.
-                    transpond_table: transpond_table && group_by.grouping().is_none(),
+                    // Classes as columns: per image, well and folder.
+                    transpond_table,
                     grouping: group_by.grouping(),
                     empty_classes,
                     sort,
@@ -10203,6 +10199,35 @@ pub(crate) mod tests {
         s.invoke_list_image_selected("A1_01.tif".into(), true);
         drain_ui_queue();
         assert!(s.get_list_image_summary().starts_with("1 of"));
+    }
+
+    /// Classes as columns per well and folder: a row per well (folder),
+    /// no class column - every class's values in its own columns.
+    #[test]
+    fn classes_as_columns_per_well_and_folder() {
+        let o = opened();
+        let s = o.state();
+        s.invoke_rail_mode_selected(ResultsRailMode::List);
+        for rows in ["wells", "folders"] {
+            s.invoke_list_transpond_changed(false);
+            s.invoke_list_group_by_selected(rows.into());
+            drain_ui_queue();
+            let per_class = s.get_list_rows().row_count();
+            assert!(per_class > 0, "{rows}");
+            s.invoke_list_transpond_changed(true);
+            drain_ui_queue();
+            let headers: Vec<String> =
+                s.get_list_column_headers().iter().map(|h| h.to_string()).collect();
+            assert!(
+                !headers.iter().any(|h| h.eq_ignore_ascii_case("class")),
+                "{rows}: {headers:?}"
+            );
+            let per_group = s.get_list_rows().row_count();
+            assert!(
+                per_group > 0 && per_group <= per_class,
+                "{rows}: {per_group} rows side by side, {per_class} by class"
+            );
+        }
     }
 
     #[test]

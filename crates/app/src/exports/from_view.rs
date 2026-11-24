@@ -62,7 +62,11 @@ pub fn entry_from_view(view: &ResultsView) -> Option<ExportEntry> {
             table.aggregations = aggregations;
             table.empty_classes = list.empty_classes;
             table.transposed =
-                list.transposed && matches!(rows, TableRows::Object | TableRows::Image);
+                list.transposed
+                    && matches!(
+                        rows,
+                        TableRows::Object | TableRows::Image | TableRows::Well | TableRows::Folder
+                    );
             table.images = match list.images.as_str() {
                 "all" => ImageScope::All,
                 "disabled" => ImageScope::LeftOut,
@@ -326,7 +330,8 @@ mod tests {
         };
         let well = rows(json!({ "rowsPerGroup": "wells", "transposed": true }));
         assert_eq!(well.rows, TableRows::Well);
-        assert!(!well.transposed);
+        assert!(well.transposed, "wells side by side as in the List");
+        assert!(!rows(json!({ "colocDetails": true, "transposed": true })).transposed);
         assert_eq!(well.columns, None);
         assert_eq!(
             rows(json!({ "rowsPerGroup": "folders" })).rows,

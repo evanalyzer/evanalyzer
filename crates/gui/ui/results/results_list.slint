@@ -246,11 +246,11 @@ component ListBar inherits ViewBar {
 
     BarMore {
         menu-width: 300px;
-        // Per image, per object: each class's values side by side.
+        // Per object, image, well and folder: each class's values side by
+        // side.
         InkMenuItem {
             text: "Classes as columns";
             checked: ResultsState.list-transpond;
-            enabled: root.rows != "Wells" && root.rows != "Folders";
             clicked => {
                 ResultsState.list-transpond = !ResultsState.list-transpond;
                 ResultsState.list-transpond-changed(ResultsState.list-transpond);
