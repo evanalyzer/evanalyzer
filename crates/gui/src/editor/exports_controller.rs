@@ -196,9 +196,13 @@ struct Shown {
     quick_view: Option<u32>,
     /// The folder its Export wrote into (the done step).
     quick_written: Option<PathBuf>,
-    /// The run going on: its cancel flag.
+    /// The run going on: its cancel flag, how far (text, 0..1), the
+    /// export (by hand: its id and name).
     running: Option<Arc<AtomicBool>>,
+    running_id: Option<u32>,
+    running_name: String,
     progress: String,
+    fraction: f32,
     /// The newest analysis' columns and classes - what the column picker
     /// offers; read when the tab is shown.
     picked_from: Option<PickedFrom>,
@@ -1002,6 +1006,15 @@ impl ExportsController {
         if self.shown.lock().expect("Poisoned").running.is_some() {
             return;
         }
+        // One at a time: no export while an analysis runs (its own
+        // exports are its last step).
+        let analysing = self.ui.upgrade().is_some_and(|ui| {
+            let running = ui.global::<crate::PipelineRunningState>();
+            running.get_active() && (!running.get_done() || running.get_exporting())
+        });
+        if analysing {
+            return;
+        }
         let Some(export) = self
             .app_state
             .get_project()
@@ -1042,7 +1055,10 @@ impl ExportsController {
         {
             let mut shown = self.shown.lock().expect("Poisoned");
             shown.running = Some(cancel.clone());
+            shown.running_id = Some(id);
+            shown.running_name = format!("“{}”", export.name);
             shown.progress = "Starting…".into();
+            shown.fraction = 0.0;
             shown.last_runs.remove(&id);
         }
         self.push();
@@ -1075,11 +1091,15 @@ impl ExportsController {
                                 &database,
                                 &once,
                                 &cancel,
-                                move |text| {
+                                move |text, done| {
                                     let this = progress_to.clone();
                                     let text = format!("{at}{text}");
+                                    let fraction = (i as f32 + done) / total as f32;
                                     ui_thread::invoke_from_event_loop(move || {
-                                        this.shown.lock().expect("Poisoned").progress = text;
+                                        let mut shown = this.shown.lock().expect("Poisoned");
+                                        shown.progress = text;
+                                        shown.fraction = fraction;
+                                        drop(shown);
                                         this.push();
                                     })
                                     .ok();
@@ -1102,7 +1122,7 @@ impl ExportsController {
         database: &Path,
         once: &[String],
         cancel: &AtomicBool,
-        progress: impl Fn(String),
+        progress: impl Fn(String, f32),
     ) -> Result<ExportReport, String> {
         self.run_one_into(project_dir, export, database, None, once, cancel, progress)
     }
@@ -1117,7 +1137,7 @@ impl ExportsController {
         output: Option<PathBuf>,
         once: &[String],
         cancel: &AtomicBool,
-        progress: impl Fn(String),
+        progress: impl Fn(String, f32),
     ) -> Result<ExportReport, String> {
         let backend = self.app_state.backend();
         let mut trusted = backend
@@ -1140,18 +1160,26 @@ impl ExportsController {
         };
         results
             .run_export(&run, cancel, &mut |message, current, total| {
-                progress(if current < total {
+                let text = if current < total {
                     format!("{}/{total} · {message}", current + 1)
                 } else {
                     message.to_string()
-                });
+                };
+                let done = if total == 0 {
+                    0.0
+                } else {
+                    current.min(total) as f32 / total as f32
+                };
+                progress(text, done);
             })
             .map_err(|e| e.to_string())
     }
 
     /// An analysis finished into `output_dir`: the exports left on in the
-    /// run dialog (else those set to run after every run) run on its
-    /// results, one after the other, in the background.
+    /// run dialog (else those set to run after analysis) run on its
+    /// results, one after the other, in the background - the analysis'
+    /// last step: its progress says "Exporting", its note waits for them
+    /// (design canvas "Quick export, open folder, run on", board 6).
     fn run_after(self: &Arc<Self>, output_dir: &Path) {
         let wanted = self.app_state.take_exports_for_run();
         let exports: Vec<ExportSettings> = self
@@ -1174,8 +1202,17 @@ impl ExportsController {
         };
         let output_dir = output_dir.to_path_buf();
         let this = self.clone();
-        // Asked on the UI thread: a script not allowed yet first.
+        // On the UI thread, before the analysis says it is done (queued
+        // first): its last step starts; a script not allowed yet is asked.
         ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = this.ui.upgrade() {
+                let running = ui.global::<crate::PipelineRunningState>();
+                running.set_exporting(true);
+                running.set_export_text("starting".into());
+                running.set_export_fraction(0.0);
+                running.set_export_note("".into());
+                running.set_export_problem(false);
+            }
             let run = this.clone();
             let asked = exports.clone();
             this.ask_scripts(&project_dir.clone(), &asked, move |once| {
@@ -1185,8 +1222,22 @@ impl ExportsController {
         .ok();
     }
 
+    /// The analysis' export step as far as it is (on the UI thread).
+    fn set_phase(&self, text: String, fraction: f32) {
+        let weak = self.ui.clone();
+        ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = weak.upgrade() {
+                let running = ui.global::<crate::PipelineRunningState>();
+                running.set_export_text(text.into());
+                running.set_export_fraction(fraction);
+            }
+        })
+        .ok();
+    }
+
     /// Runs `exports` after an analysis into `output_dir`, the scripts
-    /// allowed `once` with them.
+    /// allowed `once` with them; the Exports tab is locked meanwhile (its
+    /// Stop stops them, as the analysis' does).
     fn start_after(
         self: &Arc<Self>,
         exports: Vec<ExportSettings>,
@@ -1195,37 +1246,16 @@ impl ExportsController {
         once: Vec<String>,
     ) {
         let cancel = Arc::new(AtomicBool::new(false));
-        let note_cancel = cancel.clone();
-        self.set_after(move |after| {
-            *after = AfterRun {
-                shown: true,
-                text: "Exports · starting…".into(),
-                tone: 0,
-                open: None,
-                cancel: Some(note_cancel),
-                folder: None,
-            };
-        });
+        {
+            let mut shown = self.shown.lock().expect("Poisoned");
+            shown.running = Some(cancel.clone());
+            shown.progress = "After the analysis · starting".into();
+            shown.fraction = 0.0;
+        }
+        self.push();
         let this = self.clone();
         ui_thread::spawn(move || {
             let backend = this.app_state.backend();
-            let database = match results_database(backend.files(), &project_dir, Some(&output_dir))
-            {
-                Ok(database) => database,
-                Err(e) => {
-                    let why = e.to_string();
-                    this.set_after(move |after| {
-                        *after = AfterRun {
-                            shown: true,
-                            text: format!("Exports didn't run: {why}"),
-                            tone: 2,
-                            ..AfterRun::default()
-                        };
-                    });
-                    return;
-                }
-            };
-            let analysis = analysis_name(&database);
             let total = exports.len();
             let mut failed = 0;
             let mut files = 0;
@@ -1234,91 +1264,106 @@ impl ExportsController {
             // this computer only.
             let mut folder: Option<PathBuf> = None;
             let local = !backend.is_remote();
-            for (i, export) in exports.into_iter().enumerate() {
-                if cancel.load(Ordering::Relaxed) {
-                    break;
-                }
-                let name = export.name.clone();
-                let counter = if total > 1 {
-                    format!("{}/{total} · ", i + 1)
-                } else {
-                    String::new()
-                };
-                let at = format!("Exports · {counter}{name}");
-                this.set_after({
-                    let at = at.clone();
-                    move |after| after.text = at
-                });
-                let note_to = this.clone();
-                let result = this.run_one(
-                    &project_dir,
-                    &export,
-                    &database,
-                    &once,
-                    &cancel,
-                    move |text| {
-                        let at = format!("{at} · {text}");
-                        note_to.set_after(move |after| after.text = at);
-                    },
-                );
-                let id = export.id;
-                let problem = match &result {
-                    Err(_) => true,
-                    Ok(report) => {
-                        let written = report.entries.iter().map(|e| e.files.len()).sum::<usize>();
-                        if written > 0 && local {
-                            folder.get_or_insert_with(|| report.folder.clone());
+            let mut cant_run = None;
+            match results_database(backend.files(), &project_dir, Some(&output_dir)) {
+                Err(e) => cant_run = Some(e.to_string()),
+                Ok(database) => {
+                    let analysis = analysis_name(&database);
+                    for (i, export) in exports.into_iter().enumerate() {
+                        if cancel.load(Ordering::Relaxed) {
+                            break;
                         }
-                        files += written;
-                        !report.all_written()
+                        let name = export.name.clone();
+                        let counter = if total > 1 {
+                            format!(" · {}/{total}", i + 1)
+                        } else {
+                            String::new()
+                        };
+                        let at = format!("“{name}”{counter}");
+                        this.set_phase(at.clone(), i as f32 / total as f32);
+                        let phase_to = this.clone();
+                        let result = this.run_one(
+                            &project_dir,
+                            &export,
+                            &database,
+                            &once,
+                            &cancel,
+                            move |text, done| {
+                                phase_to.set_phase(
+                                    format!("{at} · {text}"),
+                                    (i as f32 + done) / total as f32,
+                                );
+                            },
+                        );
+                        let id = export.id;
+                        let problem = match &result {
+                            Err(_) => true,
+                            Ok(report) => {
+                                let written =
+                                    report.entries.iter().map(|e| e.files.len()).sum::<usize>();
+                                if written > 0 && local {
+                                    folder.get_or_insert_with(|| report.folder.clone());
+                                }
+                                files += written;
+                                !report.all_written()
+                            }
+                        };
+                        if problem {
+                            failed += 1;
+                            first_problem.get_or_insert(id);
+                        }
+                        let this2 = this.clone();
+                        let analysis = analysis.clone();
+                        ui_thread::invoke_from_event_loop(move || {
+                            this2.record(id, analysis, result.map(|r| (export, r)));
+                        })
+                        .ok();
                     }
-                };
-                if problem {
-                    failed += 1;
-                    first_problem.get_or_insert(id);
                 }
-                let this2 = this.clone();
-                let analysis = analysis.clone();
-                ui_thread::invoke_from_event_loop(move || {
-                    this2.record(id, analysis, result.map(|r| (export, r)));
-                })
-                .ok();
             }
             let cancelled = cancel.load(Ordering::Relaxed);
-            this.set_after(move |after| {
-                *after = if cancelled {
-                    AfterRun {
-                        shown: true,
-                        text: "Exports stopped".into(),
-                        tone: 2,
-                        ..AfterRun::default()
-                    }
-                } else if failed > 0 {
-                    AfterRun {
-                        shown: true,
-                        text: format!(
-                            "Exports · {failed} of {total} with a problem - see its report"
-                        ),
-                        tone: 2,
+            let (note, problem) = if let Some(why) = cant_run {
+                (format!("⚠ exports didn't run: {why}"), true)
+            } else if cancelled {
+                ("⚠ exports stopped".to_string(), true)
+            } else if failed > 0 {
+                (
+                    format!("⚠ {failed} of {total} exports with a problem"),
+                    true,
+                )
+            } else {
+                (
+                    format!(
+                        "{total} {} written · {files} {}",
+                        if total == 1 { "export" } else { "exports" },
+                        if files == 1 { "file" } else { "files" }
+                    ),
+                    false,
+                )
+            };
+            let this2 = this.clone();
+            ui_thread::invoke_from_event_loop(move || {
+                {
+                    let mut shown = this2.shown.lock().expect("Poisoned");
+                    shown.running = None;
+                    shown.progress.clear();
+                    // "Open in Exports" of the note: the export with the
+                    // problem; "Open folder": where they wrote.
+                    shown.after = AfterRun {
                         open: first_problem,
-                        cancel: None,
-                        folder: None,
-                    }
-                } else {
-                    AfterRun {
-                        shown: true,
-                        text: format!(
-                            "Exports written · {total} {} · {files} {}",
-                            if total == 1 { "export" } else { "exports" },
-                            if files == 1 { "file" } else { "files" }
-                        ),
-                        tone: 1,
-                        open: None,
-                        cancel: None,
                         folder,
-                    }
-                };
-            });
+                        ..AfterRun::default()
+                    };
+                }
+                this2.push();
+                if let Some(ui) = this2.ui.upgrade() {
+                    let running = ui.global::<crate::PipelineRunningState>();
+                    running.set_export_note(note.into());
+                    running.set_export_problem(problem);
+                    running.set_exporting(false);
+                }
+            })
+            .ok();
         });
     }
 
@@ -1531,7 +1576,7 @@ impl ExportsController {
                     Some(PathBuf::from(&folder)),
                     &[],
                     &cancel,
-                    |_| {},
+                    |_, _| {},
                 )?;
                 if !report.all_written() {
                     let (lines, ..) = report_lines(&export, &report, &Default::default());
@@ -1850,11 +1895,67 @@ impl ExportsController {
         id: u32,
         results: Vec<(Target, Result<(ExportSettings, ExportReport), String>)>,
     ) {
-        {
+        let (cancelled, name) = {
             let mut shown = self.shown.lock().expect("Poisoned");
-            shown.running = None;
+            let cancelled = shown
+                .running
+                .take()
+                .is_some_and(|cancel| cancel.load(Ordering::Relaxed));
             shown.progress.clear();
-        }
+            shown.running_id = None;
+            (cancelled, std::mem::take(&mut shown.running_name))
+        };
+        // The note, like an analysis' (board 6): how it went, where.
+        let total = results.len();
+        let files: usize = results
+            .iter()
+            .filter_map(|(_, r)| r.as_ref().ok())
+            .flat_map(|(_, report)| &report.entries)
+            .map(|e| e.files.len())
+            .sum();
+        let problems = results
+            .iter()
+            .filter(|(_, r)| r.as_ref().map_or(true, |(_, report)| !report.all_written()))
+            .count();
+        let folder = (!self.app_state.backend().is_remote())
+            .then(|| {
+                results
+                    .iter()
+                    .filter_map(|(_, r)| r.as_ref().ok())
+                    .find(|(_, report)| report.entries.iter().any(|e| !e.files.is_empty()))
+                    .map(|(_, report)| report.folder.clone())
+            })
+            .flatten();
+        let analyses = if total == 1 {
+            String::new()
+        } else {
+            format!(" · {total} analyses")
+        };
+        let (text, tone) = if cancelled {
+            (format!("Export stopped · {name}"), 2)
+        } else if problems > 0 {
+            (
+                format!("Export {name} · {problems} of {total} with a problem"),
+                2,
+            )
+        } else {
+            (
+                format!(
+                    "Export finished · {name}{analyses} · {files} {}",
+                    if files == 1 { "file" } else { "files" }
+                ),
+                1,
+            )
+        };
+        self.shown.lock().expect("Poisoned").after = AfterRun {
+            shown: true,
+            text,
+            tone,
+            open: Some(id),
+            cancel: None,
+            folder,
+        };
+        self.push_after();
         self.record_many(id, results);
     }
 
@@ -1983,7 +2084,10 @@ impl ExportsController {
             .exports
             .iter()
             .map(|export| {
-                let (status, tone) = shown.status.get(&export.id).cloned().unwrap_or_default();
+                let (status, tone) = match shown.running_id == Some(export.id) {
+                    true => (format!("● {}%", (shown.fraction * 100.0).round() as i32), 0),
+                    false => shown.status.get(&export.id).cloned().unwrap_or_default(),
+                };
                 ExportRow {
                     id: export.id as i32,
                     name: export.name.as_str().into(),
@@ -2005,6 +2109,8 @@ impl ExportsController {
         state.set_selected_id(shown.selected.map_or(-1, |id| id as i32));
         state.set_running(shown.running.is_some());
         state.set_progress(shown.progress.as_str().into());
+        state.set_progress_fraction(shown.fraction);
+        state.set_run_name(shown.running_name.as_str().into());
         let run = shown
             .selected
             .and_then(|id| shown.last_runs.get(&id))

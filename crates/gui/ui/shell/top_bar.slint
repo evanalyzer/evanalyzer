@@ -40,6 +40,7 @@ import { AiLearningState } from "../api/ai_learning.slint";
 import { ResultsBarNav, ResultsBarActions } from "../results/results_bar.slint";
 import { StartState } from "../api/start.slint";
 import { PipelineRunningState } from "../api/pipeline_running.slint";
+import { ExportsState } from "../api/exports.slint";
 
 // The EVA menu's open submenu: 0 none, 1 Open recent, 2 View, 3 Help.
 global EvaMenu {
@@ -656,19 +657,29 @@ component PreviewGroup inherits Rectangle {
 export global RunText {
     // "23 / 81 · ~4 min" (one image: its tiles).
     pure public function count() -> string {
-        (PipelineRunningState.images-total > 1 ? PipelineRunningState.images-done + " / " + PipelineRunningState.images-total
+        PipelineRunningState.exporting ? PipelineRunningState.export-text : ((PipelineRunningState.images-total > 1 ? PipelineRunningState.images-done + " / " + PipelineRunningState.images-total
             : PipelineRunningState.tiles-total > 0 ? "tile " + PipelineRunningState.tiles-done + " / " + PipelineRunningState.tiles-total
             : "starting")
-            + (PipelineRunningState.eta != "" ? " · " + PipelineRunningState.eta : "")
+            + (PipelineRunningState.eta != "" ? " · " + PipelineRunningState.eta : ""))
     }
     pure public function fraction() -> float {
-        PipelineRunningState.images-total > 1 ? PipelineRunningState.images-done / PipelineRunningState.images-total
+        PipelineRunningState.exporting ? PipelineRunningState.export-fraction
+            : PipelineRunningState.images-total > 1 ? PipelineRunningState.images-done / PipelineRunningState.images-total
             : PipelineRunningState.tiles-total > 0 ? PipelineRunningState.tiles-done / PipelineRunningState.tiles-total
             : 0
     }
 }
 
+// The pill of a run going on: an analysis (by default), or an export
+// started by hand (design canvas "Quick export, open folder, run on",
+// board 6) - what, a bar, how far, Stop; a click on the pill goes to it.
 component RunStatus inherits Rectangle {
+    in property <string> label: PipelineRunningState.exporting ? "Exporting" : "Analyzing";
+    in property <string> count: RunText.count();
+    in property <float> fraction: RunText.fraction();
+    in property <string> stop-label: "Stop the analysis";
+    callback stop();
+    callback clicked();
     height: 28px;
     width: row.preferred-width;
     border-radius: Ink.radius-md;
@@ -676,8 +687,14 @@ component RunStatus inherits Rectangle {
     border-color: Ink.focus.with-alpha(0.3);
     background: Ink.info-tint;
     accessible-role: progress-indicator;
-    accessible-label: "Analysis running, " + RunText.count();
-    accessible-value: round(RunText.fraction() * 100) + "%";
+    accessible-label: root.label + ", " + root.count;
+    accessible-value: round(root.fraction * 100) + "%";
+    pill-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
 
     row := HorizontalLayout {
         padding-left: 12px;
@@ -696,7 +713,7 @@ component RunStatus inherits Rectangle {
         }
 
         Text {
-            text: "Analyzing";
+            text: root.label;
             font-size: Ink.fs-body;
             font-weight: 600;
             color: Ink.focus;
@@ -713,7 +730,7 @@ component RunStatus inherits Rectangle {
                 clip: true;
                 Rectangle {
                     x: 0px;
-                    width: parent.width * RunText.fraction();
+                    width: parent.width * root.fraction;
                     background: Ink.focus;
                     animate width { duration: 200ms; }
                 }
@@ -721,7 +738,7 @@ component RunStatus inherits Rectangle {
         }
 
         Text {
-            text: RunText.count();
+            text: root.count;
             font-family: Ink.font-mono;
             font-size: Ink.fs-secondary;
             color: Ink.focus;
@@ -738,9 +755,9 @@ component RunStatus inherits Rectangle {
                 border-color: Ink.border;
                 background: stop-ta.has-hover ? Ink.hover : Ink.panel;
                 accessible-role: button;
-                accessible-label: "Stop the analysis";
+                accessible-label: root.stop-label;
                 accessible-action-default => {
-                    PipelineRunningState.cancel();
+                    root.stop();
                 }
                 stop-text := Text {
                     text: "Stop";
@@ -752,7 +769,7 @@ component RunStatus inherits Rectangle {
                 stop-ta := TouchArea {
                     mouse-cursor: pointer;
                     clicked => {
-                        PipelineRunningState.cancel();
+                        root.stop();
                     }
                 }
             }
@@ -770,7 +787,7 @@ export component TopBar inherits Rectangle {
     // page - nothing is open there). Exports: neither.
     property <bool> editing: !StartState.active && (LayoutState.mode == WorkspaceMode.images || LayoutState.mode == WorkspaceMode.pipelines);
     // An analysis in work (not yet finished).
-    property <bool> running: PipelineRunningState.active && !PipelineRunningState.done;
+    property <bool> running: PipelineRunningState.active && (!PipelineRunningState.done || PipelineRunningState.exporting);
 
     height: Ink.bar-h;
     background: Ink.panel;
@@ -931,7 +948,30 @@ export component TopBar inherits Rectangle {
                 }
                 if root.running: VerticalLayout {
                     alignment: center;
-                    RunStatus { }
+                    RunStatus {
+                        stop => {
+                            PipelineRunningState.cancel();
+                        }
+                        clicked => {
+                            LayoutState.mode = PipelineRunningState.exporting ? WorkspaceMode.exports : WorkspaceMode.pipelines;
+                        }
+                    }
+                }
+                // An export started by hand: its pill, the same.
+                if ExportsState.running && !root.running: VerticalLayout {
+                    alignment: center;
+                    RunStatus {
+                        label: "Exporting";
+                        count: ExportsState.run-name + (ExportsState.progress != "" ? " · " + ExportsState.progress : "");
+                        fraction: ExportsState.progress-fraction;
+                        stop-label: "Stop the export";
+                        stop => {
+                            ExportsState.cancel();
+                        }
+                        clicked => {
+                            LayoutState.mode = WorkspaceMode.exports;
+                        }
+                    }
                 }
                 VerticalLayout {
                     alignment: center;

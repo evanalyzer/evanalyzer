@@ -893,6 +893,12 @@ impl PipelinesController {
                 if let Some(cancel) = manager.pipeline_cancel_flag.lock().unwrap().as_ref() {
                     cancel.cancel();
                 }
+                // Its last step, the exports run after analysis: stopped too.
+                if let Some(ui) = manager.ui.upgrade()
+                    && ui.global::<PipelineRunningState>().get_exporting()
+                {
+                    ui.global::<crate::ExportsState>().invoke_cancel();
+                }
             });
 
             // The finished analysis' note closed (or timed out).
@@ -3256,6 +3262,11 @@ impl PipelinesController {
         running.set_done(false);
         running.set_has_error(false);
         running.set_status_message("".into());
+        running.set_exporting(false);
+        running.set_export_text("".into());
+        running.set_export_fraction(0.0);
+        running.set_export_note("".into());
+        running.set_export_problem(false);
         running.set_active(true);
         ui.global::<PipelinesPanelState>().set_run_locked(true);
     }
@@ -3383,6 +3394,11 @@ impl PipelinesController {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
+        // One at a time: no analysis while an export runs.
+        if ui.global::<crate::ExportsState>().get_running() {
+            self.show_warning("An export is running - wait for it or stop it in the Exports tab.");
+            return;
+        }
         let state = ui.global::<RunAnalysisState>();
         let job_name = state.get_job_name().to_string();
         // Left blank: the name the dialog showed.
@@ -12805,6 +12821,24 @@ mod tests {
         ui.global::<RunAnalysisState>().invoke_confirm();
         let task = controller.task_request.0.lock().unwrap().take().unwrap();
         assert_eq!(task.job_name.as_deref(), Some(shown.as_str()));
+    }
+
+    /// One at a time: while an export runs, no analysis starts.
+    #[test]
+    fn no_analysis_starts_while_an_export_runs() {
+        let (ui, ui_state, controller) = selected(vec![]);
+        ui_state.get_project_write().tmp_settings.current_project =
+            Some(PathBuf::from("/data/exp/project.evaproj"));
+        ui.global::<crate::ExportsState>().set_running(true);
+        ui.global::<PipelinesPanelState>().invoke_run_all();
+        ui.global::<RunAnalysisState>().invoke_confirm();
+        assert!(controller.task_request.0.lock().unwrap().is_none());
+        assert!(!ui.global::<PipelineRunningState>().get_active());
+
+        ui.global::<crate::ExportsState>().set_running(false);
+        ui.global::<PipelinesPanelState>().invoke_run_all();
+        ui.global::<RunAnalysisState>().invoke_confirm();
+        assert!(controller.task_request.0.lock().unwrap().is_some());
     }
 
     #[test]

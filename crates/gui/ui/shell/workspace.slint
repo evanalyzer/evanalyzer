@@ -474,16 +474,18 @@ export component Workspace inherits Rectangle {
 
     // -- An analysis ended: a note under the top bar - gone after a few
     // seconds when it went well, kept until closed when it didn't --
-    if PipelineRunningState.active && PipelineRunningState.done: Rectangle {
+    // Its exports (run after analysis) are its last step: the note waits
+    // for them and says how they went.
+    if PipelineRunningState.active && PipelineRunningState.done && !PipelineRunningState.exporting: Rectangle {
         x: (parent.width - self.width) / 2;
         y: Float.gap + (LayoutState.annotate ? 52px : 0px) + (LayoutState.panels-hidden && root.on-image ? 42px : 0px);
         width: toast-row.preferred-width;
         height: 36px;
         border-radius: Ink.radius-lg;
-        background: Ink.glass;
+        background: Ink.panel-blur ? Ink.glass : Ink.panel;
         backdrop-blur: Ink.backdrop;
         border-width: 1px;
-        border-color: PipelineRunningState.has-error ? Ink.err : Ink.border;
+        border-color: PipelineRunningState.has-error ? Ink.err : PipelineRunningState.export-problem ? Ink.warn : Ink.border;
         drop-shadow-blur: 24px;
         drop-shadow-offset-y: 8px;
         drop-shadow-color: Ink.shadow;
@@ -492,7 +494,7 @@ export component Workspace inherits Rectangle {
         TouchArea { }
         Timer {
             interval: 6s;
-            running: !PipelineRunningState.has-error;
+            running: !PipelineRunningState.has-error && !PipelineRunningState.export-problem;
             triggered => {
                 PipelineRunningState.close();
             }
@@ -511,12 +513,26 @@ export component Workspace inherits Rectangle {
                 text: PipelineRunningState.has-error ? "Analysis failed · " + PipelineRunningState.status-message
                     : PipelineRunningState.images-total > 0 && PipelineRunningState.images-done == PipelineRunningState.images-total
                         ? "Analysis finished · " + PipelineRunningState.images-total + (PipelineRunningState.images-total == 1 ? " image" : " images")
-                    : PipelineRunningState.status-message;
+                            + (PipelineRunningState.export-note != "" ? " · " + PipelineRunningState.export-note : "")
+                    : PipelineRunningState.status-message
+                        + (PipelineRunningState.export-note != "" ? " · " + PipelineRunningState.export-note : "");
                 font-size: Ink.fs-body;
                 color: Ink.text;
                 vertical-alignment: center;
                 max-width: 560px;
                 overflow: elide;
+            }
+            if PipelineRunningState.export-problem: VerticalLayout {
+                alignment: center;
+                InkButton {
+                    small: true;
+                    text: "Open in Exports";
+                    clicked => {
+                        ExportsState.after-open();
+                        LayoutState.mode = WorkspaceMode.exports;
+                        PipelineRunningState.close();
+                    }
+                }
             }
             if !PipelineRunningState.has-error: VerticalLayout {
                 alignment: center;
@@ -545,11 +561,12 @@ export component Workspace inherits Rectangle {
         }
     }
 
-    // -- The exports after an analysis: a note at the bottom - gone after
-    // a few seconds when all went well, kept on a problem --
+    // -- An export's note (run by hand, added from Results): where an
+    // analysis' note is - gone after a few seconds when all went well,
+    // kept on a problem (an analysis' own exports are in its note) --
     if ExportsState.after-shown: Rectangle {
         x: (parent.width - self.width) / 2;
-        y: parent.height - self.height - Float.gap - root.bottom-room;
+        y: Float.gap + (LayoutState.annotate ? 52px : 0px) + (LayoutState.panels-hidden && root.on-image ? 42px : 0px);
         width: after-row.preferred-width;
         height: 36px;
         border-radius: Ink.radius-lg;

@@ -56,7 +56,7 @@ SCREAMING_SNAKE_CASE, like the rest of the project file.
 | `prefix` | text | none | Put in front of every file and folder the export writes: `{prefix}_{name}`. Sanitized like every name part (§2.1). |
 | `lengthUnit` | `"UM"` \| `"NM"` | `"UM"` | Unit of lengths, areas and volumes in the tables. Shows in the column names (§3.3). |
 | `output` | object | see 1.2 | Where the files go. |
-| `runAfterEveryRun` | bool | `false` | Run the export when an analysis run finishes. The run dialog can switch it off for one run. |
+| `runAfterEveryRun` | bool | `false` | Run the export as the last step of every analysis ("Run after analysis" in the app). The run dialog can switch it off for one run. |
 | `tableFormat` | integer | `1` | The table format the files are written in (§3). Pinned: a newer app keeps writing this format until the user changes it. |
 | `entries` | list | `[]` | What to write, in this order. A script entry sees everything written by the entries before it. |
 
@@ -250,13 +250,20 @@ command then fails, naming the export.
   own results folder. "Last run" then has a row per analysis - what it
   wrote, a folder button (not for results on a server), its report lines
   folded while all went well.
-- **After a run**: the run dialog lists the exports with
+- **Run after analysis**: the run dialog lists the exports with
   `runAfterEveryRun` under "Afterwards"; one switched off there stays off
-  for that run only. They run on this computer when the analysis is done,
-  into its results folder (also in remote mode: the results stay on the
-  server, the export runs where they are). A note says what they wrote;
-  "Open folder" opens where (on this computer), "Open in Exports" shows an
-  export's report.
+  for that run only. They are the analysis' last step: its progress in the
+  top bar says "Exporting" while they run (its Stop stops them), its note
+  comes once they are done and says what they wrote - "Open in Exports"
+  on a problem. They run on this computer, into its results folder (also
+  in remote mode: the results stay on the server, the export runs where
+  they are).
+- **One at a time**: no analysis starts while an export runs, no export
+  while an analysis (with its exports) runs. An export run by hand shows
+  its progress in the top bar ("Exporting", Stop) on every tab; the
+  export's settings are locked meanwhile, its Run is Stop, and its run is
+  docked below its settings (progress, then the last run - foldable). Its
+  note says how it went, with "Open folder" and "Open in Exports".
 - **Scripts**: before an export runs a script the user hasn't allowed yet,
   the app shows it and asks: don't run it, run it once, or always allow
   this version (its content's SHA-256, kept in the user's settings - a

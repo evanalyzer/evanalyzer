@@ -8,6 +8,7 @@
 
 import { Ink, InkIcons, InkCheckList, InkButton, InkButtonKind, InkIconButton, InkCheckbox, InkSwitch, InkSegmented, InkSelect, InkTextField, InkListRow, InkLabel, InkCaption, InkHint, InkBanner, InkTone, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator } from "../ink/ink.slint";
 import { ExportsState, ExportRow, ExportEntryRow, RunPart } from "../api/exports.slint";
+import { PipelineRunningState } from "../api/pipeline_running.slint";
 import { ColumnPicker, ValuesClassesPart, RelatedPart } from "../results/results_panel.slint";
 import { ViewPanel } from "../results/results_view_bar.slint";
 
@@ -853,6 +854,11 @@ export component ExportsView inherits Rectangle {
     property <length> menu-y;
     // Counted up: the card's head opens its Run ▾ (⋯ › Run on…).
     property <int> run-on-request: 0;
+    // The docked run unfolded.
+    property <bool> dock-open: true;
+    // An analysis runs (its exports are its last step): one at a time, so
+    // no export starts meanwhile.
+    property <bool> analysing: PipelineRunningState.active && (!PipelineRunningState.done || PipelineRunningState.exporting);
     function open-menu(id: int, name: string, x: length, y: length) {
         root.menu-id = id;
         root.menu-name = name;
@@ -873,6 +879,7 @@ export component ExportsView inherits Rectangle {
             InkMenuItem {
                 icon: InkIcons.run;
                 text: "Run";
+                enabled: !ExportsState.running && !root.analysing;
                 clicked => {
                     ExportsState.select(root.menu-id);
                     ExportsState.run();
@@ -880,6 +887,7 @@ export component ExportsView inherits Rectangle {
             }
             InkMenuItem {
                 text: "Run on…";
+                enabled: !ExportsState.running && !root.analysing;
                 clicked => {
                     ExportsState.select(root.menu-id);
                     root.run-on-request += 1;
@@ -897,6 +905,7 @@ export component ExportsView inherits Rectangle {
             InkMenuItem {
                 icon: InkIcons.caret-up;
                 text: "Move up";
+                enabled: !ExportsState.running;
                 clicked => {
                     ExportsState.move-export(root.menu-id, -1);
                 }
@@ -904,6 +913,7 @@ export component ExportsView inherits Rectangle {
             InkMenuItem {
                 icon: InkIcons.caret-down;
                 text: "Move down";
+                enabled: !ExportsState.running;
                 clicked => {
                     ExportsState.move-export(root.menu-id, 1);
                 }
@@ -913,6 +923,7 @@ export component ExportsView inherits Rectangle {
                 icon: InkIcons.delete;
                 text: "Delete export…";
                 danger: true;
+                enabled: !ExportsState.running;
                 clicked => {
                     ExportsState.delete-asked-name = root.menu-name;
                     ExportsState.delete-asked = root.menu-id;
@@ -936,7 +947,7 @@ export component ExportsView inherits Rectangle {
             VerticalLayout {
                 CardHead {
                     title: "Exports";
-                    count: ExportsState.exports.length == 0 ? "" : ExportsState.after-count + " of " + ExportsState.exports.length + " after every run";
+                    count: ExportsState.exports.length == 0 ? "" : ExportsState.after-count + " of " + ExportsState.exports.length + " after analysis";
                     VerticalLayout {
                         alignment: center;
                         InkButton {
@@ -961,7 +972,7 @@ export component ExportsView inherits Rectangle {
                         alignment: start;
                         // Like every list (InkListRow): place, name, what it
                         // writes, the last run, ⋯, the eye - here "runs
-                        // after every run" (design canvas "Quick export,
+                        // after analysis" (design canvas "Quick export,
                         // open folder, run on", board 5).
                         for row[i] in ExportsState.exports: InkListRow {
                             lead: i + 1;
@@ -972,7 +983,7 @@ export component ExportsView inherits Rectangle {
                             has-more: true;
                             has-eye: true;
                             shown: row.after;
-                            eye-tip: row.after ? "Runs after every run" : "Only by hand";
+                            eye-tip: row.after ? "Runs after analysis" : "Only by hand";
                             clicked => {
                                 ExportsState.select(row.id);
                             }
@@ -1024,17 +1035,31 @@ export component ExportsView inherits Rectangle {
                     // Run | ▾: on the newest, or on the analyses picked
                     // (design canvas "Quick export, open folder, run on",
                     // board 3 R1).
+                    // Running: Stop in its place (board 6).
+                    if ExportsState.running: VerticalLayout {
+                        alignment: center;
+                        InkButton {
+                            text: "Stop";
+                            icon: InkIcons.stop;
+                            tip: "Stops the export at its next step";
+                            clicked => {
+                                ExportsState.cancel();
+                            }
+                        }
+                    }
                     run-on-anchor := VerticalLayout {
+                        visible: !ExportsState.running;
+                        width: ExportsState.running ? 0px : self.preferred-width;
                         alignment: center;
                         HorizontalLayout {
                             spacing: 1px;
                             InkButton {
-                                text: ExportsState.running ? "Running…" : "Run";
+                                text: "Run";
                                 kind: InkButtonKind.primary;
                                 icon: InkIcons.run;
                                 join-right: true;
-                                enabled: !ExportsState.running && ExportsState.problems == "";
-                                disabled-reason: ExportsState.problems;
+                                enabled: !root.analysing && ExportsState.problems == "";
+                                disabled-reason: root.analysing ? "An analysis is running - its exports run as its last step" : ExportsState.problems;
                                 tip: "Runs it on the project's newest analysis";
                                 clicked => {
                                     ExportsState.run();
@@ -1046,8 +1071,8 @@ export component ExportsView inherits Rectangle {
                                 icon: InkIcons.caret-down;
                                 join-left: true;
                                 tip: "Run on…";
-                                enabled: !ExportsState.running && ExportsState.problems == "";
-                                disabled-reason: ExportsState.problems;
+                                enabled: !root.analysing && ExportsState.problems == "";
+                                disabled-reason: root.analysing ? "An analysis is running - its exports run as its last step" : ExportsState.problems;
                                 clicked => {
                                     ExportsState.run-on-open();
                                     run-on-menu.show();
@@ -1135,8 +1160,22 @@ export component ExportsView inherits Rectangle {
                     height: 1px;
                     background: Ink.border;
                 }
-                Flickable {
+                // Running: the settings stay as they are until it is done
+                // (board 6) - greyed, not reacting.
+                if ExportsState.running: HorizontalLayout {
+                    padding: 12px;
+                    padding-bottom: 0px;
+                    InkBanner {
+                        tone: InkTone.info;
+                        text: "Running - the settings can be changed again once it is done.";
+                    }
+                }
+                Rectangle {
                     vertical-stretch: 1;
+                    settings-flick := Flickable {
+                    width: 100%;
+                    height: 100%;
+                    opacity: ExportsState.running ? 0.5 : 1.0;
                     VerticalLayout {
                         padding: 14px;
                         spacing: 14px;
@@ -1262,91 +1301,137 @@ export component ExportsView inherits Rectangle {
                             }
                         }
                         InkSwitch {
-                            text: "Run after every run";
+                            text: "Run after analysis";
                             checked: ExportsState.after;
                             toggled(on) => {
                                 ExportsState.set-export-field("after", on ? "1" : "0");
                             }
                         }
-                        if ExportsState.running || ExportsState.last-run-title != "": Rectangle {
-                            height: 1px;
-                            background: Ink.border;
-                        }
-                        if ExportsState.running: Text {
-                            text: ExportsState.progress;
-                            font-size: Ink.fs-body;
-                            color: Ink.text-dim;
-                        }
-                        // The last run (board 4 L1): a summary, then a row
-                        // per analysis - on one, its folder beside the
-                        // title and its lines below.
-                        if ExportsState.last-run-title != "": VerticalLayout {
-                            spacing: 4px;
-                            HorizontalLayout {
-                                spacing: 8px;
-                                height: 28px;
-                                Text {
-                                    text: ExportsState.last-run-title;
-                                    font-size: Ink.fs-body;
-                                    font-weight: 600;
-                                    color: Ink.text;
-                                    vertical-alignment: center;
-                                    overflow: elide;
-                                    horizontal-stretch: 1;
+                    }
+                    }
+                    if ExportsState.running: TouchArea { }
+                }
+                // -- The run, docked below the settings on its own ground
+                // (board 7 S2): running, its progress; done, the last run -
+                // foldable to its head --
+                if ExportsState.running || ExportsState.last-run-title != "": Rectangle {
+                    height: 1px;
+                    background: Ink.border;
+                }
+                if ExportsState.running || ExportsState.last-run-title != "": Rectangle {
+                    background: Ink.ground;
+                    VerticalLayout {
+                        padding: 12px;
+                        padding-top: 6px;
+                        spacing: 6px;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            height: 32px;
+                            Text {
+                                text: ExportsState.running ? "Running" : ExportsState.last-run-title;
+                                font-size: Ink.fs-body;
+                                font-weight: 600;
+                                color: Ink.text;
+                                vertical-alignment: center;
+                                overflow: elide;
+                                horizontal-stretch: 1;
+                            }
+                            if !ExportsState.running && ExportsState.last-run-note != "": Text {
+                                text: ExportsState.last-run-note;
+                                font-size: Ink.fs-secondary;
+                                color: Ink.text-mute;
+                                vertical-alignment: center;
+                            }
+                            if !ExportsState.running && ExportsState.run-parts.length == 1 && ExportsState.run-parts[0].folder != "": VerticalLayout {
+                                alignment: center;
+                                InkIconButton {
+                                    size: 26px;
+                                    icon: InkIcons.folder;
+                                    label: "Open exported folder";
+                                    clicked => {
+                                        ExportsState.open-folder(ExportsState.run-parts[0].folder);
+                                    }
                                 }
-                                if ExportsState.last-run-note != "": Text {
-                                    text: ExportsState.last-run-note;
-                                    font-size: Ink.fs-secondary;
-                                    color: Ink.text-mute;
-                                    vertical-alignment: center;
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                InkIconButton {
+                                    size: 26px;
+                                    icon: root.dock-open ? InkIcons.caret-down : InkIcons.caret-up;
+                                    label: root.dock-open ? "Fold the run" : "Show the run";
+                                    clicked => {
+                                        root.dock-open = !root.dock-open;
+                                    }
                                 }
-                                if ExportsState.run-parts.length == 1 && ExportsState.run-parts[0].folder != "": VerticalLayout {
-                                    alignment: center;
-                                    InkIconButton {
-                                        size: 26px;
-                                        icon: InkIcons.folder;
-                                        label: "Open exported folder";
-                                        disabled-reason: "";
-                                        clicked => {
-                                            ExportsState.open-folder(ExportsState.run-parts[0].folder);
+                            }
+                        }
+                        if root.dock-open && ExportsState.running: VerticalLayout {
+                            spacing: 6px;
+                            Rectangle {
+                                height: 6px;
+                                border-radius: 3px;
+                                background: Ink.focus.with-alpha(0.18);
+                                clip: true;
+                                Rectangle {
+                                    x: 0px;
+                                    width: parent.width * ExportsState.progress-fraction;
+                                    background: Ink.focus;
+                                    animate width { duration: 200ms; }
+                                }
+                            }
+                            Text {
+                                text: ExportsState.progress;
+                                font-family: Ink.font-mono;
+                                font-size: Ink.fs-secondary;
+                                color: Ink.text-dim;
+                                overflow: elide;
+                            }
+                        }
+                        if root.dock-open && !ExportsState.running: Flickable {
+                            height: min(dock-content.preferred-height, 300px);
+                            dock-content := VerticalLayout {
+                                spacing: 6px;
+                                // The last run (board 4 L1): on one analysis its
+                                // lines (its folder in the head), on several a row
+                                // per analysis.
+                                VerticalLayout {
+                                    spacing: 4px;
+                                    if ExportsState.run-parts.length == 1: VerticalLayout {
+                                        spacing: 2px;
+                                        for line in ExportsState.run-parts[0].lines: Text {
+                                            text: line;
+                                            font-family: Ink.font-mono;
+                                            font-size: Ink.fs-secondary;
+                                            color: Ink.text-dim;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+                                    if ExportsState.run-parts.length > 1: VerticalLayout {
+                                        spacing: 2px;
+                                        for part[i] in ExportsState.run-parts: RunPartRow {
+                                            part: part;
+                                            toggled => {
+                                                ExportsState.run-part-toggle(i);
+                                            }
+                                            open-folder => {
+                                                ExportsState.open-folder(part.folder);
+                                            }
                                         }
                                     }
                                 }
-                            }
-                            if ExportsState.run-parts.length == 1: VerticalLayout {
-                                spacing: 2px;
-                                for line in ExportsState.run-parts[0].lines: Text {
-                                    text: line;
-                                    font-family: Ink.font-mono;
-                                    font-size: Ink.fs-secondary;
-                                    color: Ink.text-dim;
-                                    wrap: word-wrap;
-                                }
-                            }
-                            if ExportsState.run-parts.length > 1: VerticalLayout {
-                                spacing: 2px;
-                                for part[i] in ExportsState.run-parts: RunPartRow {
-                                    part: part;
-                                    toggled => {
-                                        ExportsState.run-part-toggle(i);
+                                if ExportsState.log != "": Rectangle {
+                                    background: Ink.viewport;
+                                    border-radius: Ink.radius-md;
+                                    VerticalLayout {
+                                        padding: 10px;
+                                        Text {
+                                            text: ExportsState.log;
+                                            font-family: Ink.font-mono;
+                                            font-size: Ink.fs-secondary;
+                                            color: #E8E8EA;
+                                            wrap: word-wrap;
+                                        }
                                     }
-                                    open-folder => {
-                                        ExportsState.open-folder(part.folder);
-                                    }
-                                }
-                            }
-                        }
-                        if ExportsState.log != "": Rectangle {
-                            background: Ink.viewport;
-                            border-radius: Ink.radius-md;
-                            VerticalLayout {
-                                padding: 10px;
-                                Text {
-                                    text: ExportsState.log;
-                                    font-family: Ink.font-mono;
-                                    font-size: Ink.fs-secondary;
-                                    color: #E8E8EA;
-                                    wrap: word-wrap;
                                 }
                             }
                         }
@@ -1355,29 +1440,36 @@ export component ExportsView inherits Rectangle {
             }
         }
 
-        // -- The entry picked: a panel like the Results List's --
-        ViewPanel {
+        // -- The entry picked: a panel like the Results List's; locked
+        // while a run goes on (board 6) --
+        Rectangle {
             // A readable width - a wider window leaves the ground free
             // (canvas W1); at the smallest window the room left (412 px).
             width: clamp(root.width - 300px - 520px - 48px, 400px, 440px);
-            foldable: false;
-            property <bool> data: ExportsState.entry-kind == "DATA";
-            property <bool> grouped: ExportsState.grouped;
-            title: ExportsState.entry >= 0 && ExportsState.entry < ExportsState.entries.length ? ExportsState.entries[ExportsState.entry].title : "Settings";
-            parts: !self.data ? [] : self.grouped ? ["Outputs", "Columns", "Values & classes"] : ["Outputs", "Columns", "Classes"];
-            // Classes stays open when the rows change it to Classes & values
-            // and back.
-            part: ExportsState.panel-part == "Classes" || ExportsState.panel-part == "Values & classes"
-                ? (self.grouped ? "Values & classes" : "Classes") : ExportsState.panel-part;
-            part-picked(part) => {
-                ExportsState.panel-part = part;
+            ViewPanel {
+                width: 100%;
+                height: 100%;
+                opacity: ExportsState.running ? 0.5 : 1.0;
+                foldable: false;
+                property <bool> data: ExportsState.entry-kind == "DATA";
+                property <bool> grouped: ExportsState.grouped;
+                title: ExportsState.entry >= 0 && ExportsState.entry < ExportsState.entries.length ? ExportsState.entries[ExportsState.entry].title : "Settings";
+                parts: !self.data ? [] : self.grouped ? ["Outputs", "Columns", "Values & classes"] : ["Outputs", "Columns", "Classes"];
+                // Classes stays open when the rows change it to Classes & values
+                // and back.
+                part: ExportsState.panel-part == "Classes" || ExportsState.panel-part == "Values & classes"
+                    ? (self.grouped ? "Values & classes" : "Classes") : ExportsState.panel-part;
+                part-picked(part) => {
+                    ExportsState.panel-part = part;
+                }
+                if ExportsState.entry < 0: InkHint {
+                    text: "Pick what it writes to see its settings.";
+                }
+                if ExportsState.entry >= 0: EntrySettings {
+                    part: parent.current;
+                }
             }
-            if ExportsState.entry < 0: InkHint {
-                text: "Pick what it writes to see its settings.";
-            }
-            if ExportsState.entry >= 0: EntrySettings {
-                part: parent.current;
-            }
+            if ExportsState.running: TouchArea { }
         }
     }
 }

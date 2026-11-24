@@ -552,52 +552,57 @@ fn the_table_panel_has_values_then_classes() {
 }
 
 /// After an analysis: the exports left on in the run dialog run on its
-/// results - into its folder - and the note says what they wrote.
+/// results - into its folder - as its last step: its progress says
+/// "Exporting" meanwhile, its note says what they wrote; no note of their
+/// own.
 #[test]
 fn the_exports_run_after_an_analysis() {
     let dir = tempfile::tempdir().unwrap();
     let project = saved_project_with_an_analysis(dir.path());
     let (ui, ui_state, _controller) = setup(project);
     let state = ui.global::<ExportsState>();
+    let running = ui.global::<crate::PipelineRunningState>();
     state.invoke_new_export(); // "Export": images.csv, not after every run
     state.invoke_set_entry_field("images".into(), "0".into());
     let run = dir.path().join("results").join("20261124T090000Z__run");
 
-    // Not set to run after every run, nothing left on: nothing runs.
+    // Not set to run after analysis, nothing left on: nothing runs.
     ui_state.analysis_finished(&run);
     drain_ui_queue();
-    assert!(!state.get_after_shown());
+    assert!(!running.get_exporting());
+    assert_eq!(running.get_export_note(), "");
     assert!(!run.join("images.csv").exists());
 
-    // Left on in the run dialog.
+    // Left on in the run dialog: the analysis' last step.
     let id = state.get_selected_id() as u32;
     ui_state.set_exports_for_run(Some(vec![id]));
     ui_state.analysis_finished(&run);
+    assert!(!running.get_exporting(), "set on the UI thread");
     drain_ui_queue();
     assert!(run.join("images.csv").is_file());
-    assert!(state.get_after_shown());
-    assert_eq!(state.get_after_tone(), 1, "{}", state.get_after_text());
+    assert!(!running.get_exporting(), "done");
+    assert!(!state.get_running(), "the tab unlocked");
     assert!(
-        state.get_after_text().contains("1 file"),
+        running.get_export_note().contains("1 file"),
         "{}",
-        state.get_after_text()
+        running.get_export_note()
     );
-    assert!(!state.get_after_busy());
+    assert!(!running.get_export_problem());
+    assert!(!state.get_after_shown(), "no note of their own");
     // Its report in the tab, its status in the list.
     assert!(report_of(&state).iter().any(|l| l.contains("1 file")));
     assert_eq!(state.get_exports().row_data(0).unwrap().status_tone, 1);
 
-    // Set to run after every run (no run dialog): runs too.
+    // Set to run after analysis (no run dialog): runs too.
     std::fs::remove_file(run.join("images.csv")).unwrap();
     state.invoke_set_after(id as i32, true);
     ui_state.analysis_finished(&run);
     drain_ui_queue();
     assert!(run.join("images.csv").is_file());
-    state.invoke_after_close();
-    assert!(!state.get_after_shown());
 }
 
-/// A problem stays on the note, and "Open in Exports" picks that export.
+/// A problem: the analysis' note says so (and stays), "Open in Exports"
+/// picks that export.
 #[test]
 fn a_problem_after_an_analysis_opens_that_export() {
     let dir = tempfile::tempdir().unwrap();
@@ -614,12 +619,16 @@ fn a_problem_after_an_analysis_opens_that_export() {
 
     ui_state.analysis_finished(&run);
     drain_ui_queue();
-    assert_eq!(state.get_after_tone(), 2, "{}", state.get_after_text());
-    assert!(state.get_after_text().contains("problem"));
+    let running = ui.global::<crate::PipelineRunningState>();
+    assert!(running.get_export_problem());
+    assert!(
+        running.get_export_note().contains("problem"),
+        "{}",
+        running.get_export_note()
+    );
     state.invoke_after_open();
     assert_eq!(state.get_selected_id(), id);
     assert!(report_of(&state).iter().any(|l| l.contains("failed")));
-    assert!(!state.get_after_shown());
 }
 
 /// A saved project with an analysis and an export running the script
@@ -720,14 +729,16 @@ fn the_exports_after_an_analysis_wait_for_the_scripts_answer() {
     state.invoke_set_after(id, true);
     let run = dir.path().join("results").join("20261124T090000Z__run");
 
+    let running = ui.global::<crate::PipelineRunningState>();
     ui_state.analysis_finished(&run);
     drain_ui_queue();
     assert!(trust.get_shown());
-    assert!(!state.get_after_shown(), "nothing runs while asked");
+    assert!(running.get_exporting(), "the analysis' last step waits");
+    assert_eq!(running.get_export_note(), "", "nothing ran yet");
     trust.invoke_answer(0);
     drain_ui_queue();
-    assert!(state.get_after_shown());
-    assert!(!state.get_after_busy());
+    assert!(!running.get_exporting());
+    assert_ne!(running.get_export_note(), "");
 }
 
 /// The analysis of `saved_project_with_an_analysis` open in Results.
@@ -1341,4 +1352,45 @@ fn the_list_eye_and_order() {
     assert_eq!(order, [ids[1] as u32, ids[0] as u32], "at the end it stays");
     let shown: Vec<i32> = state.get_exports().iter().map(|row| row.id).collect();
     assert_eq!(shown, [ids[1], ids[0]], "the list too");
+}
+
+/// One at a time: no export while an analysis runs (also not while its
+/// own exports, its last step, run). A run by hand ends with its note,
+/// like an analysis': how it went, where; the tab unlocked again.
+#[test]
+fn an_export_waits_for_the_analysis_and_ends_with_its_note() {
+    let dir = tempfile::tempdir().unwrap();
+    let (ui, _ui_state, _controller) = setup(saved_project_with_an_analysis(dir.path()));
+    let state = ui.global::<ExportsState>();
+    let running = ui.global::<crate::PipelineRunningState>();
+    state.invoke_new_export();
+    state.invoke_set_entry_field("images".into(), "0".into());
+    let run = dir.path().join("results/20261124T090000Z__run");
+
+    running.set_active(true);
+    state.invoke_run();
+    drain_ui_queue();
+    assert!(!run.join("images.csv").exists(), "the analysis runs");
+    running.set_done(true);
+    running.set_exporting(true);
+    state.invoke_run();
+    drain_ui_queue();
+    assert!(!run.join("images.csv").exists(), "its exports run");
+    running.set_exporting(false);
+
+    state.invoke_run();
+    drain_ui_queue();
+    assert!(run.join("images.csv").is_file());
+    assert!(!state.get_running());
+    assert_eq!(state.get_run_name(), "", "no pill after it");
+    assert!(state.get_after_shown());
+    assert_eq!(state.get_after_tone(), 1);
+    assert!(
+        state
+            .get_after_text()
+            .starts_with("Export finished · “Export”"),
+        "{}",
+        state.get_after_text()
+    );
+    assert!(state.get_after_folder(), "Open folder");
 }

@@ -31,6 +31,16 @@ export global PipelineRunningState {
     in-out property <int> tiles-total: 0;
     in-out property <string> current-image;
     in-out property <string> eta;
+    // The analysis' last step: its exports set to run after analysis
+    // (design canvas "Quick export, open folder, run on", board 6). While
+    // on, the analysis counts as running (`done` already set); its pill
+    // says "Exporting", the toast waits for it. `export-note` goes into
+    // the toast: "2 exports written" / "⚠ 1 of 2 exports with a problem".
+    in-out property <bool> exporting: false;
+    in-out property <string> export-text;
+    in-out property <float> export-fraction;
+    in-out property <string> export-note;
+    in-out property <bool> export-problem: false;
     callback cancel();
     callback close();
     // Opens the results of the analysis that just finished.

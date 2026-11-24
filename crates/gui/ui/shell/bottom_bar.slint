@@ -96,7 +96,7 @@ component SlowDrawingItem inherits Rectangle {
 
 export component BottomBar inherits Rectangle {
     property <bool> secure: ConnectionState.encrypted && ConnectionState.verified;
-    property <bool> running: PipelineRunningState.active && !PipelineRunningState.done;
+    property <bool> running: PipelineRunningState.active && (!PipelineRunningState.done || PipelineRunningState.exporting);
     // Over the image (Images, Pipelines) - not Results or Exports.
     property <bool> on-image: LayoutState.mode == WorkspaceMode.images || LayoutState.mode == WorkspaceMode.pipelines;
 
@@ -173,7 +173,7 @@ export component BottomBar inherits Rectangle {
                 if root.running: InkStatusItem {
                     icon: InkIcons.busy;
                     mono: true;
-                    text: "Analyzing"
+                    text: PipelineRunningState.exporting ? "Exporting · " + PipelineRunningState.export-text : "Analyzing"
                         + (PipelineRunningState.current-image != "" ? " · " + PipelineRunningState.current-image : "")
                         + (PipelineRunningState.images-total <= 1 && PipelineRunningState.tiles-total > 0 ? " · tile " + PipelineRunningState.tiles-done + " / " + PipelineRunningState.tiles-total : "")
                         + (PipelineRunningState.images-total > 0 ? " · image " + PipelineRunningState.images-done + " / " + PipelineRunningState.images-total : "");

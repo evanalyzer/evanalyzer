@@ -191,6 +191,10 @@ export global ExportsState {
     // -- Running --
     in property <bool> running;
     in property <string> progress;
+    // How far the run is, 0..1 (all its analyses).
+    in property <float> progress-fraction;
+    // The export running: "“Export”" (the top bar's pill).
+    in property <string> run-name;
     // -- After an analysis: the exports set to run afterwards (a note) --
     in property <bool> after-shown;
     in property <string> after-text;
