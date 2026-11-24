@@ -145,4 +145,17 @@ pub trait ResultsSource: Send + Sync {
         cancel: &AtomicBool,
         on_progress: ExportProgressFn,
     ) -> Result<(), InternalErrors>;
+    /// Runs a project's export on these results (on the backend's
+    /// machine, next to them - see `crate::exports`). Blocks; stops early
+    /// with `Cancelled` once `cancel` is set.
+    fn run_export(
+        &self,
+        _run: &crate::exports::ExportRun,
+        _cancel: &AtomicBool,
+        _on_progress: ExportProgressFn,
+    ) -> Result<crate::exports::ExportReport, InternalErrors> {
+        Err(InternalErrors::Internal(
+            "exports can't run on these results here yet".into(),
+        ))
+    }
 }

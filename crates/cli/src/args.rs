@@ -72,6 +72,34 @@ pub enum ExportSubCommand {
     List(ExportListArgs),
     /// Show one export's settings
     View(ExportViewArgs),
+    /// Run an export on a run's results
+    ///
+    /// The files go where the export says (--output: there, this once).
+    /// Scripts someone else wrote need --allow-scripts - there is nobody
+    /// to ask; --no-scripts leaves them out.
+    Run(ExportRunArgs),
+}
+
+#[derive(Args)]
+pub struct ExportRunArgs {
+    /// The export: its id or its name
+    pub export: String,
+    /// The project (.evaproj)
+    #[arg(long)]
+    pub project: PathBuf,
+    /// The results: a .evadb file or its folder (default: the project's
+    /// newest analysis)
+    #[arg(long)]
+    pub results: Option<PathBuf>,
+    /// Write into this folder instead of the export's own output, this once
+    #[arg(long)]
+    pub output: Option<PathBuf>,
+    /// Run the export's scripts without asking
+    #[arg(long, conflicts_with = "no_scripts")]
+    pub allow_scripts: bool,
+    /// Leave the export's scripts out
+    #[arg(long)]
+    pub no_scripts: bool,
 }
 
 #[derive(Args)]

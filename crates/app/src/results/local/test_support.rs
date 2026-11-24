@@ -23,7 +23,7 @@ use std::path::Path;
 
 /// A row's worth of single-channel (channel 0) intensity data, as the JSON
 /// [`ObjectSpec::with_intensities`] takes (see [`json_columns_sql`]).
-pub(super) const CH0_INTENSITIES_JSON: &str = r#"{"0":{"sum_normalized":1.0,"sum_gray":255.0,"mean_normalized":0.5,"mean_gray":127.0,"min_normalized":0.0,"min_gray":0.0,"max_normalized":1.0,"max_gray":255.0}}"#;
+pub(crate) const CH0_INTENSITIES_JSON: &str = r#"{"0":{"sum_normalized":1.0,"sum_gray":255.0,"mean_normalized":0.5,"mean_gray":127.0,"min_normalized":0.0,"min_gray":0.0,"max_normalized":1.0,"max_gray":255.0}}"#;
 
 /// The `objects` columns written from an [`ObjectSpec`]'s intensity and
 /// colocalization JSON, in [`json_columns_sql`]'s order.
@@ -156,32 +156,32 @@ fn create_schema(conn: &Connection) {
 /// UBIGINT SQL column `area_px`) is the deliberate go-to numeric measurement
 /// for chart/aggregate tests, since it needs no JSON parsing to control or
 /// verify.
-pub(super) struct ObjectSpec {
-    pub(super) image: &'static str,
-    pub(super) class_name: &'static str,
-    pub(super) class_id: i32,
-    pub(super) area_px: u64,
-    pub(super) z_stack: i32,
-    pub(super) t_stack: i32,
-    pub(super) intensities_json: String,
-    pub(super) coloc_json: String,
-    pub(super) centroid_x_px: f64,
-    pub(super) centroid_y_px: f64,
+pub(crate) struct ObjectSpec {
+    pub(crate) image: &'static str,
+    pub(crate) class_name: &'static str,
+    pub(crate) class_id: i32,
+    pub(crate) area_px: u64,
+    pub(crate) z_stack: i32,
+    pub(crate) t_stack: i32,
+    pub(crate) intensities_json: String,
+    pub(crate) coloc_json: String,
+    pub(crate) centroid_x_px: f64,
+    pub(crate) centroid_y_px: f64,
     /// Real pixel size of `image` in the `images` table — every object
     /// belonging to the same `image` must agree (the fixture uses whichever
     /// spec for that image it seeds last), so only set this on a test whose
     /// image heatmap needs a specific grid size.
-    pub(super) image_width: u32,
-    pub(super) image_height: u32,
+    pub(crate) image_width: u32,
+    pub(crate) image_height: u32,
     /// 0 = not tracked, as the analysis writes it.
-    pub(super) track_id: u64,
+    pub(crate) track_id: u64,
     /// A volume's object from z-plane `.0` to `.1` (then no `z_stack`);
     /// `None`: a plane's, on `z_stack`.
-    pub(super) volume: Option<(u32, u32)>,
+    pub(crate) volume: Option<(u32, u32)>,
 }
 
 impl ObjectSpec {
-    pub(super) fn new(
+    pub(crate) fn new(
         image: &'static str,
         class_name: &'static str,
         class_id: i32,
@@ -206,39 +206,39 @@ impl ObjectSpec {
     }
 
     /// A volume's object over z-planes `z_min` to `z_max`.
-    pub(super) fn in_volume(mut self, z_min: u32, z_max: u32) -> Self {
+    pub(crate) fn in_volume(mut self, z_min: u32, z_max: u32) -> Self {
         self.volume = Some((z_min, z_max));
         self
     }
 
-    pub(super) fn in_track(mut self, track_id: u64) -> Self {
+    pub(crate) fn in_track(mut self, track_id: u64) -> Self {
         self.track_id = track_id;
         self
     }
 
-    pub(super) fn at_plane(mut self, z_stack: i32, t_stack: i32) -> Self {
+    pub(crate) fn at_plane(mut self, z_stack: i32, t_stack: i32) -> Self {
         self.z_stack = z_stack;
         self.t_stack = t_stack;
         self
     }
 
-    pub(super) fn with_intensities(mut self, json: &str) -> Self {
+    pub(crate) fn with_intensities(mut self, json: &str) -> Self {
         self.intensities_json = json.to_string();
         self
     }
 
-    pub(super) fn with_coloc(mut self, json: &str) -> Self {
+    pub(crate) fn with_coloc(mut self, json: &str) -> Self {
         self.coloc_json = json.to_string();
         self
     }
 
-    pub(super) fn at_centroid(mut self, x_px: f64, y_px: f64) -> Self {
+    pub(crate) fn at_centroid(mut self, x_px: f64, y_px: f64) -> Self {
         self.centroid_x_px = x_px;
         self.centroid_y_px = y_px;
         self
     }
 
-    pub(super) fn with_image_size(mut self, width: u32, height: u32) -> Self {
+    pub(crate) fn with_image_size(mut self, width: u32, height: u32) -> Self {
         self.image_width = width;
         self.image_height = height;
         self
@@ -253,7 +253,7 @@ impl ObjectSpec {
 /// highest `z_stack`/`t_stack` used by any seeded object overall, matching
 /// what a real `DuckDbExporter::finalize_image` call would have written),
 /// and one `classes` row per distinct `(class_id, class_name)` pair seen.
-pub(super) fn seed_db(path: &Path, objects: &[ObjectSpec]) {
+pub(crate) fn seed_db(path: &Path, objects: &[ObjectSpec]) {
     let conn = Connection::open(path).expect("open test db");
     create_schema(&conn);
 
@@ -374,7 +374,7 @@ pub(super) fn seed_db(path: &Path, objects: &[ObjectSpec]) {
 /// and random (v4) object ids like real data. Bulk `INSERT ... SELECT`, so
 /// millions of rows take seconds instead of the per-row inserts of
 /// [`seed_db`].
-pub(super) fn seed_synthetic_db(path: &Path, images: u32, classes: u32, per_class: u32) {
+pub(crate) fn seed_synthetic_db(path: &Path, images: u32, classes: u32, per_class: u32) {
     let conn = Connection::open(path).expect("open bench db");
     create_schema(&conn);
     let json_derived = json_columns_sql(CH0_INTENSITIES_JSON, "{}");
@@ -517,7 +517,7 @@ mod tests {
 /// Three neurons: two of class A in image A01 (one reaching radius 20,
 /// one radius 30), one of class B in B01 (radius 10), with their
 /// intersections per radius - and an ordinary measurement.
-pub(super) fn profile_database() -> super::results_generator::ResultsGenerator {
+pub(crate) fn profile_database() -> super::results_generator::ResultsGenerator {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("results.evadb");
     seed_db(

@@ -57,42 +57,68 @@ pub fn check_exports(project: &ProjectSettings) -> Vec<ExportProblem> {
             );
         }
         let name = export.name.trim();
-        if name.is_empty() {
-            at(Severity::Error, None, "has no name".into());
-        } else if !names.insert(name.to_lowercase()) {
+        if !name.is_empty() && !names.insert(name.to_lowercase()) {
             at(
                 Severity::Error,
                 None,
                 format!("another export is called “{name}”"),
             );
         }
-        if !is_file_name_part(export.prefix.trim()) {
-            at(
-                Severity::Error,
-                None,
-                format!("the prefix “{}” isn't usable in a file name", export.prefix),
-            );
-        }
-        check_output(export, &mut at);
-        if export.table_format != CURRENT_TABLE_FORMAT {
-            at(
-                Severity::Error,
-                None,
-                format!(
-                    "table format {} is unknown - this app writes table format {CURRENT_TABLE_FORMAT}",
-                    export.table_format
-                ),
-            );
-        }
-        for (i, entry) in export.entries.iter().enumerate() {
-            check_entry(project, entry, &mut |severity, message| {
-                at(severity, Some(i), message)
-            });
-        }
-        check_names_within(export, &mut at);
+        check_one(export, Some(project), &mut at);
     }
     check_names_across(exports, &mut problems);
     problems
+}
+
+/// The problems of one export on its own - what a run checks (it has no
+/// project to compare names with others or to know its classes).
+pub fn check_export(export: &ExportSettings) -> Vec<ExportProblem> {
+    let mut problems = Vec::new();
+    check_one(export, None, &mut |severity, entry, message| {
+        problems.push(ExportProblem {
+            severity,
+            export: Some(export.id),
+            entry,
+            message,
+        })
+    });
+    problems
+}
+
+/// What is wrong with `export` itself; with `project` also classes and
+/// columns the project doesn't have.
+fn check_one(
+    export: &ExportSettings,
+    project: Option<&ProjectSettings>,
+    at: &mut impl FnMut(Severity, Option<usize>, String),
+) {
+    if export.name.trim().is_empty() {
+        at(Severity::Error, None, "has no name".into());
+    }
+    if !is_file_name_part(export.prefix.trim()) {
+        at(
+            Severity::Error,
+            None,
+            format!("the prefix “{}” isn't usable in a file name", export.prefix),
+        );
+    }
+    check_output(export, at);
+    if export.table_format != CURRENT_TABLE_FORMAT {
+        at(
+            Severity::Error,
+            None,
+            format!(
+                "table format {} is unknown - this app writes table format {CURRENT_TABLE_FORMAT}",
+                export.table_format
+            ),
+        );
+    }
+    for (i, entry) in export.entries.iter().enumerate() {
+        check_entry(project, entry, &mut |severity, message| {
+            at(severity, Some(i), message)
+        });
+    }
+    check_names_within(export, at);
 }
 
 fn check_output(export: &ExportSettings, at: &mut impl FnMut(Severity, Option<usize>, String)) {
@@ -136,7 +162,7 @@ fn check_output(export: &ExportSettings, at: &mut impl FnMut(Severity, Option<us
 }
 
 fn check_entry(
-    project: &ProjectSettings,
+    project: Option<&ProjectSettings>,
     entry: &ExportEntry,
     at: &mut impl FnMut(Severity, String),
 ) {
@@ -243,11 +269,13 @@ fn check_table(table: &TableExport, at: &mut impl FnMut(Severity, String)) {
 /// Class ids the project doesn't have - a class can be added later, so a
 /// warning.
 fn check_classes(
-    project: &ProjectSettings,
+    project: Option<&ProjectSettings>,
     classes: Option<&[u32]>,
     at: &mut impl FnMut(Severity, String),
 ) {
-    let Some(classes) = classes else { return };
+    let (Some(classes), Some(project)) = (classes, project) else {
+        return;
+    };
     let known: BTreeSet<u32> = project
         .classification
         .classes()
@@ -270,11 +298,13 @@ fn check_classes(
 /// Column keys that aren't any - measurements depend on the run, only their
 /// key's form is checked here.
 fn check_columns(
-    project: &ProjectSettings,
+    project: Option<&ProjectSettings>,
     columns: Option<&[String]>,
     at: &mut impl FnMut(Severity, String),
 ) {
-    let Some(columns) = columns else { return };
+    let (Some(columns), Some(project)) = (columns, project) else {
+        return;
+    };
     let classes = project.classification.classes();
     let unknown: Vec<&str> = columns
         .iter()

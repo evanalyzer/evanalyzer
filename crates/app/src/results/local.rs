@@ -19,7 +19,7 @@ mod results_time_course;
 mod results_tracks;
 mod results_trees;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 pub use results_charts::ResultCharts;
 pub use results_generator::ResultsGenerator;
@@ -270,6 +270,22 @@ impl ResultsSource for LocalResults {
         // a second open locked the app out of its own database on every export.
         let database = self.with(|db| db.try_clone())?;
         export.start_export(&database, cancel, on_progress)
+    }
+
+    fn run_export(
+        &self,
+        run: &crate::exports::ExportRun,
+        cancel: &AtomicBool,
+        on_progress: ExportProgressFn,
+    ) -> Result<crate::exports::ExportReport, InternalErrors> {
+        // Its own connection, as an export above: the results window's
+        // queries go on meanwhile.
+        let own = LocalResults {
+            database: Mutex::new(self.with(|db| db.try_clone())?),
+            files: self.files.clone(),
+        };
+        let may_write = |folder: &std::path::Path| self.files.check_write(folder).map(|_| ());
+        crate::exports::local::run_export(&own, run, &may_write, cancel, on_progress)
     }
 }
 

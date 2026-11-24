@@ -10,7 +10,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use crate::args::{ExportListArgs, ExportViewArgs};
+use crate::args::{ExportListArgs, ExportRunArgs, ExportViewArgs};
 use evanalyzer_app::backend::Backend;
 use evanalyzer_app::exports::find_export;
 use evanalyzer_app::exports::naming;
@@ -46,6 +46,85 @@ pub fn run_view(args: ExportViewArgs, backend: &dyn Backend) -> Result<(), Inter
         );
     } else {
         print!("{}", view_text(export));
+    }
+    Ok(())
+}
+
+/// Runs an export on a run's results (where they are: here or on the
+/// server) and prints what it wrote. Fails if an entry failed.
+pub fn run_run(args: ExportRunArgs, backend: &dyn Backend) -> Result<(), InternalErrors> {
+    use evanalyzer_app::exports::{EntryStatus, ExportRun, ScriptPermission};
+    let project = load_project(backend.files(), &args.project)?;
+    let exports = &project.settings.exports;
+    let export = find_export(exports, &args.export)
+        .ok_or_else(|| no_such_export(exports, &args.export))?
+        .clone();
+    let project_dir = args
+        .project
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_default();
+    let database = evanalyzer_app::exports::results_database(
+        backend.files(),
+        &project_dir,
+        args.results.as_deref(),
+    )?;
+    let run = ExportRun {
+        export,
+        project_dir,
+        results_dir: database
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_default(),
+        output: args.output,
+        scripts: if args.allow_scripts {
+            ScriptPermission::All
+        } else if args.no_scripts {
+            ScriptPermission::Skip
+        } else {
+            ScriptPermission::Trusted(Vec::new())
+        },
+        drawing: None,
+    };
+    println!("Export:  {} “{}”", run.export.id, run.export.name);
+    println!("Results: {}", database.display());
+    let results = backend.open_results(&database)?;
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let report = results.run_export(&run, &cancel, &mut |message, current, total| {
+        if current < total {
+            println!("  [{}/{total}] {message}", current + 1);
+        }
+    })?;
+    println!("Folder:  {}", report.folder.display());
+    let mut failed = 0;
+    for entry in &report.entries {
+        let label = run
+            .export
+            .entries
+            .get(entry.entry)
+            .map(|e| entry_text(&run.export, e))
+            .unwrap_or_default();
+        let n = entry.entry + 1;
+        match &entry.status {
+            EntryStatus::Written => println!("  {n}. {label}: {} file(s)", entry.files.len()),
+            EntryStatus::Skipped(why) => println!("  {n}. {label}: skipped - {why}"),
+            EntryStatus::Failed(why) => {
+                failed += 1;
+                println!("  {n}. {label}: failed - {why}");
+            }
+        }
+        for file in &entry.files {
+            println!("       {}", file.display());
+        }
+        for note in &entry.notes {
+            println!("       note: {note}");
+        }
+    }
+    if failed > 0 {
+        return Err(InternalErrors::Internal(format!(
+            "{failed} of {} entries failed",
+            report.entries.len()
+        )));
     }
     Ok(())
 }
@@ -131,7 +210,14 @@ fn entry_text(export: &ExportSettings, entry: &ExportEntry) -> String {
             table.format,
             match table.split {
                 evanalyzer_cfg::settings::export_settings::TableSplit::None => String::new(),
-                split => format!(", a file per {split:?}").to_lowercase(),
+                split => match table.split_into {
+                    evanalyzer_cfg::settings::export_settings::SplitInto::Sheets => {
+                        format!(", a sheet per {split:?}").to_lowercase()
+                    }
+                    evanalyzer_cfg::settings::export_settings::SplitInto::Files => {
+                        format!(", a file per {split:?}").to_lowercase()
+                    }
+                },
             }
         ),
         ExportEntry::PlateLayout(_) => format!("{} (XLSX)", name.unwrap_or_default()),
@@ -289,6 +375,42 @@ mod tests {
         assert!(text.contains("1. exp1_objects"));
         assert!(text.contains("rows: Object"));
         assert!(text.contains("3. script scripts/stats.R"));
+    }
+
+    /// `export run` on given results, into a folder of its own: the tables
+    /// are there; an unknown export names the ones there are.
+    #[test]
+    fn run_writes_the_export_into_the_output_folder() {
+        let mut settings = ProjectSettings::default();
+        settings.exports = serde_json::from_value(json!([
+            { "id": 1, "name": "Tables", "entries": [
+                { "kind": "TABLE", "rows": "OBJECT" },
+                { "kind": "TABLE", "rows": "IMAGE" }
+            ] }
+        ]))
+        .unwrap();
+        let file = TempProjectFile::new(&settings);
+        let db = crate::commands::test_support::TempResultsDb::seeded();
+        let out = tempfile::tempdir().unwrap();
+        let backend = LocalBackend::default();
+        let run = |export: &str| {
+            run_run(
+                ExportRunArgs {
+                    export: export.into(),
+                    project: file.path.clone(),
+                    results: Some(db.path.clone()),
+                    output: Some(out.path().to_path_buf()),
+                    allow_scripts: false,
+                    no_scripts: false,
+                },
+                &backend,
+            )
+        };
+        run("tables").expect("the export runs");
+        let objects = std::fs::read_to_string(out.path().join("objects.csv")).unwrap();
+        assert!(objects.starts_with("image,class,object_id,"), "{objects}");
+        assert!(out.path().join("images.csv").exists());
+        assert!(run("nothing").is_err());
     }
 
     #[test]
