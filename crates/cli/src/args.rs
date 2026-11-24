@@ -23,6 +23,10 @@ pub enum CliCommand {
     /// Analyses on the --remote server
     #[command(subcommand)]
     Jobs(JobsSubCommand),
+    /// A project's exports: the tables, images and scripts written from a
+    /// run's results (docs/exports.md)
+    #[command(subcommand)]
+    Export(ExportSubCommand),
     /// Train a pixel or object classifier from a project's labeled objects
     ///
     /// The model is saved under the project's `models/` folder.
@@ -60,6 +64,36 @@ pub enum ResultsSubCommand {
     View(ViewArgs),
     /// List a results database's column ids (for --group-by)
     Columns(ColumnsArgs),
+}
+
+#[derive(Subcommand)]
+pub enum ExportSubCommand {
+    /// List the project's exports
+    List(ExportListArgs),
+    /// Show one export's settings
+    View(ExportViewArgs),
+}
+
+#[derive(Args)]
+pub struct ExportListArgs {
+    /// The project (.evaproj)
+    #[arg(long)]
+    pub project: PathBuf,
+    /// Print the exports as JSON, as the project file has them
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args)]
+pub struct ExportViewArgs {
+    /// The export: its id or its name
+    pub export: String,
+    /// The project (.evaproj)
+    #[arg(long)]
+    pub project: PathBuf,
+    /// Print the export as JSON, as the project file has it
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Subcommand)]

@@ -169,8 +169,11 @@ Errors:
 - An unknown `kind`, `rows`, `format`, `split`, `location`, … value.
 - `folder` with `..`; a `name`, `prefix` or script `output` that isn't a
   single safe name.
-- `aggregations` with non-grouped `rows`; `splitInto: "SHEETS"` with `"CSV"`;
-  `tracks` with `rows` other than `track`.
+- Grouped `rows` without any `aggregations` (non-grouped rows ignore
+  them); `splitInto: "SHEETS"` with `"CSV"`; `tracks` with `rows` other
+  than `"TRACK"`; a `split` finer than the rows (`"IMAGE"` for well or
+  folder rows, `"WELL"` for folder rows and back, `"CLASS"` for
+  measurement rows).
 - Two entries of one export, or two exports writing into the same folder,
   that would write the same file name.
 - A script outside `scripts/`, or missing.

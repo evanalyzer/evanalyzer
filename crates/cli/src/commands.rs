@@ -10,6 +10,7 @@
 pub mod analyze;
 pub(crate) mod common;
 pub mod export;
+pub mod exports;
 pub mod jobs;
 pub mod project;
 #[cfg(test)]
