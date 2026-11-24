@@ -838,7 +838,7 @@
           "minimum": 0
         },
         "name": {
-          "description": "Replaces the automatic file name (`images`); `\"\"`: the automatic one.",
+          "description": "Replaces the automatic file name (`drawn_images`); `\"\"`: the automatic one.",
           "type": "string",
           "default": ""
         },

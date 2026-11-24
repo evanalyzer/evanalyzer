@@ -32,6 +32,7 @@ fn run_of(dir: &Path, export: serde_json::Value) -> ExportRun {
         results_dir: dir.to_path_buf(),
         output: None,
         scripts: ScriptPermission::Skip,
+        interpreters: Default::default(),
         drawing: None,
     }
 }
@@ -214,17 +215,57 @@ fn a_fixed_folder_is_below_the_project_and_output_overrides_it() {
 fn missing_columns_are_noted_and_a_failing_entry_doesnt_stop_the_others() {
     let dir = tempfile::tempdir().unwrap();
     let results = results(dir.path());
+    // A folder where the objects' file should go: that entry can't write.
+    std::fs::create_dir_all(dir.path().join("objects.csv")).unwrap();
     let run_ = run_of(
         dir.path(),
         json!({ "id": 1, "name": "Mixed", "entries": [
-            { "kind": "TABLE", "rows": "OBJECT", "split": "WELL" },
+            { "kind": "TABLE", "rows": "OBJECT" },
             { "kind": "TABLE", "rows": "IMAGE", "columns": ["count", "measurement:gone"] }
         ]}),
     );
     let report = run(&results, &run_);
-    assert!(matches!(report.entries[0].status, EntryStatus::Failed(_)));
+    assert!(
+        matches!(report.entries[0].status, EntryStatus::Failed(_)),
+        "{report:?}"
+    );
     assert_eq!(report.entries[1].status, EntryStatus::Written);
     assert!(report.entries[1].notes[0].contains("measurement:gone"));
+}
+
+/// The wells as the results group the images (the well pattern on the
+/// image names); images it doesn't fit go into `_`.
+#[test]
+fn a_file_per_well() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("results.evadb");
+    seed_db(
+        &path,
+        &[
+            ObjectSpec::new("A01_1.tif", "Cell", 1, 1),
+            ObjectSpec::new("A01_2.tif", "Cell", 1, 2),
+            ObjectSpec::new("B03_1.tif", "Cell", 1, 3),
+        ],
+    );
+    let results = LocalResults::open(path, LocalFileSystem::default()).unwrap();
+    let run_ = run_of(
+        dir.path(),
+        json!({ "id": 1, "name": "Wells", "entries": [
+            { "kind": "TABLE", "rows": "OBJECT", "split": "WELL" }
+        ]}),
+    );
+    let report = run(&results, &run_);
+    assert!(report.all_written(), "{report:?}");
+    let mut files = report.entries[0].files.clone();
+    files.sort();
+    assert_eq!(
+        files,
+        [
+            PathBuf::from("objects_A01.csv"),
+            PathBuf::from("objects_B03.csv")
+        ]
+    );
+    assert_eq!(lines(&dir.path().join("objects_A01.csv")).len(), 3);
 }
 
 #[test]
@@ -238,4 +279,309 @@ fn an_export_with_errors_doesnt_run() {
     let cancel = AtomicBool::new(false);
     let refused = results.run_export(&run_, &cancel, &mut |_, _, _| {});
     assert!(matches!(refused, Err(InternalErrors::InvalidArgument(_))));
+}
+
+/// A track over three time points: where, when, its leading columns.
+#[test]
+fn a_track_table_has_a_row_per_track() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("results.evadb");
+    seed_db(
+        &path,
+        &[
+            ObjectSpec::new("A1/img.tif", "Cell", 1, 100)
+                .in_track(7)
+                .at_plane(0, 0),
+            ObjectSpec::new("A1/img.tif", "Cell", 1, 120)
+                .in_track(7)
+                .at_plane(0, 1),
+            ObjectSpec::new("A1/img.tif", "Cell", 1, 140)
+                .in_track(7)
+                .at_plane(0, 2),
+            ObjectSpec::new("B1/img.tif", "Cell", 1, 50)
+                .in_track(3)
+                .at_plane(0, 1),
+        ],
+    );
+    let results = LocalResults::open(path, LocalFileSystem::default()).unwrap();
+    let run_ = run_of(
+        dir.path(),
+        json!({ "id": 1, "name": "Tracks", "entries": [
+            { "kind": "TABLE", "rows": "TRACK", "columns": ["area_px"], "aggregations": ["AVG", "MAX"] }
+        ]}),
+    );
+    let report = run(&results, &run_);
+    assert!(report.all_written(), "{report:?}");
+    let lines = lines(&dir.path().join("tracks.csv"));
+    let header: Vec<&str> = lines[0].split(',').collect();
+    assert_eq!(&header[..4], ["image", "well", "class", "track_id"]);
+    for column in [
+        "first_t",
+        "last_t",
+        "time_points",
+        "touches_edge",
+        "from_start",
+        "area_px_avg",
+        "area_px_max",
+    ] {
+        assert!(header.contains(&column), "{column} in {header:?}");
+    }
+    let at = |name: &str| header.iter().position(|h| *h == name).unwrap();
+    let track = lines
+        .iter()
+        .map(|line| line.split(',').collect::<Vec<_>>())
+        .find(|cells| cells[at("track_id")] == "7")
+        .expect("track 7");
+    assert_eq!(track[at("image")], "A1/img.tif");
+    assert_eq!(track[at("first_t")], "0");
+    assert_eq!(track[at("last_t")], "2");
+    assert_eq!(track[at("time_points")], "3");
+    assert_eq!(track[at("area_px_avg")], "120");
+    assert_eq!(track[at("area_px_max")], "140");
+    assert_eq!(lines.len(), 3, "two tracks: {lines:?}");
+}
+
+/// The measurement values one by one, only the asked-for keys, the unit as
+/// a column.
+#[test]
+fn a_measurement_table_has_a_row_per_value() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("results.evadb");
+    seed_db(&path, &[ObjectSpec::new("A1/img.tif", "Cell", 1, 100)]);
+    {
+        let conn = duckdb::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE measurements (image_name VARCHAR, image_rel_path VARCHAR, \
+             z_stack INTEGER, t_stack INTEGER, region VARCHAR, object_id UUID, \
+             related_object_id UUID, object_class_name VARCHAR, object_class_id INTEGER[], \
+             step VARCHAR, measurement VARCHAR, unit VARCHAR, key VARCHAR, value DOUBLE);
+             INSERT INTO measurements VALUES
+               ('img.tif', 'A1/img.tif', 0, 0, 'image', NULL, NULL, NULL, NULL, 'threshold_01', 'Threshold', 'gray value', 'threshold_01/threshold', 42.0),
+               ('img.tif', 'A1/img.tif', 0, 0, 'image', NULL, NULL, NULL, NULL, 'noise_01', 'Noise', '', 'noise_01/noise', 3.5);",
+        )
+        .unwrap();
+    }
+    let results = LocalResults::open(path, LocalFileSystem::default()).unwrap();
+    let run_ = run_of(
+        dir.path(),
+        json!({ "id": 1, "name": "Measurements", "entries": [
+            { "kind": "TABLE", "rows": "MEASUREMENT", "columns": ["measurement:threshold_01/threshold", "count"] }
+        ]}),
+    );
+    let report = run(&results, &run_);
+    assert!(report.all_written(), "{report:?}");
+    assert!(
+        report.entries[0].notes[0].contains("count"),
+        "{:?}",
+        report.entries[0].notes
+    );
+    let lines = lines(&dir.path().join("measurements.csv"));
+    assert_eq!(
+        lines[0],
+        "image,region,object_id,related_object_id,class,step,measurement,key,value,unit"
+    );
+    assert_eq!(
+        lines[1..],
+        ["A1/img.tif,image,,,,threshold_01,Threshold,threshold_01/threshold,42,gray value"]
+    );
+}
+
+/// The plate grid of the results' export, under the entry's name.
+#[test]
+fn a_plate_layout_is_a_workbook_under_its_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("results.evadb");
+    seed_db(
+        &path,
+        &[
+            ObjectSpec::new("A01_1.tif", "Cell", 1, 1),
+            ObjectSpec::new("B03_1.tif", "Cell", 1, 3),
+        ],
+    );
+    let results = LocalResults::open(path, LocalFileSystem::default()).unwrap();
+    let run_ = run_of(
+        dir.path(),
+        json!({ "id": 1, "name": "Plate", "prefix": "p",
+            "entries": [{ "kind": "PLATE_LAYOUT" }] }),
+    );
+    let report = run(&results, &run_);
+    assert!(report.all_written(), "{report:?}");
+    assert_eq!(report.entries[0].files, [PathBuf::from("p_plate.xlsx")]);
+    assert!(dir.path().join("p_plate.xlsx").exists());
+    let left: Vec<String> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with(".evanalyzer-export"))
+        .collect();
+    assert!(left.is_empty(), "the scratch folder is gone: {left:?}");
+}
+
+/// Without the project's image settings (no project) drawing is skipped;
+/// with them a PNG per image, flat, by its shortest unique name.
+#[test]
+fn drawn_images_are_flat_pngs_by_image_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("results.evadb");
+    let image = "multi-channel-4D-series.ome.tif";
+    seed_db(&path, &[ObjectSpec::new(image, "Cell", 1, 50)]);
+    let results = LocalResults::open(path, LocalFileSystem::default()).unwrap();
+    let mut run_ = run_of(
+        dir.path(),
+        json!({ "id": 1, "name": "Drawn", "entries": [{ "kind": "DRAWN_IMAGES", "maxSide": 64 }] }),
+    );
+    let report = run(&results, &run_);
+    assert!(matches!(report.entries[0].status, EntryStatus::Skipped(_)));
+
+    run_.drawing = Some(crate::results::DrawnImages {
+        image_root: Path::new(env!("CARGO_MANIFEST_DIR")).join("../core/tests"),
+        max_side: 2048,
+        ..Default::default()
+    });
+    let report = run(&results, &run_);
+    assert!(report.all_written(), "{report:?}");
+    assert_eq!(
+        report.entries[0].files,
+        [PathBuf::from(
+            "drawn_images_multi-channel-4D-series_ome.png"
+        )]
+    );
+    let png = std::fs::read(
+        dir.path()
+            .join("drawn_images_multi-channel-4D-series_ome.png"),
+    )
+    .unwrap();
+    assert!(png.starts_with(b"\x89PNG"));
+}
+
+/// Python as the tests' interpreter - `None` (the test is skipped) where
+/// there is none.
+fn python() -> Option<&'static str> {
+    let name = if cfg!(windows) { "python" } else { "python3" };
+    std::process::Command::new(name)
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|_| name)
+}
+
+/// A project folder with `scripts/<name>`, and a run of an image table
+/// then that script.
+fn script_run(dir: &Path, name: &str, source: &str, scripts: ScriptPermission) -> ExportRun {
+    let project = dir.join("project");
+    std::fs::create_dir_all(project.join("scripts")).unwrap();
+    std::fs::write(project.join("scripts").join(name), source).unwrap();
+    let mut run_ = run_of(
+        dir,
+        json!({ "id": 1, "name": "With script", "entries": [
+            { "kind": "TABLE", "rows": "IMAGE" },
+            { "kind": "SCRIPT", "language": "PYTHON", "file": format!("scripts/{name}") }
+        ]}),
+    );
+    run_.scripts = scripts;
+    run_
+}
+
+const COUNT_LINES: &str = r#"
+import sys, os
+args = dict(zip(sys.argv[1::2], sys.argv[2::2]))
+with open(os.path.join(args["--input"], "images.csv")) as f:
+    n = len(f.read().splitlines()) - 1
+os.makedirs(args["--output"], exist_ok=True)
+with open(os.path.join(args["--output"], "n.txt"), "w") as f:
+    f.write(str(n))
+print("rows:", n, "cwd:", os.path.basename(os.getcwd()))
+"#;
+
+/// Allowed, the script runs after the table, on its folder: its files and
+/// its output come back; it runs in the project's folder.
+#[test]
+fn an_allowed_script_runs_on_the_tables_before_it() {
+    if python().is_none() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let results = results(dir.path());
+    let run_ = script_run(dir.path(), "count.py", COUNT_LINES, ScriptPermission::All);
+    let report = run(&results, &run_);
+    assert!(report.all_written(), "{report:?}");
+    assert_eq!(report.entries[1].files, [PathBuf::from("count/n.txt")]);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("count/n.txt")).unwrap(),
+        "4"
+    );
+    assert!(
+        report.entries[1].log.contains("rows: 4 cwd: project"),
+        "{}",
+        report.entries[1].log
+    );
+}
+
+/// The OK is per content: the hash allows it, a changed script asks again;
+/// not allowed or scripts off, it is skipped - the table is still written.
+#[test]
+fn a_script_runs_only_with_the_ok_for_its_content() {
+    if python().is_none() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let results = results(dir.path());
+    let hash = crate::exports::script_hash(COUNT_LINES.as_bytes());
+
+    let trusted = script_run(
+        dir.path(),
+        "count.py",
+        COUNT_LINES,
+        ScriptPermission::Trusted(vec![hash.clone()]),
+    );
+    assert!(run(&results, &trusted).all_written());
+
+    let changed = script_run(
+        dir.path(),
+        "count.py",
+        &format!("{COUNT_LINES}\n# changed"),
+        ScriptPermission::Trusted(vec![hash]),
+    );
+    let report = run(&results, &changed);
+    assert_eq!(report.entries[0].status, EntryStatus::Written);
+    assert!(matches!(report.entries[1].status, EntryStatus::Skipped(_)));
+    assert!(report.entries[1].notes[0].starts_with("script hash "));
+
+    let off = script_run(dir.path(), "count.py", COUNT_LINES, ScriptPermission::Skip);
+    assert!(matches!(
+        run(&results, &off).entries[1].status,
+        EntryStatus::Skipped(_)
+    ));
+}
+
+/// A script that fails says its exit code and keeps its output; an
+/// interpreter that isn't there says so.
+#[test]
+fn a_failing_script_or_a_missing_interpreter_fail_the_entry() {
+    if python().is_none() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let results = results(dir.path());
+    let failing = script_run(
+        dir.path(),
+        "fail.py",
+        "import sys\nprint('oops', file=sys.stderr)\nsys.exit(3)\n",
+        ScriptPermission::All,
+    );
+    let report = run(&results, &failing);
+    assert_eq!(
+        report.entries[1].status,
+        EntryStatus::Failed("scripts/fail.py stopped with exit code 3".into())
+    );
+    assert!(report.entries[1].log.contains("oops"));
+
+    let mut missing = script_run(dir.path(), "count.py", COUNT_LINES, ScriptPermission::All);
+    missing.interpreters.python = Some(dir.path().join("no-such-python"));
+    let report = run(&results, &missing);
+    let EntryStatus::Failed(why) = &report.entries[1].status else {
+        panic!("{report:?}");
+    };
+    assert!(why.contains("Could not start"), "{why}");
 }

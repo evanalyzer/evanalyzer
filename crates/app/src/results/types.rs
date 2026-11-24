@@ -582,6 +582,38 @@ impl Default for TimeCourseExport {
     }
 }
 
+/// A page of the measurement values (`ResultsSource::measurement_rows`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MeasurementRowsFilter {
+    /// `None`: every image.
+    pub images: Option<Vec<String>>,
+    /// The measurements by key; `None`: all.
+    pub keys: Option<Vec<String>>,
+    /// The page: at most `limit` rows after the first `offset`.
+    pub limit: u32,
+    pub offset: u64,
+}
+
+/// One measurement value with what it is about (the `measurements` table).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MeasurementRow {
+    pub image: String,
+    pub t: i32,
+    /// `None` for a value of a whole volume.
+    pub z: Option<i32>,
+    pub region: Option<String>,
+    pub object_id: Option<String>,
+    pub related_object_id: Option<String>,
+    pub class: Option<String>,
+    pub step: Option<String>,
+    pub measurement: Option<String>,
+    pub unit: Option<String>,
+    pub key: String,
+    pub value: Option<f64>,
+    /// A profile's position (e.g. a Sholl ring's radius).
+    pub position: Option<f64>,
+}
+
 /// One row per track (Results › Tracks, its export): when it was seen,
 /// how it moved, its measurements over its time points. Failed and
 /// disabled images are left out.
@@ -625,6 +657,9 @@ impl Default for TrackSummaryFilter {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct TrackSummary {
     pub image: String,
+    /// The image's path below the image folder.
+    #[serde(default)]
+    pub image_rel_path: String,
     /// Its well / group (`TrackSummaryFilter::grouping`), empty for none.
     pub group: String,
     pub z: u32,

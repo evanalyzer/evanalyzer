@@ -218,6 +218,20 @@ pub enum TopCommand {
         /// Default: no limit.
         #[arg(long, value_name = "MINUTES", value_parser = parse_at_least_one::<u64>)]
         max_job_minutes: Option<u64>,
+
+        /// Let exports run their R / Python scripts here
+        ///
+        /// A script is code that runs as this account. Off by default.
+        #[arg(long)]
+        allow_scripts: bool,
+
+        /// Rscript for exports' R scripts (default: from the PATH)
+        #[arg(long, value_name = "FILE", requires = "allow_scripts")]
+        rscript: Option<std::path::PathBuf>,
+
+        /// Python for exports' Python scripts (default: from the PATH)
+        #[arg(long, value_name = "FILE", requires = "allow_scripts")]
+        python: Option<std::path::PathBuf>,
     },
 }
 

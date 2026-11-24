@@ -25,11 +25,11 @@ use crate::backend::ExportProgressFn;
 use crate::results::{
     BoxplotFilter, BoxplotResult, ColumnEntry, DatabaseResult, GroupedByImageFilter, Grouping,
     HistogramFilter, HistogramResult, ImageEntry, ImageHeatmapFilter, ImageObjectsFilter,
-    ImageReviewChange, ImageTracks, ImageTracksFilter, ListFilter, MeasurementColumn, PlaneFilter,
-    PlateFilter, ProfileFilter, ProfileResult, ProfileStep, ProfileStepFilter, ResultExport,
-    ResultObject, ResultsSource, RunStatus, ScatterFilter, ScatterResult, TimeCourseFilter,
-    TimeCourseResult, TrackPaths, TrackPathsFilter, TrackSummary, TrackSummaryFilter, TreeNeurons,
-    TreeSegment, View, WellFilter,
+    ImageReviewChange, ImageTracks, ImageTracksFilter, ListFilter, MeasurementColumn,
+    MeasurementRow, MeasurementRowsFilter, PlaneFilter, PlateFilter, ProfileFilter, ProfileResult,
+    ProfileStep, ProfileStepFilter, ResultExport, ResultObject, ResultsSource, RunStatus,
+    ScatterFilter, ScatterResult, TimeCourseFilter, TimeCourseResult, TrackPaths, TrackPathsFilter,
+    TrackSummary, TrackSummaryFilter, TreeNeurons, TreeSegment, View, WellFilter,
 };
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::classification_settings::Class;
@@ -189,6 +189,7 @@ results_calls! {
         TreeSegments => fn tree_segments(text soma_id: String) -> Vec<TreeSegment>;
         ImageObjects => fn image_objects(borrowed filter: ImageObjectsFilter) -> Vec<ResultObject>;
         TrackSummary => fn track_summary(borrowed filter: TrackSummaryFilter) -> Vec<TrackSummary>;
+        MeasurementRows => fn measurement_rows(borrowed filter: MeasurementRowsFilter) -> Vec<MeasurementRow>;
         TrackPaths => fn track_paths(borrowed filter: TrackPathsFilter) -> TrackPaths;
         HasTracks => fn has_tracks() -> bool;
         HasLineage => fn has_lineage() -> bool;
@@ -208,6 +209,17 @@ results_calls! {
             on_progress: ExportProgressFn,
         ) -> Result<(), InternalErrors> {
             self.export_results(export, cancel, on_progress)
+        }
+
+        /// Runs where the results are, on the server - see
+        /// `RemoteResults::run_export_remote`.
+        fn run_export(
+            &self,
+            run: &crate::exports::ExportRun,
+            cancel: &AtomicBool,
+            on_progress: ExportProgressFn,
+        ) -> Result<crate::exports::ExportReport, InternalErrors> {
+            self.run_export_remote(run, cancel, on_progress)
         }
     }
 }

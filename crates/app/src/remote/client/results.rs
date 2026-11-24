@@ -128,6 +128,57 @@ impl RemoteResults {
     }
 }
 
+impl RemoteResults {
+    /// `ResultsSource::run_export` on the server: the run sent, its
+    /// progress streamed back, cancelled when `cancel` is set.
+    pub(in crate::remote) fn run_export_remote(
+        &self,
+        run: &crate::exports::ExportRun,
+        cancel: &AtomicBool,
+        on_progress: ExportProgressFn,
+    ) -> Result<crate::exports::ExportReport, InternalErrors> {
+        let (session, handle) = self.session()?;
+        let request = Request::RunExport { handle };
+        // JSON, not postcard: the export's entries are a tagged enum
+        // (`"kind"`), which postcard can't carry.
+        let blob = serde_json::to_vec(run).map_err(|e| InternalErrors::Internal(e.to_string()))?;
+        let (id, rx) = session.request_with_blobs(request, vec![blob])?;
+        let mut cancel_sent = false;
+        let result = loop {
+            if !cancel_sent && cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                cancel_sent = true;
+                let _ = session.send(&ClientMsg::Cancel { id });
+            }
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(Frame {
+                    msg:
+                        Reply::ExportProgress {
+                            message,
+                            current,
+                            total,
+                        },
+                    ..
+                }) => on_progress(&message, current, total),
+                Ok(Frame {
+                    msg: Reply::ExportRunDone(result),
+                    ..
+                }) => break result.map_err(|e| e.into_internal()),
+                Ok(Frame {
+                    msg: Reply::Failed(e),
+                    ..
+                }) => break Err(e.into_internal()),
+                Ok(_) => break Err(unexpected_reply()),
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    break Err(session.disconnected());
+                }
+            }
+        };
+        session.finish(id);
+        result
+    }
+}
+
 impl Drop for RemoteResults {
     fn drop(&mut self) {
         if let Some((session, handle)) = self.handle.to_close() {
@@ -164,6 +215,78 @@ mod tests {
         let url = format!("ws://{}", worker.local_addr().unwrap());
         std::thread::spawn(move || worker.run(Arc::new(backend)));
         RemoteBackend::connect(&url, TOKEN).unwrap()
+    }
+
+    /// An export runs on the server, next to the results: its table is
+    /// written there; a script only where the worker allows scripts.
+    #[test]
+    fn an_export_runs_on_the_server_and_scripts_only_where_allowed() {
+        use crate::exports::{EntryStatus, ExportRun, ScriptPermission};
+        use crate::results::local::test_support::{ObjectSpec, seed_db};
+        let dir = tempfile::tempdir().unwrap();
+        let database = dir.path().join("results.evadb");
+        seed_db(&database, &[ObjectSpec::new("a.tif", "Cell", 1, 10)]);
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(project.join("scripts")).unwrap();
+        std::fs::write(
+            project.join("scripts/touch.py"),
+            "import sys, os\nos.makedirs(sys.argv[-1], exist_ok=True)\nopen(os.path.join(sys.argv[-1], 'done'), 'w').close()\n",
+        )
+        .unwrap();
+        let run = ExportRun {
+            export: serde_json::from_value(serde_json::json!({
+                "id": 1, "name": "Remote", "entries": [
+                    { "kind": "TABLE", "rows": "IMAGE" },
+                    { "kind": "SCRIPT", "language": "PYTHON", "file": "scripts/touch.py" }
+                ]
+            }))
+            .unwrap(),
+            project_dir: project,
+            results_dir: dir.path().to_path_buf(),
+            output: None,
+            scripts: ScriptPermission::All,
+            interpreters: Default::default(),
+            drawing: None,
+        };
+        let cancel = AtomicBool::new(false);
+
+        let backend = connect(LocalBackend::default());
+        let results = backend.open_results(&database).unwrap();
+        let mut progress = Vec::new();
+        let report = results
+            .run_export(&run, &cancel, &mut |message, _, _| {
+                progress.push(message.to_string())
+            })
+            .unwrap();
+        assert_eq!(report.entries[0].status, EntryStatus::Written);
+        assert!(dir.path().join("images.csv").exists());
+        let EntryStatus::Skipped(why) = &report.entries[1].status else {
+            panic!("{report:?}");
+        };
+        assert!(why.contains("don't run on this server"), "{why}");
+        assert!(progress.contains(&"images".to_string()), "{progress:?}");
+
+        let python = if cfg!(windows) { "python" } else { "python3" };
+        if std::process::Command::new(python)
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let worker = Worker::bind("127.0.0.1:0", TOKEN.into())
+            .unwrap()
+            .with_scripts(crate::exports::Interpreters::default());
+        let url = format!("ws://{}", worker.local_addr().unwrap());
+        std::thread::spawn(move || worker.run(Arc::new(LocalBackend::default())));
+        let allowing = RemoteBackend::connect(&url, TOKEN).unwrap();
+        let report = allowing
+            .open_results(&database)
+            .unwrap()
+            .run_export(&run, &cancel, &mut |_, _, _| {})
+            .unwrap();
+        assert!(report.all_written(), "{report:?}");
+        assert!(dir.path().join("touch/done").exists());
     }
 
     /// The `.evadb` of a local analysis of a one-image project (plus the
@@ -627,6 +750,12 @@ mod tests {
             _: &TrackSummaryFilter,
         ) -> Result<Vec<TrackSummary>, InternalErrors> {
             Err(broken("track summary"))
+        }
+        fn measurement_rows(
+            &self,
+            _: &crate::results::MeasurementRowsFilter,
+        ) -> Result<Vec<crate::results::MeasurementRow>, InternalErrors> {
+            Err(broken("measurement rows"))
         }
         fn track_paths(
             &self,

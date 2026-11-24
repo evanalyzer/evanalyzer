@@ -53,7 +53,6 @@ pub fn run_view(args: ExportViewArgs, backend: &dyn Backend) -> Result<(), Inter
 /// Runs an export on a run's results (where they are: here or on the
 /// server) and prints what it wrote. Fails if an entry failed.
 pub fn run_run(args: ExportRunArgs, backend: &dyn Backend) -> Result<(), InternalErrors> {
-    use evanalyzer_app::exports::{EntryStatus, ExportRun, ScriptPermission};
     let project = load_project(backend.files(), &args.project)?;
     let exports = &project.settings.exports;
     let export = find_export(exports, &args.export)
@@ -69,26 +68,83 @@ pub fn run_run(args: ExportRunArgs, backend: &dyn Backend) -> Result<(), Interna
         &project_dir,
         args.results.as_deref(),
     )?;
+    let scripts = if args.allow_scripts {
+        Scripts::All
+    } else if args.no_scripts {
+        Scripts::None
+    } else {
+        Scripts::Allowed
+    };
+    let failed = run_export_on(
+        backend,
+        &project,
+        &project_dir,
+        export,
+        &database,
+        args.output,
+        scripts,
+    )?;
+    if failed > 0 {
+        return Err(InternalErrors::Internal(format!("{failed} entries failed")));
+    }
+    Ok(())
+}
+
+/// Which of an export's scripts run.
+#[derive(Clone, Copy)]
+pub(crate) enum Scripts {
+    /// All (`--allow-scripts`).
+    All,
+    /// None (`--no-scripts`).
+    None,
+    /// Those the user allowed (the settings' trusted scripts).
+    Allowed,
+}
+
+/// Runs `export` on the results `database` (where they are: here or on
+/// the server) and prints what it wrote - the number of entries that
+/// failed.
+pub(crate) fn run_export_on(
+    backend: &dyn Backend,
+    project: &evanalyzer_app::project::ProjectWithRuntime,
+    project_dir: &std::path::Path,
+    export: ExportSettings,
+    database: &std::path::Path,
+    output: Option<std::path::PathBuf>,
+    scripts: Scripts,
+) -> Result<usize, InternalErrors> {
+    use evanalyzer_app::exports::{EntryStatus, ExportRun, ScriptPermission};
+    // The user's settings on the machine the export runs on.
+    let settings = backend.load_app_settings().unwrap_or_default();
+    println!("Export:  {} “{}”", export.id, export.name);
+    println!("Results: {}", database.display());
+    let results = backend.open_results(database)?;
+    let results_images: Vec<String> = results
+        .get_images()?
+        .into_iter()
+        .map(|image| image.rel_path.to_string_lossy().replace('\\', "/"))
+        .collect();
     let run = ExportRun {
         export,
-        project_dir,
+        project_dir: project_dir.to_path_buf(),
         results_dir: database
             .parent()
             .map(std::path::Path::to_path_buf)
             .unwrap_or_default(),
-        output: args.output,
-        scripts: if args.allow_scripts {
-            ScriptPermission::All
-        } else if args.no_scripts {
-            ScriptPermission::Skip
-        } else {
-            ScriptPermission::Trusted(Vec::new())
+        output,
+        scripts: match scripts {
+            Scripts::All => ScriptPermission::All,
+            Scripts::None => ScriptPermission::Skip,
+            Scripts::Allowed => ScriptPermission::Trusted(settings.trusted_scripts.clone()),
         },
-        drawing: None,
+        interpreters: settings.script_interpreters.clone(),
+        drawing: Some(evanalyzer_app::exports::drawing(
+            project,
+            backend.files(),
+            database,
+            &results_images,
+        )),
     };
-    println!("Export:  {} “{}”", run.export.id, run.export.name);
-    println!("Results: {}", database.display());
-    let results = backend.open_results(&database)?;
     let cancel = std::sync::atomic::AtomicBool::new(false);
     let report = results.run_export(&run, &cancel, &mut |message, current, total| {
         if current < total {
@@ -119,14 +175,21 @@ pub fn run_run(args: ExportRunArgs, backend: &dyn Backend) -> Result<(), Interna
         for note in &entry.notes {
             println!("       note: {note}");
         }
+        if !matches!(entry.status, EntryStatus::Written) && !entry.log.is_empty() {
+            for line in entry
+                .log
+                .lines()
+                .rev()
+                .take(20)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+            {
+                println!("       | {line}");
+            }
+        }
     }
-    if failed > 0 {
-        return Err(InternalErrors::Internal(format!(
-            "{failed} of {} entries failed",
-            report.entries.len()
-        )));
-    }
-    Ok(())
+    Ok(failed)
 }
 
 fn json_error(e: serde_json::Error) -> InternalErrors {

@@ -315,7 +315,7 @@ pub enum PlateGrid {
 #[derive(Serialize, Deserialize, Debug, JsonSchema, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct DrawnImagesExport {
-    /// Replaces the automatic file name (`images`); `""`: the automatic one.
+    /// Replaces the automatic file name (`drawn_images`); `""`: the automatic one.
     #[serde(default)]
     pub name: String,
     /// The classes drawn (class ids); `None`: all classes.

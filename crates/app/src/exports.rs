@@ -24,7 +24,9 @@ pub(crate) mod local;
 pub mod naming;
 mod types;
 
-pub use types::{EntryReport, EntryStatus, ExportReport, ExportRun, ScriptPermission};
+pub use types::{
+    EntryReport, EntryStatus, ExportReport, ExportRun, Interpreters, ScriptPermission,
+};
 
 use evanalyzer_cfg::settings::export_settings::ExportSettings;
 
@@ -44,6 +46,56 @@ pub fn find_export<'a>(
                 .iter()
                 .find(|export| export.name.trim().eq_ignore_ascii_case(wanted))
         })
+}
+
+/// What a script's OK is kept by (`ScriptPermission::Trusted`): its
+/// content's SHA-256, as hex - a changed script asks again.
+pub fn script_hash(content: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(content)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// How the project draws the images of the results `results_db`
+/// (`ExportRun::drawing`): where its images are, the series, the channels'
+/// colours and display - a drawn images entry sets its own style, brightness
+/// and size. `results_images` the results' images (relative paths), for
+/// those the project has below another path (its image folder changed
+/// since the run).
+pub fn drawing(
+    project: &crate::project::ProjectWithRuntime,
+    files: &dyn crate::files::FileSystem,
+    results_db: &std::path::Path,
+    results_images: &[String],
+) -> crate::results::DrawnImages {
+    let run_root = crate::project::run_image_root(files, results_db);
+    let (display, image_display) = project.drawn_image_display();
+    let finder = crate::project::ResultsImageFinder::new(
+        &project.images.list,
+        project.images.root.as_deref(),
+        run_root.as_deref(),
+    );
+    let image_paths = results_images
+        .iter()
+        .filter_map(|rel| {
+            let image = finder.find(std::path::Path::new(rel))?;
+            let image = image.to_string_lossy().into_owned();
+            (image != *rel).then(|| (rel.clone(), image))
+        })
+        .collect();
+    crate::results::DrawnImages {
+        image_root: project.images.root.clone().unwrap_or_default(),
+        series: project.images.settings.selected_series.unwrap_or(0),
+        max_side: 2048,
+        colors: project.get_channel_display_colors().into_iter().collect(),
+        style: Default::default(),
+        brightness: Default::default(),
+        display,
+        image_display,
+        image_paths,
+    }
 }
 
 /// The results database an export runs on: `given` (a `.evadb` file, or

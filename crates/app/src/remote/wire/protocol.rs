@@ -69,7 +69,7 @@ use std::sync::Arc;
 // run).
 // 56: one query and one answer variant per results call, from the list in
 // `remote/results.rs` (the answers were shared: `Table`, `Count`, ...).
-pub const PROTOCOL_VERSION: u32 = 56;
+pub const PROTOCOL_VERSION: u32 = 57;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -139,6 +139,12 @@ pub(crate) enum Request {
     /// A postcard-encoded `ResultExport` follows as blob 0; progress
     /// streams back until `ExportDone`.
     ExportResults {
+        handle: u64,
+    },
+    /// A JSON-encoded `exports::ExportRun` follows as blob 0 (its entries
+    /// are a tagged enum postcard can't carry); progress
+    /// streams back (`ExportProgress`) until `ExportRunDone`.
+    RunExport {
         handle: u64,
     },
     TemplateFolders,
@@ -245,6 +251,7 @@ pub(crate) enum Reply {
         total: usize,
     },
     ExportDone(Result<(), WireError>),
+    ExportRunDone(Result<crate::exports::ExportReport, WireError>),
     TemplateFolders(TemplateFolders),
     SystemInfo(SystemInfo),
     AppSettings(AppSettings),

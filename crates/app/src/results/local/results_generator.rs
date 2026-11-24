@@ -55,6 +55,7 @@ mod columns;
 mod grouped;
 mod images;
 mod list;
+mod measurement_rows;
 mod plate;
 mod sql;
 #[cfg(test)]

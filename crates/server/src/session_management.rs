@@ -95,6 +95,9 @@ pub struct SessionManagement {
     pub worker_max_ram_mb: Option<u64>,
     /// Passed to every worker as `--max-job-minutes`.
     pub worker_max_job_minutes: Option<u64>,
+    /// Passed to every worker as `--allow-scripts` (with `--rscript` /
+    /// `--python`): exports may run their scripts, with these interpreters.
+    pub worker_scripts: Option<(Option<PathBuf>, Option<PathBuf>)>,
     /// At most this many workers at once (`limits.max_workers`).
     pub max_workers: Option<usize>,
     state: Mutex<State>,
@@ -141,6 +144,7 @@ impl SessionManagement {
             worker_max_threads: None,
             worker_max_ram_mb: None,
             worker_max_job_minutes: None,
+            worker_scripts: None,
             max_workers: None,
             state: Mutex::new(State {
                 sessions,
@@ -269,6 +273,15 @@ impl SessionManagement {
         }
         if let Some(minutes) = self.worker_max_job_minutes {
             command.arg("--max-job-minutes").arg(minutes.to_string());
+        }
+        if let Some((rscript, python)) = &self.worker_scripts {
+            command.arg("--allow-scripts");
+            if let Some(rscript) = rscript {
+                command.arg("--rscript").arg(rscript);
+            }
+            if let Some(python) = python {
+                command.arg("--python").arg(python);
+            }
         }
         command
             .current_dir(&user.home)
@@ -637,6 +650,7 @@ pub(crate) mod tests {
         sessions.worker_max_threads = Some(8);
         sessions.worker_max_ram_mb = Some(16384);
         sessions.worker_max_job_minutes = Some(600);
+        sessions.worker_scripts = Some((Some(PathBuf::from("/usr/bin/Rscript")), None));
         let mut alice = user("alice");
         alice.home = dir.path().to_path_buf();
 
@@ -652,6 +666,9 @@ pub(crate) mod tests {
         assert_eq!(value_of("--max-threads"), "8");
         assert_eq!(value_of("--max-ram"), "16384");
         assert_eq!(value_of("--max-job-minutes"), "600");
+        assert!(args.contains(&"--allow-scripts"));
+        assert_eq!(value_of("--rscript"), "/usr/bin/Rscript");
+        assert!(!args.contains(&"--python"));
         sessions.close_session(&entry.session_token).unwrap();
     }
 

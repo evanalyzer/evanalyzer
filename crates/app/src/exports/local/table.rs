@@ -51,7 +51,20 @@ pub(super) fn write(
     report: &mut EntryReport,
     cancel: &AtomicBool,
 ) -> Result<(), InternalErrors> {
-    let plan = Plan::new(results, export, table, &mut report.notes)?;
+    let rows: Box<dyn Rows> = match table.rows {
+        TableRows::Track => Box::new(super::tracks::TrackRows::new(
+            results,
+            export,
+            table,
+            &mut report.notes,
+        )?),
+        TableRows::Measurement => Box::new(super::measurements::MeasurementTable::new(
+            results,
+            table,
+            &mut report.notes,
+        )?),
+        _ => Box::new(Plan::new(results, export, table, &mut report.notes)?),
+    };
     let name = naming::with_prefix(
         export,
         &naming::entry_name(
@@ -59,7 +72,7 @@ pub(super) fn write(
         )
         .unwrap_or_default(),
     );
-    let parts = parts(results, table, &plan)?;
+    let parts = parts(results, table, rows.images(), rows.classes())?;
 
     match (table.format, table.split_into) {
         (TableFileFormat::Csv, _) => {
@@ -67,7 +80,7 @@ pub(super) fn write(
                 let file = output.file(&format!("{}.csv", part.file_name(&name)));
                 let path = output.path(&file);
                 let mut sink = CsvSink::create(&path)?;
-                plan.write_part(results, part, &mut sink, cancel)?;
+                rows.write_part(results, part, &mut sink, cancel)?;
                 sink.finish()?;
                 report.files.push(file);
             }
@@ -77,7 +90,7 @@ pub(super) fn write(
                 let file = output.file(&format!("{}.xlsx", part.file_name(&name)));
                 write_workbook(
                     &output.path(&file),
-                    &plan,
+                    rows.as_ref(),
                     results,
                     std::slice::from_ref(part),
                     cancel,
@@ -87,19 +100,37 @@ pub(super) fn write(
         }
         (TableFileFormat::Xlsx, SplitInto::Sheets) => {
             let file = output.file(&format!("{name}.xlsx"));
-            write_workbook(&output.path(&file), &plan, results, &parts, cancel)?;
+            write_workbook(&output.path(&file), rows.as_ref(), results, &parts, cancel)?;
             report.files.push(file);
         }
     }
     Ok(())
 }
 
+/// The rows of a table: what a part of it holds, written into a sink.
+pub(super) trait Rows {
+    /// The images the table covers (relative paths, `/` separated).
+    fn images(&self) -> &[String];
+    /// The classes the table covers; `None`: all.
+    fn classes(&self) -> Option<Vec<ObjectClass>>;
+    /// The header, then the rows of `part`.
+    fn write_part(
+        &self,
+        results: &dyn ResultsSource,
+        part: &Part,
+        sink: &mut dyn Sink,
+        cancel: &AtomicBool,
+    ) -> Result<(), InternalErrors>;
+    /// The `About` sheet's rows: each column's name, label and unit.
+    fn about(&self) -> Vec<[String; 3]>;
+}
+
 /// One file (or sheet) of a table: its name part and what it covers.
-struct Part {
+pub(super) struct Part {
     /// `None`: the table isn't split.
-    suffix: Option<String>,
-    images: Vec<String>,
-    classes: Option<Vec<ObjectClass>>,
+    pub(super) suffix: Option<String>,
+    pub(super) images: Vec<String>,
+    pub(super) classes: Option<Vec<ObjectClass>>,
 }
 
 impl Part {
@@ -119,25 +150,26 @@ impl Part {
 fn parts(
     results: &dyn ResultsSource,
     table: &TableExport,
-    plan: &Plan,
+    images: &[String],
+    classes: Option<Vec<ObjectClass>>,
 ) -> Result<Vec<Part>, InternalErrors> {
     let all = |images: Vec<String>, suffix| Part {
         suffix,
         images,
-        classes: plan.classes.clone(),
+        classes: classes.clone(),
     };
     Ok(match table.split {
-        TableSplit::None => vec![all(plan.images.clone(), None)],
+        TableSplit::None => vec![all(images.to_vec(), None)],
         TableSplit::Image => {
-            let names = naming::unique_image_parts(&plan.images);
-            plan.images
+            let names = naming::unique_image_parts(&images);
+            images
                 .iter()
                 .map(|image| all(vec![image.clone()], Some(names[image].clone())))
                 .collect()
         }
         TableSplit::Folder => {
             let mut folders: BTreeMap<String, Vec<String>> = BTreeMap::new();
-            for image in &plan.images {
+            for image in images {
                 let folder = image
                     .rsplit_once('/')
                     .map(|(folder, _)| folder.to_string())
@@ -162,7 +194,7 @@ fn parts(
                 .into_iter()
                 .filter(|class| class.id != 0)
                 .filter(|class| {
-                    plan.classes
+                    classes
                         .as_ref()
                         .is_none_or(|classes| classes.contains(&ObjectClass::Global(class.id)))
                 })
@@ -173,15 +205,39 @@ fn parts(
                 .iter()
                 .map(|(id, _)| Part {
                     suffix: Some(names[id].clone()),
-                    images: plan.images.clone(),
+                    images: images.to_vec(),
                     classes: Some(vec![ObjectClass::Global(*id)]),
                 })
                 .collect()
         }
         TableSplit::Well => {
-            return Err(InternalErrors::InvalidArgument(
-                "a file per well isn't possible yet".into(),
-            ));
+            // The well as the results group their images: the grouping's
+            // pattern on the image's name (its first capture group).
+            let pattern = results.grouping_regex(&Grouping::Auto)?;
+            let regex = regex::Regex::new(&pattern).map_err(|e| {
+                InternalErrors::Internal(format!("the well pattern “{pattern}” doesn't work: {e}"))
+            })?;
+            let mut wells: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for image in images {
+                let name = image.rsplit('/').next().unwrap_or(image);
+                let well = regex
+                    .captures(name)
+                    .and_then(|captures| captures.get(1))
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_default();
+                wells.entry(well).or_default().push(image.clone());
+            }
+            wells
+                .into_iter()
+                .map(|(well, images)| {
+                    let suffix = if well.is_empty() {
+                        "_".to_string()
+                    } else {
+                        naming::sanitize(&well)
+                    };
+                    all(images, Some(suffix))
+                })
+                .collect()
         }
     })
 }
@@ -209,15 +265,6 @@ impl Plan {
         table: &TableExport,
         notes: &mut Vec<String>,
     ) -> Result<Self, InternalErrors> {
-        if matches!(table.rows, TableRows::Track | TableRows::Measurement) {
-            return Err(InternalErrors::InvalidArgument(format!(
-                "tables of {} aren't possible yet",
-                match table.rows {
-                    TableRows::Track => "tracks",
-                    _ => "measurements",
-                }
-            )));
-        }
         let db_classes = results.get_object_classes()?;
         let grouped = matches!(
             table.rows,
@@ -246,16 +293,7 @@ impl Plan {
         values.sort();
         values.dedup();
 
-        let images: Vec<String> = results
-            .get_images()?
-            .into_iter()
-            .filter(|image| match table.images {
-                ImageScope::All => true,
-                ImageScope::Included => !image.disabled,
-                ImageScope::LeftOut => image.disabled,
-            })
-            .map(|image| image.rel_path.to_string_lossy().replace('\\', "/"))
-            .collect();
+        let images = scope_images(results, table.images)?;
         let mut planes = results.get_planes()?;
         if planes.is_empty() {
             planes.push(PlaneFilter {
@@ -620,7 +658,7 @@ fn length_of(column: &Column) -> Option<Length> {
 /// A column's format 1 name and the factor its values are multiplied by:
 /// its key with anything but `a-z`, `0-9` and `_` turned into `_`, lengths
 /// in the export's unit.
-fn column_name(column: &Column, unit: LengthUnit, classes: &[Class]) -> (String, f64) {
+pub(super) fn column_name(column: &Column, unit: LengthUnit, classes: &[Class]) -> (String, f64) {
     let mut name: String = column
         .as_key(classes)
         .to_lowercase()
@@ -651,7 +689,7 @@ fn column_name(column: &Column, unit: LengthUnit, classes: &[Class]) -> (String,
 }
 
 /// The unit of a column's values for the About sheet.
-fn unit_label(column: &Column, unit: LengthUnit) -> String {
+pub(super) fn unit_label(column: &Column, unit: LengthUnit) -> String {
     let base = match unit {
         LengthUnit::Um => "µm",
         LengthUnit::Nm => "nm",
@@ -675,13 +713,13 @@ fn unit_label(column: &Column, unit: LengthUnit) -> String {
 
 /// One written value.
 #[derive(Clone, Debug, PartialEq)]
-enum Out {
+pub(super) enum Out {
     Empty,
     Text(String),
     Number(f64),
 }
 
-fn value(cell: &Cell, factor: f64) -> Out {
+pub(super) fn value(cell: &Cell, factor: f64) -> Out {
     match &cell.value {
         CellValue::Empty => Out::Empty,
         CellValue::String(text) => Out::Text(text.clone()),
@@ -693,7 +731,7 @@ fn value(cell: &Cell, factor: f64) -> Out {
 }
 
 /// Where a table's rows go.
-trait Sink {
+pub(super) trait Sink {
     fn row(&mut self, cells: &[Out]) -> Result<(), InternalErrors>;
 }
 
@@ -799,7 +837,7 @@ fn xlsx_error(e: rust_xlsxwriter::XlsxError) -> InternalErrors {
 /// A workbook with a sheet per part and the `About` sheet.
 fn write_workbook(
     path: &Path,
-    plan: &Plan,
+    rows: &dyn Rows,
     results: &dyn ResultsSource,
     parts: &[Part],
     cancel: &AtomicBool,
@@ -813,11 +851,11 @@ fn write_workbook(
         sheet
             .set_name(sheet_name(&part.sheet_name(), &mut used))
             .map_err(xlsx_error)?;
-        plan.write_part(results, part, &mut SheetSink { sheet, row: 0 }, cancel)?;
+        rows.write_part(results, part, &mut SheetSink { sheet, row: 0 }, cancel)?;
     }
     let about = workbook.add_worksheet();
     about.set_name("About").map_err(xlsx_error)?;
-    for (row, cells) in plan.about().iter().enumerate() {
+    for (row, cells) in rows.about().iter().enumerate() {
         for (col, text) in cells.iter().enumerate() {
             about
                 .write_string(row as u32, col as u16, text)
@@ -849,6 +887,47 @@ fn sheet_name(wanted: &str, used: &mut Vec<String>) -> String {
     }
     used.push(name.clone());
     name
+}
+
+/// The images of a run in `scope` (relative paths, `/` separated).
+pub(super) fn scope_images(
+    results: &dyn ResultsSource,
+    scope: ImageScope,
+) -> Result<Vec<String>, InternalErrors> {
+    Ok(results
+        .get_images()?
+        .into_iter()
+        .filter(|image| match scope {
+            ImageScope::All => true,
+            ImageScope::Included => !image.disabled,
+            ImageScope::LeftOut => image.disabled,
+        })
+        .map(|image| image.rel_path.to_string_lossy().replace('\\', "/"))
+        .collect())
+}
+
+impl Rows for Plan {
+    fn images(&self) -> &[String] {
+        &self.images
+    }
+
+    fn classes(&self) -> Option<Vec<ObjectClass>> {
+        self.classes.clone()
+    }
+
+    fn write_part(
+        &self,
+        results: &dyn ResultsSource,
+        part: &Part,
+        sink: &mut dyn Sink,
+        cancel: &AtomicBool,
+    ) -> Result<(), InternalErrors> {
+        Plan::write_part(self, results, part, sink, cancel)
+    }
+
+    fn about(&self) -> Vec<[String; 3]> {
+        Plan::about(self)
+    }
 }
 
 #[cfg(test)]

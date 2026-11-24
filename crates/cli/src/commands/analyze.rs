@@ -64,7 +64,79 @@ pub fn run(args: AnalyzeArgs, backend: &dyn Backend) -> Result<(), InternalError
         job.parallelism()
     );
 
-    follow(job, backend, image_count, start)
+    follow(job, backend, image_count, start)?;
+    run_exports_after(&args, backend, &project, &output_path)
+}
+
+/// The exports after a run: those set to run after every run, or the
+/// `--export`s, none with `--no-exports`. Fails if one of them does.
+fn run_exports_after(
+    args: &AnalyzeArgs,
+    backend: &dyn Backend,
+    project: &evanalyzer_app::project::ProjectWithRuntime,
+    run_folder: &std::path::Path,
+) -> Result<(), InternalErrors> {
+    use crate::commands::exports::{Scripts, no_such_export, run_export_on};
+    let exports = &project.settings.exports;
+    let chosen: Vec<_> = if args.no_exports {
+        Vec::new()
+    } else if args.exports.is_empty() {
+        exports
+            .iter()
+            .filter(|e| e.run_after_every_run)
+            .cloned()
+            .collect()
+    } else {
+        args.exports
+            .iter()
+            .map(|wanted| {
+                evanalyzer_app::exports::find_export(exports, wanted)
+                    .cloned()
+                    .ok_or_else(|| no_such_export(exports, wanted))
+            })
+            .collect::<Result<_, _>>()?
+    };
+    if chosen.is_empty() {
+        return Ok(());
+    }
+    let project_dir = args
+        .project
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let database =
+        evanalyzer_app::exports::results_database(backend.files(), &project_dir, Some(run_folder))?;
+    let scripts = if args.allow_scripts {
+        Scripts::All
+    } else {
+        Scripts::Allowed
+    };
+    let mut failed = Vec::new();
+    for export in chosen {
+        println!();
+        let name = export.name.clone();
+        match run_export_on(
+            backend,
+            project,
+            &project_dir,
+            export,
+            &database,
+            None,
+            scripts,
+        ) {
+            Ok(0) => {}
+            Ok(n) => failed.push(format!("“{name}”: {n} entries failed")),
+            Err(e) => failed.push(format!("“{name}”: {e}")),
+        }
+    }
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(InternalErrors::Internal(format!(
+            "the analysis is done, but exports failed - {}",
+            failed.join("; ")
+        )))
+    }
 }
 
 /// Prints `job`'s progress until it ends (Ctrl+C cancels it), then its
@@ -171,6 +243,9 @@ mod tests {
             threads: None,
             job_name: None,
             set: Vec::new(),
+            exports: Vec::new(),
+            no_exports: false,
+            allow_scripts: false,
         });
 
         let err = result.expect_err("expected an empty project to be rejected before any job runs");
@@ -188,6 +263,9 @@ mod tests {
             threads: None,
             job_name: None,
             set: Vec::new(),
+            exports: Vec::new(),
+            no_exports: false,
+            allow_scripts: false,
         });
 
         assert!(result.is_err());
@@ -209,6 +287,9 @@ mod tests {
             threads: None,
             job_name: None,
             set: Vec::new(),
+            exports: Vec::new(),
+            no_exports: false,
+            allow_scripts: false,
         });
 
         let err = result
@@ -230,6 +311,9 @@ mod tests {
             threads: None,
             job_name: None,
             set: Vec::new(),
+            exports: Vec::new(),
+            no_exports: false,
+            allow_scripts: false,
         });
 
         let err = result.expect_err("scanning a nonexistent images dir must still yield 0 images");
@@ -262,6 +346,9 @@ mod tests {
             threads: Some(1),
             job_name: Some("cli_test".into()),
             set: Vec::new(),
+            exports: Vec::new(),
+            no_exports: false,
+            allow_scripts: false,
         });
 
         result.expect("a real image with zero enabled pipelines should still run to completion");
@@ -419,6 +506,15 @@ mod tests {
                 },
             ],
         }];
+        // Runs after the analysis, into its results folder.
+        settings.exports = serde_json::from_value(serde_json::json!([
+            { "id": 1, "name": "After", "runAfterEveryRun": true, "entries": [
+                { "kind": "TABLE", "rows": "IMAGE" },
+                { "kind": "DRAWN_IMAGES", "maxSide": 128 }
+            ] },
+            { "id": 2, "name": "Not after", "entries": [{ "kind": "TABLE", "rows": "OBJECT" }] }
+        ]))
+        .unwrap();
 
         let file = TempProjectFile::new(&settings);
         let images_dir = file.path.parent().unwrap().join("images");
@@ -444,11 +540,22 @@ mod tests {
             threads: Some(1),
             job_name: Some("e2e".into()),
             set: Vec::new(),
+            exports: Vec::new(),
+            no_exports: false,
+            allow_scripts: false,
         })
         .expect("analyze should succeed against real fixture images with a working pipeline");
 
         let results_root = file.path.parent().unwrap().join("results");
         let evadb = find_evadb(&results_root).expect("analyze should have produced a .evadb file");
+        // The export set to run after every run wrote next to the results,
+        // the other one didn't.
+        let run_folder = evadb.parent().unwrap();
+        let images_csv = std::fs::read_to_string(run_folder.join("images.csv")).unwrap();
+        assert!(images_csv.starts_with("image,class,"), "{images_csv}");
+        assert!(run_folder.join("drawn_images_a_ome.png").exists());
+        assert!(run_folder.join("drawn_images_b.png").exists());
+        assert!(!run_folder.join("objects.csv").exists());
 
         let out_dir = tempfile::tempdir().expect("tempdir");
 
@@ -717,6 +824,9 @@ mod tests {
             threads: Some(1),
             job_name: Some("wrong".into()),
             set: vec!["Varroa detection.1.thresholds.0.minThreshold=low".into()],
+            exports: Vec::new(),
+            no_exports: false,
+            allow_scripts: false,
         })
         .expect_err("a value the setting doesn't take must stop the run");
         assert!(err.to_string().contains("it takes a number"), "{err}");
@@ -729,6 +839,9 @@ mod tests {
             threads: Some(1),
             job_name: Some("set".into()),
             set: vec!["Varroa detection.1.thresholds.0.minThreshold=123".into()],
+            exports: Vec::new(),
+            no_exports: false,
+            allow_scripts: false,
         })
         .expect("analyze with --set should succeed");
 

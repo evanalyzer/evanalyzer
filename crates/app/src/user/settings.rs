@@ -32,6 +32,17 @@ pub struct AppSettings {
     #[serde(default)]
     pub pipeline_focus_mode: bool,
 
+    /// Where the interpreters for exports' scripts are on this computer
+    /// (unset: from the `PATH`).
+    #[serde(default)]
+    pub script_interpreters: crate::exports::Interpreters,
+
+    /// The scripts of exports this user allowed to run - their content's
+    /// hash (`exports::script_hash`): a changed script asks again. Kept
+    /// here, never in a project, so a project can't allow itself.
+    #[serde(default)]
+    pub trusted_scripts: Vec<String>,
+
     /// Show every step's advanced settings without expanding them.
     #[serde(default)]
     pub always_show_advanced_settings: bool,

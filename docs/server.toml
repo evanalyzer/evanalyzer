@@ -117,6 +117,14 @@ idle_timeout_minutes = 120
 # user's analysis can't take the machine for good. Default: no limit -
 # whole slides can take hours.
 #max_job_minutes = 720
+# Exports may run their R / Python scripts (docs/exports.md). A script is
+# code from a project that runs as the user's account in their worker, so
+# it is off unless allowed here.
+allow_scripts = false
+# The interpreters for those scripts. Default: Rscript / python3 from the
+# workers' PATH.
+#rscript = "/usr/bin/Rscript"
+#python = "/usr/bin/python3"
 
 [limits]
 # Not set: no limit.

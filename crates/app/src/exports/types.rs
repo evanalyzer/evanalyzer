@@ -31,6 +31,10 @@ pub struct ExportRun {
     pub output: Option<PathBuf>,
     /// Whether the export's scripts run.
     pub scripts: ScriptPermission,
+    /// Where the interpreters are on the machine the export runs on;
+    /// unset: `Rscript` / `python3` from the `PATH`.
+    #[serde(default)]
+    pub interpreters: Interpreters,
     /// How the project draws its images (root, channel colours, display) -
     /// for drawn images entries; `None`: such entries are skipped.
     pub drawing: Option<DrawnImages>,
@@ -47,6 +51,19 @@ pub enum ScriptPermission {
     Trusted(Vec<String>),
     /// All of them (`--allow-scripts`).
     All,
+    /// None, and why (a server that doesn't allow scripts).
+    Refused(String),
+}
+
+/// The interpreters scripts run with - a setting of the computer (or
+/// server), never of the project.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Interpreters {
+    /// `Rscript`; unset: `Rscript` from the `PATH`.
+    pub r: Option<PathBuf>,
+    /// `python`; unset: `python3` (`python` on Windows) from the `PATH`.
+    pub python: Option<PathBuf>,
 }
 
 /// What an export run wrote.

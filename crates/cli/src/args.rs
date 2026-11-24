@@ -170,6 +170,19 @@ pub struct AnalyzeArgs {
     /// it ran with.
     #[arg(long = "set", value_name = "SETTING=VALUE")]
     pub set: Vec<String>,
+
+    /// Run this export afterwards instead of those set to run after every
+    /// run (id or name, repeatable)
+    #[arg(long = "export", value_name = "EXPORT", conflicts_with = "no_exports")]
+    pub exports: Vec<String>,
+
+    /// Run no export afterwards
+    #[arg(long)]
+    pub no_exports: bool,
+
+    /// Let the exports run their scripts without asking
+    #[arg(long)]
+    pub allow_scripts: bool,
 }
 
 #[derive(Args)]

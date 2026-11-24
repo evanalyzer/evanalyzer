@@ -194,9 +194,11 @@ Warnings:
 | `export view <id or name> --project <file.evaproj>` | Shows one export's settings. |
 | `export run <id or name> --project <file.evaproj> [--results <.evadb or its folder>] [--output <folder>] [--allow-scripts \| --no-scripts]` | Runs the export on a run's results - the newest run of the project without `--results`. `--output` writes into that folder for this once instead of the export's `output`. A script someone else wrote needs `--allow-scripts` (there is nobody to ask); `--no-scripts` leaves scripts out. |
 
-`analyze` runs the exports with `runAfterEveryRun` when it is done;
-`--export <id or name>` (repeatable) runs those instead, `--no-exports`
-none.
+`analyze` runs the exports with `runAfterEveryRun` when it is done, into
+its results folder; `--export <id or name>` (repeatable) runs those
+instead, `--no-exports` none, `--allow-scripts` lets their scripts run
+without asking. The analysis is kept even where an export fails; the
+command then fails, naming the export.
 
 ### 1.6 Versions
 
@@ -225,7 +227,7 @@ else becomes `_`.
 |---|---|
 | `table` | by `rows`: `objects`, `images`, `wells`, `folders`, `coloc_pairs`, `tracks`, `measurements` |
 | `plateLayout` | `plate` or `well` |
-| `drawnImages` | `images` |
+| `drawnImages` | `drawn_images` |
 | `script` | (its `output` folder) |
 
 With a `prefix`: `{prefix}_{name}`. An entry's own `name` replaces the

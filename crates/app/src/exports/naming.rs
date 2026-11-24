@@ -45,7 +45,7 @@ pub fn entry_name(entry: &ExportEntry) -> Option<String> {
                 PlateGrid::Well => "well",
             },
         ),
-        ExportEntry::DrawnImages(drawn) => (&drawn.name, "images"),
+        ExportEntry::DrawnImages(drawn) => (&drawn.name, "drawn_images"),
         ExportEntry::Script(_) => return None,
     };
     Some(if own.trim().is_empty() {
@@ -266,7 +266,7 @@ mod tests {
         );
         assert_eq!(
             entry_name(&entry(json!({"kind": "DRAWN_IMAGES"}))).unwrap(),
-            "images"
+            "drawn_images"
         );
         assert!(
             entry_name(&entry(

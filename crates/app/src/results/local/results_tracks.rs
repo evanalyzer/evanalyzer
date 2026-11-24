@@ -247,6 +247,7 @@ impl<'a> TrackSummaryQuery<'a> {
                     let first_t = row.get::<_, i64>(3)? as u32;
                     Ok(TrackSummary {
                         image: image.name.clone(),
+                        image_rel_path: image.rel_path.clone(),
                         group: image.group.clone(),
                         track_id: row.get(0)?,
                         z: row.get::<_, i64>(1)? as u32,

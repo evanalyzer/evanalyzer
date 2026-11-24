@@ -12,7 +12,11 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+mod measurements;
+mod reused;
+mod script;
 mod table;
+mod tracks;
 
 use super::check::check_export;
 use super::naming;
@@ -80,10 +84,26 @@ pub(crate) fn run_export(
             ExportEntry::Table(table) => {
                 table::write(results, export, table, &output, &mut report, cancel)
             }
-            ExportEntry::PlateLayout(_) | ExportEntry::DrawnImages(_) | ExportEntry::Script(_) => {
-                report.status = EntryStatus::Skipped("not built yet".into());
-                Ok(())
+            ExportEntry::PlateLayout(plate) => {
+                reused::plate_layout(results, export, plate, &output, &mut report, cancel)
             }
+            ExportEntry::DrawnImages(drawn) => match &run.drawing {
+                Some(drawing) => reused::drawn_images(
+                    results,
+                    export,
+                    drawn,
+                    drawing,
+                    &output,
+                    &mut report,
+                    cancel,
+                ),
+                None => {
+                    report.status =
+                        EntryStatus::Skipped("drawing needs the project's image settings".into());
+                    Ok(())
+                }
+            },
+            ExportEntry::Script(script) => script::run(run, script, &output, &mut report, cancel),
         };
         match result {
             Ok(()) => {}

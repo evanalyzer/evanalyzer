@@ -228,6 +228,13 @@ impl ResultsSource for LocalResults {
         self.with(|db| db.track_summary(filter))
     }
 
+    fn measurement_rows(
+        &self,
+        filter: &crate::results::MeasurementRowsFilter,
+    ) -> Result<Vec<crate::results::MeasurementRow>, InternalErrors> {
+        self.with(|db| db.measurement_rows(filter))
+    }
+
     fn track_paths(
         &self,
         filter: &crate::results::TrackPathsFilter,

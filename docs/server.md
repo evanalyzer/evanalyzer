@@ -227,6 +227,11 @@ limit):
 - `[workers] max_job_minutes`: an analysis running longer is cancelled
   (default: no limit). Scripts stop as soon as their analysis is
   cancelled.
+- `[workers] allow_scripts` (default `false`): exports may run their R /
+  Python scripts (docs/exports.md) in the user's worker, as the user's
+  account - code that comes with a project. `rscript` / `python` set the
+  interpreters (default: from the workers' PATH). Without it, an export's
+  tables and images are written and its scripts skipped.
 
 After 5 wrong passwords (or unknown sessions) from one address, its next
 tries are refused without checking the password: 1 s, then 2, 4, ... up to

@@ -122,6 +122,12 @@ pub trait ResultsSource: Send + Sync {
         &self,
         filter: &crate::results::TrackSummaryFilter,
     ) -> Result<Vec<crate::results::TrackSummary>, InternalErrors>;
+    /// A page of the measurement values one by one (an export's table of
+    /// measurements).
+    fn measurement_rows(
+        &self,
+        filter: &crate::results::MeasurementRowsFilter,
+    ) -> Result<Vec<crate::results::MeasurementRow>, InternalErrors>;
     /// A sample of the tracks, each from its start (Results › Paths).
     fn track_paths(
         &self,

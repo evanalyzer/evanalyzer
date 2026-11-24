@@ -1,5 +1,5 @@
 {
-  "protocol_version": 56,
+  "protocol_version": 57,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -1136,6 +1136,93 @@
         }
       ]
     },
+    "MeasurementRow": {
+      "STRUCT": [
+        {
+          "image": "STR"
+        },
+        {
+          "t": "I32"
+        },
+        {
+          "z": {
+            "OPTION": "I32"
+          }
+        },
+        {
+          "region": {
+            "OPTION": "STR"
+          }
+        },
+        {
+          "object_id": {
+            "OPTION": "STR"
+          }
+        },
+        {
+          "related_object_id": {
+            "OPTION": "STR"
+          }
+        },
+        {
+          "class": {
+            "OPTION": "STR"
+          }
+        },
+        {
+          "step": {
+            "OPTION": "STR"
+          }
+        },
+        {
+          "measurement": {
+            "OPTION": "STR"
+          }
+        },
+        {
+          "unit": {
+            "OPTION": "STR"
+          }
+        },
+        {
+          "key": "STR"
+        },
+        {
+          "value": {
+            "OPTION": "F64"
+          }
+        },
+        {
+          "position": {
+            "OPTION": "F64"
+          }
+        }
+      ]
+    },
+    "MeasurementRowsFilter": {
+      "STRUCT": [
+        {
+          "images": {
+            "OPTION": {
+              "SEQ": "STR"
+            }
+          }
+        },
+        {
+          "keys": {
+            "OPTION": {
+              "SEQ": "STR"
+            }
+          }
+        },
+        {
+          "limit": "U32"
+        },
+        {
+          "offset": "U64"
+        }
+      ]
+    },
     "ObjectClass": {
       "ENUM": {
         "0": {
@@ -1970,35 +2057,44 @@
           }
         },
         "27": {
+          "MeasurementRows": {
+            "NEWTYPE": {
+              "SEQ": {
+                "TYPENAME": "MeasurementRow"
+              }
+            }
+          }
+        },
+        "28": {
           "TrackPaths": {
             "NEWTYPE": {
               "TYPENAME": "TrackPaths"
             }
           }
         },
-        "28": {
+        "29": {
           "HasTracks": {
             "NEWTYPE": "BOOL"
           }
         },
-        "29": {
+        "30": {
           "HasLineage": {
             "NEWTYPE": "BOOL"
           }
         },
-        "30": {
+        "31": {
           "ImageTracks": {
             "NEWTYPE": {
               "TYPENAME": "ImageTracks"
             }
           }
         },
-        "31": {
+        "32": {
           "ZStacks": {
             "NEWTYPE": "U32"
           }
         },
-        "32": {
+        "33": {
           "TStacks": {
             "NEWTYPE": "U32"
           }
@@ -2286,6 +2382,17 @@
           }
         },
         "27": {
+          "MeasurementRows": {
+            "STRUCT": [
+              {
+                "filter": {
+                  "TYPENAME": "MeasurementRowsFilter"
+                }
+              }
+            ]
+          }
+        },
+        "28": {
           "TrackPaths": {
             "STRUCT": [
               {
@@ -2296,17 +2403,17 @@
             ]
           }
         },
-        "28": {
+        "29": {
           "HasTracks": {
             "STRUCT": []
           }
         },
-        "29": {
+        "30": {
           "HasLineage": {
             "STRUCT": []
           }
         },
-        "30": {
+        "31": {
           "ImageTracks": {
             "STRUCT": [
               {
@@ -2317,10 +2424,10 @@
             ]
           }
         },
-        "31": {
+        "32": {
           "ZStacks": "UNIT"
         },
-        "32": {
+        "33": {
           "TStacks": "UNIT"
         }
       }
@@ -2938,6 +3045,9 @@
       "STRUCT": [
         {
           "image": "STR"
+        },
+        {
+          "image_rel_path": "STR"
         },
         {
           "group": "STR"
