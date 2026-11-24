@@ -45,11 +45,18 @@ export struct DataOutputRow {
     on: bool,
 }
 
-/// A folder the last run wrote into: the analysis' name ("" for a run on
-/// one) and the folder.
-export struct ReportFolder {
+/// What the last run did on one analysis (design canvas "Quick export,
+/// open folder, run on", board 4 L1): its name and age, all written or
+/// not, a few words ("2 files", "1 failed"), where it wrote ("" not on
+/// this computer), the report's lines, unfolded.
+export struct RunPart {
     name: string,
-    path: string,
+    when: string,
+    ok: bool,
+    summary: string,
+    folder: string,
+    lines: [string],
+    open: bool,
 }
 
 /// An analysis the Run ▾ lists: its results file, name, when, ticked.
@@ -197,8 +204,12 @@ export global ExportsState {
     in property <bool> after-folder;
     callback after-open-folder();
 
-    // The last run's report, line by line.
-    in property <[string]> report: [];
+    // The last run: "Last run · 09:14 · 3 analyses" ("" none), "2 written
+    // · 1 with a problem", a part per analysis.
+    in property <string> last-run-title;
+    in property <string> last-run-note;
+    in property <[RunPart]> run-parts: [];
+    callback run-part-toggle(int);
     // A script's output of the last run.
     in property <string> log;
 
@@ -208,6 +219,11 @@ export global ExportsState {
     callback new-export();
     callback duplicate(int);
     callback delete(int);
+    // Moves the export (its id) by a place up (-1) or down (1): the order
+    // they run in after an analysis.
+    callback move-export(int, int);
+    // How many run after every run (the list's head).
+    in property <int> after-count;
     // The trash asked about this export (its id, -1 none): the confirm.
     in-out property <int> delete-asked: -1;
     in-out property <string> delete-asked-name;
@@ -244,7 +260,6 @@ export global ExportsState {
     callback run-on-pick(int, bool);
     callback run-on-picked();
     // -- Open exported folder --
-    in property <[ReportFolder]> report-folders: [];
     callback open-folder(string);
     callback cancel();
 }

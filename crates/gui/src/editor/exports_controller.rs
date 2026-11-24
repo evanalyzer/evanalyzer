@@ -181,11 +181,8 @@ struct Shown {
     entry: Option<usize>,
     /// The last run here, per export: (text, tone).
     status: BTreeMap<u32, (String, i32)>,
-    /// Per export its last run's report and a failed script's log.
-    reports: BTreeMap<u32, (Vec<String>, String)>,
-    /// Per export the folders its last run wrote into: (the analysis'
-    /// name - "" for a run on one -, the folder).
-    folders: BTreeMap<u32, Vec<(String, PathBuf)>>,
+    /// Per export its last run: a part per analysis it ran on.
+    last_runs: BTreeMap<u32, LastRun>,
     /// The analyses the Run ▾ lists: (results file, name, when, ticked).
     run_on: Vec<(PathBuf, String, String, bool)>,
     /// The exports running after an analysis (the note over the window).
@@ -212,6 +209,39 @@ struct Shown {
     coloc: ColocSettings,
     sections_open: HashMap<String, bool>,
     column_filter: String,
+}
+
+/// An export's last run (design canvas "Quick export, open folder, run on",
+/// board 4 L1): when, a part per analysis, a failed script's output.
+#[derive(Clone, Default)]
+struct LastRun {
+    time: String,
+    parts: Vec<RunPart>,
+    log: String,
+}
+
+/// What a run did on one analysis: its name and age, all written or not,
+/// a few words, where it wrote (on this computer), the report's lines,
+/// unfolded.
+#[derive(Clone, Default)]
+struct RunPart {
+    name: String,
+    when: String,
+    ok: bool,
+    summary: String,
+    folder: Option<PathBuf>,
+    lines: Vec<String>,
+    open: bool,
+}
+
+/// The analysis a run is on: its name and age as the Results list says
+/// them ("" when not known yet - the newest), its results file (`None`:
+/// the newest).
+#[derive(Clone)]
+struct Target {
+    name: String,
+    when: String,
+    database: Option<PathBuf>,
 }
 
 /// A script an export runs that the user hasn't allowed yet.
@@ -474,6 +504,8 @@ impl ExportsController {
 
         let this = self.clone();
         state.on_delete(move |id| this.delete(id));
+        let this = self.clone();
+        state.on_move_export(move |id, by| this.move_export(id, by));
 
         let this = self.clone();
         state.on_set_after(move |id, on| {
@@ -586,6 +618,8 @@ impl ExportsController {
 
         let this = self.clone();
         state.on_run(move || this.run());
+        let this = self.clone();
+        state.on_run_part_toggle(move |index| this.toggle_run_part(index));
         let this = self.clone();
         state.on_run_on_open(move || this.run_on_open());
         let this = self.clone();
@@ -813,6 +847,31 @@ impl ExportsController {
         self.push();
     }
 
+    /// Moves the export `id` by `by` places (the list's and the runs'
+    /// order); at an end it stays.
+    fn move_export(&self, id: i32, by: i32) {
+        let Ok(id) = u32::try_from(id) else {
+            return;
+        };
+        let (from, count) = {
+            let project = self.app_state.get_project();
+            let exports = &project.settings.exports;
+            let Some(from) = exports.iter().position(|e| e.id == id) else {
+                return;
+            };
+            (from, exports.len())
+        };
+        let to = from as i64 + i64::from(by);
+        if to < 0 || to >= count as i64 {
+            return;
+        }
+        self.change_exports(|exports| {
+            let export = exports.remove(from);
+            exports.insert(to as usize, export);
+        });
+        self.push();
+    }
+
     fn delete(&self, id: i32) {
         let Ok(id) = u32::try_from(id) else {
             return;
@@ -863,7 +922,11 @@ impl ExportsController {
     /// Runs the export being edited on the project's newest analysis, in
     /// the background; the report shows when done.
     fn run(self: &Arc<Self>) {
-        self.run_on(vec![(String::new(), None)]);
+        self.run_on(vec![Target {
+            name: String::new(),
+            when: String::new(),
+            database: None,
+        }]);
     }
 
     /// The Run ▾ opened: the analyses of the Results list (newest first),
@@ -911,20 +974,17 @@ impl ExportsController {
 
     /// "Run on N analyses": the export on each ticked one, newest first.
     fn run_on_picked(self: &Arc<Self>) {
-        let picked: Vec<(String, Option<PathBuf>)> = self
+        let picked: Vec<Target> = self
             .shown
             .lock()
             .expect("Poisoned")
             .run_on
             .iter()
             .filter(|row| row.3)
-            .map(|(path, name, when, _)| {
-                let name = if when.is_empty() {
-                    name.clone()
-                } else {
-                    format!("{name} · {when}")
-                };
-                (name, Some(path.clone()))
+            .map(|(path, name, when, _)| Target {
+                name: name.clone(),
+                when: when.clone(),
+                database: Some(path.clone()),
             })
             .collect();
         if picked.is_empty() {
@@ -933,9 +993,9 @@ impl ExportsController {
         self.run_on(picked);
     }
 
-    /// Runs the export being edited on `analyses` ((name, results file);
-    /// `None`: the newest), one after the other, in the background.
-    fn run_on(self: &Arc<Self>, analyses: Vec<(String, Option<PathBuf>)>) {
+    /// Runs the export being edited on `analyses`, one after the other, in
+    /// the background.
+    fn run_on(self: &Arc<Self>, analyses: Vec<Target>) {
         let Some(id) = self.selected() else {
             return;
         };
@@ -975,7 +1035,7 @@ impl ExportsController {
         id: u32,
         export: ExportSettings,
         project_dir: PathBuf,
-        analyses: Vec<(String, Option<PathBuf>)>,
+        analyses: Vec<Target>,
         once: Vec<String>,
     ) {
         let cancel = Arc::new(AtomicBool::new(false));
@@ -983,8 +1043,7 @@ impl ExportsController {
             let mut shown = self.shown.lock().expect("Poisoned");
             shown.running = Some(cancel.clone());
             shown.progress = "Starting…".into();
-            shown.reports.remove(&id);
-            shown.folders.remove(&id);
+            shown.last_runs.remove(&id);
         }
         self.push();
 
@@ -993,37 +1052,41 @@ impl ExportsController {
             let backend = this.app_state.backend();
             let total = analyses.len();
             let mut results = Vec::with_capacity(total);
-            for (i, (name, given)) in analyses.into_iter().enumerate() {
+            for (i, mut target) in analyses.into_iter().enumerate() {
                 if cancel.load(Ordering::Relaxed) {
                     break;
                 }
                 let at = if total > 1 {
-                    format!("{}/{total} · {name} · ", i + 1)
+                    format!("{}/{total} · {} · ", i + 1, target.name)
                 } else {
                     String::new()
                 };
                 let progress_to = this.clone();
-                let result = results_database(backend.files(), &project_dir, given.as_deref())
-                    .map_err(|e| e.to_string())
-                    .and_then(|database| {
-                        this.run_one(
-                            &project_dir,
-                            &export,
-                            &database,
-                            &once,
-                            &cancel,
-                            move |text| {
-                                let this = progress_to.clone();
-                                let text = format!("{at}{text}");
-                                ui_thread::invoke_from_event_loop(move || {
-                                    this.shown.lock().expect("Poisoned").progress = text;
-                                    this.push();
-                                })
-                                .ok();
-                            },
-                        )
-                    });
-                results.push((name, result.map(|r| (export.clone(), r))));
+                let result =
+                    results_database(backend.files(), &project_dir, target.database.as_deref())
+                        .map_err(|e| e.to_string())
+                        .and_then(|database| {
+                            if target.name.is_empty() {
+                                target.name = analysis_name(&database);
+                            }
+                            this.run_one(
+                                &project_dir,
+                                &export,
+                                &database,
+                                &once,
+                                &cancel,
+                                move |text| {
+                                    let this = progress_to.clone();
+                                    let text = format!("{at}{text}");
+                                    ui_thread::invoke_from_event_loop(move || {
+                                        this.shown.lock().expect("Poisoned").progress = text;
+                                        this.push();
+                                    })
+                                    .ok();
+                                },
+                            )
+                        });
+                results.push((target, result.map(|r| (export.clone(), r))));
             }
             ui_thread::invoke_from_event_loop(move || this.finish_many(id, results)).ok();
         });
@@ -1162,6 +1225,7 @@ impl ExportsController {
                     return;
                 }
             };
+            let analysis = analysis_name(&database);
             let total = exports.len();
             let mut failed = 0;
             let mut files = 0;
@@ -1214,8 +1278,9 @@ impl ExportsController {
                     first_problem.get_or_insert(id);
                 }
                 let this2 = this.clone();
+                let analysis = analysis.clone();
                 ui_thread::invoke_from_event_loop(move || {
-                    this2.record(id, result.map(|r| (export, r)));
+                    this2.record(id, analysis, result.map(|r| (export, r)));
                 })
                 .ok();
             }
@@ -1766,14 +1831,24 @@ impl ExportsController {
 
     /// A run of the export `id` ended: its report and status.
     fn finish(&self, id: u32, result: Result<(ExportSettings, ExportReport), String>) {
-        self.finish_many(id, vec![(String::new(), result)]);
+        self.finish_many(
+            id,
+            vec![(
+                Target {
+                    name: String::new(),
+                    when: String::new(),
+                    database: None,
+                },
+                result,
+            )],
+        );
     }
 
     /// [`Self::finish`] of a run on several analyses.
     fn finish_many(
         &self,
         id: u32,
-        results: Vec<(String, Result<(ExportSettings, ExportReport), String>)>,
+        results: Vec<(Target, Result<(ExportSettings, ExportReport), String>)>,
     ) {
         {
             let mut shown = self.shown.lock().expect("Poisoned");
@@ -1783,63 +1858,106 @@ impl ExportsController {
         self.record_many(id, results);
     }
 
-    /// The report and status of a run of the export `id` (by hand or after
-    /// an analysis).
-    fn record(&self, id: u32, result: Result<(ExportSettings, ExportReport), String>) {
-        self.record_many(id, vec![(String::new(), result)]);
+    /// The report and status of a run of the export `id` on the analysis
+    /// `name` (after an analysis).
+    fn record(
+        &self,
+        id: u32,
+        name: String,
+        result: Result<(ExportSettings, ExportReport), String>,
+    ) {
+        self.record_many(
+            id,
+            vec![(
+                Target {
+                    name,
+                    when: String::new(),
+                    database: None,
+                },
+                result,
+            )],
+        );
     }
 
-    /// [`Self::record`] of a run on several analyses, each named: a part
-    /// of the report per analysis, under its name.
+    /// The last run of the export `id`: a part per analysis (board 4 L1) -
+    /// a part that went well folded, one with a problem open.
     fn record_many(
         &self,
         id: u32,
-        results: Vec<(String, Result<(ExportSettings, ExportReport), String>)>,
+        results: Vec<(Target, Result<(ExportSettings, ExportReport), String>)>,
     ) {
         let local = !self.app_state.backend().is_remote();
         {
             let mut shown = self.shown.lock().expect("Poisoned");
             let time = chrono::Local::now().format("%H:%M").to_string();
-            let several = results.len() > 1;
-            let mut lines = Vec::new();
+            let mut run = LastRun {
+                time: time.clone(),
+                ..LastRun::default()
+            };
             let mut logs = Vec::new();
-            let mut folders = Vec::new();
-            let mut failed = 0;
-            let mut not_run = 0;
-            for (name, result) in results {
-                if several {
-                    lines.push(format!("— {name} —"));
-                }
+            for (target, result) in results {
+                let mut part = RunPart {
+                    name: target.name,
+                    when: target.when,
+                    ..RunPart::default()
+                };
                 match result {
                     Err(why) => {
-                        lines.push(format!("Did not run: {why}"));
-                        not_run += 1;
+                        part.summary = "did not run".into();
+                        part.lines.push(format!("Did not run: {why}"));
                     }
                     Ok((export, report)) => {
-                        let (part, log, part_failed) =
+                        let (mut lines, log, failed) =
                             report_lines(&export, &report, &shown.refused);
-                        lines.extend(part);
+                        let files: usize = report.entries.iter().map(|e| e.files.len()).sum();
+                        if local && files > 0 {
+                            // The folder button says where: no "Into …" line.
+                            lines.remove(0);
+                            part.folder = Some(report.folder.clone());
+                        }
+                        part.ok = failed == 0 && report.all_written();
+                        part.summary = if failed > 0 {
+                            format!("{failed} failed")
+                        } else if !report.all_written() {
+                            "not all written".into()
+                        } else {
+                            format!("{files} {}", if files == 1 { "file" } else { "files" })
+                        };
+                        part.lines = lines;
                         if !log.is_empty() {
                             logs.push(log);
                         }
-                        failed += part_failed;
-                        let written = report.entries.iter().any(|e| !e.files.is_empty());
-                        if written && local {
-                            folders.push((name, report.folder));
-                        }
                     }
                 }
+                part.open = !part.ok;
+                run.parts.push(part);
             }
-            shown.reports.insert(id, (lines, logs.join("\n")));
-            shown.folders.insert(id, folders);
-            let status = if !several && not_run == 1 {
-                ("⚠ did not run".to_string(), 2)
-            } else if failed + not_run > 0 {
-                (format!("⚠ {} failed · {time}", failed + not_run), 2)
-            } else {
-                (format!("✓ {time}"), 1)
+            run.log = logs.join("\n");
+            let problems = run.parts.iter().filter(|p| !p.ok).count();
+            let status = match (run.parts.as_slice(), problems) {
+                ([one], 1) if one.summary == "did not run" => ("⚠ did not run".to_string(), 2),
+                (_, 0) => (format!("✓ {time}"), 1),
+                (_, n) => (format!("⚠ {n} failed · {time}"), 2),
             };
+            shown.last_runs.insert(id, run);
             shown.status.insert(id, status);
+        }
+        self.push();
+    }
+
+    /// A part of the last run (its index) folded or unfolded.
+    fn toggle_run_part(&self, index: i32) {
+        {
+            let mut shown = self.shown.lock().expect("Poisoned");
+            let Some(id) = shown.selected else {
+                return;
+            };
+            if let Some(part) = shown.last_runs.get_mut(&id).and_then(|run| {
+                run.parts
+                    .get_mut(usize::try_from(index).unwrap_or(usize::MAX))
+            }) {
+                part.open = !part.open;
+            }
         }
         self.push();
     }
@@ -1876,31 +1994,63 @@ impl ExportsController {
                 }
             })
             .collect();
+        state.set_after_count(
+            settings
+                .exports
+                .iter()
+                .filter(|e| e.run_after_every_run)
+                .count() as i32,
+        );
         state.set_exports(model(rows));
         state.set_selected_id(shown.selected.map_or(-1, |id| id as i32));
         state.set_running(shown.running.is_some());
         state.set_progress(shown.progress.as_str().into());
-        let (report, log) = shown
+        let run = shown
             .selected
-            .and_then(|id| shown.reports.get(&id))
+            .and_then(|id| shown.last_runs.get(&id))
             .cloned()
             .unwrap_or_default();
-        state.set_report(model(report.iter().map(SharedString::from).collect()));
-        state.set_log(log.as_str().into());
-        let folders = shown
-            .selected
-            .and_then(|id| shown.folders.get(&id))
-            .cloned()
-            .unwrap_or_default();
-        state.set_report_folders(model(
-            folders
+        let parts = run.parts.len();
+        state.set_last_run_title(
+            match run.parts.as_slice() {
+                [] => String::new(),
+                [one] if one.name.is_empty() => format!("Last run · {}", run.time),
+                [one] => format!("Last run · {} · {}", run.time, one.name),
+                _ => format!("Last run · {} · {parts} analyses", run.time),
+            }
+            .into(),
+        );
+        let problems = run.parts.iter().filter(|p| !p.ok).count();
+        state.set_last_run_note(
+            if parts < 2 {
+                String::new()
+            } else if problems == 0 {
+                "all written".into()
+            } else {
+                format!("{} written · {problems} with a problem", parts - problems)
+            }
+            .into(),
+        );
+        state.set_run_parts(model(
+            run.parts
                 .iter()
-                .map(|(name, folder)| crate::ReportFolder {
-                    name: name.as_str().into(),
-                    path: folder.to_string_lossy().as_ref().into(),
+                .map(|part| crate::RunPart {
+                    name: part.name.as_str().into(),
+                    when: part.when.as_str().into(),
+                    ok: part.ok,
+                    summary: part.summary.as_str().into(),
+                    folder: part
+                        .folder
+                        .as_ref()
+                        .map(|f| f.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                        .into(),
+                    lines: model(part.lines.iter().map(SharedString::from).collect()),
+                    open: part.open || parts == 1,
                 })
                 .collect(),
         ));
+        state.set_log(run.log.as_str().into());
         state.set_run_on(model(
             shown
                 .run_on
@@ -2542,6 +2692,13 @@ fn open_in_system(path: &Path) {
         .args(["/C", "start", ""])
         .arg(path)
         .spawn();
+}
+
+/// An analysis' name as the Results list shows it, from its results file.
+fn analysis_name(database: &Path) -> String {
+    crate::editor::results_list_controller::extract_name_from_path(&database.to_path_buf())
+        .unwrap_or_default()
+        .to_string()
 }
 
 fn model<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {

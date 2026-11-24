@@ -7,7 +7,7 @@
 // not over other content: no blur.
 
 import { Ink, InkIcons, InkCheckList, InkButton, InkButtonKind, InkIconButton, InkCheckbox, InkSwitch, InkSegmented, InkSelect, InkTextField, InkListRow, InkLabel, InkCaption, InkHint, InkBanner, InkTone, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator } from "../ink/ink.slint";
-import { ExportsState, ExportRow, ExportEntryRow } from "../api/exports.slint";
+import { ExportsState, ExportRow, ExportEntryRow, RunPart } from "../api/exports.slint";
 import { ColumnPicker, ValuesClassesPart, RelatedPart } from "../results/results_panel.slint";
 import { ViewPanel } from "../results/results_view_bar.slint";
 
@@ -69,62 +69,100 @@ component Setting inherits VerticalLayout {
     @children
 }
 
-// One export in the list: its tick (after every run), name, what it writes,
-// its last run.
-component ExportListRow inherits Rectangle {
-    in property <ExportRow> item;
-    in property <bool> selected;
-    callback clicked();
-    callback after-toggled(bool);
-
-    height: 52px;
-    border-radius: Ink.radius-md;
-    background: root.selected ? Ink.row-select : ta.has-hover ? Ink.row-hover : transparent;
-    accessible-role: list-item;
-    accessible-label: root.item.name;
-    accessible-item-selected: root.selected;
-
-    ta := TouchArea {
-        clicked => {
-            root.clicked();
-        }
-    }
-    HorizontalLayout {
-        padding-left: 10px;
-        padding-right: 10px;
-        spacing: 10px;
-        VerticalLayout {
-            alignment: center;
-            InkCheckbox {
-                checked: root.item.after;
-                toggled(on) => {
-                    root.after-toggled(on);
-                }
+// What the last run did on one analysis (board 4 L1): ✓ / ⚠, its name
+// and age, a few words, the folder (its path as the tip), ▾ for the
+// report's lines.
+component RunPartRow inherits VerticalLayout {
+    in property <RunPart> part;
+    callback toggled();
+    callback open-folder();
+    spacing: 2px;
+    Rectangle {
+        height: 34px;
+        border-radius: Ink.radius-md;
+        background: ta.has-hover ? Ink.row-hover : transparent;
+        ta := TouchArea {
+            clicked => {
+                root.toggled();
             }
         }
-        VerticalLayout {
-            alignment: center;
-            spacing: 2px;
-            horizontal-stretch: 1;
+        HorizontalLayout {
+            padding-left: 6px;
+            padding-right: 2px;
+            spacing: 8px;
+            VerticalLayout {
+                alignment: center;
+                Image {
+                    width: 14px;
+                    source: root.part.ok ? InkIcons.check : InkIcons.warning;
+                    colorize: root.part.ok ? Ink.ok : Ink.warn;
+                    image-fit: contain;
+                }
+            }
             Text {
-                text: root.item.name;
+                text: root.part.name;
                 font-size: Ink.fs-body;
                 font-weight: 500;
                 color: Ink.text;
+                vertical-alignment: center;
                 overflow: elide;
+            }
+            if root.part.when != "": Text {
+                text: "· " + root.part.when;
+                font-size: Ink.fs-secondary;
+                color: Ink.text-mute;
+                vertical-alignment: center;
+            }
+            Rectangle {
+                horizontal-stretch: 1;
             }
             Text {
-                text: root.item.summary;
+                text: root.part.summary;
                 font-size: Ink.fs-secondary;
-                color: Ink.text-dim;
-                overflow: elide;
+                color: root.part.ok ? Ink.text-mute : Ink.warn;
+                vertical-alignment: center;
+            }
+            VerticalLayout {
+                alignment: center;
+                width: 26px;
+                if root.part.folder != "": InkIconButton {
+                    size: 26px;
+                    on-row: true;
+                    icon: InkIcons.folder;
+                    label: "Open exported folder";
+                    clicked => {
+                        root.open-folder();
+                    }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                InkIconButton {
+                    size: 26px;
+                    on-row: true;
+                    icon: root.part.open ? InkIcons.caret-up : InkIcons.caret-down;
+                    label: root.part.open ? "Hide the report" : "Show the report";
+                    clicked => {
+                        root.toggled();
+                    }
+                }
             }
         }
-        Text {
-            text: root.item.status;
-            font-size: Ink.fs-secondary;
-            color: root.item.status-tone == 1 ? Ink.ok : root.item.status-tone == 2 ? Ink.warn : Ink.text-mute;
-            vertical-alignment: center;
+    }
+    if root.part.open: Rectangle {
+        background: Ink.hover;
+        border-radius: Ink.radius-md;
+        VerticalLayout {
+            padding: 8px;
+            padding-left: 10px;
+            spacing: 2px;
+            for line in root.part.lines: Text {
+                text: line;
+                font-family: Ink.font-mono;
+                font-size: Ink.fs-secondary;
+                color: Ink.text-dim;
+                wrap: word-wrap;
+            }
         }
     }
 }
@@ -808,6 +846,81 @@ component EntrySettings inherits VerticalLayout {
 export component ExportsView inherits Rectangle {
     background: Ink.ground;
 
+    // -- An export's ⋯ (its row, or the card's head): the same menu --
+    property <int> menu-id: -1;
+    property <string> menu-name;
+    property <length> menu-x;
+    property <length> menu-y;
+    // Counted up: the card's head opens its Run ▾ (⋯ › Run on…).
+    property <int> run-on-request: 0;
+    function open-menu(id: int, name: string, x: length, y: length) {
+        root.menu-id = id;
+        root.menu-name = name;
+        root.menu-x = max(0px, x);
+        root.menu-y = y;
+        export-menu.show();
+    }
+    // Floats: blurred like every menu (InkMenuFrame).
+    export-menu := PopupWindow {
+        x: root.menu-x;
+        y: root.menu-y;
+        InkMenuFrame {
+            menu-width: 236px;
+            open-y: root.absolute-position.y + root.menu-y;
+            InkMenuCaption {
+                text: root.menu-name;
+            }
+            InkMenuItem {
+                icon: InkIcons.run;
+                text: "Run";
+                clicked => {
+                    ExportsState.select(root.menu-id);
+                    ExportsState.run();
+                }
+            }
+            InkMenuItem {
+                text: "Run on…";
+                clicked => {
+                    ExportsState.select(root.menu-id);
+                    root.run-on-request += 1;
+                }
+            }
+            InkMenuSeparator { }
+            InkMenuItem {
+                icon: InkIcons.copy;
+                text: "Duplicate";
+                clicked => {
+                    ExportsState.duplicate(root.menu-id);
+                }
+            }
+            InkMenuSeparator { }
+            InkMenuItem {
+                icon: InkIcons.caret-up;
+                text: "Move up";
+                clicked => {
+                    ExportsState.move-export(root.menu-id, -1);
+                }
+            }
+            InkMenuItem {
+                icon: InkIcons.caret-down;
+                text: "Move down";
+                clicked => {
+                    ExportsState.move-export(root.menu-id, 1);
+                }
+            }
+            InkMenuSeparator { }
+            InkMenuItem {
+                icon: InkIcons.delete;
+                text: "Delete export…";
+                danger: true;
+                clicked => {
+                    ExportsState.delete-asked-name = root.menu-name;
+                    ExportsState.delete-asked = root.menu-id;
+                }
+            }
+        }
+    }
+
     init => {
         ExportsState.refresh();
     }
@@ -823,7 +936,7 @@ export component ExportsView inherits Rectangle {
             VerticalLayout {
                 CardHead {
                     title: "Exports";
-                    count: ExportsState.exports.length;
+                    count: ExportsState.exports.length == 0 ? "" : ExportsState.after-count + " of " + ExportsState.exports.length + " after every run";
                     VerticalLayout {
                         alignment: center;
                         InkButton {
@@ -846,14 +959,28 @@ export component ExportsView inherits Rectangle {
                         padding: 6px;
                         spacing: 2px;
                         alignment: start;
-                        for row in ExportsState.exports: ExportListRow {
-                            item: row;
+                        // Like every list (InkListRow): place, name, what it
+                        // writes, the last run, ⋯, the eye - here "runs
+                        // after every run" (design canvas "Quick export,
+                        // open folder, run on", board 5).
+                        for row[i] in ExportsState.exports: InkListRow {
+                            lead: i + 1;
+                            title: row.name;
+                            subtitle: row.summary;
+                            trailing: row.status != "" ? row.status : row.after ? "" : "by hand";
                             selected: row.id == ExportsState.selected-id;
+                            has-more: true;
+                            has-eye: true;
+                            shown: row.after;
+                            eye-tip: row.after ? "Runs after every run" : "Only by hand";
                             clicked => {
                                 ExportsState.select(row.id);
                             }
-                            after-toggled(on) => {
-                                ExportsState.set-after(row.id, on);
+                            eye-toggled => {
+                                ExportsState.set-after(row.id, !row.after);
+                            }
+                            context-menu(x, y) => {
+                                root.open-menu(row.id, row.name, min(self.x + x, self.width - 236px), self.absolute-position.y - root.absolute-position.y + y + 4px);
                             }
                         }
                         if ExportsState.exports.length == 0: InkHint {
@@ -862,18 +989,7 @@ export component ExportsView inherits Rectangle {
                         }
                     }
                 }
-                Rectangle {
-                    height: 1px;
-                    background: Ink.border;
-                }
-                HorizontalLayout {
-                    padding-left: 14px;
-                    height: 36px;
-                    InkHint {
-                        text: "Ticked: runs after every run.";
-                        vertical-alignment: center;
-                    }
-                }
+
             }
         }
 
@@ -996,28 +1112,23 @@ export component ExportsView inherits Rectangle {
                             }
                         }
                     }
-                    VerticalLayout {
+                    // The same menu as the export's row in the list.
+                    head-more := VerticalLayout {
                         alignment: center;
                         InkIconButton {
                             size: 30px;
-                            icon: InkIcons.copy;
-                            label: "Duplicate this export";
+                            icon: InkIcons.more;
+                            label: "Actions";
                             clicked => {
-                                ExportsState.duplicate(ExportsState.selected-id);
+                                root.open-menu(ExportsState.selected-id, ExportsState.name, head-more.absolute-position.x - root.absolute-position.x + head-more.width - 236px, head-more.absolute-position.y - root.absolute-position.y + head-more.height + 4px);
                             }
                         }
                     }
-                    VerticalLayout {
-                        alignment: center;
-                        InkIconButton {
-                            size: 30px;
-                            icon: InkIcons.delete;
-                            label: "Delete this export";
-                            clicked => {
-                                ExportsState.delete-asked-name = ExportsState.name;
-                                ExportsState.delete-asked = ExportsState.selected-id;
-                            }
-                        }
+                    // The list's ⋯ › Run on… asks for the Run ▾ here.
+                    property <int> run-on-asked: root.run-on-request;
+                    changed run-on-asked => {
+                        ExportsState.run-on-open();
+                        run-on-menu.show();
                     }
                 }
                 Rectangle {
@@ -1157,7 +1268,7 @@ export component ExportsView inherits Rectangle {
                                 ExportsState.set-export-field("after", on ? "1" : "0");
                             }
                         }
-                        if ExportsState.running || ExportsState.report.length > 0: Rectangle {
+                        if ExportsState.running || ExportsState.last-run-title != "": Rectangle {
                             height: 1px;
                             background: Ink.border;
                         }
@@ -1166,56 +1277,63 @@ export component ExportsView inherits Rectangle {
                             font-size: Ink.fs-body;
                             color: Ink.text-dim;
                         }
-                        if ExportsState.report.length > 0: VerticalLayout {
+                        // The last run (board 4 L1): a summary, then a row
+                        // per analysis - on one, its folder beside the
+                        // title and its lines below.
+                        if ExportsState.last-run-title != "": VerticalLayout {
                             spacing: 4px;
                             HorizontalLayout {
                                 spacing: 8px;
+                                height: 28px;
                                 Text {
-                                    text: "Last run";
+                                    text: ExportsState.last-run-title;
                                     font-size: Ink.fs-body;
                                     font-weight: 600;
                                     color: Ink.text;
                                     vertical-alignment: center;
-                                    horizontal-stretch: 1;
-                                }
-                                // A run on one analysis: its folder here.
-                                if ExportsState.report-folders.length == 1 && ExportsState.report-folders[0].name == "": InkButton {
-                                    small: true;
-                                    text: "Open exported folder";
-                                    icon: InkIcons.folder;
-                                    clicked => {
-                                        ExportsState.open-folder(ExportsState.report-folders[0].path);
-                                    }
-                                }
-                            }
-                            // On several: a folder per analysis.
-                            for folder in ExportsState.report-folders: HorizontalLayout {
-                                visible: folder.name != "";
-                                height: folder.name != "" ? self.preferred-height : 0px;
-                                spacing: 8px;
-                                Text {
-                                    text: folder.name;
-                                    font-size: Ink.fs-secondary;
-                                    color: Ink.text-dim;
-                                    vertical-alignment: center;
                                     overflow: elide;
                                     horizontal-stretch: 1;
                                 }
-                                InkButton {
-                                    small: true;
-                                    text: "Open exported folder";
-                                    icon: InkIcons.folder;
-                                    clicked => {
-                                        ExportsState.open-folder(folder.path);
+                                if ExportsState.last-run-note != "": Text {
+                                    text: ExportsState.last-run-note;
+                                    font-size: Ink.fs-secondary;
+                                    color: Ink.text-mute;
+                                    vertical-alignment: center;
+                                }
+                                if ExportsState.run-parts.length == 1 && ExportsState.run-parts[0].folder != "": VerticalLayout {
+                                    alignment: center;
+                                    InkIconButton {
+                                        size: 26px;
+                                        icon: InkIcons.folder;
+                                        label: "Open exported folder";
+                                        disabled-reason: "";
+                                        clicked => {
+                                            ExportsState.open-folder(ExportsState.run-parts[0].folder);
+                                        }
                                     }
                                 }
                             }
-                            for line in ExportsState.report: Text {
-                                text: line;
-                                font-family: Ink.font-mono;
-                                font-size: Ink.fs-secondary;
-                                color: Ink.text-dim;
-                                wrap: word-wrap;
+                            if ExportsState.run-parts.length == 1: VerticalLayout {
+                                spacing: 2px;
+                                for line in ExportsState.run-parts[0].lines: Text {
+                                    text: line;
+                                    font-family: Ink.font-mono;
+                                    font-size: Ink.fs-secondary;
+                                    color: Ink.text-dim;
+                                    wrap: word-wrap;
+                                }
+                            }
+                            if ExportsState.run-parts.length > 1: VerticalLayout {
+                                spacing: 2px;
+                                for part[i] in ExportsState.run-parts: RunPartRow {
+                                    part: part;
+                                    toggled => {
+                                        ExportsState.run-part-toggle(i);
+                                    }
+                                    open-folder => {
+                                        ExportsState.open-folder(part.folder);
+                                    }
+                                }
                             }
                         }
                         if ExportsState.log != "": Rectangle {

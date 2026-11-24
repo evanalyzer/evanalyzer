@@ -241,12 +241,15 @@ command then fails, naming the export.
 ### 1.6 In the app
 
 - **Exports tab** (Ctrl+4): the project's exports, the one picked and the
-  settings of its entry; Run runs it on the project's newest analysis, the
-  ▾ beside it on the analyses ticked there (the Results list's, newest
-  first), one after the other, each into its own results folder - the
-  report has a part per analysis. "Open exported folder" beside "Last run"
-  opens where it wrote (a folder per analysis; not for results on a
-  server).
+  settings of its entry. The list's rows are like every list's: the eye
+  is `runAfterEveryRun` (crossed: only by hand), ⋯ (also on the picked
+  export's head) has Run, Run on…, Duplicate, Move up / down (the order
+  they run in) and Delete export… (asked first). Run runs it on the
+  project's newest analysis, the ▾ beside it on the analyses ticked there
+  (the Results list's, newest first), one after the other, each into its
+  own results folder. "Last run" then has a row per analysis - what it
+  wrote, a folder button (not for results on a server), its report lines
+  folded while all went well.
 - **After a run**: the run dialog lists the exports with
   `runAfterEveryRun` under "Afterwards"; one switched off there stays off
   for that run only. They run on this computer when the analysis is done,

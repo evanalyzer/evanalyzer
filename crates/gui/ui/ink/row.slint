@@ -29,6 +29,9 @@ export component InkListRow inherits Rectangle {
     /// An eye at the right that shows/hides.
     in property <bool> has-eye: false;
     in property <bool> shown: true;
+    /// What the eye says ("" its usual Hide / Show) - an export's "Runs
+    /// after every run" / "Only by hand".
+    in property <string> eye-tip;
     /// A short word in a pill after the title ("not stored"); empty: none.
     in property <string> badge;
     /// A small mark (error, warning) after the title; transparent: none.
@@ -245,7 +248,7 @@ export component InkListRow inherits Rectangle {
                             size: 22px;
                             on-row: true;
                             icon: root.shown ? InkIcons.visible : InkIcons.hidden;
-                            label: root.shown ? "Hide" : "Show";
+                            label: root.eye-tip != "" ? root.eye-tip : root.shown ? "Hide" : "Show";
                             clicked => {
                                 root.eye-toggled();
                             }

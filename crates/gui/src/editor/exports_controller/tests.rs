@@ -241,7 +241,7 @@ fn a_run_needs_a_saved_project() {
     state.invoke_run();
     drain_ui_queue();
     assert!(!state.get_running());
-    let report: Vec<SharedString> = state.get_report().iter().collect();
+    let report: Vec<String> = report_of(&state);
     assert!(report[0].contains("Save the project first"), "{report:?}");
     assert_eq!(state.get_exports().row_data(0).unwrap().status_tone, 2);
 }
@@ -264,12 +264,21 @@ fn a_run_writes_into_the_newest_analysis() {
     drain_ui_queue();
 
     assert!(!state.get_running());
-    let report: Vec<String> = state.get_report().iter().map(|l| l.to_string()).collect();
+    let report: Vec<String> = report_of(&state);
     assert!(run.join("images.csv").is_file(), "{report:?}");
     assert!(report.iter().any(|l| l.contains("1 file")), "{report:?}");
     let row = state.get_exports().row_data(0).unwrap();
     assert_eq!(row.status_tone, 1, "{report:?}");
     assert!(row.status.starts_with('✓'));
+}
+
+/// The last run's report lines, of every analysis.
+fn report_of(state: &ExportsState) -> Vec<String> {
+    state
+        .get_run_parts()
+        .iter()
+        .flat_map(|part| part.lines.iter().map(|l| l.to_string()).collect::<Vec<_>>())
+        .collect()
 }
 
 /// A saved project with one analysis (seeded) in its `results/`.
@@ -575,7 +584,7 @@ fn the_exports_run_after_an_analysis() {
     );
     assert!(!state.get_after_busy());
     // Its report in the tab, its status in the list.
-    assert!(state.get_report().iter().any(|l| l.contains("1 file")));
+    assert!(report_of(&state).iter().any(|l| l.contains("1 file")));
     assert_eq!(state.get_exports().row_data(0).unwrap().status_tone, 1);
 
     // Set to run after every run (no run dialog): runs too.
@@ -609,7 +618,7 @@ fn a_problem_after_an_analysis_opens_that_export() {
     assert!(state.get_after_text().contains("problem"));
     state.invoke_after_open();
     assert_eq!(state.get_selected_id(), id);
-    assert!(state.get_report().iter().any(|l| l.contains("failed")));
+    assert!(report_of(&state).iter().any(|l| l.contains("failed")));
     assert!(!state.get_after_shown());
 }
 
@@ -660,7 +669,7 @@ fn a_script_not_allowed_yet_is_asked_about_before_the_run() {
     trust.invoke_answer(0);
     drain_ui_queue();
     assert!(!trust.get_shown());
-    let report: Vec<String> = state.get_report().iter().map(|l| l.to_string()).collect();
+    let report: Vec<String> = report_of(&state);
     assert!(
         report
             .iter()
@@ -676,7 +685,7 @@ fn a_script_not_allowed_yet_is_asked_about_before_the_run() {
     assert!(trust.get_shown());
     trust.invoke_answer(1);
     drain_ui_queue();
-    let report: Vec<String> = state.get_report().iter().map(|l| l.to_string()).collect();
+    let report: Vec<String> = report_of(&state);
     assert!(!report.iter().any(|l| l.contains("not run")), "{report:?}");
     assert!(trusted(&ui_state).is_empty());
 
@@ -883,15 +892,23 @@ fn an_export_runs_on_the_analyses_picked() {
     state.invoke_new_export();
     state.invoke_set_entry_field("images".into(), "0".into());
 
-    // Run alone: the newest; its folder beside "Last run".
+    // Run alone: the newest, named in the title; its folder beside it,
+    // no "Into …" line.
     state.invoke_run();
     drain_ui_queue();
     assert!(newer.join("images.csv").is_file());
     assert!(!older.join("images.csv").exists());
-    let folders: Vec<_> = state.get_report_folders().iter().collect();
-    assert_eq!(folders.len(), 1);
-    assert_eq!(folders[0].name, "");
-    assert_eq!(std::path::PathBuf::from(folders[0].path.as_str()), newer);
+    assert!(
+        state.get_last_run_title().ends_with(" · run"),
+        "{}",
+        state.get_last_run_title()
+    );
+    assert_eq!(state.get_last_run_note(), "");
+    let parts: Vec<_> = state.get_run_parts().iter().collect();
+    assert_eq!(parts.len(), 1);
+    assert!(parts[0].ok && parts[0].open);
+    assert_eq!(std::path::PathBuf::from(parts[0].folder.as_str()), newer);
+    assert!(!report_of(&state).iter().any(|l| l.starts_with("Into ")));
     std::fs::remove_file(newer.join("images.csv")).unwrap();
 
     // The ▾: both listed, the newest ticked.
@@ -911,23 +928,30 @@ fn an_export_runs_on_the_analyses_picked() {
     assert!(older.join("images.csv").is_file(), "the older alone");
     assert!(!newer.join("images.csv").exists());
 
-    // Both: a part of the report and a folder per analysis.
+    // Both: a row per analysis - name, age, what it wrote, its folder;
+    // folded while all went well, a click unfolds it.
     state.invoke_run_on_open();
     state.invoke_run_on_pick(-1, true);
     state.invoke_run_on_picked();
     drain_ui_queue();
     assert!(newer.join("images.csv").is_file());
-    let report: Vec<String> = state.get_report().iter().map(|l| l.to_string()).collect();
-    assert_eq!(
-        report.iter().filter(|l| l.starts_with("— run · ")).count(),
-        2,
-        "{report:?}"
+    assert!(
+        state.get_last_run_title().ends_with(" · 2 analyses"),
+        "{}",
+        state.get_last_run_title()
     );
-    let folders: Vec<_> = state.get_report_folders().iter().collect();
-    assert_eq!(folders.len(), 2);
-    assert!(folders[0].name.contains("24 Nov"), "{}", folders[0].name);
+    assert_eq!(state.get_last_run_note(), "all written");
+    let parts: Vec<_> = state.get_run_parts().iter().collect();
+    assert_eq!(parts.len(), 2);
+    assert_eq!(parts[0].name, "run");
+    assert_eq!(parts[0].when, "24 Nov 09:00");
+    assert_eq!(parts[0].summary, "1 file");
+    assert!(parts[0].ok && !parts[0].open, "folded");
+    assert_eq!(std::path::PathBuf::from(parts[1].folder.as_str()), older);
+    state.invoke_run_part_toggle(1);
+    assert!(state.get_run_parts().row_data(1).unwrap().open);
     let row = state.get_exports().row_data(0).unwrap();
-    assert_eq!(row.status_tone, 1, "{report:?}");
+    assert_eq!(row.status_tone, 1);
 }
 
 /// A view's ⋯ › Save as export…: a new export of it, opened in the tab -
@@ -1254,9 +1278,9 @@ fn a_data_export_run_writes_each_output() {
     assert!(run.join("objects.csv").is_file());
     assert!(run.join("images.csv").is_file());
     assert!(
-        state.get_report().iter().any(|l| l.contains("2 files")),
+        report_of(&state).iter().any(|l| l.contains("2 files")),
         "{:?}",
-        state.get_report().iter().collect::<Vec<_>>()
+        report_of(&state)
     );
 }
 
@@ -1287,4 +1311,34 @@ fn classes_side_by_side_from_the_tab() {
         header.contains("object_id_classa"),
         "objects transposed: {header}"
     );
+}
+
+/// The list like every list: the eye runs it after every run (the head
+/// counts them), ⋯ › Move up / down reorders - at an end it stays.
+#[test]
+fn the_list_eye_and_order() {
+    let (ui, ui_state, _controller) = setup(ProjectWithRuntime::default());
+    let state = ui.global::<ExportsState>();
+    state.invoke_new_export();
+    state.invoke_new_export();
+    let ids: Vec<i32> = state.get_exports().iter().map(|row| row.id).collect();
+    assert_eq!(ids.len(), 2);
+    let after = state.get_after_count();
+    let first = state.get_exports().row_data(0).unwrap();
+    state.invoke_set_after(first.id, !first.after);
+    let toggled = state.get_exports().row_data(0).unwrap();
+    assert_eq!(toggled.after, !first.after);
+    assert_eq!(
+        state.get_after_count(),
+        if toggled.after { after + 1 } else { after - 1 }
+    );
+
+    state.invoke_move_export(ids[0], 1);
+    let order: Vec<u32> = exports(&ui_state).iter().map(|e| e.id).collect();
+    assert_eq!(order, [ids[1] as u32, ids[0] as u32]);
+    state.invoke_move_export(ids[0], 1);
+    let order: Vec<u32> = exports(&ui_state).iter().map(|e| e.id).collect();
+    assert_eq!(order, [ids[1] as u32, ids[0] as u32], "at the end it stays");
+    let shown: Vec<i32> = state.get_exports().iter().map(|row| row.id).collect();
+    assert_eq!(shown, [ids[1], ids[0]], "the list too");
 }
