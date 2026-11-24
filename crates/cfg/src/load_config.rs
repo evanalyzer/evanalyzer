@@ -27,6 +27,7 @@ use crate::load_problems::project_problems;
 use crate::migration::migration_v1_to_v2::migrate_from_v1_to_v2;
 use crate::migration::migration_v2_to_v3::migrate_from_v2_to_v3;
 use crate::migration::migration_v3_to_v4::migrate_from_v3_to_v4;
+use crate::migration::migration_v4_to_v5::migrate_from_v4_to_v5;
 use crate::settings::ai_learning_settings::AiLearningSettings;
 use crate::settings::project_settings::ProjectSettings;
 use crate::{CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION, CURRENT_PROJECT_SCHEMA_VERSION};
@@ -43,6 +44,7 @@ const PROJECT_MIGRATIONS: &[MigrationStep] = &[
     migrate_from_v1_to_v2,
     migrate_from_v2_to_v3,
     migrate_from_v3_to_v4,
+    migrate_from_v4_to_v5,
 ];
 
 /// Loads a [`ProjectSettings`] from its raw on-disk JSON, migrating it

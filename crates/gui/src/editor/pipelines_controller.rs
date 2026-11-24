@@ -2913,6 +2913,7 @@ impl PipelinesController {
             // The preview needs none of the editor's state.
             editor: Default::default(),
             results_views: Default::default(),
+            exports: Default::default(),
         }
     }
 

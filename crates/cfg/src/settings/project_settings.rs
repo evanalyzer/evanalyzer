@@ -7,6 +7,7 @@
 // Copyright 2026 Joachim Danmayr.
 // Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::settings::export_settings::ExportSettings;
 use crate::settings::modules::ModuleDefinition;
 use crate::{
     settings::meta_data::MetaData,
@@ -158,6 +159,11 @@ pub struct ProjectSettings {
     /// every analysis.
     #[serde(default)]
     pub results_views: ResultsViews,
+    /// The project's exports: the tables, images and scripts written from
+    /// a run's results, where to and whether after every run - see
+    /// `docs/exports.md`. Absent in projects before schema 5.
+    #[serde(default)]
+    pub exports: Vec<ExportSettings>,
 }
 
 /// See `ProjectSettings::results_views`.

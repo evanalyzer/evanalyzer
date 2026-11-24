@@ -16,7 +16,7 @@
 // is include!()-d into this separate build-script crate root, so it needs its
 // own copy of anything from `crate::` that it references.
 #[allow(dead_code)]
-pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 4;
+pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 5;
 
 mod utils {
     pub mod hex_colors {
@@ -78,6 +78,14 @@ mod settings {
         ));
     }
     #[allow(dead_code)]
+    // Only the types are needed for the schema, not their helpers.
+    #[allow(dead_code)]
+    pub mod export_settings {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/settings/export_settings.rs"
+        ));
+    }
     pub mod images_settings {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -172,6 +180,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/settings/classification_settings.rs");
     println!("cargo:rerun-if-changed=src/settings/object_settings.rs");
     println!("cargo:rerun-if-changed=src/settings/images_settings.rs");
+    println!("cargo:rerun-if-changed=src/settings/export_settings.rs");
     println!("cargo:rerun-if-changed=src/settings/parameter_def.rs");
     println!("cargo:rerun-if-changed=src/settings/pipeline_settings.rs");
     println!("cargo:rerun-if-changed=src/settings/modules.rs");

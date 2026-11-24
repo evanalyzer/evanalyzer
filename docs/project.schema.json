@@ -15,6 +15,14 @@
         "previewedImages": []
       }
     },
+    "exports": {
+      "description": "The project's exports: the tables, images and scripts written from\na run's results, where to and whether after every run - see\n`docs/exports.md`. Absent in projects before schema 5.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ExportSettings"
+      }
+    },
     "images": {
       "description": "The collection of images and their associated processing states.",
       "$ref": "#/$defs/ImageSettings"
@@ -782,6 +790,84 @@
         "edgesAreBackground"
       ]
     },
+    "DrawnBrightness": {
+      "description": "Where each channel's display range comes from.",
+      "oneOf": [
+        {
+          "description": "As set in the viewer.",
+          "type": "string",
+          "const": "VIEWER"
+        },
+        {
+          "description": "Automatic per image.",
+          "type": "string",
+          "const": "AUTO"
+        }
+      ]
+    },
+    "DrawnImagesExport": {
+      "description": "A PNG per image (and plane) with the objects drawn on it.",
+      "type": "object",
+      "properties": {
+        "brightness": {
+          "$ref": "#/$defs/DrawnBrightness",
+          "default": "VIEWER"
+        },
+        "classes": {
+          "description": "The classes drawn (class ids); `None`: all classes.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "images": {
+          "$ref": "#/$defs/ImageScope",
+          "default": "INCLUDED"
+        },
+        "maxSide": {
+          "description": "The longer side at most, in pixels.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 2048,
+          "minimum": 0
+        },
+        "name": {
+          "description": "Replaces the automatic file name (`images`); `\"\"`: the automatic one.",
+          "type": "string",
+          "default": ""
+        },
+        "style": {
+          "$ref": "#/$defs/DrawnStyle",
+          "default": "OUTLINE"
+        }
+      }
+    },
+    "DrawnStyle": {
+      "description": "How an object is drawn.",
+      "oneOf": [
+        {
+          "description": "Its contour, in its class's colour.",
+          "type": "string",
+          "const": "OUTLINE"
+        },
+        {
+          "description": "Filled half transparent, its contour opaque.",
+          "type": "string",
+          "const": "FILLED"
+        },
+        {
+          "description": "Its bounding box.",
+          "type": "string",
+          "const": "BOX"
+        }
+      ]
+    },
     "EdgeDetectionCannySettings": {
       "description": "Extracts structural boundaries and fine edges using the multi-stage Canny algorithm.\n\nThis algorithm identifies optimal edge locations by calculating spatial intensity\ngradients, suppressing non-maximum pixel responses to thin lines down to 1-pixel width,\nand applying a dual-threshold hysteresis loop to preserve weak edges connected\nto strong ones while completely rejecting isolated noise.",
       "type": "object",
@@ -933,6 +1019,155 @@
         "measurement",
         "comparison",
         "value"
+      ]
+    },
+    "ExportAggregation": {
+      "description": "How grouped rows sum up their objects' values.",
+      "type": "string",
+      "enum": [
+        "AVG",
+        "MEDIAN",
+        "STDDEV",
+        "SUM",
+        "MIN",
+        "MAX",
+        "SKEWNESS"
+      ]
+    },
+    "ExportEntry": {
+      "description": "One thing an export writes (`\"kind\"` says which).",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "TABLE"
+            }
+          },
+          "$ref": "#/$defs/TableExport",
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "PLATE_LAYOUT"
+            }
+          },
+          "$ref": "#/$defs/PlateLayoutExport",
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "DRAWN_IMAGES"
+            }
+          },
+          "$ref": "#/$defs/DrawnImagesExport",
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "SCRIPT"
+            }
+          },
+          "$ref": "#/$defs/ScriptExport",
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "ExportOutput": {
+      "description": "Where an export's files go.",
+      "type": "object",
+      "properties": {
+        "folder": {
+          "description": "`ResultsFolder`: a subfolder inside it, `\"\"` = the results folder\nitself. `FixedFolder`: a path relative to the project folder (an\nabsolute one works but isn't portable). `/` as separator, never `..`.",
+          "type": "string",
+          "default": ""
+        },
+        "ifExists": {
+          "description": "What happens to a file that is already there.",
+          "$ref": "#/$defs/IfExists",
+          "default": "OVERWRITE"
+        },
+        "location": {
+          "$ref": "#/$defs/OutputLocation",
+          "default": "RESULTS_FOLDER"
+        }
+      }
+    },
+    "ExportSettings": {
+      "description": "One export: what it writes (`entries`, in this order), where to\n(`output`) and whether after every run.",
+      "type": "object",
+      "properties": {
+        "entries": {
+          "description": "What to write, in this order: a script sees everything written by\nthe entries before it.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ExportEntry"
+          }
+        },
+        "id": {
+          "description": "Stable while the export exists, unique among the exports.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "lengthUnit": {
+          "description": "The unit of lengths, areas and volumes in the tables - also in their\ncolumn names (`area_um2`, `area_nm2`).",
+          "$ref": "#/$defs/LengthUnit",
+          "default": "UM"
+        },
+        "name": {
+          "description": "Shown in the app, `evanalyzer cli export run <name>`. Not empty,\nunique ignoring case.",
+          "type": "string"
+        },
+        "output": {
+          "description": "Where the files go.",
+          "$ref": "#/$defs/ExportOutput",
+          "default": {
+            "folder": "",
+            "ifExists": "OVERWRITE",
+            "location": "RESULTS_FOLDER"
+          }
+        },
+        "prefix": {
+          "description": "Put in front of every file and folder the export writes\n(`{prefix}_{name}`); `\"\"`: none.",
+          "type": "string",
+          "default": ""
+        },
+        "runAfterEveryRun": {
+          "description": "Run the export when an analysis run finishes.",
+          "type": "boolean",
+          "default": false
+        },
+        "tableFormat": {
+          "description": "The table format the files are written in - pinned, so a newer app\nkeeps writing it until the user changes it.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 1,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "name"
       ]
     },
     "ExtractClassMappingSettings": {
@@ -1747,6 +1982,21 @@
         }
       }
     },
+    "IfExists": {
+      "description": "See [`ExportOutput::if_exists`] - per file.",
+      "oneOf": [
+        {
+          "description": "Replace it.",
+          "type": "string",
+          "const": "OVERWRITE"
+        },
+        {
+          "description": "Keep it, write the new one as `name_2.csv`, `name_3.csv`, ...",
+          "type": "string",
+          "const": "RENAME"
+        }
+      ]
+    },
     "IlluminationCorrectionSettings": {
       "description": "Use this when your images are brighter in the middle and dimmer toward\nthe edges/corners (vignetting), or show any other smooth shading pattern\nthat repeats the same way across every tile or every image from the same\nmicroscope/camera setup - a consequence of the optics or illumination,\nnot the sample. Left uncorrected, that shading makes intensity\ncomparisons between regions of an image (or between images/wells)\nunreliable, even though it rarely stops segmentation from finding\nobjects on its own.\n\nUse **Rolling Ball** instead when the problem is a\n*local* background glow or halo under/around individual objects (e.g.\nout-of-focus light, autofluorescence, uneven staining) that differs from\nimage to image rather than being tied to the acquisition setup -\nRollingBall strips that local floor so thresholding/segmentation works\ncleanly. The two solve different problems: RollingBall won't fix a\nglobal brightness gradient, and this filter won't remove a local halo.\n\n### How it works\n\nFlat-field (\"illumination\") correction: estimates a smooth, slowly-varying\ngain/offset field caused by uneven illumination (vignetting, dust on the\ncondenser, uneven excitation) and removes it in a single calculate+apply\nstep, so the field never has to be stored as an intermediate image\nand re-read.\n\nUnlike `RollingBall`, which estimates a *local* per-object background\nbaseline via a rolling structural element, this estimates one *global*,\nlow-frequency field for the whole image/channel.",
       "type": "object",
@@ -1983,6 +2233,23 @@
         }
       }
     },
+    "ImageScope": {
+      "description": "Which images of a run.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "ALL",
+            "LEFT_OUT"
+          ]
+        },
+        {
+          "description": "The ones not left out.",
+          "type": "string",
+          "const": "INCLUDED"
+        }
+      ]
+    },
     "ImageSettings": {
       "type": "object",
       "properties": {
@@ -2209,6 +2476,21 @@
         "EMPTY",
         "STAINING",
         "OTHER"
+      ]
+    },
+    "LengthUnit": {
+      "description": "See [`ExportSettings::length_unit`].",
+      "oneOf": [
+        {
+          "description": "Micrometres (µm, µm², µm³).",
+          "type": "string",
+          "const": "UM"
+        },
+        {
+          "description": "Nanometres (nm, nm², nm³).",
+          "type": "string",
+          "const": "NM"
+        }
       ]
     },
     "LibsLinkingMergeSplitAmountSettings": {
@@ -4621,6 +4903,21 @@
         }
       ]
     },
+    "OutputLocation": {
+      "description": "See [`ExportOutput::location`].",
+      "oneOf": [
+        {
+          "description": "The folder of the results database (`.evadb`) the export runs for.",
+          "type": "string",
+          "const": "RESULTS_FOLDER"
+        },
+        {
+          "description": "The same folder for every run.",
+          "type": "string",
+          "const": "FIXED_FOLDER"
+        }
+      ]
+    },
     "ParamBinding": {
       "description": "An inner parameter a module parameter sets.",
       "type": "object",
@@ -5803,6 +6100,68 @@
         "RELATIVE"
       ]
     },
+    "PlateGrid": {
+      "description": "See [`PlateLayoutExport::grid`].",
+      "oneOf": [
+        {
+          "description": "A cell per well.",
+          "type": "string",
+          "const": "PLATE"
+        },
+        {
+          "description": "A cell per image position inside the wells.",
+          "type": "string",
+          "const": "WELL"
+        }
+      ]
+    },
+    "PlateLayoutExport": {
+      "description": "The values laid out as the plate (or well) grid - an `xlsx` workbook, a\nsheet per class and value.",
+      "type": "object",
+      "properties": {
+        "aggregation": {
+          "$ref": "#/$defs/ExportAggregation",
+          "default": "AVG"
+        },
+        "classes": {
+          "description": "Class ids; `None`: all classes.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "columns": {
+          "description": "Column keys; `None`: the count.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "string"
+          }
+        },
+        "grid": {
+          "$ref": "#/$defs/PlateGrid",
+          "default": "PLATE"
+        },
+        "images": {
+          "$ref": "#/$defs/ImageScope",
+          "default": "INCLUDED"
+        },
+        "name": {
+          "description": "Replaces the automatic file name (`plate`, `well`); `\"\"`: the\nautomatic one.",
+          "type": "string",
+          "default": ""
+        }
+      }
+    },
     "PlateSettings": {
       "type": "object",
       "properties": {
@@ -6077,6 +6436,37 @@
           "default": "IMAGE"
         }
       }
+    },
+    "ScriptExport": {
+      "description": "A script run after the entries before it, on their files:\n`<interpreter> <file> --input <output folder> --output <output folder>/<output>`,\nin the project folder.",
+      "type": "object",
+      "properties": {
+        "file": {
+          "description": "Relative to the project folder, inside `scripts/`.",
+          "type": "string"
+        },
+        "language": {
+          "description": "Which interpreter - where it is installed is a setting of the\ncomputer (or server), never of the project.",
+          "$ref": "#/$defs/ScriptLanguage"
+        },
+        "output": {
+          "description": "The subfolder of the export's output folder the script writes into;\n`\"\"`: the file name without its extension.",
+          "type": "string",
+          "default": ""
+        }
+      },
+      "required": [
+        "language",
+        "file"
+      ]
+    },
+    "ScriptLanguage": {
+      "description": "See [`ScriptExport::language`].",
+      "type": "string",
+      "enum": [
+        "R",
+        "PYTHON"
+      ]
     },
     "ScriptSettings": {
       "description": "Runs a user-written [Rhai](https://rhai.rs) script as a pipeline step.\n\nThe script sees the current tile as read-only constants:\n`image_width`, `image_height`, `tile_x`, `tile_y` and `image_bits`.\n`print(...)` writes to the log. `run(command, #{ params })` runs a\npipeline command on the current image, with the parameter names of the\nstep settings.\n\n# Examples\n\n```rhai\nprint(`Hello world from a ${image_width}x${image_height} tile`);\nrun(\"gaussian_blur\", #{ kernel_size: 5 });\n```",
@@ -6689,6 +7079,42 @@
         }
       ]
     },
+    "SpeedUnit": {
+      "description": "The unit of a track's speed.",
+      "oneOf": [
+        {
+          "description": "Pixels per time point (results without a pixel size or interval).",
+          "type": "string",
+          "const": "PX_FRAME"
+        },
+        {
+          "description": "Micrometres per minute.",
+          "type": "string",
+          "const": "UM_MIN"
+        },
+        {
+          "description": "Micrometres per second.",
+          "type": "string",
+          "const": "UM_S"
+        }
+      ]
+    },
+    "SplitInto": {
+      "description": "See [`TableExport::split_into`].",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "FILES"
+          ]
+        },
+        {
+          "description": "One workbook, a sheet each (`Xlsx` only).",
+          "type": "string",
+          "const": "SHEETS"
+        }
+      ]
+    },
     "StardistSettings": {
       "description": "Instance segmentation using a pretrained StarDist model exported as TorchScript.\n\nThe model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return two tensors:\nan object-probability map `[1, 1, H', W']` and a ray-distance map\n`[1, n_rays, H', W']` giving, for each grid cell, the distance to the object\nboundary along `n_rays` equally-spaced angles (the StarDist star-convex-polygon\nrepresentation). `H'`/`W'` may be smaller than the input size if the model\npredicts on a coarser grid; this is detected from the output shape and the\npolygons are rescaled back to image resolution automatically.\n\nSome TorchScript exports concatenate both outputs into a single\n`[1, 1 + n_rays, H', W']` tensor (channel 0 = probability, the rest =\ndistances); this is also supported.\n\nPer grid cell candidates above `probability_threshold` are converted to\nstar-convex polygons, then greedily filtered with non-maximum suppression\n(polygons whose pixel-overlap ratio with a higher-scoring candidate exceeds\n`nms_threshold` are discarded) before being rasterized into the pipeline's\nsegmentation and instance maps. Runs on GPU automatically if CUDA is\navailable in the linked libtorch build, otherwise falls back to CPU.",
       "type": "object",
@@ -6938,6 +7364,153 @@
         "stackHandling",
         "playbackSpeed",
         "tStack"
+      ]
+    },
+    "TableExport": {
+      "description": "A table of the results (table format: `ExportSettings::table_format`).",
+      "type": "object",
+      "properties": {
+        "aggregations": {
+          "description": "Grouped rows only (`Image`, `Well`, `Folder`, `Track`).",
+          "type": "array",
+          "default": [
+            "AVG"
+          ],
+          "items": {
+            "$ref": "#/$defs/ExportAggregation"
+          }
+        },
+        "classes": {
+          "description": "The classes in the table (class ids); `None`: all classes.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "columns": {
+          "description": "The value columns by column key (`count`, `area_nm2`,\n`intensity_mean_gray_ch1`, `measurement:<key>`, ...); `None`: the\ndefault columns.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "string"
+          }
+        },
+        "emptyClasses": {
+          "description": "Grouped rows: a row also for classes without objects.",
+          "type": "boolean",
+          "default": false
+        },
+        "format": {
+          "$ref": "#/$defs/TableFileFormat",
+          "default": "CSV"
+        },
+        "images": {
+          "description": "Which images of the run.",
+          "$ref": "#/$defs/ImageScope",
+          "default": "INCLUDED"
+        },
+        "name": {
+          "description": "Replaces the automatic file name (`objects`, `images`, ...); `\"\"`:\nthe automatic one.",
+          "type": "string",
+          "default": ""
+        },
+        "rows": {
+          "description": "What a row is.",
+          "$ref": "#/$defs/TableRows"
+        },
+        "split": {
+          "description": "One file (or sheet) per image, well, folder or class.",
+          "$ref": "#/$defs/TableSplit",
+          "default": "NONE"
+        },
+        "splitInto": {
+          "description": "The split parts as files or as sheets of one workbook (`Xlsx` only).",
+          "$ref": "#/$defs/SplitInto",
+          "default": "FILES"
+        },
+        "tracks": {
+          "description": "`rows: Track` only.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrackOptions"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "rows"
+      ]
+    },
+    "TableFileFormat": {
+      "description": "The file format of a table.",
+      "type": "string",
+      "enum": [
+        "CSV",
+        "XLSX"
+      ]
+    },
+    "TableRows": {
+      "description": "What a row of a table is.",
+      "oneOf": [
+        {
+          "description": "An object.",
+          "type": "string",
+          "const": "OBJECT"
+        },
+        {
+          "description": "An image and class.",
+          "type": "string",
+          "const": "IMAGE"
+        },
+        {
+          "description": "A well and class.",
+          "type": "string",
+          "const": "WELL"
+        },
+        {
+          "description": "An image folder and class.",
+          "type": "string",
+          "const": "FOLDER"
+        },
+        {
+          "description": "A pair of overlapping objects (Colocalize Objects' partners).",
+          "type": "string",
+          "const": "COLOC_PAIR"
+        },
+        {
+          "description": "A track.",
+          "type": "string",
+          "const": "TRACK"
+        },
+        {
+          "description": "A measurement value (image, plane, object or region, step,\nmeasurement, value, unit).",
+          "type": "string",
+          "const": "MEASUREMENT"
+        }
+      ]
+    },
+    "TableSplit": {
+      "description": "See [`TableExport::split`].",
+      "type": "string",
+      "enum": [
+        "NONE",
+        "IMAGE",
+        "WELL",
+        "FOLDER",
+        "CLASS"
       ]
     },
     "ThresholdEntrySettings": {
@@ -7273,6 +7846,33 @@
           "description": "Unit in which `max_distance` is expressed (e.g. pixels, nm).",
           "$ref": "#/$defs/SizeUnits",
           "default": "NANO_METER"
+        }
+      }
+    },
+    "TrackOptions": {
+      "description": "Which tracks a `rows: Track` table has, and the unit of their speed.",
+      "type": "object",
+      "properties": {
+        "fromStart": {
+          "description": "Only tracks there from the first time point.",
+          "type": "boolean",
+          "default": false
+        },
+        "minPoints": {
+          "description": "Only tracks with at least this many time points.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 1,
+          "minimum": 0
+        },
+        "noEdge": {
+          "description": "Leave out tracks with an object touching the image edge.",
+          "type": "boolean",
+          "default": false
+        },
+        "speedUnit": {
+          "$ref": "#/$defs/SpeedUnit",
+          "default": "UM_MIN"
         }
       }
     },
