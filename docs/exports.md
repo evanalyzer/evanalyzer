@@ -86,6 +86,9 @@ same kind would write the same name.
 | `images` | `"ALL"` \| `"INCLUDED"` \| `"LEFT_OUT"` | `"INCLUDED"` | Which images of the run. |
 | `emptyClasses` | bool | `false` | Grouped rows: a row also for classes without objects. |
 | `transposed` | bool | `false` | The classes side by side: a column per value and class instead of a row per class (§3.2). `object` and `image` rows only. |
+| `children` | list of `[parent class id, child class id]` | none | The children linked to each object (Relate Objects), as the Results List shows them: per link their count and each `childAggregations` value of each column. Not for tracks or measurements. |
+| `childAggregations` | list of aggregations | none | How the children's values are summed up, besides their count. |
+| `parents` | list of class ids | none | The linked objects (parents): their id and each column. |
 | `split` | `"NONE"` \| `"IMAGE"` \| `"WELL"` \| `"FOLDER"` \| `"CLASS"` | `"NONE"` | One file (or sheet) per image, well, folder or class. |
 | `splitInto` | `"FILES"` \| `"SHEETS"` | `"FILES"` | `sheets`: one workbook, a sheet each. `xlsx` only. |
 | `tracks` | object | see below | `rows: "TRACK"` only. |
@@ -101,10 +104,32 @@ same kind would write the same name.
 | `colocPair` | a pair of overlapping objects (Colocalize Objects' partners) |
 | `track` | a track |
 | `measurement` | a measurement value (image, plane, object or region, step, measurement, value, unit) |
+| `timePoint` | a time point of a line (the time course): the values summed up over the line's objects there - `aggregations` say how |
+| `profilePosition` | a position of a profile (e.g. a Sholl ring's radius): of a line, or of an object |
 
 `tracks`: `minPoints` (integer, default `1`), `fromStart` (bool, `false`),
 `noEdge` (bool, `false`), `speedUnit` (`"PX_FRAME"` \| `"UM_MIN"` \| `"UM_S"`,
 default `"UM_MIN"`).
+
+`timeCourse` (`rows: "TIME_POINT"` only): `lines` (`"CLASS"` \| `"IMAGE"` \|
+`"WELL"` \| `"TRACK"`, default `"CLASS"`), `layout` (`"LONG"` \| `"WIDE"` \|
+`"BOTH"`, default `"LONG"`; wide: a table per value - a row per time point, a
+column per line - in `<name>_wide.xlsx` or `<name>_wide_<value>.csv`; not per
+track, not split), `relative` (bool, `false`: the values in % of the line's
+first time point with objects), `withParents` (bool, `false`: track lines
+with their parents' history). The values are the objects' (not the count,
+not an image's own measurements); `SKEWNESS` has none.
+
+`profile` (`rows: "PROFILE_POSITION"` only, required there): `key` (the
+profile measurement, e.g. `"sholl_01/intersections"`), `lines` (`"CLASS"`
+\| `"IMAGE"` \| `"WELL"` \| `"ALL"`, default `"CLASS"`), `content`
+(`"LINES"` \| `"OBJECTS"`, default `"LINES"`: per line and position n, mean,
+SD, median, Q1, Q3 - an object without a value at a position counts 0;
+objects: each object's value per position).
+
+`planes` (tables, plate layouts, drawn images; not tracks and profiles):
+`z` and `t`, each `[from, to]` (both included, counted from 0); left out:
+all of them.
 
 #### `plateLayout`
 
@@ -112,13 +137,16 @@ The values laid out as the plate (or well) grid, for Excel.
 
 | Key | Type | Default | Meaning and rules |
 |---|---|---|---|
-| `grid` | `"PLATE"` \| `"WELL"` | `"PLATE"` | Plate: a cell per well. Well: a cell per image position inside the wells. |
+| `grid` | `"PLATE"` \| `"WELL"` \| `"IMAGE"` | `"PLATE"` | Plate: a cell per well. Well: a cell per image position inside the wells. Image: a workbook per image (`<name>_<image>.xlsx`), its area as a grid of squares. |
+| `squareSize` | integer (px) | `64` | `grid: "IMAGE"`: the side of a square. |
 | `classes` | list of class ids | all classes | |
 | `columns` | list of column keys | `["count"]` | |
-| `aggregation` | one aggregation (as above) | `"AVG"` | |
+| `aggregations` | list of aggregations (as above) | `["AVG"]` | How each column is summed up per cell. |
+| `colors` | `"EXCEL"` \| `"VIRIDIS"` \| `"PLASMA"` \| `"INFERNO"` \| `"CIVIDIS"` \| `"COOLWARM"` \| `"RED_BLUE"` \| `"YL_GN_BU"` \| `"HALINE"` \| `"ALGAE"` \| `"THERMAL"` | `"EXCEL"` | The heatmap's colours. |
 | `images` | as in `table` | `"INCLUDED"` | |
+| `planes` | as in `table` | all | |
 
-Always `xlsx`, a sheet per class and value.
+Always `xlsx`, a sheet per class, column and aggregation.
 
 #### `drawnImages`
 
@@ -131,6 +159,7 @@ A PNG per image (and plane) with the objects drawn on it.
 | `brightness` | `"VIEWER"` \| `"AUTO"` | `"VIEWER"` | Each channel's display range: as set in the viewer, or automatic per image. |
 | `maxSide` | integer (px) | `2048` | The longer side at most. |
 | `images` | as in `table` | `"INCLUDED"` | |
+| `planes` | as in `table` | all | |
 
 Channel colours and display settings are the project's when the export runs.
 
@@ -175,6 +204,9 @@ Errors:
   than `"TRACK"`; a `split` finer than the rows (`"IMAGE"` for well or
   folder rows, `"WELL"` for folder rows and back, `"CLASS"` for
   measurement rows).
+- `timeCourse` / `profile` on other rows; `rows: "PROFILE_POSITION"`
+  without `profile.key`; a wide time course per track or split; a plane
+  range whose `from` is after its `to`.
 - `classes` given but empty (it would write nothing; left out it means
   all classes).
 - Two entries of one export, or two exports writing into the same folder,
@@ -185,6 +217,9 @@ Warnings:
 
 - An absolute `folder` (not portable).
 - `transposed` with `split: "CLASS"` (each file has a single class).
+- `planes` on tracks or profiles (they span the planes); children or
+  linked objects on tables of tracks, measurements, time points or
+  profiles.
 - Class ids or column keys the project doesn't have (a class may be absent
   from some runs; the table then has no such column or rows).
 
@@ -218,13 +253,15 @@ command then fails, naming the export.
   the app shows it and asks: don't run it, run it once, or always allow
   this version (its content's SHA-256, kept in the user's settings - a
   changed file asks again). Its tables and images are written either way.
-- **Results › Export…** on a List, Plate or Tracks view: "Export this view"
-  writes the view as it is shown (a table, a plate layout, a table of
-  tracks) into a folder, once - a file of that name stays, the new one gets
+- **Results › Export…** on any view: "Export this view" writes the view as
+  it is shown into a folder, once: a List as a table, a Plate as a plate
+  layout, Tracks and Paths as a table of tracks, a chart as the table behind
+  it (over time: a time course; a profile; a histogram, scatter or boxplot:
+  its values), Trees as the measurements - a file of that name stays, the new one gets
   `_2`. Ticked, it is also kept in the project: as a new export or added
   to one there is. A view's ⋯ › "Save as export…" keeps it without writing,
-  "Add to export…" opens the dialog with the tick on. Charts, Paths and
-  Trees keep the results' export dialog.
+  "Add to export…" opens the dialog with the tick on. A chart's picture is
+  Charts › "Save chart…".
 
 ### 1.7 Versions
 
@@ -328,6 +365,17 @@ Made for scripts: lower case, only `a-z`, `0-9` and `_`.
   `_gray`.
 - Grouped rows add the aggregation: `area_um2_avg`, `area_um2_median`.
   The count of objects is `count`.
+- A time course: `class`, the line (`image`, `well`, or `track_id` and
+  `image`), `t`, `z` (several planes), `time_s` (empty without a frame
+  interval), `n_images`, `n_objects`, `n_tracks`, then per column and
+  aggregation `area_um2_avg`, … (`…_pct` with `relative`). Always the same
+  columns, so a script needn't check for them.
+- A profile: the line (`class`, `image` or `well`), `position`,
+  `n_objects`, `mean`, `sd`, `median`, `q1`, `q3`; of objects: `image`,
+  `class`, `object_id`, `position`, `value`.
+- Children and linked objects are named by their key, class ids
+  included: `children_1_2_count`, `children_1_2_max_area_um2`,
+  `parent_1_id`, `parent_1_area_um2`.
 - `transposed` adds the class at the end, its name made a name part
   (with its id where two classes would give the same): `count_nucleus`,
   `area_um2_avg_nucleus`, `object_id_cell`.

@@ -30,6 +30,7 @@ pub(super) struct MeasurementTable {
     keys: Option<Vec<String>>,
     several_z: bool,
     several_t: bool,
+    planes: evanalyzer_cfg::settings::export_settings::Planes,
     /// The results have profiles (a value per position).
     position: bool,
 }
@@ -67,6 +68,7 @@ impl MeasurementTable {
                 .map(|class| (class.id, class.name))
                 .collect(),
             keys,
+            planes: table.planes,
             several_z: results.get_nr_of_z_stacks() > 1,
             several_t: results.get_nr_of_t_stacks() > 1,
             position: !results.profile_columns()?.is_empty(),
@@ -180,7 +182,15 @@ impl Rows for MeasurementTable {
             })?;
             let count = page.len();
             for row in page {
-                if self.in_classes(part, &row) {
+                // A whole-volume value (no z) is of every z-plane.
+                let in_planes = super::in_planes(
+                    &self.planes,
+                    row.z
+                        .and_then(|z| u32::try_from(z).ok())
+                        .unwrap_or(self.planes.z.map_or(0, |[from, _]| from)),
+                    u32::try_from(row.t).unwrap_or(0),
+                );
+                if in_planes && self.in_classes(part, &row) {
                     sink.row(&self.row(row))?;
                 }
             }

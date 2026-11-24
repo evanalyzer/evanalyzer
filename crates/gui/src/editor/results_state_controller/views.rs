@@ -669,9 +669,6 @@ impl ResultsStateController {
         self.reset_filters_to_defaults();
         self.apply_active_view();
         self.show_active_view_mode();
-        // The export dialog starts from the view shown (its columns,
-        // classes, aggregation) the next time it opens.
-        *self.export_populated.lock().expect("Poisoned") = false;
         self.refresh_list_now();
         self.update_matrix_view_now();
         self.refresh_charts_now();
@@ -847,53 +844,23 @@ impl ResultsStateController {
             .collect();
         let column_items_list =
             column_items(&plain_columns, &classes, |key| list_columns.contains(key));
-        let class_label = |class: ObjectClass| {
-            classes
-                .iter()
-                .find(|c| c.global() == class)
-                .map(|c| c.name.clone())
-                .unwrap_or_else(|| format!("class {}", class.to_u32().unwrap_or_default()))
-        };
-        // The links Relate Objects made, from the results' columns.
-        let children_items: Vec<MultiSelectItem> = available
-            .iter()
-            .filter_map(|entry| match &entry.key {
-                Column::Children(c) if c.value == ChildValue::Count => {
-                    let link = (c.parent_class, c.child_class);
-                    Some(MultiSelectItem {
-                        key: link_key(link).into(),
-                        value: format!(
-                            "{} in {}",
-                            class_label(c.child_class),
-                            class_label(c.parent_class)
-                        )
-                        .into(),
-                        color: Color::default(),
-                        group: "".into(),
-                        selected: children.contains(&link),
-                    })
-                }
-                _ => None,
-            })
-            .collect();
-        let parent_items: Vec<MultiSelectItem> = available
-            .iter()
-            .filter_map(|entry| match &entry.key {
-                Column::Parent(p) => Some(MultiSelectItem {
-                    key: p.parent_class.to_u32()?.to_string().into(),
-                    value: format!("Parent · {}", class_label(p.parent_class)).into(),
-                    color: Color::default(),
-                    group: "".into(),
-                    selected: parents.contains(&p.parent_class),
-                }),
-                _ => None,
-            })
-            .collect();
-        let children_summary = format!("{} of {}", children.len(), children_items.len());
-        let parent_summary = format!("{} of {}", parents.len(), parent_items.len());
-        let child_aggregation_items = aggregation_items(&child_aggregations);
-        let child_aggregate_summary =
-            list_summary(child_aggregations.len(), AGGREGATIONS.len(), "Aggregations");
+        // The links Relate Objects made, from the results' columns - the
+        // Exports tab shows the same lists.
+        let related = crate::editor::column_picker::related_items(
+            &available,
+            &classes,
+            &children,
+            &child_aggregations,
+            &parents,
+        );
+        let crate::editor::column_picker::RelatedItems {
+            children: children_items,
+            children_summary,
+            aggregations: child_aggregation_items,
+            aggregate_summary: child_aggregate_summary,
+            parents: parent_items,
+            parent_summary,
+        } = related;
         let has_partners = available
             .iter()
             .any(|entry| super::coloc::is_coloc_column(&entry.key));

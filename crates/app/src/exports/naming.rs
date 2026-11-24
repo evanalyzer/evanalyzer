@@ -43,6 +43,7 @@ pub fn entry_name(entry: &ExportEntry) -> Option<String> {
             match plate.grid {
                 PlateGrid::Plate => "plate",
                 PlateGrid::Well => "well",
+                PlateGrid::Image => "heatmap",
             },
         ),
         ExportEntry::DrawnImages(drawn) => (&drawn.name, "drawn_images"),
@@ -65,6 +66,8 @@ fn rows_name(rows: TableRows) -> &'static str {
         TableRows::ColocPair => "coloc_pairs",
         TableRows::Track => "tracks",
         TableRows::Measurement => "measurements",
+        TableRows::TimePoint => "time_course",
+        TableRows::ProfilePosition => "profile",
     }
 }
 

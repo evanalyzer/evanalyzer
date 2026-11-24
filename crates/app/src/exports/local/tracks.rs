@@ -360,7 +360,7 @@ impl Rows for TrackRows {
     }
 }
 
-fn statistic(aggregation: ExportAggregation) -> Option<TimeCourseStat> {
+pub(super) fn statistic(aggregation: ExportAggregation) -> Option<TimeCourseStat> {
     Some(match aggregation {
         ExportAggregation::Avg => TimeCourseStat::Mean,
         ExportAggregation::Median => TimeCourseStat::Median,
@@ -372,7 +372,7 @@ fn statistic(aggregation: ExportAggregation) -> Option<TimeCourseStat> {
     })
 }
 
-fn suffix(aggregation: ExportAggregation) -> &'static str {
+pub(super) fn suffix(aggregation: ExportAggregation) -> &'static str {
     match aggregation {
         ExportAggregation::Avg => "avg",
         ExportAggregation::Median => "median",

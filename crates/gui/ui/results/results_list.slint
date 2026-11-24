@@ -12,7 +12,7 @@ import { Ink } from "../ink/palette.slint";
 
 import { InkCheckList, InkMultiSelect, InkSearchField, InkSegmented, InkSwitch, InkTipSide, InkTipZone, InkMenuItem } from "../ink/ink.slint";
 import { ViewBar, BarChip, BarLabel, BarSpacer, BarCount, BarMore, BarFolded, ViewPanel } from "results_view_bar.slint";
-import { ColumnPicker, ValuesClassesPart } from "results_panel.slint";
+import { ColumnPicker, ValuesClassesPart, RelatedPart } from "results_panel.slint";
 
 /// The List's left panel (design canvas "Results rework", ColumnPanel E
 /// with PanelNav D): Columns, Images, and Values & classes (a row per
@@ -96,44 +96,27 @@ component ListPanel inherits ViewPanel {
                 ResultsState.list-columns-preset(key);
             }
         }
-        if ResultsState.list-children-items.length > 0: InkCheckList {
-            title: "CHILDREN · " + ResultsState.list-children-summary;
-            items <=> ResultsState.list-children-items;
-            list-height: 120px;
-            collapsible: true;
-            item-selected(key, value, selected) => {
+        RelatedPart {
+            children <=> ResultsState.list-children-items;
+            children-summary: ResultsState.list-children-summary;
+            aggregations <=> ResultsState.list-child-aggregation-items;
+            aggregate-summary: ResultsState.list-child-aggregate;
+            parents <=> ResultsState.list-parent-items;
+            parent-summary: ResultsState.list-parent-summary;
+            child-selected(key, selected) => {
                 ResultsState.list-children-selected(key, selected);
             }
-            select-all => {
-                ResultsState.list-children-select-all(true);
+            children-all(all) => {
+                ResultsState.list-children-select-all(all);
             }
-            select-none => {
-                ResultsState.list-children-select-all(false);
-            }
-        }
-        if ResultsState.list-children-items.length > 0: InkMultiSelect {
-            label: "Of the columns";
-            summary-text: ResultsState.list-child-aggregate;
-            items <=> ResultsState.list-child-aggregation-items;
-            multi-select: true;
-            pill-width: 372px;
-            item-selected(key, value, selected) => {
+            aggregation-selected(key, selected) => {
                 ResultsState.list-child-aggregation-selected(key, selected);
             }
-        }
-        if ResultsState.list-parent-items.length > 0: InkCheckList {
-            title: "LINKED OBJECTS · " + ResultsState.list-parent-summary;
-            items <=> ResultsState.list-parent-items;
-            list-height: 120px;
-            collapsible: true;
-            item-selected(key, value, selected) => {
+            parent-selected(key, selected) => {
                 ResultsState.list-parent-selected(key, selected);
             }
-            select-all => {
-                ResultsState.list-parent-select-all(true);
-            }
-            select-none => {
-                ResultsState.list-parent-select-all(false);
+            parents-all(all) => {
+                ResultsState.list-parent-select-all(all);
             }
         }
     }

@@ -170,6 +170,14 @@ impl ResultsSource for LocalResults {
         self.with(|db| results_time_course::time_course(db, filter))
     }
 
+    fn time_course_each(
+        &self,
+        filter: &TimeCourseFilter,
+        each: &mut dyn FnMut(&crate::results::TimeCoursePoint) -> Result<(), InternalErrors>,
+    ) -> Result<(), InternalErrors> {
+        self.with(|db| results_time_course::TimeCourseQuery::prepare(db, filter)?.for_each(each))
+    }
+
     fn profile_columns(&self) -> Result<Vec<crate::results::MeasurementColumn>, InternalErrors> {
         self.with(results_profile::profile_columns)
     }

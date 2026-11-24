@@ -520,6 +520,13 @@ mod tests {
 pub(crate) fn profile_database() -> super::results_generator::ResultsGenerator {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("results.evadb");
+    seed_profile_db(&path);
+    std::mem::forget(dir);
+    super::results_generator::ResultsGenerator::open_database(path).unwrap()
+}
+
+/// [`profile_database`]'s results, written to `path`.
+pub(crate) fn seed_profile_db(path: &Path) {
     seed_db(
         &path,
         &[
@@ -528,8 +535,7 @@ pub(crate) fn profile_database() -> super::results_generator::ResultsGenerator {
             ObjectSpec::new("B01_1.tif", "B", 2, 10),
         ],
     );
-    std::mem::forget(dir);
-    let db = super::results_generator::ResultsGenerator::open_database(path).unwrap();
+    let db = super::results_generator::ResultsGenerator::open_database(path.to_path_buf()).unwrap();
     let id = |i: usize| format!("00000000-0000-0000-0000-{i:012}");
     let row = |object: usize, image: &str, class: u32, position: f64, value: f64| {
         format!(
@@ -561,5 +567,4 @@ pub(crate) fn profile_database() -> super::results_generator::ResultsGenerator {
             row(2, "B01_1.tif", 2, 10.0, 1.0),
         ))
         .unwrap();
-    db
 }

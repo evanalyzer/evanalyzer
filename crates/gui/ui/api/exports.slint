@@ -89,6 +89,35 @@ export global ExportsState {
     in property <string> coloc-partner-order;
     in property <int> coloc-count;
     in property <bool> coloc-only-occurring;
+    // A time course (`rows` 7): line kind, layout (indexes), relative,
+    // with the parents' history.
+    in property <int> time-lines;
+    in property <int> time-layout;
+    in property <bool> time-relative;
+    in property <bool> time-with-parents;
+    // A profile (`rows` 8): the newest analysis' profiles, the one picked,
+    // its lines, each object instead.
+    in property <[string]> profile-names: [];
+    in property <string> profile-name;
+    in property <int> profile-lines;
+    in property <bool> profile-objects;
+    // A plate layout: square size and colours (indexes).
+    in property <int> square;
+    in property <int> colors;
+    // The z-planes and time points: a range each, or all.
+    in property <bool> z-range;
+    in property <string> z-from;
+    in property <string> z-to;
+    in property <bool> t-range;
+    in property <string> t-from;
+    in property <string> t-to;
+    // The children and linked objects (the Results List's lists).
+    in-out property <[MultiSelectItem]> related-children: [];
+    in property <string> related-children-summary;
+    in-out property <[MultiSelectItem]> related-aggregations: [];
+    in property <string> related-aggregate-summary;
+    in-out property <[MultiSelectItem]> related-parents: [];
+    in property <string> related-parent-summary;
     // The classes side by side (object and image rows).
     in property <bool> transposed;
     // Grouped rows: a row also for classes without objects.
@@ -147,7 +176,9 @@ export global ExportsState {
     // A setting of the entry picked: "rows", "format", "split",
     // "split-into", "images", "class:<id>", "aggregation:<key>",
     // "all-classes", "no-classes", "all-aggregations", "no-aggregations",
-    // "clear-columns", "transposed", "empty-classes",
+    // "clear-columns", "transposed", "empty-classes", "child:<p>:<c>",
+    // "children-all", "children-none", "child-aggregation:<name>",
+    // "parent:<id>", "parents-all", "parents-none",
     // "columns-from-view:<name>",
     // "grid", "aggregation", "style", "brightness", "max-side",
     // "script-file", "language", "script-output", "name".

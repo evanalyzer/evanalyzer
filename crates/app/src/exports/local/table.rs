@@ -23,6 +23,7 @@ use crate::results::{
 };
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use evanalyzer_cfg::settings::classification_settings::Class;
+use evanalyzer_cfg::settings::export_settings::TimeCourseTableLayout;
 use evanalyzer_cfg::settings::export_settings::{
     ExportAggregation, ExportSettings, ImageScope, LengthUnit, SplitInto, TableExport,
     TableFileFormat, TableRows, TableSplit,
@@ -63,6 +64,26 @@ pub(super) fn write(
             table,
             &mut report.notes,
         )?),
+        TableRows::ProfilePosition => Box::new(super::series::ProfileRows::new(results, table)?),
+        TableRows::TimePoint => {
+            let rows =
+                super::series::TimeCourseRows::new(results, export, table, &mut report.notes)?;
+            let name = naming::with_prefix(
+                export,
+                &naming::entry_name(
+                    &evanalyzer_cfg::settings::export_settings::ExportEntry::Table(table.clone()),
+                )
+                .unwrap_or_default(),
+            );
+            let layout = rows.layout();
+            if layout != TimeCourseTableLayout::Long {
+                rows.write_wide(results, &name, table.format, output, report, cancel)?;
+            }
+            if layout == TimeCourseTableLayout::Wide {
+                return Ok(());
+            }
+            Box::new(rows)
+        }
         _ => Box::new(Plan::new(results, export, table, &mut report.notes)?),
     };
     let name = naming::with_prefix(
@@ -297,6 +318,32 @@ impl Plan {
                 columns
             }
         };
+        // The children and linked objects, as the Results List adds them:
+        // per link its count and each value of each column, per parent class
+        // its id and each column.
+        if !table.children.is_empty() || !table.parents.is_empty() {
+            let children: Vec<(ObjectClass, ObjectClass)> = table
+                .children
+                .iter()
+                .map(|(p, c)| (ObjectClass::Global(*p), ObjectClass::Global(*c)))
+                .collect();
+            let child_aggregations: Vec<Aggregation> = table
+                .child_aggregations
+                .iter()
+                .map(|a| aggregation(*a))
+                .collect();
+            let parents: Vec<ObjectClass> = table
+                .parents
+                .iter()
+                .map(|p| ObjectClass::Global(*p))
+                .collect();
+            values = crate::results::view_settings::with_related_columns(
+                &values,
+                &children,
+                &child_aggregations,
+                &parents,
+            );
+        }
         // The leading columns are always there, in their place.
         values.retain(|column| !is_leading(column));
         if !grouped {
@@ -307,7 +354,8 @@ impl Plan {
 
         let images = scope_images(results, table.images)?;
         let mut planes = results.get_planes()?;
-        if planes.is_empty() {
+        planes.retain(|p| super::in_planes(&table.planes, p.z_stack, p.t_stack));
+        if planes.is_empty() && table.planes == Default::default() {
             planes.push(PlaneFilter {
                 z_stack: 0,
                 t_stack: 0,
@@ -972,14 +1020,14 @@ pub(super) trait Sink {
 }
 
 /// A CSV file: UTF-8, `,`, `.` decimals, `"` quoting where needed, `\n`.
-struct CsvSink {
+pub(super) struct CsvSink {
     out: std::io::BufWriter<std::fs::File>,
     path: PathBuf,
     line: Vec<u8>,
 }
 
 impl CsvSink {
-    fn create(path: &Path) -> Result<Self, InternalErrors> {
+    pub(super) fn create(path: &Path) -> Result<Self, InternalErrors> {
         let file = std::fs::File::create(path)
             .map_err(|e| InternalErrors::Io(format!("Could not create {}: {e}", path.display())))?;
         Ok(Self {
@@ -989,7 +1037,7 @@ impl CsvSink {
         })
     }
 
-    fn finish(mut self) -> Result<(), InternalErrors> {
+    pub(super) fn finish(mut self) -> Result<(), InternalErrors> {
         self.out.flush().map_err(|e| {
             InternalErrors::Io(format!("Could not write {}: {e}", self.path.display()))
         })
@@ -1068,6 +1116,28 @@ impl Sink for SheetSink<'_> {
 
 fn xlsx_error(e: rust_xlsxwriter::XlsxError) -> InternalErrors {
     InternalErrors::Io(format!("Could not write the workbook: {e}"))
+}
+
+/// A workbook of `tables`: a sheet each, named by it.
+pub(super) fn write_sheets(
+    path: &Path,
+    tables: &[(String, Vec<Vec<Out>>)],
+) -> Result<(), InternalErrors> {
+    let mut workbook = Workbook::new();
+    let mut used: Vec<String> = Vec::new();
+    for (name, rows) in tables {
+        let sheet = workbook.add_worksheet();
+        sheet
+            .set_name(sheet_name(name, &mut used))
+            .map_err(xlsx_error)?;
+        let mut sink = SheetSink { sheet, row: 0 };
+        for row in rows {
+            sink.row(row)?;
+        }
+    }
+    workbook
+        .save(path)
+        .map_err(|e| InternalErrors::Io(format!("Could not write {}: {e}", path.display())))
 }
 
 /// A workbook with a sheet per part and the `About` sheet.

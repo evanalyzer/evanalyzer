@@ -47,7 +47,6 @@ import { CommandPickerState } from "api/command_selection.slint";
 import { ProjectTemplateState } from "api/project_template.slint";
 import { ShortcutsDoc } from "api/shortcuts.slint";
 import { Appearance } from "api/appearance.slint";
-import { ExportDialogState } from "api/export.slint";
 import { ResultsState } from "api/results.slint";
 
 export component GlobalShortcuts inherits FocusScope {
@@ -99,11 +98,6 @@ export component GlobalShortcuts inherits FocusScope {
 
         // Esc: an open dialog first (dialogs don't block the window).
         if (e.text == Key.Escape && GlobalAppState.active_dialog != DialogType.none && DialogEscape.close()) {
-            return accept;
-        }
-        if (e.text == Key.Escape && ExportDialogState.active && !ExportDialogState.is-exporting) {
-            ExportDialogState.close-clicked();
-            ExportDialogState.active = false;
             return accept;
         }
 

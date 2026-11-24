@@ -153,6 +153,9 @@ pub(crate) fn run_export_on(
         let n = entry.entry + 1;
         match &entry.status {
             EntryStatus::Written => println!("  {n}. {label}: {} file(s)", entry.files.len()),
+            EntryStatus::Skipped(why) if why == evanalyzer_app::exports::NOT_ALLOWED => println!(
+                "  {n}. {label}: skipped - {why}: allow it in the app, or run with --allow-scripts"
+            ),
             EntryStatus::Skipped(why) => println!("  {n}. {label}: skipped - {why}"),
             EntryStatus::Failed(why) => {
                 failed += 1;
@@ -371,7 +374,7 @@ fn entry_details(entry: &ExportEntry) -> String {
             format!("grid: {:?}", plate.grid),
             format!("classes: {}", classes(&plate.classes)),
             format!("columns: {}", columns(&plate.columns, "count")),
-            format!("aggregation: {:?}", plate.aggregation),
+            format!("aggregations: {:?}", plate.aggregations),
         ],
         ExportEntry::DrawnImages(drawn) => vec![
             format!("classes: {}", classes(&drawn.classes)),

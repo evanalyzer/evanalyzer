@@ -23,7 +23,7 @@ use crate::results::{
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use evanalyzer_cfg::settings::export_settings::{
     DrawnBrightness, DrawnImagesExport, DrawnStyle, ExportAggregation, ExportEntry, ExportSettings,
-    PlateGrid, PlateLayoutExport,
+    HeatmapColors, PlateGrid, PlateLayoutExport,
 };
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -53,14 +53,23 @@ pub(super) fn plate_layout(
             columns
         }
     };
+    let images = scope_images(results, plate.images)?;
+    if plate.grid == PlateGrid::Image {
+        return image_heatmaps(
+            results, export, plate, columns, images, output, report, cancel,
+        );
+    }
     let scratch = Scratch::new(output)?;
     let job = ResultExport {
         output_dir: scratch.dir.clone(),
         format: ExportFormat::XLSX,
-        image_rel_paths: scope_images(results, plate.images)?,
+        image_rel_paths: images,
         columns,
         object_classes: classes(&plate.classes),
-        aggregations: vec![aggregation(plate.aggregation)],
+        aggregations: plate.aggregations.iter().map(|a| aggregation(*a)).collect(),
+        color_schema: color_schema(plate.colors),
+        z_stacks: super::plane_range(plate.planes.z),
+        t_stacks: super::plane_range(plate.planes.t),
         with_plate_view_heatmap: plate.grid == PlateGrid::Plate,
         with_well_view_heatmap: plate.grid == PlateGrid::Well,
         ..Default::default()
@@ -68,12 +77,63 @@ pub(super) fn plate_layout(
     results.export(&job, cancel, &mut |_, _, _| {})?;
     let written = match plate.grid {
         PlateGrid::Plate => "plate.xlsx",
-        PlateGrid::Well => "well.xlsx",
+        _ => "well.xlsx",
     };
     let name = entry_file_name(export, &ExportEntry::PlateLayout(plate.clone()));
     let file = output.file(&format!("{name}.xlsx"));
     scratch.take(Path::new(written), &output.path(&file))?;
     report.files.push(file);
+    Ok(())
+}
+
+/// A plate layout of `grid: Image`: a workbook per image, its area as a
+/// grid of squares - `<name>_<image>.xlsx`, the image by its shortest
+/// unique name. Written image by image (one at a time in the scratch
+/// folder: which file is whose is never guessed).
+#[allow(clippy::too_many_arguments)]
+fn image_heatmaps(
+    results: &dyn ResultsSource,
+    export: &ExportSettings,
+    plate: &PlateLayoutExport,
+    columns: Vec<Column>,
+    images: Vec<String>,
+    output: &Output,
+    report: &mut EntryReport,
+    cancel: &AtomicBool,
+) -> Result<(), InternalErrors> {
+    let name = entry_file_name(export, &ExportEntry::PlateLayout(plate.clone()));
+    let parts = naming::unique_image_parts(&images);
+    for image in &images {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(InternalErrors::Cancelled);
+        }
+        let scratch = Scratch::new(output)?;
+        let job = ResultExport {
+            output_dir: scratch.dir.clone(),
+            format: ExportFormat::XLSX,
+            image_rel_paths: vec![image.clone()],
+            columns: columns.clone(),
+            object_classes: classes(&plate.classes),
+            aggregations: plate.aggregations.iter().map(|a| aggregation(*a)).collect(),
+            color_schema: color_schema(plate.colors),
+            z_stacks: super::plane_range(plate.planes.z),
+            t_stacks: super::plane_range(plate.planes.t),
+            with_heatmap: true,
+            square_size: Some(plate.square_size.unwrap_or(64).max(1) as usize),
+            ..Default::default()
+        };
+        results.export(&job, cancel, &mut |_, _, _| {})?;
+        let Some(written) = files_below(&scratch.dir)?.into_iter().next() else {
+            continue;
+        };
+        let file = output.file(&format!("{name}_{}.xlsx", parts[image]));
+        let relative = written
+            .strip_prefix(&scratch.dir)
+            .unwrap_or(&written)
+            .to_path_buf();
+        scratch.take(&relative, &output.path(&file))?;
+        report.files.push(file);
+    }
     Ok(())
 }
 
@@ -94,6 +154,8 @@ pub(super) fn drawn_images(
         output_dir: scratch.dir.clone(),
         image_rel_paths: images.clone(),
         object_classes: classes(&drawn.classes),
+        z_stacks: super::plane_range(drawn.planes.z),
+        t_stacks: super::plane_range(drawn.planes.t),
         drawn_images: Some(DrawnImages {
             max_side: drawn.max_side,
             style: match drawn.style {
@@ -165,6 +227,23 @@ fn classes(classes: &Option<Vec<u32>>) -> Vec<ObjectClass> {
         .as_ref()
         .map(|ids| ids.iter().map(|id| ObjectClass::Global(*id)).collect())
         .unwrap_or_default()
+}
+
+fn color_schema(colors: HeatmapColors) -> crate::results::ColorSchema {
+    use crate::results::ColorSchema;
+    match colors {
+        HeatmapColors::Excel => ColorSchema::Excel,
+        HeatmapColors::Viridis => ColorSchema::Viridis,
+        HeatmapColors::Plasma => ColorSchema::Plasma,
+        HeatmapColors::Inferno => ColorSchema::Inferno,
+        HeatmapColors::Cividis => ColorSchema::Cividis,
+        HeatmapColors::Coolwarm => ColorSchema::Coolwarm,
+        HeatmapColors::RedBlue => ColorSchema::RedBlue,
+        HeatmapColors::YlGnBu => ColorSchema::YlGnBu,
+        HeatmapColors::Haline => ColorSchema::Haline,
+        HeatmapColors::Algae => ColorSchema::Algae,
+        HeatmapColors::Thermal => ColorSchema::Thermal,
+    }
 }
 
 fn aggregation(aggregation: ExportAggregation) -> Aggregation {

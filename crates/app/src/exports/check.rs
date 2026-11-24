@@ -17,7 +17,7 @@ use crate::results::Column;
 use evanalyzer_cfg::core_types::{is_contained_rel_path, is_file_name_part};
 use evanalyzer_cfg::settings::export_settings::{
     CURRENT_TABLE_FORMAT, ExportEntry, ExportSettings, OutputLocation, SplitInto, TableExport,
-    TableFileFormat, TableRows, TableSplit,
+    TableFileFormat, TableRows, TableSplit, TimeCourseLineKind, TimeCourseTableLayout,
 };
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 use std::collections::{BTreeMap, BTreeSet};
@@ -170,6 +170,15 @@ fn check_entry(
         ExportEntry::Table(table) => {
             check_table(table, at);
             check_classes(project, table.classes.as_deref(), at);
+            let linked: Vec<u32> = table
+                .children
+                .iter()
+                .flat_map(|(p, c)| [*p, *c])
+                .chain(table.parents.iter().copied())
+                .collect();
+            if !linked.is_empty() {
+                check_classes(project, Some(&linked), at);
+            }
             check_columns(project, table.columns.as_deref(), at);
             Some(&table.name)
         }
@@ -227,7 +236,11 @@ fn check_entry(
 fn check_table(table: &TableExport, at: &mut impl FnMut(Severity, String)) {
     let grouped = matches!(
         table.rows,
-        TableRows::Image | TableRows::Well | TableRows::Folder | TableRows::Track
+        TableRows::Image
+            | TableRows::Well
+            | TableRows::Folder
+            | TableRows::Track
+            | TableRows::TimePoint
     );
     if grouped && table.aggregations.is_empty() {
         at(
@@ -252,6 +265,76 @@ fn check_table(table: &TableExport, at: &mut impl FnMut(Severity, String)) {
             Severity::Warning,
             "transposed and one file per class: each file has a single class".into(),
         );
+    }
+    if (!table.children.is_empty() || !table.parents.is_empty())
+        && matches!(
+            table.rows,
+            TableRows::Track
+                | TableRows::Measurement
+                | TableRows::TimePoint
+                | TableRows::ProfilePosition
+        )
+    {
+        at(
+            Severity::Warning,
+            "children and linked objects are for tables of objects, images, wells and folders - left out".into(),
+        );
+    }
+    if table.planes != Default::default()
+        && matches!(table.rows, TableRows::Track | TableRows::ProfilePosition)
+    {
+        at(
+            Severity::Warning,
+            "z-planes and time points are for tables of objects, images, wells, folders, measurements and time points - tracks and profiles span them".into(),
+        );
+    }
+    for range in [table.planes.z, table.planes.t].into_iter().flatten() {
+        if range[0] > range[1] {
+            at(
+                Severity::Error,
+                format!("a plane range from {} to {} is empty", range[0], range[1]),
+            );
+        }
+    }
+    if table.time_course.is_some() && table.rows != TableRows::TimePoint {
+        at(
+            Severity::Error,
+            "time course options are for a table of time points only".into(),
+        );
+    }
+    if table.profile.is_some() && table.rows != TableRows::ProfilePosition {
+        at(
+            Severity::Error,
+            "profile options are for a table of profile positions only".into(),
+        );
+    }
+    if table.rows == TableRows::ProfilePosition
+        && table
+            .profile
+            .as_ref()
+            .is_none_or(|p| p.key.trim().is_empty())
+    {
+        at(
+            Severity::Error,
+            "pick the profile measurement (e.g. a Sholl analysis)".into(),
+        );
+    }
+    if let (TableRows::TimePoint, Some(course)) = (table.rows, &table.time_course)
+        && course.layout != TimeCourseTableLayout::Long
+    {
+        if course.lines == TimeCourseLineKind::Track {
+            at(
+                Severity::Error,
+                "a wide time course per track would have a column per track - lay it out long"
+                    .into(),
+            );
+        }
+        if table.split != TableSplit::None {
+            at(
+                Severity::Error,
+                "a wide time course is one file - no split".into(),
+            );
+        }
     }
     if table.tracks.is_some() && table.rows != TableRows::Track {
         at(

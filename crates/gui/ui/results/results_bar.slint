@@ -473,12 +473,9 @@ export component ResultsBarNav inherits HorizontalLayout {
                 }
             }
 
-            // Exports write tables and images: not of a chart, paths or
-            // trees.
             InkMenuItem {
                 icon: InkIcons.export;
                 text: "Save as export…";
-                enabled: root.menu-tab.kind == "LIST" || root.menu-tab.kind == "PLATE" || root.menu-tab.kind == "TRACKS";
                 clicked => {
                     QuickExportState.save-view(root.menu-id);
                 }
@@ -487,7 +484,6 @@ export component ResultsBarNav inherits HorizontalLayout {
             InkMenuItem {
                 icon: InkIcons.add;
                 text: "Add to export…";
-                enabled: root.menu-tab.kind == "LIST" || root.menu-tab.kind == "PLATE" || root.menu-tab.kind == "TRACKS";
                 clicked => {
                     QuickExportState.open(root.menu-id);
                 }
@@ -638,13 +634,8 @@ export component ResultsBarActions inherits HorizontalLayout {
             enabled: ResultsState.database-name != "";
             disabled-reason: "Open an analysis first";
             clicked => {
-                // A List, Plate or Tracks view: export it as it is shown
-                // (and keep it, ticked); the others: the export dialog.
-                if ResultsState.rail-mode == ResultsRailMode.list || ResultsState.rail-mode == ResultsRailMode.matrix || ResultsState.rail-mode == ResultsRailMode.tracks {
-                    QuickExportState.open(-1);
-                } else {
-                    ResultsState.export-dialog-open();
-                }
+                // The view as it is shown (and kept, ticked).
+                QuickExportState.open(-1);
             }
         }
     }

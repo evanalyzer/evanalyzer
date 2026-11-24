@@ -7,6 +7,7 @@
 // `ResultsGenerator::get_histogram`/`get_scatter`/`get_boxplot` and pushes
 // into `ResultsState.chart-*`) in the stretch area below.
 import { ChartHit, ResultsChartKind2, ResultsState } from "../api/results.slint";
+import { QuickExportState } from "../api/quick_export.slint";
 import { InkScheme } from "../ink/palette.slint";
 import { InkSegmented, InkHint, InkNumberField, InkSwitch, InkButton, InkButtonKind } from "../ink/ink.slint";
 import { ColocCountRow, SettingsGroup } from "results_common.slint";
@@ -437,7 +438,8 @@ component OverTimeChart inherits Rectangle {
                     ? "The profile as CSV or XLSX - the lines or each object, long and/or wide"
                     : "The time course as CSV or XLSX - long and/or wide tables";
                 clicked => {
-                    ResultsState.chart-time-export();
+                    // The chart as it is shown, in "Export this view".
+                    QuickExportState.open(-1);
                 }
             }
         }

@@ -15,6 +15,7 @@
 mod measurements;
 mod reused;
 mod script;
+mod series;
 pub(crate) mod table;
 mod tracks;
 
@@ -174,3 +175,25 @@ impl Output {
 
 #[cfg(test)]
 mod tests;
+
+/// Whether the plane `(z, t)` is one of `planes` (`Planes`: ranges, both
+/// ends included; `None`: all).
+pub(crate) fn in_planes(
+    planes: &evanalyzer_cfg::settings::export_settings::Planes,
+    z: u32,
+    t: u32,
+) -> bool {
+    let within = |range: Option<[u32; 2]>, value: u32| {
+        range.is_none_or(|[from, to]| from <= value && value <= to)
+    };
+    within(planes.z, z) && within(planes.t, t)
+}
+
+/// `planes`' range of `axis` as the results' export takes it (end
+/// excluded).
+pub(crate) fn plane_range(range: Option<[u32; 2]>) -> Option<std::range::Range<u32>> {
+    range.map(|[from, to]| std::range::Range {
+        start: from,
+        end: to.saturating_add(1),
+    })
+}

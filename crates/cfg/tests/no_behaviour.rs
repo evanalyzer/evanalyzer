@@ -99,7 +99,6 @@ const ALLOWED: &[&str] = &[
     "fn default_table_format",
     "fn default_aggregations",
     "fn default_min_points",
-    "fn default_aggregation",
     "fn default_max_side",
     "fn is_zero",
     "fn is_one_plane",

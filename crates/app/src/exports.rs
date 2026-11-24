@@ -26,6 +26,10 @@ pub mod naming;
 mod types;
 
 pub use from_view::entry_from_view;
+
+/// Why a script didn't run: the user hasn't allowed it (its content) on
+/// this computer - `EntryStatus::Skipped` says so in these words.
+pub const NOT_ALLOWED: &str = "not allowed yet on this computer";
 pub use types::{
     EntryReport, EntryStatus, ExportReport, ExportRun, Interpreters, ScriptPermission,
 };
@@ -160,7 +164,13 @@ pub fn default_columns(
         TableRows::Image | TableRows::Well | TableRows::Folder => {
             local::table::DEFAULT_GROUPED_COLUMNS.to_vec()
         }
-        TableRows::Track | TableRows::Measurement => Vec::new(),
+        // A time course sums up values (not the count) per time point.
+        TableRows::TimePoint => local::table::DEFAULT_GROUPED_COLUMNS
+            .iter()
+            .filter(|column| **column != crate::results::Column::Count)
+            .cloned()
+            .collect(),
+        TableRows::Track | TableRows::Measurement | TableRows::ProfilePosition => Vec::new(),
     }
 }
 

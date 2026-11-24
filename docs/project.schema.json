@@ -842,6 +842,13 @@
           "type": "string",
           "default": ""
         },
+        "planes": {
+          "$ref": "#/$defs/Planes",
+          "default": {
+            "t": null,
+            "z": null
+          }
+        },
         "style": {
           "$ref": "#/$defs/DrawnStyle",
           "default": "OUTLINE"
@@ -1887,6 +1894,31 @@
           }
         }
       }
+    },
+    "HeatmapColors": {
+      "description": "The colours of a plate layout's heatmap, low to high.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "VIRIDIS",
+            "PLASMA",
+            "INFERNO",
+            "CIVIDIS",
+            "COOLWARM",
+            "RED_BLUE",
+            "YL_GN_BU",
+            "HALINE",
+            "ALGAE",
+            "THERMAL"
+          ]
+        },
+        {
+          "description": "Excel's red - yellow - green.",
+          "type": "string",
+          "const": "EXCEL"
+        }
+      ]
     },
     "HessianSettings": {
       "description": "Extracts continuous structural ridges, tubular vessels, and blobs using second-order spatial derivatives.\n\nThis algorithm constructs a localized Hessian matrix for each pixel to analyze local curvature\nand intensity topography. By evaluating the eigenvalues of this matrix, it differentiates\nbetween directional ridges (like blood vessels or filaments), distinct intensity peaks (blobs),\nand flat regions, making it highly effective for curvilinear feature extraction.",
@@ -6100,6 +6132,40 @@
         "RELATIVE"
       ]
     },
+    "Planes": {
+      "description": "Which z-planes and time points an entry writes: each a range `[from,\nto]` (both included, counted from 0); `None`: all of them.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "z": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "maxItems": 2,
+          "minItems": 2
+        }
+      }
+    },
     "PlateGrid": {
       "description": "See [`PlateLayoutExport::grid`].",
       "oneOf": [
@@ -6112,6 +6178,11 @@
           "description": "A cell per image position inside the wells.",
           "type": "string",
           "const": "WELL"
+        },
+        {
+          "description": "A workbook per image: its area as a grid of squares\n(`square_size` pixels), the objects' values summed up per square.",
+          "type": "string",
+          "const": "IMAGE"
         }
       ]
     },
@@ -6119,9 +6190,15 @@
       "description": "The values laid out as the plate (or well) grid - an `xlsx` workbook, a\nsheet per class and value.",
       "type": "object",
       "properties": {
-        "aggregation": {
-          "$ref": "#/$defs/ExportAggregation",
-          "default": "AVG"
+        "aggregations": {
+          "description": "How each column is summed up per cell: a sheet per class, column\nand aggregation.",
+          "type": "array",
+          "default": [
+            "AVG"
+          ],
+          "items": {
+            "$ref": "#/$defs/ExportAggregation"
+          }
         },
         "classes": {
           "description": "Class ids; `None`: all classes.",
@@ -6135,6 +6212,11 @@
             "format": "uint32",
             "minimum": 0
           }
+        },
+        "colors": {
+          "description": "The heatmap's colours.",
+          "$ref": "#/$defs/HeatmapColors",
+          "default": "EXCEL"
         },
         "columns": {
           "description": "Column keys; `None`: the count.",
@@ -6159,6 +6241,23 @@
           "description": "Replaces the automatic file name (`plate`, `well`); `\"\"`: the\nautomatic one.",
           "type": "string",
           "default": ""
+        },
+        "planes": {
+          "$ref": "#/$defs/Planes",
+          "default": {
+            "t": null,
+            "z": null
+          }
+        },
+        "squareSize": {
+          "description": "`grid: Image`: the side of a square in pixels (`None`: 64).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "default": null,
+          "minimum": 0
         }
       }
     },
@@ -6215,6 +6314,51 @@
         "PLATE32X48",
         "PLATE48X72"
       ]
+    },
+    "ProfileContent": {
+      "description": "A profile's lines (n, mean, SD, median, quartiles per position) or each\nobject's values.",
+      "type": "string",
+      "enum": [
+        "LINES",
+        "OBJECTS"
+      ]
+    },
+    "ProfileLineKind": {
+      "description": "What a line of a profile is.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "CLASS",
+            "IMAGE",
+            "WELL"
+          ]
+        },
+        {
+          "description": "All objects one line.",
+          "type": "string",
+          "const": "ALL"
+        }
+      ]
+    },
+    "ProfileOptions": {
+      "description": "A profile (`rows: ProfilePosition`): which, and of what.",
+      "type": "object",
+      "properties": {
+        "content": {
+          "$ref": "#/$defs/ProfileContent",
+          "default": "LINES"
+        },
+        "key": {
+          "description": "The profile measurement's key (\"sholl_01/intersections\").",
+          "type": "string",
+          "default": ""
+        },
+        "lines": {
+          "$ref": "#/$defs/ProfileLineKind",
+          "default": "CLASS"
+        }
+      }
     },
     "PropagationSettings": {
       "description": "Grows a region around each seed object through a channel.\n\nE.g. a cell around its nucleus through the cell stain: every pixel goes\nto the seed it is reached from at the lowest cost, a step costing more\nthe more the stain's brightness changes - so neighbouring cells meet\nwhere the stain is dim, not halfway between their nuclei. Each region\nkeeps its seed's pixels (Relate Objects links it to its seed).",
@@ -7380,6 +7524,36 @@
             "$ref": "#/$defs/ExportAggregation"
           }
         },
+        "childAggregations": {
+          "description": "How the children's values are summed up (besides their count).",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ExportAggregation"
+          }
+        },
+        "children": {
+          "description": "The children linked to each object (Relate Objects), as the Results\nList shows them: (parent class id, child class id) - per link their\ncount and each `child_aggregations` of each column.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "array",
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              }
+            ]
+          }
+        },
         "classes": {
           "description": "The classes in the table (class ids); `None`: all classes.",
           "type": [
@@ -7423,6 +7597,36 @@
           "type": "string",
           "default": ""
         },
+        "parents": {
+          "description": "The linked objects (parents) by class id: their id and each column.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "planes": {
+          "description": "Not for tracks and profiles (they span the planes).",
+          "$ref": "#/$defs/Planes",
+          "default": {
+            "t": null,
+            "z": null
+          }
+        },
+        "profile": {
+          "description": "`rows: ProfilePosition` only: which profile, what a line is.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProfileOptions"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "rows": {
           "description": "What a row is.",
           "$ref": "#/$defs/TableRows"
@@ -7436,6 +7640,18 @@
           "description": "The split parts as files or as sheets of one workbook (`Xlsx` only).",
           "$ref": "#/$defs/SplitInto",
           "default": "FILES"
+        },
+        "timeCourse": {
+          "description": "`rows: TimePoint` only: what a line is, the layout.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeCourseOptions"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "tracks": {
           "description": "`rows: Track` only.",
@@ -7504,6 +7720,16 @@
           "description": "A measurement value (image, plane, object or region, step,\nmeasurement, value, unit).",
           "type": "string",
           "const": "MEASUREMENT"
+        },
+        {
+          "description": "A time point of a line (the time course): its values summed up\nover the line's objects there.",
+          "type": "string",
+          "const": "TIME_POINT"
+        },
+        {
+          "description": "A position of a profile (e.g. a Sholl ring's radius): of a line, or\nof an object.",
+          "type": "string",
+          "const": "PROFILE_POSITION"
         }
       ]
     },
@@ -7620,6 +7846,57 @@
           "minimum": 0
         }
       }
+    },
+    "TimeCourseLineKind": {
+      "description": "What a line of a time course follows.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "IMAGE",
+            "WELL",
+            "TRACK"
+          ]
+        },
+        {
+          "description": "The objects of a class.",
+          "type": "string",
+          "const": "CLASS"
+        }
+      ]
+    },
+    "TimeCourseOptions": {
+      "description": "A time course (`rows: TimePoint`): what a line is, and how it is laid\nout.",
+      "type": "object",
+      "properties": {
+        "layout": {
+          "$ref": "#/$defs/TimeCourseTableLayout",
+          "default": "LONG"
+        },
+        "lines": {
+          "$ref": "#/$defs/TimeCourseLineKind",
+          "default": "CLASS"
+        },
+        "relative": {
+          "description": "The values in % of the line's first time point with objects.",
+          "type": "boolean",
+          "default": false
+        },
+        "withParents": {
+          "description": "Track lines: each track with its parents' history (divisions,\nfusions), else each track on its own.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "TimeCourseTableLayout": {
+      "description": "A time course as rows (long: a row per time point and line - for\nscripts) and/or as a table per value (wide: a row per time point, a\ncolumn per line).",
+      "type": "string",
+      "enum": [
+        "LONG",
+        "WIDE",
+        "BOTH"
+      ]
     },
     "TraceFilamentsSettings": {
       "description": "Traces each neuron as a tree from its soma to its tips (the end points\nof Skeletonize Objects) along the cheapest paths - bridging dim gaps and\ngiving each tip to the soma reaching it most cheaply - and splits it\ninto segments at its branch points.\n\n[Skeletonize Objects (end points)] -> [Trace Filaments] -> [Measure Filament Tree]\n\nEach segment is a 1-pixel-wide object of the output class, linked to the\nnext segment towards the soma (a root segment: none) and to its soma.",

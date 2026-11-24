@@ -152,6 +152,17 @@ pub struct TableExport {
     /// row per class - `Object` and `Image` rows only.
     #[serde(default)]
     pub transposed: bool,
+    /// The children linked to each object (Relate Objects), as the Results
+    /// List shows them: (parent class id, child class id) - per link their
+    /// count and each `child_aggregations` of each column.
+    #[serde(default)]
+    pub children: Vec<(u32, u32)>,
+    /// How the children's values are summed up (besides their count).
+    #[serde(default)]
+    pub child_aggregations: Vec<ExportAggregation>,
+    /// The linked objects (parents) by class id: their id and each column.
+    #[serde(default)]
+    pub parents: Vec<u32>,
     /// One file (or sheet) per image, well, folder or class.
     #[serde(default)]
     pub split: TableSplit,
@@ -161,6 +172,15 @@ pub struct TableExport {
     /// `rows: Track` only.
     #[serde(default)]
     pub tracks: Option<TrackOptions>,
+    /// `rows: TimePoint` only: what a line is, the layout.
+    #[serde(default)]
+    pub time_course: Option<TimeCourseOptions>,
+    /// `rows: ProfilePosition` only: which profile, what a line is.
+    #[serde(default)]
+    pub profile: Option<ProfileOptions>,
+    /// Not for tracks and profiles (they span the planes).
+    #[serde(default)]
+    pub planes: Planes,
 }
 
 fn default_aggregations() -> Vec<ExportAggregation> {
@@ -186,6 +206,12 @@ pub enum TableRows {
     /// A measurement value (image, plane, object or region, step,
     /// measurement, value, unit).
     Measurement,
+    /// A time point of a line (the time course): its values summed up
+    /// over the line's objects there.
+    TimePoint,
+    /// A position of a profile (e.g. a Sholl ring's radius): of a line, or
+    /// of an object.
+    ProfilePosition,
 }
 
 /// The file format of a table.
@@ -243,6 +269,83 @@ pub enum SplitInto {
     Sheets,
 }
 
+/// A time course (`rows: TimePoint`): what a line is, and how it is laid
+/// out.
+#[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TimeCourseOptions {
+    #[serde(default)]
+    pub lines: TimeCourseLineKind,
+    #[serde(default)]
+    pub layout: TimeCourseTableLayout,
+    /// The values in % of the line's first time point with objects.
+    #[serde(default)]
+    pub relative: bool,
+    /// Track lines: each track with its parents' history (divisions,
+    /// fusions), else each track on its own.
+    #[serde(default)]
+    pub with_parents: bool,
+}
+
+/// What a line of a time course follows.
+#[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum TimeCourseLineKind {
+    /// The objects of a class.
+    #[default]
+    Class,
+    Image,
+    Well,
+    Track,
+}
+
+/// A time course as rows (long: a row per time point and line - for
+/// scripts) and/or as a table per value (wide: a row per time point, a
+/// column per line).
+#[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum TimeCourseTableLayout {
+    #[default]
+    Long,
+    Wide,
+    Both,
+}
+
+/// A profile (`rows: ProfilePosition`): which, and of what.
+#[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileOptions {
+    /// The profile measurement's key ("sholl_01/intersections").
+    #[serde(default)]
+    pub key: String,
+    #[serde(default)]
+    pub lines: ProfileLineKind,
+    #[serde(default)]
+    pub content: ProfileContent,
+}
+
+/// What a line of a profile is.
+#[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ProfileLineKind {
+    #[default]
+    Class,
+    Image,
+    Well,
+    /// All objects one line.
+    All,
+}
+
+/// A profile's lines (n, mean, SD, median, quartiles per position) or each
+/// object's values.
+#[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ProfileContent {
+    #[default]
+    Lines,
+    Objects,
+}
+
 /// Which tracks a `rows: Track` table has, and the unit of their speed.
 #[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -294,14 +397,50 @@ pub struct PlateLayoutExport {
     /// Column keys; `None`: the count.
     #[serde(default)]
     pub columns: Option<Vec<String>>,
-    #[serde(default = "default_aggregation")]
-    pub aggregation: ExportAggregation,
+    /// How each column is summed up per cell: a sheet per class, column
+    /// and aggregation.
+    #[serde(default = "default_aggregations")]
+    pub aggregations: Vec<ExportAggregation>,
     #[serde(default)]
     pub images: ImageScope,
+    /// `grid: Image`: the side of a square in pixels (`None`: 64).
+    #[serde(default)]
+    pub square_size: Option<u32>,
+    /// The heatmap's colours.
+    #[serde(default)]
+    pub colors: HeatmapColors,
+    #[serde(default)]
+    pub planes: Planes,
 }
 
-fn default_aggregation() -> ExportAggregation {
-    ExportAggregation::Avg
+/// The colours of a plate layout's heatmap, low to high.
+#[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum HeatmapColors {
+    /// Excel's red - yellow - green.
+    #[default]
+    Excel,
+    Viridis,
+    Plasma,
+    Inferno,
+    Cividis,
+    Coolwarm,
+    RedBlue,
+    YlGnBu,
+    Haline,
+    Algae,
+    Thermal,
+}
+
+/// Which z-planes and time points an entry writes: each a range `[from,
+/// to]` (both included, counted from 0); `None`: all of them.
+#[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Planes {
+    #[serde(default)]
+    pub z: Option<[u32; 2]>,
+    #[serde(default)]
+    pub t: Option<[u32; 2]>,
 }
 
 /// See [`PlateLayoutExport::grid`].
@@ -313,6 +452,9 @@ pub enum PlateGrid {
     Plate,
     /// A cell per image position inside the wells.
     Well,
+    /// A workbook per image: its area as a grid of squares
+    /// (`square_size` pixels), the objects' values summed up per square.
+    Image,
 }
 
 /// A PNG per image (and plane) with the objects drawn on it.
@@ -334,6 +476,8 @@ pub struct DrawnImagesExport {
     pub max_side: u32,
     #[serde(default)]
     pub images: ImageScope,
+    #[serde(default)]
+    pub planes: Planes,
 }
 
 fn default_max_side() -> u32 {
@@ -473,6 +617,12 @@ mod tests {
                     images: ImageScope::All,
                     empty_classes: true,
                     transposed: false,
+                    children: vec![],
+                    child_aggregations: vec![],
+                    parents: vec![],
+                    time_course: None,
+                    profile: None,
+                    planes: Planes::default(),
                     split: TableSplit::Class,
                     split_into: SplitInto::Sheets,
                     tracks: Some(TrackOptions {
@@ -487,8 +637,11 @@ mod tests {
                     grid: PlateGrid::Well,
                     classes: Some(vec![2]),
                     columns: None,
-                    aggregation: ExportAggregation::Max,
+                    aggregations: vec![ExportAggregation::Max],
                     images: ImageScope::LeftOut,
+                    square_size: None,
+                    colors: HeatmapColors::Excel,
+                    planes: Planes::default(),
                 }),
                 ExportEntry::DrawnImages(DrawnImagesExport {
                     name: "pictures".into(),
@@ -497,6 +650,10 @@ mod tests {
                     brightness: DrawnBrightness::Auto,
                     max_side: 1024,
                     images: ImageScope::Included,
+                    planes: Planes {
+                        z: Some([0, 2]),
+                        t: None,
+                    },
                 }),
                 ExportEntry::Script(ScriptExport {
                     language: ScriptLanguage::Python,

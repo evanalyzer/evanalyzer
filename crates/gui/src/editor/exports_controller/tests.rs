@@ -617,7 +617,13 @@ fn a_script_not_allowed_yet_is_asked_about_before_the_run() {
     drain_ui_queue();
     assert!(!trust.get_shown());
     let report: Vec<String> = state.get_report().iter().map(|l| l.to_string()).collect();
-    assert!(report.iter().any(|l| l.contains("skipped")), "{report:?}");
+    assert!(
+        report
+            .iter()
+            .any(|l| l
+                .contains("not run - you chose \"Don't run\". Run the export again to be asked.")),
+        "{report:?}"
+    );
     assert!(trusted(&ui_state).is_empty());
 
     // Asked again; run once: allowed for this run, not kept.
@@ -627,7 +633,7 @@ fn a_script_not_allowed_yet_is_asked_about_before_the_run() {
     trust.invoke_answer(1);
     drain_ui_queue();
     let report: Vec<String> = state.get_report().iter().map(|l| l.to_string()).collect();
-    assert!(!report.iter().any(|l| l.contains("allowed")), "{report:?}");
+    assert!(!report.iter().any(|l| l.contains("not run")), "{report:?}");
     assert!(trusted(&ui_state).is_empty());
 
     // Always allow this version: kept, not asked again.
@@ -786,7 +792,7 @@ fn export_this_view_keeps_it_as_an_export() {
 }
 
 /// A view's ⋯ › Save as export…: a new export of it, opened in the tab -
-/// nothing written; charts have none.
+/// nothing written; a chart's is the table behind it.
 #[test]
 fn save_a_view_as_export() {
     use crate::{LayoutState, QuickExportState, WorkspaceMode};
@@ -808,12 +814,14 @@ fn save_a_view_as_export() {
         WorkspaceMode::Exports
     );
 
-    // The Charts view: no export of it.
+    // The Charts view: the table behind its chart.
     quick.invoke_save_view(3);
-    quick.invoke_open(3);
     drain_ui_queue();
-    assert_eq!(exports(&ui_state).len(), 1);
-    assert!(!quick.get_shown());
+    let all = exports(&ui_state);
+    assert_eq!(all.len(), 2);
+    assert!(matches!(all[1].entries[0], ExportEntry::Table(_)));
+    quick.invoke_open(3);
+    assert!(quick.get_shown());
 }
 
 /// At the smallest window the new dialogs show whole: their buttons inside.
@@ -853,4 +861,158 @@ fn the_export_dialogs_fit_the_smallest_window() {
     inside("Run once");
     ui.global::<ScriptTrustState>().invoke_answer(0);
     drain_ui_queue();
+}
+
+/// Children and linked objects: the Results List's lists, from the newest
+/// analysis' links; ticked, kept as links on the table.
+#[test]
+fn children_and_linked_objects_are_picked_like_the_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = saved_project_with_an_analysis(dir.path());
+    // ClassB objects inside the first ClassA object.
+    {
+        let db = dir.path().join("results/20261124T090000Z__run/run.evadb");
+        let conn = duckdb::Connection::open(db).unwrap();
+        conn.execute_batch(
+            "UPDATE objects SET parent_ids = MAP {1: (SELECT object_id FROM objects \
+             WHERE list_contains(object_class_id, 1) ORDER BY object_id LIMIT 1)} \
+             WHERE list_contains(object_class_id, 2);",
+        )
+        .unwrap();
+    }
+    let (ui, ui_state, _controller) = setup(project);
+    let state = ui.global::<ExportsState>();
+    state.invoke_new_export();
+    state.invoke_set_entry_field("rows".into(), "0".into());
+    state.invoke_refresh();
+    drain_ui_queue();
+
+    let children: Vec<String> = state
+        .get_related_children()
+        .iter()
+        .map(|i| i.key.to_string())
+        .collect();
+    assert_eq!(children, ["1:2"], "the link of the analysis");
+    assert_eq!(state.get_related_parents().row_count(), 1);
+    state.invoke_set_entry_field("child:1:2".into(), "1".into());
+    state.invoke_set_entry_field("child-aggregation:Maximum".into(), "1".into());
+    state.invoke_set_entry_field("parents-all".into(), "".into());
+    let ExportEntry::Table(table) = &exports(&ui_state)[0].entries[0] else {
+        panic!("a table");
+    };
+    assert_eq!(table.children, vec![(1, 2)]);
+    assert_eq!(table.child_aggregations, vec![ExportAggregation::Max]);
+    assert_eq!(table.parents, vec![1]);
+    assert!(state.get_related_children().row_data(0).unwrap().selected);
+    assert!(state.get_related_children_summary().starts_with("1 of 1"));
+
+    // Written with their columns.
+    state.invoke_set_entry_field("images".into(), "0".into());
+    state.invoke_run();
+    drain_ui_queue();
+    let csv = std::fs::read_to_string(dir.path().join("results/20261124T090000Z__run/objects.csv"))
+        .unwrap();
+    let header = csv.lines().next().unwrap();
+    assert!(header.contains("children_1_2_count"), "{header}");
+    assert!(header.contains("parent_1_id"), "{header}");
+}
+
+/// A time course: its options with the rows; a profile: its options; the
+/// options go when the rows change.
+#[test]
+fn time_course_and_profile_options() {
+    let (ui, ui_state, _controller) = setup(ProjectWithRuntime::default());
+    let state = ui.global::<ExportsState>();
+    state.invoke_new_export();
+    let table = |ui_state: &UiState| match &exports(ui_state)[0].entries[0] {
+        ExportEntry::Table(table) => table.clone(),
+        _ => panic!("a table"),
+    };
+    state.invoke_set_entry_field("rows".into(), "7".into());
+    state.invoke_set_entry_field("time-lines".into(), "3".into());
+    state.invoke_set_entry_field("time-layout".into(), "0".into());
+    state.invoke_set_entry_field("time-with-parents".into(), "1".into());
+    let course = table(&ui_state).time_course.unwrap();
+    assert_eq!(course.lines, TimeCourseLineKind::Track);
+    assert!(course.with_parents);
+    assert_eq!(state.get_time_lines(), 3);
+    assert!(
+        entries(&ui)[0].title.contains("time_course.csv"),
+        "{}",
+        entries(&ui)[0].title
+    );
+
+    state.invoke_set_entry_field("rows".into(), "8".into());
+    assert!(
+        table(&ui_state).time_course.is_none(),
+        "its options go with it"
+    );
+    state.invoke_set_entry_field("profile-objects".into(), "1".into());
+    assert_eq!(
+        table(&ui_state).profile.unwrap().content,
+        ProfileContent::Objects
+    );
+    // No profile picked yet: it can't run.
+    assert!(state.get_problems().contains("profile measurement"));
+}
+
+/// Z-planes and time points: all, or a range.
+#[test]
+fn plane_ranges() {
+    let (ui, ui_state, _controller) = setup(ProjectWithRuntime::default());
+    let state = ui.global::<ExportsState>();
+    state.invoke_new_export();
+    state.invoke_set_entry_field("t-planes".into(), "4-2".into());
+    let planes = |ui_state: &UiState| match &exports(ui_state)[0].entries[0] {
+        ExportEntry::Table(table) => table.planes,
+        _ => panic!("a table"),
+    };
+    assert_eq!(planes(&ui_state).t, Some([2, 4]), "from the smaller");
+    assert!(state.get_t_range());
+    assert_eq!(state.get_t_from(), "2");
+    state.invoke_set_entry_field("t-planes".into(), "all".into());
+    assert_eq!(planes(&ui_state).t, None);
+    assert!(!state.get_t_range());
+}
+
+/// A plate layout: Layout, Columns (the picker), Values & classes - its
+/// columns, several values, colours, the image grid.
+#[test]
+fn a_plate_layout_picks_columns_and_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let (ui, ui_state, _controller) = setup(saved_project_with_an_analysis(dir.path()));
+    let state = ui.global::<ExportsState>();
+    state.invoke_new_export();
+    state.invoke_remove_entry(0);
+    state.invoke_add_entry("PLATE_LAYOUT".into());
+    state.invoke_refresh();
+    drain_ui_queue();
+    let plate = |ui_state: &UiState| match &exports(ui_state)[0].entries[0] {
+        ExportEntry::PlateLayout(plate) => plate.clone(),
+        _ => panic!("a plate layout"),
+    };
+    assert!(state.get_columns_default(), "the count");
+    assert!(ticked_in_picker(&ui).contains(&"count".to_string()));
+    state.invoke_picker("picked".into(), "area_px".into(), true);
+    assert_eq!(
+        plate(&ui_state).columns,
+        Some(vec!["count".to_string(), "area_px".to_string()])
+    );
+    state.invoke_set_entry_field("aggregation:max".into(), "1".into());
+    assert_eq!(
+        plate(&ui_state).aggregations,
+        vec![ExportAggregation::Avg, ExportAggregation::Max]
+    );
+    state.invoke_set_entry_field("colors".into(), "1".into());
+    state.invoke_set_entry_field("grid".into(), "2".into());
+    state.invoke_set_entry_field("square".into(), "3".into());
+    let p = plate(&ui_state);
+    assert_eq!(
+        p.colors,
+        evanalyzer_cfg::settings::export_settings::HeatmapColors::Viridis
+    );
+    assert_eq!(p.grid, PlateGrid::Image);
+    assert_eq!(p.square_size, Some(256));
+    state.invoke_set_entry_field("clear-columns".into(), "".into());
+    assert_eq!(plate(&ui_state).columns, None);
 }

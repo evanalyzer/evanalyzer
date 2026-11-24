@@ -53,10 +53,8 @@ pub(super) fn run(
         }
     };
     if !allowed {
-        report.status = EntryStatus::Skipped(format!(
-            "{} hasn't been allowed to run (yet) - allow it, or run with --allow-scripts",
-            script.file
-        ));
+        // The app and the command line each say what to do about it.
+        report.status = EntryStatus::Skipped(crate::exports::NOT_ALLOWED.into());
         report.notes.push(format!("script hash {hash}"));
         return Ok(());
     }

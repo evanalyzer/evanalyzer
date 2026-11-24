@@ -675,3 +675,285 @@ fn a_failing_script_or_a_missing_interpreter_fail_the_entry() {
     };
     assert!(why.contains("Could not start"), "{why}");
 }
+
+/// Children and linked objects as the Results List adds them: per link the
+/// count and each value of each column; per parent class its id and each
+/// column.
+#[test]
+fn children_and_linked_objects_add_their_columns() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("results.evadb");
+    seed_db(
+        &path,
+        &[
+            ObjectSpec::new("img.tif", "Cell", 1, 100),
+            ObjectSpec::new("img.tif", "Cell", 1, 200),
+            ObjectSpec::new("img.tif", "Spot", 2, 10),
+            ObjectSpec::new("img.tif", "Spot", 2, 30),
+            ObjectSpec::new("img.tif", "Spot", 2, 50),
+        ],
+    );
+    {
+        let id = |i: usize| format!("00000000-0000-0000-0000-{i:012}");
+        let conn = duckdb::Connection::open(&path).unwrap();
+        for (spot, cell) in [(2, 0), (3, 0), (4, 1)] {
+            conn.execute(
+                &format!(
+                    "UPDATE objects SET parent_ids = MAP {{1: '{}'::UUID}} WHERE object_id = '{}'",
+                    id(cell),
+                    id(spot)
+                ),
+                [],
+            )
+            .unwrap();
+        }
+    }
+    let results = LocalResults::open(path, LocalFileSystem::default()).unwrap();
+    let run_ = run_of(
+        dir.path(),
+        json!({ "id": 1, "name": "Linked", "entries": [
+            { "kind": "TABLE", "rows": "OBJECT", "columns": ["area_px"], "images": "ALL",
+              "children": [[1, 2]], "childAggregations": ["MAX"], "parents": [1] }
+        ]}),
+    );
+    let report = run(&results, &run_);
+    assert!(report.all_written(), "{report:?}");
+    let lines = lines(&dir.path().join("objects.csv"));
+    let header: Vec<&str> = lines[0].split(',').collect();
+    for name in [
+        "area_px",
+        "children_1_2_count",
+        "children_1_2_max_area_px",
+        "parent_1_id",
+        "parent_1_area_px",
+    ] {
+        assert!(header.contains(&name), "{name} in {header:?}");
+    }
+    let at = |name: &str| header.iter().position(|h| *h == name).unwrap();
+    let first_cell: Vec<&str> = lines[1].split(',').collect();
+    assert_eq!(first_cell[at("area_px")], "100");
+    assert_eq!(first_cell[at("children_1_2_count")], "2");
+    assert_eq!(first_cell[at("children_1_2_max_area_px")], "30");
+    // A spot: its cell's area.
+    let spot: Vec<&str> = lines
+        .iter()
+        .find(|l| l.contains(",Spot,"))
+        .unwrap()
+        .split(',')
+        .collect();
+    assert_eq!(spot[at("parent_1_area_px")], "100");
+}
+
+/// Three analysed time points: two images at 0, one object at 1, none at 2.
+fn timed_results(dir: &Path) -> LocalResults {
+    let path = dir.join("results.evadb");
+    seed_db(
+        &path,
+        &[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 100),
+            ObjectSpec::new("img2.tif", "ClassA", 1, 200),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 300).at_plane(0, 1),
+        ],
+    );
+    let conn = duckdb::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "ALTER TABLE images ADD COLUMN t_stacks_analyzed INTEGER[];
+         ALTER TABLE images ADD COLUMN z_stacks_analyzed INTEGER[];
+         UPDATE images SET t_stacks = 3, t_stacks_analyzed = [0, 1, 2], z_stacks_analyzed = [0];",
+    )
+    .unwrap();
+    drop(conn);
+    LocalResults::open(path, LocalFileSystem::default()).unwrap()
+}
+
+/// A time course: long (a row per time point and line, stable columns for
+/// scripts) and wide (a table per value, a column per line).
+#[test]
+fn a_time_course_is_long_and_wide() {
+    let dir = tempfile::tempdir().unwrap();
+    let results = timed_results(dir.path());
+    let run_ = run_of(
+        dir.path(),
+        json!({ "id": 1, "name": "Course", "entries": [
+            { "kind": "TABLE", "rows": "TIME_POINT", "columns": ["area_px", "count"],
+              "aggregations": ["AVG", "STDDEV"], "images": "ALL",
+              "timeCourse": { "layout": "BOTH" } }
+        ]}),
+    );
+    let report = run(&results, &run_);
+    assert!(report.all_written(), "{report:?}");
+    assert!(
+        report.entries[0]
+            .notes
+            .iter()
+            .any(|n| n.contains("left out: count")),
+        "{report:?}"
+    );
+    let long = lines(&dir.path().join("time_course.csv"));
+    assert_eq!(
+        long[0],
+        "class,t,time_s,n_images,n_objects,n_tracks,area_px_avg,area_px_stddev"
+    );
+    assert_eq!(long.len(), 4, "{long:?}");
+    assert!(long[1].starts_with("ClassA,0,,2,2,0,150,70.71"), "{long:?}");
+    assert_eq!(long[2], "ClassA,1,,2,1,0,300,");
+    let wide = lines(&dir.path().join("time_course_wide_area_px_avg.csv"));
+    assert_eq!(wide, ["t,time_s,classa", "0,,150", "1,,300", "2,,"]);
+    assert!(
+        dir.path()
+            .join("time_course_wide_area_px_stddev.csv")
+            .is_file()
+    );
+}
+
+/// Per image lines, relative to the start; wide alone: no long file. A
+/// wide course per track is refused.
+#[test]
+fn a_time_course_per_image_relative() {
+    let dir = tempfile::tempdir().unwrap();
+    let results = timed_results(dir.path());
+    let run_ = run_of(
+        dir.path(),
+        json!({ "id": 1, "name": "Course", "entries": [
+            { "kind": "TABLE", "rows": "TIME_POINT", "columns": ["area_px"], "images": "ALL",
+              "timeCourse": { "lines": "IMAGE", "relative": true } }
+        ]}),
+    );
+    let report = run(&results, &run_);
+    assert!(report.all_written(), "{report:?}");
+    let long = lines(&dir.path().join("time_course.csv"));
+    assert_eq!(
+        long[0],
+        "image,class,t,time_s,n_images,n_objects,n_tracks,area_px_avg_pct"
+    );
+    assert!(
+        long.iter()
+            .any(|l| l.starts_with("img1.tif,ClassA,1,") && l.ends_with(",300")),
+        "{long:?}"
+    );
+
+    let problems = crate::exports::check::check_export(
+        &serde_json::from_value(json!({ "id": 1, "name": "W", "entries": [
+            { "kind": "TABLE", "rows": "TIME_POINT",
+              "timeCourse": { "lines": "TRACK", "layout": "WIDE" } }
+        ]}))
+        .unwrap(),
+    );
+    assert!(
+        problems.iter().any(|p| p.message.contains("per track")),
+        "{problems:?}"
+    );
+}
+
+/// A profile: its lines (statistics per position) or each object's values;
+/// without a measurement it can't run.
+#[test]
+fn a_profile_has_lines_or_objects() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("results.evadb");
+    crate::results::local::test_support::seed_profile_db(&path);
+    let results = LocalResults::open(path, LocalFileSystem::default()).unwrap();
+    let run_ = run_of(
+        dir.path(),
+        json!({ "id": 1, "name": "Sholl", "entries": [
+            { "kind": "TABLE", "rows": "PROFILE_POSITION", "images": "ALL",
+              "profile": { "key": "sholl_01/intersections" } },
+            { "kind": "TABLE", "rows": "PROFILE_POSITION", "images": "ALL", "name": "each",
+              "profile": { "key": "sholl_01/intersections", "content": "OBJECTS" } }
+        ]}),
+    );
+    let report = run(&results, &run_);
+    assert!(report.all_written(), "{report:?}");
+    let lines_ = lines(&dir.path().join("profile.csv"));
+    assert_eq!(lines_[0], "class,position,n_objects,mean,sd,median,q1,q3");
+    // Class A at radius 10: values 2 and 4.
+    assert!(
+        lines_.iter().any(|l| l.starts_with("A,10,2,3,")),
+        "{lines_:?}"
+    );
+    let each = lines(&dir.path().join("each.csv"));
+    assert_eq!(each[0], "image,class,object_id,position,value");
+    assert_eq!(each.len(), 7, "a row per object and position: {each:?}");
+
+    let problems = crate::exports::check::check_export(
+        &serde_json::from_value(json!({ "id": 1, "name": "P", "entries": [
+            { "kind": "TABLE", "rows": "PROFILE_POSITION" }
+        ]}))
+        .unwrap(),
+    );
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.message.contains("profile measurement")),
+        "{problems:?}"
+    );
+}
+
+/// The image heatmap: a workbook per image, by its unique name.
+#[test]
+fn an_image_heatmap_is_a_workbook_per_image() {
+    let dir = tempfile::tempdir().unwrap();
+    let results = results(dir.path());
+    let run_ = run_of(
+        dir.path(),
+        json!({ "id": 1, "name": "Heat", "entries": [
+            { "kind": "PLATE_LAYOUT", "grid": "IMAGE", "squareSize": 32, "images": "ALL" }
+        ]}),
+    );
+    let report = run(&results, &run_);
+    assert!(report.all_written(), "{report:?}");
+    let mut files = report.entries[0].files.clone();
+    files.sort();
+    assert_eq!(files.len(), 3, "{files:?}");
+    assert!(
+        files
+            .iter()
+            .all(|f| f.to_string_lossy().starts_with("heatmap_"))
+    );
+    assert!(
+        files
+            .iter()
+            .any(|f| f.to_string_lossy() == "heatmap_other.xlsx"),
+        "{files:?}"
+    );
+}
+
+/// Planes: only the time points asked for - in a table and a time course.
+#[test]
+fn a_time_point_range_writes_only_those() {
+    let dir = tempfile::tempdir().unwrap();
+    let results = timed_results(dir.path());
+    let run_ = run_of(
+        dir.path(),
+        json!({ "id": 1, "name": "Range", "entries": [
+            { "kind": "TABLE", "rows": "OBJECT", "columns": ["area_px"], "images": "ALL",
+              "planes": { "t": [1, 1] } },
+            { "kind": "TABLE", "rows": "TIME_POINT", "columns": ["area_px"], "images": "ALL",
+              "planes": { "t": [0, 1] } }
+        ]}),
+    );
+    let report = run(&results, &run_);
+    assert!(report.all_written(), "{report:?}");
+    let objects = lines(&dir.path().join("objects.csv"));
+    assert_eq!(objects.len(), 2, "time point 1's object only: {objects:?}");
+    assert!(objects[1].ends_with(",300"), "{objects:?}");
+    let course = lines(&dir.path().join("time_course.csv"));
+    assert_eq!(course.len(), 3, "time points 0 and 1: {course:?}");
+}
+
+/// A plate layout with several aggregations and its colours.
+#[test]
+fn a_plate_layout_with_several_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let results = results(dir.path());
+    let run_ = run_of(
+        dir.path(),
+        json!({ "id": 1, "name": "Plate", "entries": [
+            { "kind": "PLATE_LAYOUT", "columns": ["area_px"], "aggregations": ["AVG", "MAX"],
+              "colors": "VIRIDIS", "images": "ALL" }
+        ]}),
+    );
+    let report = run(&results, &run_);
+    assert!(report.all_written(), "{report:?}");
+    assert!(dir.path().join("plate.xlsx").is_file());
+}

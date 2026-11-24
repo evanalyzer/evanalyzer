@@ -252,3 +252,79 @@ pub(crate) fn toggle_partner(settings: &mut ColocSettings, key: &str) {
         }
     });
 }
+
+/// The Children and Linked objects lists of a table (the Results List's,
+/// an export table's): the links Relate Objects made, how the children's
+/// values are summed up, the parent classes - those picked ticked.
+pub(crate) struct RelatedItems {
+    pub children: Vec<MultiSelectItem>,
+    pub children_summary: String,
+    pub aggregations: Vec<MultiSelectItem>,
+    pub aggregate_summary: slint::SharedString,
+    pub parents: Vec<MultiSelectItem>,
+    pub parent_summary: String,
+}
+
+/// [`RelatedItems`] of the results' columns `available`, with `children`,
+/// `aggregations` and `parents` picked.
+pub(crate) fn related_items(
+    available: &[ColumnEntry],
+    classes: &[Class],
+    children: &[(ObjectClass, ObjectClass)],
+    aggregations: &[evanalyzer_app::results::Aggregation],
+    parents: &[ObjectClass],
+) -> RelatedItems {
+    use super::results_state_controller::{
+        AGGREGATIONS, aggregation_items, link_key, list_summary,
+    };
+    use evanalyzer_app::results::ChildValue;
+    let class_label = |class: ObjectClass| {
+        classes
+            .iter()
+            .find(|c| c.global() == class)
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| format!("class {}", class.to_u32().unwrap_or_default()))
+    };
+    let children_items: Vec<MultiSelectItem> = available
+        .iter()
+        .filter_map(|entry| match &entry.key {
+            Column::Children(c) if c.value == ChildValue::Count => {
+                let link = (c.parent_class, c.child_class);
+                Some(MultiSelectItem {
+                    key: link_key(link).into(),
+                    value: format!(
+                        "{} in {}",
+                        class_label(c.child_class),
+                        class_label(c.parent_class)
+                    )
+                    .into(),
+                    color: slint::Color::default(),
+                    group: "".into(),
+                    selected: children.contains(&link),
+                })
+            }
+            _ => None,
+        })
+        .collect();
+    let parent_items: Vec<MultiSelectItem> = available
+        .iter()
+        .filter_map(|entry| match &entry.key {
+            Column::Parent(p) => Some(MultiSelectItem {
+                key: p.parent_class.to_u32()?.to_string().into(),
+                value: format!("Parent · {}", class_label(p.parent_class)).into(),
+                color: slint::Color::default(),
+                group: "".into(),
+                selected: parents.contains(&p.parent_class),
+            }),
+            _ => None,
+        })
+        .collect();
+    RelatedItems {
+        children_summary: format!("{} of {}", children.len(), children_items.len()),
+        parent_summary: format!("{} of {}", parents.len(), parent_items.len()),
+        children: children_items,
+        parents: parent_items,
+        aggregations: aggregation_items(aggregations),
+        aggregate_summary: list_summary(aggregations.len(), AGGREGATIONS.len(), "Aggregations"),
+    }
+}

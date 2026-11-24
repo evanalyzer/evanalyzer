@@ -25,8 +25,8 @@ mod trees;
 mod views;
 use crate::{
     AppWindow, BreadcrumbItem, ChartBoxplotBox, ChartCard, ChartScatterPoint, ChartTimeLine,
-    ExportDialogState, MatrixCell, MatrixLevel, MultiSelectItem, ResultRow, ResultsChartKind2,
-    ResultsRailMode, ResultsState, UiState,
+    MatrixCell, MatrixLevel, MultiSelectItem, ResultRow, ResultsChartKind2, ResultsRailMode,
+    ResultsState, UiState,
 };
 use evanalyzer_app::results::CellValue;
 use evanalyzer_app::results::ColorScale;
@@ -34,14 +34,12 @@ use evanalyzer_app::results::ColorSchema;
 use evanalyzer_app::results::Column;
 use evanalyzer_app::results::ColumnEntry;
 use evanalyzer_app::results::DatabaseResult;
-use evanalyzer_app::results::ExportFormat;
 use evanalyzer_app::results::GroupedByImageFilter;
 use evanalyzer_app::results::HistogramFilter;
 use evanalyzer_app::results::ImageEntry;
 use evanalyzer_app::results::ImageHeatmapFilter;
 use evanalyzer_app::results::ImageReviewChange;
 use evanalyzer_app::results::ProfileStepFilter;
-use evanalyzer_app::results::ResultExport;
 use evanalyzer_app::results::ResultsSource;
 use evanalyzer_app::results::ScatterFilter;
 use evanalyzer_app::results::TrackHistory;
@@ -52,16 +50,12 @@ use evanalyzer_app::results::{BoxplotBox, Cell};
 use evanalyzer_app::results::{BoxplotFilter, BoxplotGroup, ScatterResult};
 use evanalyzer_app::results::{ChildColumn, ChildValue};
 use evanalyzer_app::results::{Grouping, PlateSize};
-use evanalyzer_app::results::{
-    MeasurementColumn, ProfileExport, ProfileExportContent, ProfileFilter, ProfileLines,
-    ProfileResult,
-};
+use evanalyzer_app::results::{MeasurementColumn, ProfileFilter, ProfileLines, ProfileResult};
 use evanalyzer_app::results::{ParentColumn, ParentValue};
 use evanalyzer_app::results::{
-    TimeCourseExport, TimeCourseFilter, TimeCourseLayout, TimeCourseLines, TimeCourseNormalize,
-    TimeCourseResult, TimeCourseStat,
+    TimeCourseFilter, TimeCourseLines, TimeCourseNormalize, TimeCourseResult, TimeCourseStat,
 };
-use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
+use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_cfg::settings::images_settings::{ImageMarker, LeaveOutReason};
 use evanalyzer_cfg::settings::plate_settings::{GroupingMode, PlateSettings, WellLayout};
@@ -347,7 +341,7 @@ impl Default for ChartFilter {
     }
 }
 
-/// The profile chart's / export dialog's "A line per" (0..3).
+/// The profile chart's "A line per" (0..3).
 fn profile_lines_of(index: i32) -> ProfileLines {
     match index {
         1 => ProfileLines::Image,
@@ -382,7 +376,7 @@ fn profile_index(columns: &[MeasurementColumn], key: &str) -> i32 {
     columns.iter().position(|c| c.key == key).unwrap_or(0) as i32
 }
 
-/// The chart's / export dialog's "A line per" (0..3).
+/// The chart's "A line per" (0..3).
 fn time_lines_of(index: i32) -> TimeCourseLines {
     match index {
         1 => TimeCourseLines::Image,
@@ -399,31 +393,6 @@ fn time_lines_index(lines: TimeCourseLines) -> i32 {
         TimeCourseLines::Track => 3,
         TimeCourseLines::Class => 0,
     }
-}
-
-/// The time course statistics the export dialog offers, in this order.
-const TIME_STATS: [TimeCourseStat; 8] = [
-    TimeCourseStat::Mean,
-    TimeCourseStat::Sd,
-    TimeCourseStat::Median,
-    TimeCourseStat::Q1,
-    TimeCourseStat::Q3,
-    TimeCourseStat::Min,
-    TimeCourseStat::Max,
-    TimeCourseStat::Sum,
-];
-
-fn time_stat_items(selected: &[TimeCourseStat]) -> Vec<MultiSelectItem> {
-    TIME_STATS
-        .iter()
-        .map(|stat| MultiSelectItem {
-            key: stat.label().into(),
-            value: stat.label().into(),
-            color: Color::default(),
-            group: "".into(),
-            selected: selected.contains(stat),
-        })
-        .collect()
 }
 
 /// At most this many lines are drawn (a legend entry each).
@@ -695,30 +664,6 @@ pub struct ResultsStateController {
     /// box - for a click on a point.
     scatter_points: Mutex<Vec<(f32, f32, String, [u32; 4])>>,
     image_list_controller: Arc<ImagesListController>,
-    // Whether the export dialog's defaults have already been seeded for the
-    // currently-open database (see `populate_export_defaults`) — reset to
-    // `false` on every `open_database` so a fresh database gets fresh
-    // defaults the next time the dialog opens, but re-opening the dialog
-    // against the *same* database leaves whatever the user already
-    // configured alone. Most of the configuration needs no Rust-side
-    // mirror: those dialog controls are two-way bound straight to
-    // `ExportDialogState` in Slint, which retains it for the life of the
-    // window — `on_export_start_clicked` reads it back from there directly.
-    // The IMAGES picker is the exception, see `export_image_selection`.
-    export_populated: Mutex<bool>,
-    // The export dialog's IMAGES picker selection, by `rel_path`. Kept here
-    // rather than in its Slint `image-items` because the picker's search
-    // box narrows `image-items` down to the matching rows - reading the
-    // selection back from there would silently drop every checked image the
-    // current search hides.
-    export_image_selection: Mutex<HashSet<PathBuf>>,
-    // Set to a fresh flag whenever an export starts, so `on_cancel_clicked`
-    // can signal the background export thread to stop at its next
-    // per-image/per-class checkpoint (see `results_exporter::start_export`'s
-    // `cancel` parameter). Cleared back to `None` once the export finishes
-    // (successfully, with an error, or cancelled) — mirrors
-    // `PipelinesController::pipeline_cancel_flag`'s pattern.
-    export_cancel_flag: Mutex<Option<Arc<AtomicBool>>>,
     // Opening a database and toggling an image run here, off the UI thread.
     db_worker: Arc<DbWorker>,
     // The tab on screen (`ResultsState.rail-mode`), readable off the UI
@@ -796,9 +741,6 @@ impl ResultsStateController {
             view_unavailable: Mutex::new(None),
             scatter_points: Mutex::new(Vec::new()),
             image_list_controller,
-            export_populated: Mutex::new(false),
-            export_image_selection: Mutex::new(HashSet::new()),
-            export_cancel_flag: Mutex::new(None),
             db_worker: Arc::new(DbWorker::new()),
             rail_mode: Mutex::new(ResultsRailMode::List),
             list_stale: AtomicBool::new(false),
@@ -2207,15 +2149,6 @@ impl ResultsStateController {
                 });
 
             let manager = self.clone();
-            ui.global::<ResultsState>().on_chart_time_export(move || {
-                let kind = manager.chart_filter.lock().expect("Poisened").kind;
-                match kind {
-                    ChartKind::Profile => manager.export_chart_profile(),
-                    _ => manager.export_chart_time_course(),
-                }
-            });
-
-            let manager = self.clone();
             ui.global::<ResultsState>()
                 .on_chart_per_image_changed(move |per_image| {
                     {
@@ -2301,325 +2234,6 @@ impl ResultsStateController {
                         Some(object_class);
                     manager.refresh_charts();
                 });
-
-            // -- Export --
-            let manager = self.clone();
-            let ui_weak = self.ui.clone();
-            ui.global::<ResultsState>().on_export_dialog_open(move || {
-                let Some(ui_ready) = ui_weak.upgrade() else {
-                    warn!("Failed to upgrade UI handle in on_export_dialog_open");
-                    return;
-                };
-                let already_populated = {
-                    let mut populated = manager.export_populated.lock().expect("Poisened");
-                    let was_populated = *populated;
-                    *populated = true;
-                    was_populated
-                };
-                if !already_populated {
-                    manager.populate_export_defaults(&ui_ready);
-                }
-                // What the table shows, every time: the dialog opens with
-                // the table's settings, not those of its first opening.
-                manager.sync_export_with_table(&ui_ready);
-                ui_ready.global::<ExportDialogState>().set_active(true);
-            });
-
-            let ui_weak = self.ui.clone();
-            let browser = self._app_state.file_browser.clone();
-            ui.global::<ExportDialogState>()
-                .on_pick_output_dir(move || {
-                    let Some(ui_ready) = ui_weak.upgrade() else {
-                        warn!("Failed to upgrade UI handle in on_pick_output_dir");
-                        return;
-                    };
-                    let current = ui_ready.global::<ExportDialogState>().get_output_dir();
-                    let request = crate::FileRequest::open_folder("Choose export folder")
-                        .start_in(current.as_str());
-                    let ui_weak = ui_weak.clone();
-                    browser.open(request, move |path| {
-                        let (Some(path), Some(ui_ready)) = (path, ui_weak.upgrade()) else {
-                            return;
-                        };
-                        ui_ready
-                            .global::<ExportDialogState>()
-                            .set_output_dir(path.to_string_lossy().into_owned().into());
-                    });
-                });
-
-            // The IMAGES picker: every callback updates
-            // `export_image_selection` (the real selection) and re-pushes
-            // the rows matching the current search, see
-            // `push_export_image_items`.
-            let manager = self.clone();
-            let ui_weak = self.ui.clone();
-            ui.global::<ExportDialogState>()
-                .on_image_item_selected(move |key, selected| {
-                    let Some(ui_ready) = ui_weak.upgrade() else {
-                        warn!("Failed to upgrade UI handle in on_image_item_selected");
-                        return;
-                    };
-                    let rel_path = PathBuf::from(key.as_str());
-                    {
-                        let mut selection =
-                            manager.export_image_selection.lock().expect("Poisened");
-                        if selected {
-                            selection.insert(rel_path);
-                        } else {
-                            selection.remove(&rel_path);
-                        }
-                    }
-                    manager.push_export_image_summary(&ui_ready);
-                });
-
-            let ui_weak = self.ui.clone();
-            let manager = self.clone();
-            ui.global::<ExportDialogState>()
-                .on_image_select_all(move || {
-                    let Some(ui_ready) = ui_weak.upgrade() else {
-                        warn!("Failed to upgrade UI handle in on_image_select_all");
-                        return;
-                    };
-                    let all: HashSet<PathBuf> = manager
-                        .images
-                        .lock()
-                        .expect("Poisened")
-                        .iter()
-                        .map(|image| image.rel_path.clone())
-                        .collect();
-                    *manager.export_image_selection.lock().expect("Poisened") = all;
-                    manager.push_export_image_items(&ui_ready);
-                });
-
-            let ui_weak = self.ui.clone();
-            let manager = self.clone();
-            ui.global::<ExportDialogState>()
-                .on_image_select_none(move || {
-                    let Some(ui_ready) = ui_weak.upgrade() else {
-                        warn!("Failed to upgrade UI handle in on_image_select_none");
-                        return;
-                    };
-                    manager
-                        .export_image_selection
-                        .lock()
-                        .expect("Poisened")
-                        .clear();
-                    manager.push_export_image_items(&ui_ready);
-                });
-
-            // Search box in the export dialog's own IMAGES picker - only
-            // narrows which rows show, never the selection.
-            let ui_weak = self.ui.clone();
-            let manager = self.clone();
-            ui.global::<ExportDialogState>()
-                .on_image_filter_changed(move |query| {
-                    let Some(ui_ready) = ui_weak.upgrade() else {
-                        warn!("Failed to upgrade UI handle in on_image_filter_changed");
-                        return;
-                    };
-                    ui_ready
-                        .global::<ExportDialogState>()
-                        .set_image_filter_text(query);
-                    manager.push_export_image_items(&ui_ready);
-                });
-
-            let manager = self.clone();
-            let ui_weak = self.ui.clone();
-            ui.global::<ExportDialogState>()
-                .on_class_item_selected(move |_key, _selected| {
-                    let Some(ui_ready) = ui_weak.upgrade() else {
-                        warn!("Failed to upgrade UI handle in on_class_item_selected");
-                        return;
-                    };
-                    let state = ui_ready.global::<ExportDialogState>();
-                    let items = state.get_class_items();
-                    let selected = items.iter().filter(|item| item.selected).count();
-                    let total = manager.classes.lock().expect("Poisened").len();
-                    state.set_class_summary(list_summary(selected, total, "Classes"));
-                });
-
-            let ui_weak = self.ui.clone();
-            let manager = self.clone();
-            ui.global::<ExportDialogState>()
-                .on_class_select_all(move || {
-                    let Some(ui_ready) = ui_weak.upgrade() else {
-                        warn!("Failed to upgrade UI handle in on_class_select_all");
-                        return;
-                    };
-                    let classes = manager.classes.lock().expect("Poisened");
-                    let items = class_filter_items(&classes, true);
-                    let total = classes.len();
-                    drop(classes);
-                    let state = ui_ready.global::<ExportDialogState>();
-                    state.set_class_items(ModelRc::from(Rc::new(VecModel::from(items))));
-                    state.set_class_summary(list_summary(total, total, "Classes"));
-                });
-
-            let ui_weak = self.ui.clone();
-            let manager = self.clone();
-            ui.global::<ExportDialogState>()
-                .on_class_select_none(move || {
-                    let Some(ui_ready) = ui_weak.upgrade() else {
-                        warn!("Failed to upgrade UI handle in on_class_select_none");
-                        return;
-                    };
-                    let classes = manager.classes.lock().expect("Poisened");
-                    let items = class_filter_items(&classes, false);
-                    let total = classes.len();
-                    drop(classes);
-                    let state = ui_ready.global::<ExportDialogState>();
-                    state.set_class_items(ModelRc::from(Rc::new(VecModel::from(items))));
-                    state.set_class_summary(list_summary(0, total, "Classes"));
-                });
-
-            let manager = self.clone();
-            let ui_weak = self.ui.clone();
-            ui.global::<ExportDialogState>()
-                .on_column_item_selected(move |_key, _selected| {
-                    let Some(ui_ready) = ui_weak.upgrade() else {
-                        warn!("Failed to upgrade UI handle in on_column_item_selected");
-                        return;
-                    };
-                    let state = ui_ready.global::<ExportDialogState>();
-                    let items = state.get_column_items();
-                    let selected = items.iter().filter(|item| item.selected).count();
-                    let total = manager.available_columns.lock().expect("Poisened").len();
-                    state.set_column_summary(list_summary(selected, total, "Columns"));
-                });
-
-            let ui_weak = self.ui.clone();
-            let manager = self.clone();
-            ui.global::<ExportDialogState>()
-                .on_column_select_all(move || {
-                    let Some(ui_ready) = ui_weak.upgrade() else {
-                        warn!("Failed to upgrade UI handle in on_column_select_all");
-                        return;
-                    };
-                    let columns = manager.available_columns.lock().expect("Poisened");
-                    let classes = manager.classes.lock().expect("Poisened");
-                    let items = column_items(&columns, &classes, |_| true);
-                    drop(classes);
-                    let total = columns.len();
-                    drop(columns);
-                    let state = ui_ready.global::<ExportDialogState>();
-                    state.set_column_items(ModelRc::from(Rc::new(VecModel::from(items))));
-                    state.set_column_summary(list_summary(total, total, "Columns"));
-                });
-
-            let ui_weak = self.ui.clone();
-            let manager = self.clone();
-            ui.global::<ExportDialogState>()
-                .on_column_select_none(move || {
-                    let Some(ui_ready) = ui_weak.upgrade() else {
-                        warn!("Failed to upgrade UI handle in on_column_select_none");
-                        return;
-                    };
-                    let columns = manager.available_columns.lock().expect("Poisened");
-                    let classes = manager.classes.lock().expect("Poisened");
-                    let items = column_items(&columns, &classes, |_| false);
-                    drop(classes);
-                    let total = columns.len();
-                    drop(columns);
-                    let state = ui_ready.global::<ExportDialogState>();
-                    state.set_column_items(ModelRc::from(Rc::new(VecModel::from(items))));
-                    state.set_column_summary(list_summary(0, total, "Columns"));
-                });
-
-            let ui_weak = self.ui.clone();
-            ui.global::<ExportDialogState>()
-                .on_aggregation_item_selected(move |_key, _selected| {
-                    let Some(ui_ready) = ui_weak.upgrade() else {
-                        warn!("Failed to upgrade UI handle in on_aggregation_item_selected");
-                        return;
-                    };
-                    let state = ui_ready.global::<ExportDialogState>();
-                    let items = state.get_aggregation_items();
-                    let selected = items.iter().filter(|item| item.selected).count();
-                    state.set_aggregation_summary(list_summary(
-                        selected,
-                        AGGREGATIONS.len(),
-                        "Aggregations",
-                    ));
-                });
-
-            let ui_weak = self.ui.clone();
-            ui.global::<ExportDialogState>()
-                .on_time_stat_item_selected(move |_key, _selected| {
-                    let Some(ui_ready) = ui_weak.upgrade() else {
-                        return;
-                    };
-                    let state = ui_ready.global::<ExportDialogState>();
-                    let selected = state
-                        .get_time_stat_items()
-                        .iter()
-                        .filter(|i| i.selected)
-                        .count();
-                    state.set_time_stat_summary(list_summary(
-                        selected,
-                        TIME_STATS.len(),
-                        "Statistics",
-                    ));
-                });
-
-            let ui_weak = self.ui.clone();
-            ui.global::<ExportDialogState>()
-                .on_track_stat_item_selected(move |_key, _selected| {
-                    let Some(ui_ready) = ui_weak.upgrade() else {
-                        return;
-                    };
-                    let state = ui_ready.global::<ExportDialogState>();
-                    let selected = state
-                        .get_track_stat_items()
-                        .iter()
-                        .filter(|i| i.selected)
-                        .count();
-                    state.set_track_stat_summary(list_summary(
-                        selected,
-                        TIME_STATS.len(),
-                        "Statistics",
-                    ));
-                });
-
-            let manager = self.clone();
-            let ui_weak = self.ui.clone();
-            ui.global::<ExportDialogState>().on_start_clicked(move || {
-                let Some(ui_ready) = ui_weak.upgrade() else {
-                    warn!("Failed to upgrade UI handle in on_start_clicked");
-                    return;
-                };
-                let state = ui_ready.global::<ExportDialogState>();
-                match manager.read_export_settings(&ui_ready) {
-                    Ok(export) => {
-                        state.set_is_exporting(true);
-                        state.set_done(false);
-                        state.set_has_error(false);
-                        state.set_error_message("".into());
-                        state.set_progress_message("Starting export…".into());
-                        state.set_progress_current(0);
-                        state.set_progress_total(1);
-                        manager.run_export(export);
-                    }
-                    Err(message) => {
-                        state.set_has_error(true);
-                        state.set_error_message(message.into());
-                    }
-                }
-            });
-
-            ui.global::<ExportDialogState>()
-                .on_close_clicked(move || {});
-
-            let manager = self.clone();
-            ui.global::<ExportDialogState>().on_cancel_clicked(move || {
-                if let Some(flag) = manager
-                    .export_cancel_flag
-                    .lock()
-                    .expect("Poisened")
-                    .as_ref()
-                {
-                    flag.store(true, Ordering::Relaxed);
-                }
-            });
         }
     }
 
@@ -3164,11 +2778,6 @@ impl ResultsStateController {
         self.list_row_locations.lock().expect("Poisoned").clear();
         self.scatter_points.lock().expect("Poisoned").clear();
         self.clear_chart();
-        *self.export_populated.lock().expect("Poisoned") = false;
-        self.export_image_selection
-            .lock()
-            .expect("Poisoned")
-            .clear();
 
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
@@ -3219,7 +2828,6 @@ impl ResultsStateController {
                     );
                 // Nothing written into the view before it's applied.
                 *self.view_unavailable.lock().expect("Poisoned") = None;
-                *self.export_populated.lock().expect("Poisened") = false;
                 // Another analysis: nothing of the last one's split.
                 *self.split.lock().expect("Poisoned") = split::SplitState::default();
                 *self.tracks.lock().expect("Poisoned") = tracks::TracksState::default();
@@ -4307,103 +3915,6 @@ impl ResultsStateController {
             }
         })
         .ok();
-    }
-
-    /// "Export data…" of the profile chart: the export dialog with only the
-    /// profile, as the chart has it - its measurement and lines.
-    fn export_chart_profile(&self) {
-        let Some(ui_ready) = self.ui.upgrade() else {
-            return;
-        };
-        let populated =
-            std::mem::replace(&mut *self.export_populated.lock().expect("Poisened"), true);
-        if !populated {
-            self.populate_export_defaults(&ui_ready);
-        }
-        // The lists (images, classes, columns) as the table has them; the
-        // chart's preset below.
-        self.sync_export_with_table(&ui_ready);
-        let filter = self.chart_filter.lock().expect("Poisened").clone();
-        let profiles = self.profile_columns.lock().expect("Poisened").clone();
-        let state = ui_ready.global::<ExportDialogState>();
-        state.set_with_list_view(false);
-        state.set_with_grouped_by_image_list(false);
-        state.set_with_plate_heatmap_view(false);
-        state.set_with_well_heatmap_view(false);
-        state.set_with_plate_list(false);
-        state.set_with_well_list(false);
-        state.set_with_heatmap(false);
-        state.set_with_drawn_images(false);
-        state.set_with_time_course(false);
-        state.set_with_measurements(false);
-        state.set_with_tracks(false);
-        state.set_with_profile(true);
-        state.set_profile_names(profile_names(&profiles));
-        state.set_profile_index(profile_index(&profiles, &filter.profile_key));
-        state.set_profile_lines(profile_lines_index(filter.profile_lines));
-        state.set_profile_content(0);
-        state.set_active(true);
-    }
-
-    /// "Export data…" of the "Over time" chart: the export dialog with only
-    /// the time course, as the chart has it - its value, lines, summary.
-    fn export_chart_time_course(&self) {
-        let Some(ui_ready) = self.ui.upgrade() else {
-            return;
-        };
-        let populated =
-            std::mem::replace(&mut *self.export_populated.lock().expect("Poisened"), true);
-        if !populated {
-            self.populate_export_defaults(&ui_ready);
-        }
-        // The lists (images, classes, columns) as the table has them; the
-        // chart's preset below.
-        self.sync_export_with_table(&ui_ready);
-        let filter = self.chart_filter.lock().expect("Poisened").clone();
-        let classes = self.classes.lock().expect("Poisened").clone();
-        let state = ui_ready.global::<ExportDialogState>();
-        state.set_with_list_view(false);
-        state.set_with_grouped_by_image_list(false);
-        state.set_with_plate_heatmap_view(false);
-        state.set_with_well_heatmap_view(false);
-        state.set_with_plate_list(false);
-        state.set_with_well_list(false);
-        state.set_with_heatmap(false);
-        state.set_with_drawn_images(false);
-        state.set_with_time_course(true);
-        state.set_time_lines(time_lines_index(filter.time_lines));
-        let statistics = match filter.time_median {
-            true => vec![
-                TimeCourseStat::Median,
-                TimeCourseStat::Q1,
-                TimeCourseStat::Q3,
-            ],
-            false => TimeCourseStat::DEFAULT.to_vec(),
-        };
-        state.set_time_stat_items(ModelRc::from(Rc::new(VecModel::from(time_stat_items(
-            &statistics,
-        )))));
-        state.set_time_stat_summary(list_summary(
-            statistics.len(),
-            TIME_STATS.len(),
-            "Statistics",
-        ));
-        state.set_time_relative(filter.time_relative);
-        state.set_time_with_parents(filter.time_history == TrackHistory::WithParents);
-        // The chart's value only.
-        let key = filter.column.as_key(&classes);
-        let items: Vec<MultiSelectItem> = state
-            .get_column_items()
-            .iter()
-            .map(|item| MultiSelectItem {
-                selected: item.key == key.as_str(),
-                ..item
-            })
-            .collect();
-        let total = items.len();
-        state.set_column_items(ModelRc::from(Rc::new(VecModel::from(items))));
-        state.set_column_summary(list_summary(1, total, "Columns"));
-        state.set_active(true);
     }
 
     /// How images are put into wells now (the project's plate settings, as
@@ -5982,663 +5493,6 @@ impl ResultsStateController {
         self.push_list_columns();
         self.refresh_list();
     }
-
-    // Seeds `ExportDialogState` from whatever's currently selected in the
-    // List/Matrix views — called once per opened database, the first time
-    // the export dialog is opened against it (see `export_populated` and
-    // `on_export_dialog_open`). Runs directly on the UI thread (it's called
-    // from a Slint callback), so it pushes into `ExportDialogState` right
-    // away rather than through `invoke_from_event_loop`.
-    /// The settings that mirror the table - images, classes, columns,
-    /// aggregations, transpose, objects or per image, coloc rows and the
-    /// profile measurements - set every time the dialog opens.
-    fn sync_export_with_table(&self, ui_ready: &AppWindow) {
-        {
-            // The profile measurements (the first preselected).
-            let profiles = self.profile_columns.lock().expect("Poisened");
-            let state = ui_ready.global::<ExportDialogState>();
-            state.set_profile_names(profile_names(&profiles));
-            state.set_profile_index(0);
-        }
-
-        let list_filter = self.list_filter.lock().expect("Poisened");
-        let classes = self.classes.lock().expect("Poisened");
-        let images = self.images.lock().expect("Poisened");
-        let available_columns = self.available_columns.lock().expect("Poisened");
-
-        // `select_none_classes` stores a sentinel (a single entry that
-        // can't match any real class) rather than a genuinely empty list,
-        // since empty means "no filter" (all) to `update_list_view` —
-        // exporting is naturally "all" whenever nothing meaningful was
-        // excluded, so the sentinel maps back to an empty `ResultExport`
-        // list here rather than trying to preserve a "selected literally
-        // nothing" state an export has no use for.
-        let image_rel_paths: Vec<String> = list_filter
-            .image_rel_path
-            .iter()
-            .map(|path| path.to_string_lossy().into_owned())
-            .collect();
-        let object_classes: Vec<ObjectClass> = if list_filter.object_classes == [ObjectClass::Unset]
-        {
-            Vec::new()
-        } else {
-            list_filter.object_classes.clone()
-        };
-        let base_columns = if list_filter.columns.is_empty() {
-            DEFAULT_LIST_COLUMNS.to_vec()
-        } else {
-            list_filter.columns.clone()
-        };
-        // The view's Children and Linked objects columns too.
-        let columns = evanalyzer_app::results::view_settings::with_related_columns(
-            &base_columns,
-            &list_filter.children,
-            &list_filter.child_aggregations,
-            &list_filter.parents,
-        );
-        let overlapping_pairs = list_filter.with_coloc_details;
-        // The table's aggregations (the Matrix view has its own one).
-        let aggregations = if list_filter.aggregations.is_empty() {
-            vec![Aggregation::default()]
-        } else {
-            list_filter.aggregations.clone()
-        };
-        let transpond = list_filter.transpond;
-        let per_object = list_filter.group_by == ListGroupBy::Objects;
-
-        // Seeds the export dialog's own image selection from whatever the
-        // main List view's image filter currently has selected - except
-        // when that's "all" (`image_rel_paths` empty, which is also what
-        // "none selected" means), or when it's such a
-        // large individual selection (> 50) that pre-checking every one of
-        // them would make the dialog's own picker unwieldy to review/
-        // change - in either case, default to just the first image rather
-        // than a wall of checkmarks (or none at all) the user almost
-        // certainly still needs to narrow down anyway.
-        let select_individually = !image_rel_paths.is_empty()
-            && image_rel_paths.len() <= 50
-            && image_rel_paths.len() < images.len();
-
-        let image_selection: HashSet<PathBuf> = if select_individually {
-            image_rel_paths.iter().map(PathBuf::from).collect()
-        } else {
-            images
-                .first()
-                .map(|image| image.rel_path.clone())
-                .into_iter()
-                .collect()
-        };
-
-        let class_items_vec: Vec<MultiSelectItem> = classes
-            .iter()
-            .map(|class| MultiSelectItem {
-                key: class.name.as_str().into(),
-                value: class.name.as_str().into(),
-                color: bg_color_to_slint(class.color),
-                group: "".into(),
-                selected: object_classes.is_empty() || object_classes.contains(&class.global()),
-            })
-            .collect();
-
-        let class_summary = list_summary(
-            if object_classes.is_empty() {
-                classes.len()
-            } else {
-                object_classes.len()
-            },
-            classes.len(),
-            "Classes",
-        );
-
-        // The picker lists the composed children's / parents' columns of
-        // the view as well - the results only offer their count and id.
-        let mut dialog_columns: Vec<ColumnEntry> = available_columns.clone();
-        for column in &columns {
-            if dialog_columns.iter().any(|entry| entry.key == *column) {
-                continue;
-            }
-            let group = match column {
-                Column::Children(_) => "Children",
-                Column::Parent(_) => "Parent",
-                _ => continue,
-            };
-            dialog_columns.push(ColumnEntry {
-                display_name: column.display_label(&classes),
-                key: column.clone(),
-                group: group.into(),
-                coloc_group: 0,
-            });
-        }
-        let column_items_vec = column_items(&dialog_columns, &classes, |key| columns.contains(key));
-        let column_groups_vec = column_groups(&dialog_columns);
-        // Taken from the table on open (a change in the dialog says how
-        // many of how many instead).
-        let column_summary: slint::SharedString =
-            format!("As in the table · {}", columns.len()).into();
-
-        let aggregation_items_vec = aggregation_items(&aggregations);
-        let aggregation_summary =
-            list_summary(aggregations.len(), AGGREGATIONS.len(), "Aggregations");
-
-        drop(available_columns);
-        drop(images);
-        drop(classes);
-        drop(list_filter);
-
-        let state = ui_ready.global::<ExportDialogState>();
-        *self.export_image_selection.lock().expect("Poisened") = image_selection;
-        state.set_image_filter_text("".into());
-        self.push_export_image_items(ui_ready);
-        state.set_class_items(ModelRc::from(Rc::new(VecModel::from(class_items_vec))));
-        state.set_class_summary(class_summary);
-        state.set_column_items(ModelRc::from(Rc::new(VecModel::from(column_items_vec))));
-        state.set_column_groups(ModelRc::from(Rc::new(VecModel::from(column_groups_vec))));
-        state.set_column_summary(column_summary);
-        state.set_aggregation_items(ModelRc::from(Rc::new(VecModel::from(
-            aggregation_items_vec,
-        ))));
-        state.set_aggregation_summary(aggregation_summary);
-        state.set_transpond_output_table(transpond);
-        // The table's rows: one per object, or per image.
-        state.set_with_list_view(per_object);
-        state.set_with_grouped_by_image_list(!per_object);
-        state.set_with_list_coloc_details(overlapping_pairs);
-    }
-
-    /// The export-only settings (folder, format, planes, time course,
-    /// plate and heatmap options), set the first time the dialog opens and
-    /// kept from one export to the next. What mirrors the table:
-    /// [`Self::sync_export_with_table`].
-    fn populate_export_defaults(&self, ui_ready: &AppWindow) {
-        let rail_mode = ui_ready.global::<ResultsState>().get_rail_mode();
-        let z_stack_max = ui_ready.global::<ResultsState>().get_z_stack_max().max(0) as u32;
-        let t_stack_max = ui_ready.global::<ResultsState>().get_t_stack_max().max(0) as u32;
-        // Export always uses `ColorScale::Auto` (see `read_export_settings`)
-        // - the dialog exposes no manual min/max override, so the current
-        // Matrix view's own scale (which may be pinned) isn't mirrored here.
-        let (color_schema, square_size) =
-            match self.matrix_filter.lock().expect("Poisened").as_ref() {
-                Some(filter) => (filter.color_schema.clone(), filter.square_size),
-                None => (ColorSchema::default(), None),
-            };
-        let square_size = square_size.unwrap_or(DEFAULT_SQUARE_SIZE);
-
-        let state = ui_ready.global::<ExportDialogState>();
-        state.set_output_dir("".into());
-        state.set_format_items(ModelRc::from(Rc::new(VecModel::from(export_format_items(
-            ExportFormat::XLSX,
-        )))));
-        state.set_format_summary("XLSX".into());
-        state.set_z_all(true);
-        state.set_t_all(true);
-        state.set_z_start("0".into());
-        state.set_z_end((z_stack_max + 1).to_string().into());
-        state.set_t_start("0".into());
-        state.set_t_end((t_stack_max + 1).to_string().into());
-
-        state.set_color_schema_items(ModelRc::from(Rc::new(VecModel::from(color_schema_items()))));
-        state.set_color_schema_summary(
-            color_schemas()
-                .into_iter()
-                .find(|(_, schema)| *schema == color_schema)
-                .map(|(name, _)| name)
-                .unwrap_or("Viridis")
-                .into(),
-        );
-        state.set_square_size_items(ModelRc::from(Rc::new(VecModel::from(square_size_items(
-            square_size,
-        )))));
-        state.set_square_size_summary(format!("{square_size} px").into());
-
-        state.set_with_list_one_file_per_image(true);
-        state.set_with_plate_heatmap_view(rail_mode == ResultsRailMode::Matrix);
-        state.set_with_well_heatmap_view(rail_mode == ResultsRailMode::Matrix);
-        state.set_with_plate_list(false);
-        state.set_with_well_list(false);
-        state.set_with_heatmap(false);
-        state.set_with_time_course(false);
-        state.set_time_lines(0);
-        state.set_time_stat_items(ModelRc::from(Rc::new(VecModel::from(time_stat_items(
-            &TimeCourseStat::DEFAULT,
-        )))));
-        state.set_time_stat_summary(list_summary(
-            TimeCourseStat::DEFAULT.len(),
-            TIME_STATS.len(),
-            "Statistics",
-        ));
-        state.set_time_relative(false);
-        state.set_time_layout(2);
-        state.set_with_tracks(false);
-        state.set_with_measurements(false);
-        state.set_track_stat_items(ModelRc::from(Rc::new(VecModel::from(time_stat_items(&[
-            TimeCourseStat::Mean,
-        ])))));
-        state.set_track_stat_summary(list_summary(1, TIME_STATS.len(), "Statistics"));
-        state.set_track_min_points("1".into());
-        state.set_track_from_start(false);
-        state.set_track_no_edge(false);
-
-        state.set_is_exporting(false);
-        state.set_done(false);
-        state.set_has_error(false);
-        state.set_error_message("".into());
-        state.set_progress_message("".into());
-        state.set_progress_current(0);
-        state.set_progress_total(0);
-    }
-
-    // Rebuilds the export dialog's IMAGES rows from `export_image_selection`,
-    // showing only the images matching the picker's search text, and
-    // refreshes its summary. Runs on the UI thread (called from Slint
-    // callbacks), so it pushes into `ExportDialogState` directly.
-    fn push_export_image_items(&self, ui_ready: &AppWindow) {
-        let state = ui_ready.global::<ExportDialogState>();
-        let query = state.get_image_filter_text();
-        let images = self.images.lock().expect("Poisened");
-        let selection = self.export_image_selection.lock().expect("Poisened");
-        let items = filtered_image_items(&images, |path| selection.contains(path), &query);
-        drop(selection);
-        drop(images);
-        state.set_image_items(ModelRc::from(Rc::new(VecModel::from(items))));
-        self.push_export_image_summary(ui_ready);
-    }
-
-    fn push_export_image_summary(&self, ui_ready: &AppWindow) {
-        let total = self.images.lock().expect("Poisened").len();
-        let selected = self.export_image_selection.lock().expect("Poisened").len();
-        ui_ready
-            .global::<ExportDialogState>()
-            .set_image_summary(image_summary_text(selected, total));
-    }
-
-    // Reads `ExportDialogState`'s current values back into a `ResultExport`
-    // at "Start Export" time — the single point where the dialog's Slint
-    // state (the source of truth for everything a control lets the user
-    // edit directly) gets turned into the typed request `start_export`
-    // wants. `Err` for a setting that can't be parsed/resolved at all
-    // (blank output folder, unrecognized dropdown key, non-numeric range
-    // field) — shown in the dialog's error area rather than silently
-    // falling back to a default the user didn't ask for.
-    /// "Images with objects drawn": where the project's images are, the
-    /// series, the channels' colors and how the viewer shows the images
-    /// (the database knows only the objects), and the dialog's choices.
-    fn drawn_images(&self, state: &ExportDialogState) -> evanalyzer_app::results::DrawnImages {
-        use evanalyzer_app::results::{DrawBrightness, DrawStyle};
-        let results_images: Vec<String> = self
-            .images
-            .lock()
-            .expect("Poisoned")
-            .iter()
-            .map(|image| image.rel_path.to_string_lossy().into_owned())
-            .collect();
-        let run_root = self.run_image_root.lock().expect("Poisoned").clone();
-        let project = self._app_state.get_project();
-        let (display, image_display) = project.drawn_image_display();
-        // The images the project has below another path than the results
-        // (its image folder changed since the run) - usually none.
-        let finder = evanalyzer_app::project::ResultsImageFinder::new(
-            &project.images.list,
-            project.images.root.as_deref(),
-            run_root.as_deref(),
-        );
-        let image_paths = results_images
-            .into_iter()
-            .filter_map(|rel| {
-                let image = finder.find(Path::new(&rel))?;
-                let image = image.to_string_lossy().into_owned();
-                (image != rel).then_some((rel, image))
-            })
-            .collect();
-        evanalyzer_app::results::DrawnImages {
-            image_root: project.images.root.clone().unwrap_or_default(),
-            series: project.images.settings.selected_series.unwrap_or(0),
-            max_side: match state.get_drawn_size() {
-                0 => 2048,
-                2 => 8192,
-                _ => 4096,
-            },
-            colors: project.get_channel_display_colors().into_iter().collect(),
-            style: match state.get_drawn_style() {
-                1 => DrawStyle::Filled,
-                2 => DrawStyle::Box,
-                _ => DrawStyle::Outline,
-            },
-            brightness: match state.get_drawn_brightness() {
-                1 => DrawBrightness::Auto,
-                _ => DrawBrightness::Viewer,
-            },
-            display,
-            image_display,
-            image_paths,
-        }
-    }
-
-    fn read_export_settings(&self, ui_ready: &AppWindow) -> Result<ResultExport, String> {
-        let state = ui_ready.global::<ExportDialogState>();
-        let classes = self.classes.lock().expect("Poisened");
-
-        let output_dir = state.get_output_dir().to_string();
-        if output_dir.is_empty() {
-            return Err("Choose an output folder first.".to_string());
-        }
-
-        let file_prefix_tmp = state.get_output_file_prefix().to_string();
-        let file_prefix = if file_prefix_tmp.is_empty() {
-            None
-        } else {
-            Some(file_prefix_tmp)
-        };
-
-        let transpond_table = state.get_transpond_output_table();
-
-        let parse_u32 = |label: &str, text: slint::SharedString| -> Result<u32, String> {
-            text.trim()
-                .parse::<u32>()
-                .map_err(|_| format!("\"{text}\" isn't a valid {label}."))
-        };
-        // A range only when chosen - "All" leaves its (hidden) fields alone.
-        let range =
-            |all: bool, axis: &str, start: slint::SharedString, end: slint::SharedString| {
-                if all {
-                    return Ok(None);
-                }
-                let start = parse_u32(&format!("{axis} start"), start)?;
-                let end = parse_u32(&format!("{axis} end"), end)?;
-                Ok::<_, String>(Some(std::range::Range {
-                    start,
-                    end: end.max(start + 1),
-                }))
-            };
-        let z_stacks = range(
-            state.get_z_all(),
-            "Z",
-            state.get_z_start(),
-            state.get_z_end(),
-        )?;
-        let t_stacks = range(
-            state.get_t_all(),
-            "T",
-            state.get_t_start(),
-            state.get_t_end(),
-        )?;
-
-        let selected_keys = |items: ModelRc<MultiSelectItem>| -> Vec<slint::SharedString> {
-            items
-                .iter()
-                .filter(|item| item.selected)
-                .map(|item| item.key)
-                .collect()
-        };
-
-        // From `export_image_selection`, not the picker's `image-items`,
-        // which only holds the rows the search box currently shows.
-        let image_rel_paths: Vec<String> = self
-            .export_image_selection
-            .lock()
-            .expect("Poisened")
-            .iter()
-            .map(|path| path.to_string_lossy().into_owned())
-            .collect();
-        // Empty means every image, as the picker's "All Images" says.
-
-        let mut object_classes = Vec::new();
-        for key in selected_keys(state.get_class_items()) {
-            let Some(class) = classes.iter().find(|class| class.name == key.as_str()) else {
-                return Err(format!("Unknown class \"{key}\" selected for export."));
-            };
-            object_classes.push(class.global());
-        }
-        drop(classes);
-
-        let available_columns = self.available_columns.lock().expect("Poisened");
-        let class_list = self.classes.lock().expect("Poisened");
-        let mut columns = Vec::new();
-        for key in selected_keys(state.get_column_items()) {
-            // `available_columns` is held already: not `self.column_for_key`.
-            let Some(column) = column_for_key(key.as_str(), &class_list, &available_columns) else {
-                return Err(format!("Unknown column \"{key}\" selected for export."));
-            };
-            columns.push(column);
-        }
-        drop(class_list);
-        drop(available_columns);
-
-        let mut aggregations = Vec::new();
-        for key in selected_keys(state.get_aggregation_items()) {
-            let Some(aggregation) = aggregation_from_key(key.as_str()) else {
-                return Err(format!(
-                    "Unknown aggregation \"{key}\" selected for export."
-                ));
-            };
-            aggregations.push(aggregation);
-        }
-
-        let color_schema_key = state
-            .get_color_schema_items()
-            .iter()
-            .find(|item| item.selected)
-            .map(|item| item.key)
-            .unwrap_or_else(|| "Viridis".into());
-        let Some(color_schema) = color_schema_from_key(color_schema_key.as_str()) else {
-            return Err(format!("Unknown color schema \"{color_schema_key}\"."));
-        };
-
-        // Grouping, plate size and well layout: the project's plate
-        // settings, the same the Matrix view shows.
-        let plate = self.current_plate_settings();
-
-        let square_size_key = state
-            .get_square_size_items()
-            .iter()
-            .find(|item| item.selected)
-            .map(|item| item.key)
-            .unwrap_or_else(|| DEFAULT_SQUARE_SIZE.to_string().into());
-        let square_size = square_size_key
-            .parse::<usize>()
-            .map_err(|_| format!("Unknown square size \"{square_size_key}\"."))?;
-
-        let format_key = state
-            .get_format_items()
-            .iter()
-            .find(|item| item.selected)
-            .map(|item| item.key)
-            .unwrap_or_else(|| "XLSX".into());
-        let Some(format) = export_format_from_key(format_key.as_str()) else {
-            return Err(format!("Unknown export format \"{format_key}\"."));
-        };
-
-        Ok(ResultExport {
-            output_dir: PathBuf::from(output_dir),
-            outputfile_prefix: file_prefix,
-            format,
-            z_stacks,
-            t_stacks,
-            image_rel_paths,
-            columns,
-            color_schema,
-            color_scale: ColorScale::Auto,
-            grouping: grouping_of(&plate),
-            object_classes,
-            aggregations,
-            plate_size: plate.plate_size,
-            well_size: well_size_of(&plate),
-            well_order: well_order_of(&plate),
-            square_size: Some(square_size),
-            with_list_view: state.get_with_list_view(),
-            with_list_coloc_details: state.get_with_list_coloc_details(),
-            with_list_one_file_per_image: state.get_with_list_one_file_per_image(),
-            with_grouped_by_image_list: state.get_with_grouped_by_image_list(),
-            with_time_course: state.get_with_time_course(),
-            time_course: TimeCourseExport {
-                lines: time_lines_of(state.get_time_lines()),
-                statistics: TIME_STATS
-                    .iter()
-                    .copied()
-                    .filter(|stat| {
-                        state
-                            .get_time_stat_items()
-                            .iter()
-                            .any(|item| item.selected && item.key == stat.label())
-                    })
-                    .collect(),
-                normalize: match state.get_time_relative() {
-                    true => TimeCourseNormalize::RelativeToStart,
-                    false => TimeCourseNormalize::None,
-                },
-                layout: match state.get_time_layout() {
-                    0 => TimeCourseLayout::Long,
-                    1 => TimeCourseLayout::Wide,
-                    _ => TimeCourseLayout::Both,
-                },
-                history: match state.get_time_with_parents() {
-                    true => TrackHistory::WithParents,
-                    false => TrackHistory::Own,
-                },
-            },
-            with_track_summary: state.get_with_tracks(),
-            with_measurements: state.get_with_measurements(),
-            with_profile: state.get_with_profile(),
-            profile: ProfileExport {
-                key: self
-                    .profile_columns
-                    .lock()
-                    .expect("Poisened")
-                    .get(state.get_profile_index().max(0) as usize)
-                    .map(|c| c.key.clone())
-                    .unwrap_or_default(),
-                lines: profile_lines_of(state.get_profile_lines()),
-                content: match state.get_profile_content() {
-                    1 => ProfileExportContent::Objects,
-                    _ => ProfileExportContent::Lines,
-                },
-                layout: match state.get_profile_layout() {
-                    0 => TimeCourseLayout::Long,
-                    1 => TimeCourseLayout::Wide,
-                    _ => TimeCourseLayout::Both,
-                },
-            },
-            track_summary: evanalyzer_app::results::TrackSummaryExport {
-                statistics: TIME_STATS
-                    .iter()
-                    .copied()
-                    .filter(|stat| {
-                        state
-                            .get_track_stat_items()
-                            .iter()
-                            .any(|item| item.selected && item.key == stat.label())
-                    })
-                    .collect(),
-                min_points: state
-                    .get_track_min_points()
-                    .trim()
-                    .parse()
-                    .unwrap_or(1)
-                    .max(1),
-                from_start: state.get_track_from_start(),
-                no_edge: state.get_track_no_edge(),
-                // As the Tracks view shows it.
-                speed_unit: self._app_state.load_app_settings().results_split.speed_unit,
-            },
-            with_plate_view_heatmap: state.get_with_plate_heatmap_view(),
-            with_well_view_heatmap: state.get_with_well_heatmap_view(),
-            with_plate_view_list: state.get_with_plate_list(),
-            with_well_view_list: state.get_with_well_list(),
-            with_heatmap: state.get_with_heatmap(),
-            transpond_table,
-            drawn_images: state
-                .get_with_drawn_images()
-                .then(|| self.drawn_images(&state)),
-        })
-    }
-
-    // Runs `export` on a background thread. The results source gives it its
-    // own database connection (see `LocalResults::export`), so the
-    // (potentially long-running) export doesn't block every other
-    // List/Matrix query meanwhile.
-    fn run_export(self: &Arc<Self>, export: ResultExport) {
-        let Some(database) = self.result_generator.lock().expect("Poisened").clone() else {
-            self.push_export_error("No database is open.".to_string());
-            return;
-        };
-        let cancel = Arc::new(AtomicBool::new(false));
-        *self.export_cancel_flag.lock().expect("Poisened") = Some(cancel.clone());
-        let manager = self.clone();
-        crate::helper::ui_thread::spawn(move || {
-            let manager_for_progress = manager.clone();
-            let result = database.export(&export, &cancel, &mut |message, current, total| {
-                manager_for_progress.push_export_progress(message.to_string(), current, total);
-            });
-            match result {
-                Ok(()) => manager.push_export_done(),
-                Err(InternalErrors::Cancelled) => manager.push_export_cancelled(),
-                Err(err) => manager.push_export_error(err.to_string()),
-            }
-            *manager.export_cancel_flag.lock().expect("Poisened") = None;
-        });
-    }
-
-    fn push_export_progress(&self, message: String, current: usize, total: usize) {
-        let ui_weak = self.ui.clone();
-        crate::helper::ui_thread::invoke_from_event_loop(move || {
-            if let Some(ui_ready) = ui_weak.upgrade() {
-                let state = ui_ready.global::<ExportDialogState>();
-                state.set_progress_message(message.into());
-                state.set_progress_current(current as i32);
-                state.set_progress_total(total as i32);
-            } else {
-                warn!("Failed to upgrade UI handle, cannot update export progress!");
-            }
-        })
-        .ok();
-    }
-
-    fn push_export_done(&self) {
-        let ui_weak = self.ui.clone();
-        crate::helper::ui_thread::invoke_from_event_loop(move || {
-            if let Some(ui_ready) = ui_weak.upgrade() {
-                let state = ui_ready.global::<ExportDialogState>();
-                state.set_is_exporting(false);
-                state.set_done(true);
-            } else {
-                warn!("Failed to upgrade UI handle, cannot mark export as done!");
-            }
-        })
-        .ok();
-    }
-
-    fn push_export_error(&self, message: String) {
-        let ui_weak = self.ui.clone();
-        crate::helper::ui_thread::invoke_from_event_loop(move || {
-            if let Some(ui_ready) = ui_weak.upgrade() {
-                let state = ui_ready.global::<ExportDialogState>();
-                state.set_is_exporting(false);
-                state.set_has_error(true);
-                state.set_error_message(message.into());
-            } else {
-                warn!("Failed to upgrade UI handle, cannot report export error!");
-            }
-        })
-        .ok();
-    }
-
-    // A user-cancelled export is not an error - it's reported through
-    // `progress_message` rather than `has_error`/`error_message`, so the
-    // dialog doesn't flash red for something the user explicitly asked for.
-    fn push_export_cancelled(&self) {
-        let ui_weak = self.ui.clone();
-        crate::helper::ui_thread::invoke_from_event_loop(move || {
-            if let Some(ui_ready) = ui_weak.upgrade() {
-                let state = ui_ready.global::<ExportDialogState>();
-                state.set_is_exporting(false);
-                state.set_done(false);
-                state.set_has_error(false);
-                state.set_progress_message("Export cancelled.".into());
-            } else {
-                warn!("Failed to upgrade UI handle, cannot report export cancellation!");
-            }
-        })
-        .ok();
-    }
 }
 
 // Shared "N of M <noun>" text for the images/classes/columns dropdown pills
@@ -6668,17 +5522,16 @@ fn chip_summary(selected: usize, total: usize) -> slint::SharedString {
     }
 }
 
-fn list_summary(selected: usize, total: usize, noun: &str) -> slint::SharedString {
+pub(crate) fn list_summary(selected: usize, total: usize, noun: &str) -> slint::SharedString {
     format!("{selected} of {total} {noun}").into()
 }
 
 // The IMAGES dropdown's own summary: unlike columns/classes, an empty
 // selection here means "no image filter at all" (every image matches — see
 // `update_list_view`'s `image_rel_path.is_empty()` check), not "match
-// nothing" - for the export dialog's picker too. "0 of N
-// Images" reads as the opposite of that, so it's shown as "All Images"
-// instead — including right after a database opens, since `set_images_in_slint`
-// starts with nothing selected.
+// nothing". "0 of N Images" reads as the opposite of that, so it's shown
+// as "All Images" instead — including right after a database opens, since
+// `set_images_in_slint` starts with nothing selected.
 fn image_summary_text(selected: usize, total: usize) -> slint::SharedString {
     if selected == 0 {
         "All Images".into()
@@ -6979,7 +5832,7 @@ fn group_by_items(selected: &str, pairs: bool) -> Vec<MultiSelectItem> {
 }
 
 /// A Children group item's key ("<parent id>:<child id>") for a link.
-fn link_key((parent, child): (ObjectClass, ObjectClass)) -> String {
+pub(crate) fn link_key((parent, child): (ObjectClass, ObjectClass)) -> String {
     let id = |class: ObjectClass| {
         class
             .to_u32()
@@ -6989,7 +5842,7 @@ fn link_key((parent, child): (ObjectClass, ObjectClass)) -> String {
 }
 
 /// The link a Children group item's key names.
-fn link_from_key(key: &str) -> Option<(ObjectClass, ObjectClass)> {
+pub(crate) fn link_from_key(key: &str) -> Option<(ObjectClass, ObjectClass)> {
     let (parent, child) = key.split_once(':')?;
     Some((
         ObjectClass::Global(parent.parse().ok()?),
@@ -7024,7 +5877,7 @@ fn aggregation_display_name(aggregation: &Aggregation) -> &'static str {
     }
 }
 
-const AGGREGATIONS: [Aggregation; 7] = [
+pub(crate) const AGGREGATIONS: [Aggregation; 7] = [
     Aggregation::Avg,
     Aggregation::Min,
     Aggregation::Max,
@@ -7034,10 +5887,10 @@ const AGGREGATIONS: [Aggregation; 7] = [
     Aggregation::Skewness,
 ];
 
-// The Export dialog's AGGREGATIONS picker is multi-select (unlike the
-// Matrix toolbar's single-select one) — `selected` is a whole `Vec` to
+// The AGGREGATIONS pickers (List, column picker) are multi-select (unlike
+// the Matrix toolbar's single-select one) — `selected` is a whole `Vec` to
 // check each fixed option against, not one currently-chosen value.
-fn aggregation_items(selected: &[Aggregation]) -> Vec<MultiSelectItem> {
+pub(crate) fn aggregation_items(selected: &[Aggregation]) -> Vec<MultiSelectItem> {
     AGGREGATIONS
         .iter()
         .map(|aggregation| {
@@ -7053,7 +5906,7 @@ fn aggregation_items(selected: &[Aggregation]) -> Vec<MultiSelectItem> {
         .collect()
 }
 
-fn aggregation_from_key(key: &str) -> Option<Aggregation> {
+pub(crate) fn aggregation_from_key(key: &str) -> Option<Aggregation> {
     AGGREGATIONS
         .iter()
         .find(|aggregation| aggregation_display_name(aggregation) == key)
@@ -7074,39 +5927,6 @@ fn color_schemas() -> [(&'static str, ColorSchema); 11] {
         ("Algae", ColorSchema::Algae),
         ("Thermal", ColorSchema::Thermal),
     ]
-}
-
-// FORMAT dropdown vocabulary for the export dialog — mirrors
-// `ExportFormat`'s three variants (see results_exporter.rs); "Parquet"
-// ignores every other dialog setting (column/filter/grouping/plate/well/
-// heatmap), which `export_dialog.slint` calls out with its own note text
-// when selected.
-fn export_format_options() -> [(&'static str, ExportFormat); 3] {
-    [
-        ("XLSX", ExportFormat::XLSX),
-        ("CSV", ExportFormat::CSV),
-        ("Parquet", ExportFormat::Parquet),
-    ]
-}
-
-fn export_format_items(selected: ExportFormat) -> Vec<MultiSelectItem> {
-    export_format_options()
-        .into_iter()
-        .map(|(name, format)| MultiSelectItem {
-            key: name.into(),
-            value: name.into(),
-            color: Color::default(),
-            group: "".into(),
-            selected: format == selected,
-        })
-        .collect()
-}
-
-fn export_format_from_key(key: &str) -> Option<ExportFormat> {
-    export_format_options()
-        .into_iter()
-        .find(|(name, _)| *name == key)
-        .map(|(_, format)| format)
 }
 
 fn color_schema_items() -> Vec<MultiSelectItem> {
@@ -7843,206 +6663,6 @@ pub(crate) mod tests {
         ))
     }
 
-    // Regression test for the export dialog's very first hurdle: for a long
-    // time this failed to even *compile* (`ExportDialogState` had no public
-    // Rust binding at all - it wasn't re-exported from main.slint's own
-    // top-level `export { ... }` block, the same way every other dialog
-    // global there is, see main.slint). Exercises the actual callback
-    // wiring end to end against a real (headless) `AppWindow`, with no
-    // database open - the state every dialog control's defaults must still
-    // fall back to sanely (an empty images/classes list, no matrix filter
-    // set yet).
-    #[test]
-    fn attach_callbacks_export_dialog_open_populates_defaults_and_activates() {
-        let ui = test_ui_window();
-        let controller = make_controller_with_ui(ui.as_weak());
-        controller.attach_callbacks();
-
-        assert!(!ui.global::<ExportDialogState>().get_active());
-
-        ui.global::<ResultsState>().invoke_export_dialog_open();
-
-        let state = ui.global::<ExportDialogState>();
-        assert!(state.get_active(), "dialog should activate on open");
-        // The table's rows (see `sync_export_with_table`): it starts with a
-        // row per object, so the Objects export is checked and Per image
-        // isn't. One-file-per-image starts checked, and the plate/well
-        // heatmap flags follow whether the rail was on Matrix - no matrix
-        // view has been rendered yet (`matrix_filter` starts `None`) and
-        // the rail starts on List, so both start unchecked too.
-        assert!(state.get_with_list_view());
-        assert!(state.get_with_list_one_file_per_image());
-        assert!(!state.get_with_grouped_by_image_list());
-        assert!(!state.get_transpond_output_table());
-        assert!(!state.get_with_plate_heatmap_view());
-        assert!(!state.get_with_well_heatmap_view());
-        assert!(!state.get_with_plate_list());
-        assert!(!state.get_with_well_list());
-        assert!(!state.get_with_heatmap());
-        // z/t default to the database's full range, exclusive end - starting
-        // at 0, and past whatever `ResultsState.z-stack-max`/`t-stack-max`
-        // are currently set to (their own default, before any real database
-        // has been opened, is a temporary design-preview placeholder - see
-        // that property's doc comment in api/results.slint - so this only
-        // checks the *shape* of the range, not its exact placeholder bound).
-        assert_eq!(state.get_z_start(), "0");
-        assert_eq!(state.get_t_start(), "0");
-        let z_end: i32 = state.get_z_end().parse().expect("z_end should be numeric");
-        let t_end: i32 = state.get_t_end().parse().expect("t_end should be numeric");
-        assert!(z_end >= 1);
-        assert!(t_end >= 1);
-        // No images/classes/columns registered without an open database.
-        assert_eq!(state.get_image_items().row_count(), 0);
-        assert_eq!(state.get_class_items().row_count(), 0);
-        // Format defaults to XLSX with all 3 options present.
-        assert_eq!(state.get_format_summary(), "XLSX");
-        assert_eq!(state.get_format_items().row_count(), 3);
-        assert!(
-            state
-                .get_format_items()
-                .iter()
-                .any(|item| item.key == "XLSX" && item.selected)
-        );
-    }
-
-    #[test]
-    fn export_format_items_marks_only_the_selected_format() {
-        let items = export_format_items(ExportFormat::CSV);
-        let selected: Vec<&str> = items
-            .iter()
-            .filter(|item| item.selected)
-            .map(|item| item.key.as_str())
-            .collect();
-        assert_eq!(selected, vec!["CSV"]);
-        assert_eq!(items.len(), 3);
-    }
-
-    #[test]
-    fn export_format_from_key_round_trips_every_option_and_rejects_unknown_keys() {
-        for (name, format) in export_format_options() {
-            assert_eq!(export_format_from_key(name), Some(format));
-        }
-        assert_eq!(export_format_from_key("bogus"), None);
-    }
-
-    // Re-opening the dialog keeps what only the export has (here: the
-    // output folder and the plate list) - only the *first* open after a
-    // database loads seeds those (see `export_populated`) - while what
-    // mirrors the table follows the table again (`sync_export_with_table`).
-    #[test]
-    fn attach_callbacks_export_dialog_reopen_keeps_user_changes() {
-        let ui = test_ui_window();
-        let controller = make_controller_with_ui(ui.as_weak());
-        controller.attach_callbacks();
-
-        ui.global::<ResultsState>().invoke_export_dialog_open();
-        let state = ui.global::<ExportDialogState>();
-        state.set_output_dir("/tmp/out".into());
-        state.set_with_plate_list(true);
-        state.set_with_list_view(false);
-        state.set_active(false);
-
-        ui.global::<ResultsState>().invoke_export_dialog_open();
-
-        assert!(state.get_active());
-        assert_eq!(
-            state.get_output_dir(),
-            "/tmp/out",
-            "an export-only setting stays"
-        );
-        assert!(state.get_with_plate_list(), "an export-only setting stays");
-        assert!(
-            state.get_with_list_view(),
-            "the table's rows (one per object) come back with each opening"
-        );
-    }
-
-    /// Each opening takes the table's aggregations, transpose and rows as
-    /// they are now - also after they changed since the first opening.
-    #[test]
-    fn export_dialog_follows_the_tables_aggregation_transpose_and_rows() {
-        let ui = test_ui_window();
-        let controller = make_controller_with_ui(ui.as_weak());
-        controller.attach_callbacks();
-        ui.global::<ResultsState>().invoke_export_dialog_open();
-
-        {
-            let mut filter = controller.list_filter.lock().unwrap();
-            filter.aggregations = vec![Aggregation::Median, Aggregation::Max];
-            filter.transpond = true;
-            filter.group_by = ListGroupBy::Images;
-        }
-        ui.global::<ResultsState>().invoke_export_dialog_open();
-
-        let state = ui.global::<ExportDialogState>();
-        let selected: Vec<String> = state
-            .get_aggregation_items()
-            .iter()
-            .filter(|item| item.selected)
-            .map(|item| item.key.to_string())
-            .collect();
-        let expected: Vec<String> = aggregation_items(&[Aggregation::Median, Aggregation::Max])
-            .into_iter()
-            .filter(|item| item.selected)
-            .map(|item| item.key.to_string())
-            .collect();
-        assert_eq!(selected, expected);
-        assert!(state.get_transpond_output_table());
-        assert!(state.get_with_grouped_by_image_list());
-        assert!(!state.get_with_list_view());
-    }
-
-    // `on_start_clicked` with no output folder chosen must surface a
-    // validation error rather than silently doing nothing or panicking
-    // (there's no database open in this test either, so this also exercises
-    // that `read_export_settings` fails fast before `run_export` ever
-    // touches `result_generator`).
-    #[test]
-    fn attach_callbacks_export_start_without_output_dir_reports_an_error() {
-        let ui = test_ui_window();
-        let controller = make_controller_with_ui(ui.as_weak());
-        controller.attach_callbacks();
-
-        ui.global::<ResultsState>().invoke_export_dialog_open();
-        ui.global::<ExportDialogState>().invoke_start_clicked();
-
-        let state = ui.global::<ExportDialogState>();
-        assert!(state.get_has_error());
-        assert!(!state.get_is_exporting());
-        assert!(!state.get_error_message().is_empty());
-    }
-
-    #[test]
-    fn on_cancel_clicked_does_nothing_when_no_export_is_running() {
-        let ui = test_ui_window();
-        let controller = make_controller_with_ui(ui.as_weak());
-        controller.attach_callbacks();
-
-        assert!(controller.export_cancel_flag.lock().unwrap().is_none());
-        // Must not panic even though no export ever set the flag.
-        ui.global::<ExportDialogState>().invoke_cancel_clicked();
-        assert!(controller.export_cancel_flag.lock().unwrap().is_none());
-    }
-
-    #[test]
-    fn on_cancel_clicked_signals_the_flag_stored_for_the_running_export() {
-        let ui = test_ui_window();
-        let controller = make_controller_with_ui(ui.as_weak());
-        controller.attach_callbacks();
-
-        // Simulate `run_export` having just started a background export -
-        // it stores a fresh flag here before spawning the export thread.
-        let flag = Arc::new(AtomicBool::new(false));
-        *controller.export_cancel_flag.lock().unwrap() = Some(flag.clone());
-
-        ui.global::<ExportDialogState>().invoke_cancel_clicked();
-
-        assert!(
-            flag.load(Ordering::Relaxed),
-            "cancel-clicked must signal the stored flag"
-        );
-    }
-
     // -- Real-database fixture ---------------------------------------------
     //
     // `attach_callbacks`'s ~60 callbacks are almost entirely untested above
@@ -8437,7 +7057,6 @@ pub(crate) mod tests {
 
         assert!(controller.matrix_filter.lock().unwrap().is_some());
         assert!(controller.result_generator.lock().unwrap().is_some());
-        assert!(!*controller.export_populated.lock().unwrap());
 
         // The List tab is on screen, so the list was queried as part of
         // opening - every object's location is cached. The hidden Matrix
@@ -8525,174 +7144,6 @@ pub(crate) mod tests {
                 .is_empty()
         );
         assert_eq!(controller.list_row_locations.lock().unwrap().len(), 3);
-    }
-
-    #[test]
-    fn export_dialog_open_seeds_image_selection_from_the_list_filter() {
-        // Seeded images, alphabetically ("A1_01.tif" first) - see
-        // `seed_test_db`.
-        let (ui, controller) = controller_with_open_database();
-        let list_state = ui.global::<ResultsState>();
-        let export_state = ui.global::<ExportDialogState>();
-
-        let selected_keys = |export_state: &ExportDialogState| -> Vec<String> {
-            export_state
-                .get_image_items()
-                .iter()
-                .filter(|item| item.selected)
-                .map(|item| item.key.to_string())
-                .collect()
-        };
-
-        // 1-50 images individually selected (here: 1, and deliberately not
-        // the alphabetically-first one) -> the export dialog starts with
-        // exactly those checked, not just the first.
-        list_state.invoke_list_image_selected("A2_01.tif".into(), true);
-        controller.sync_export_with_table(&ui);
-        assert_eq!(selected_keys(&export_state), vec!["A2_01.tif".to_string()]);
-
-        // Every image selected -> too many to usefully pre-check, defaults
-        // back to just the first.
-        list_state.invoke_list_image_select_all();
-        controller.sync_export_with_table(&ui);
-        assert_eq!(selected_keys(&export_state), vec!["A1_01.tif".to_string()]);
-
-        // Nothing selected (= all images) -> same "just the
-        // first" default, rather than a picker with nothing checked at all.
-        list_state.invoke_list_image_select_none();
-        controller.sync_export_with_table(&ui);
-        assert_eq!(selected_keys(&export_state), vec!["A1_01.tif".to_string()]);
-    }
-
-    #[test]
-    fn export_dialog_image_filter_changed_narrows_items_without_touching_selection() {
-        let (ui, controller) = controller_with_open_database();
-        let export_state = ui.global::<ExportDialogState>();
-        controller.sync_export_with_table(&ui);
-
-        // Starts with just "A1_01.tif" selected (the default - see the
-        // test above), and, unlike the main List view's search box, this
-        // one's own `on_image_filter_changed` handler runs synchronously
-        // (no `invoke_from_event_loop`), so its effect is directly
-        // observable here.
-        export_state.invoke_image_filter_changed("A1".into());
-        let keys: Vec<String> = export_state
-            .get_image_items()
-            .iter()
-            .map(|item| item.key.to_string())
-            .collect();
-        assert_eq!(keys, vec!["A1_01.tif".to_string(), "A1_02.tif".to_string()]);
-        assert!(
-            export_state
-                .get_image_items()
-                .iter()
-                .find(|item| item.key == "A1_01.tif")
-                .unwrap()
-                .selected,
-            "the pre-existing selection must survive narrowing the view"
-        );
-
-        export_state.invoke_image_filter_changed("".into());
-        assert_eq!(export_state.get_image_items().row_count(), 3);
-    }
-
-    // Clicks an export-dialog IMAGES row the way `InkMultiSelect`
-    // does: flips the row in place, then fires `image-item-selected`.
-    fn click_export_image(state: &ExportDialogState, key: &str, selected: bool) {
-        let items = state.get_image_items();
-        let row = (0..items.row_count())
-            .find(|&i| items.row_data(i).unwrap().key == key)
-            .unwrap_or_else(|| panic!("{key} is not shown in the picker"));
-        let mut item = items.row_data(row).unwrap();
-        item.selected = selected;
-        items.set_row_data(row, item);
-        state.invoke_image_item_selected(key.into(), selected);
-    }
-
-    fn exported_images(controller: &ResultsStateController, ui: &AppWindow) -> Vec<String> {
-        let mut paths = controller
-            .read_export_settings(ui)
-            .expect("valid export settings")
-            .image_rel_paths;
-        paths.sort();
-        paths
-    }
-
-    #[test]
-    fn export_dialog_keeps_images_selected_under_an_earlier_search() {
-        // Regression: the picker's selection used to be read back from its
-        // search-narrowed rows, so images checked under one search were
-        // dropped from the export (and the "N of M" count) by the next.
-        let (ui, controller) = controller_with_open_database();
-        controller.sync_export_with_table(&ui);
-        let state = ui.global::<ExportDialogState>();
-        state.set_output_dir("out".into());
-        state.set_with_list_view(true);
-
-        state.invoke_image_select_none();
-        state.invoke_image_filter_changed("A1".into());
-        click_export_image(&state, "A1_01.tif", true);
-        click_export_image(&state, "A1_02.tif", true);
-        state.invoke_image_filter_changed("A2".into());
-        click_export_image(&state, "A2_01.tif", true);
-
-        let all = vec!["A1_01.tif", "A1_02.tif", "A2_01.tif"];
-        assert_eq!(state.get_image_summary(), image_summary_text(3, 3));
-        assert_eq!(exported_images(&controller, &ui), all);
-
-        // Clearing the search shows every checkmark again.
-        state.invoke_image_filter_changed("".into());
-        assert!(state.get_image_items().iter().all(|item| item.selected));
-        assert_eq!(exported_images(&controller, &ui), all);
-
-        // Unchecking a visible row leaves the hidden selections alone.
-        state.invoke_image_filter_changed("A2".into());
-        click_export_image(&state, "A2_01.tif", false);
-        assert_eq!(
-            exported_images(&controller, &ui),
-            vec!["A1_01.tif", "A1_02.tif"]
-        );
-        assert_eq!(state.get_image_summary(), image_summary_text(2, 3));
-    }
-
-    #[test]
-    fn export_dialog_select_all_and_none_keep_the_current_search() {
-        let (ui, controller) = controller_with_open_database();
-        controller.sync_export_with_table(&ui);
-        let state = ui.global::<ExportDialogState>();
-        state.set_output_dir("out".into());
-
-        state.invoke_image_filter_changed("A1".into());
-        state.invoke_image_select_all();
-        let shown: Vec<String> = state
-            .get_image_items()
-            .iter()
-            .map(|item| item.key.to_string())
-            .collect();
-        assert_eq!(shown, vec!["A1_01.tif", "A1_02.tif"]);
-        assert_eq!(
-            exported_images(&controller, &ui),
-            vec!["A1_01.tif", "A1_02.tif", "A2_01.tif"]
-        );
-
-        state.invoke_image_select_none();
-        assert_eq!(state.get_image_items().row_count(), 2);
-        assert!(state.get_image_items().iter().all(|item| !item.selected));
-        assert_eq!(state.get_image_summary(), image_summary_text(0, 3));
-    }
-
-    #[test]
-    fn export_dialog_with_no_image_selected_exports_all_images() {
-        let (ui, controller) = controller_with_open_database();
-        controller.sync_export_with_table(&ui);
-        let state = ui.global::<ExportDialogState>();
-        state.set_output_dir("out".into());
-        state.set_with_list_view(true);
-        state.invoke_image_select_none();
-
-        assert_eq!(state.get_image_summary(), "All Images");
-        // An empty list is the exporter's "every image".
-        assert!(exported_images(&controller, &ui).is_empty());
     }
 
     /// Quick clicks query once: of refreshes queued while the database
@@ -10134,34 +8585,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn export_dialog_select_all_and_select_none_callbacks_do_not_panic() {
-        let (ui, _controller) = controller_with_open_database();
-        ui.global::<ResultsState>().invoke_export_dialog_open();
-        let state = ui.global::<ExportDialogState>();
-
-        state.invoke_image_select_all();
-        state.invoke_image_select_none();
-        state.invoke_class_select_all();
-        state.invoke_class_select_none();
-        state.invoke_column_select_all();
-        state.invoke_column_select_none();
-        state.invoke_aggregation_item_selected("avg".into(), true);
-
-        let image_key = state.get_image_items().iter().next().map(|item| item.key);
-        if let Some(key) = image_key {
-            state.invoke_image_item_selected(key, true);
-        }
-        let class_key = state.get_class_items().iter().next().map(|item| item.key);
-        if let Some(key) = class_key {
-            state.invoke_class_item_selected(key, true);
-        }
-        let column_key = state.get_column_items().iter().next().map(|item| item.key);
-        if let Some(key) = column_key {
-            state.invoke_column_item_selected(key, true);
-        }
-    }
-
-    #[test]
     fn z_and_t_changed_update_the_plane_filter_and_refresh() {
         let (ui, controller) = controller_with_open_database();
         let state = ui.global::<ResultsState>();
@@ -10174,7 +8597,7 @@ pub(crate) mod tests {
 
     // -- what the results view shows (UI updates applied) --------------------
 
-    use crate::editor::test_support::{choose_file, ui_state_with_window};
+    use crate::editor::test_support::ui_state_with_window;
     use crate::helper::ui_thread::drain_ui_queue;
 
     // -- plate settings: shared with the project ------------------------------
@@ -10512,27 +8935,6 @@ pub(crate) mod tests {
         assert_eq!(well_grid_keys(&s), vec!["A1_02.tif", "A1_01.tif"]);
     }
 
-    #[test]
-    fn the_export_uses_the_shared_plate_settings() {
-        let plate = PlateSettings {
-            grouping_mode: GroupingMode::Folder,
-            plate_size: PlateSize::Plate6x8,
-            well_layout: WellLayout::Fixed { rows: 2, cols: 2 },
-            well_image_order: vec![2, 1, 3, 4],
-            ..PlateSettings::default()
-        };
-        let (o, _project_settings) = opened_with_plate(plate);
-        o.state().invoke_export_dialog_open();
-        drain_ui_queue();
-        o.ui.global::<ExportDialogState>()
-            .set_output_dir("/tmp".into());
-        let export = o.controller.read_export_settings(&o.ui).unwrap();
-        assert_eq!(export.grouping, Grouping::Folder);
-        assert_eq!(export.plate_size, PlateSize::Plate6x8);
-        assert_eq!(export.well_size, Some(WellSize { rows: 2, cols: 2 }));
-        assert_eq!(export.well_order, Some(vec![2, 1, 3, 4]));
-    }
-
     struct Opened {
         ui: AppWindow,
         controller: Arc<ResultsStateController>,
@@ -10561,9 +8963,6 @@ pub(crate) mod tests {
     impl Opened {
         fn state(&self) -> ResultsState<'_> {
             self.ui.global::<ResultsState>()
-        }
-        fn export(&self) -> ExportDialogState<'_> {
-            self.ui.global::<ExportDialogState>()
         }
     }
 
@@ -11751,143 +10150,6 @@ pub(crate) mod tests {
         assert_eq!(settings["chart"]["profileMark"], false);
     }
 
-    /// "Export data…" of the profile chart: the export dialog with only the
-    /// profile, its measurement and lines.
-    #[test]
-    fn exporting_the_profile_chart_presets_the_dialog() {
-        let (o, _) = opened_with_profiles();
-        let s = o.state();
-        s.invoke_rail_mode_selected(ResultsRailMode::Charts);
-        s.invoke_chart_kind_selected(ResultsChartKind2::Profile);
-        s.set_chart_profile_lines(1);
-        s.invoke_chart_time_changed();
-        drain_ui_queue();
-        s.invoke_chart_time_export();
-        let export = o.export();
-        assert!(export.get_active());
-        assert!(export.get_with_profile());
-        assert!(!export.get_with_time_course() && !export.get_with_list_view());
-        export.set_output_dir("/tmp".into());
-        let settings = o.controller.read_export_settings(&o.ui).expect("settings");
-        assert!(settings.with_profile);
-        assert_eq!(settings.profile.key, "sholl_01/intersections");
-        assert_eq!(settings.profile.lines, ProfileLines::Image);
-        assert_eq!(settings.profile.content, ProfileExportContent::Lines);
-    }
-
-    /// "Export data…": the export dialog with only the time course - the
-    /// chart's value, lines, summary and normalization.
-    #[test]
-    fn exporting_the_over_time_chart_presets_the_dialog() {
-        let o = opened_time_series();
-        let s = o.state();
-        s.invoke_rail_mode_selected(ResultsRailMode::Charts);
-        s.invoke_chart_kind_selected(ResultsChartKind2::OverTime);
-        s.invoke_chart_column_selected("area_px".into());
-        s.set_chart_time_lines(2);
-        s.set_chart_time_summary(1);
-        s.set_chart_time_relative(true);
-        s.invoke_chart_time_changed();
-        drain_ui_queue();
-
-        s.invoke_chart_time_export();
-        let export = o.export();
-        assert!(export.get_active());
-        assert!(export.get_with_time_course());
-        assert!(!export.get_with_list_view() && !export.get_with_grouped_by_image_list());
-        let selected: Vec<String> = export
-            .get_column_items()
-            .iter()
-            .filter(|item| item.selected)
-            .map(|item| item.key.to_string())
-            .collect();
-        assert_eq!(selected, ["area_px"]);
-
-        export.set_output_dir("/tmp".into());
-        let settings = o.controller.read_export_settings(&o.ui).expect("settings");
-        assert!(settings.with_time_course);
-        assert_eq!(settings.columns, [Column::AreaSizePx]);
-        assert_eq!(settings.time_course.lines, TimeCourseLines::Well);
-        assert_eq!(
-            settings.time_course.statistics,
-            [
-                TimeCourseStat::Median,
-                TimeCourseStat::Q1,
-                TimeCourseStat::Q3
-            ]
-        );
-        assert_eq!(
-            settings.time_course.normalize,
-            TimeCourseNormalize::RelativeToStart
-        );
-        assert_eq!(settings.time_course.layout, TimeCourseLayout::Both);
-    }
-
-    /// "Measurements - one row per value" is offered when the analysis has
-    /// measurements, off until ticked.
-    #[test]
-    fn the_export_dialog_exports_measurements_of_an_analysis_with_them() {
-        let o = opened();
-        assert!(!o.state().get_has_measurements(), "no measurement step ran");
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("results.evadb");
-        seed_test_db(&path);
-        duckdb::Connection::open(&path)
-            .unwrap()
-            .execute_batch(
-                "CREATE TABLE measurement_info (key VARCHAR PRIMARY KEY, measurement VARCHAR, \
-                 step VARCHAR, unit VARCHAR, target VARCHAR, range_min DOUBLE, \
-                 range_max DOUBLE, aggregatable BOOLEAN);
-                 INSERT INTO measurement_info VALUES
-                     ('pearson_01/pearson/ch0_ch1', 'Pearson', 'pearson_01', 'None', 'Image',
-                      -1, 1, true);",
-            )
-            .unwrap();
-        o.controller.open_database(path);
-        drain_ui_queue();
-        assert!(o.state().get_has_measurements());
-
-        o.controller.populate_export_defaults(&o.ui);
-        o.export().set_output_dir("/tmp".into());
-        let settings = o.controller.read_export_settings(&o.ui).expect("settings");
-        assert!(!settings.with_measurements);
-        o.export().set_with_measurements(true);
-        let settings = o.controller.read_export_settings(&o.ui).expect("settings");
-        assert!(settings.with_measurements);
-    }
-
-    /// Tracks in the export dialog: off by default; on, with its
-    /// statistics, minimum time points and filters - the speed in the
-    /// Tracks view's unit.
-    #[test]
-    fn the_export_dialog_exports_tracks() {
-        use evanalyzer_app::results::SpeedUnit;
-        let o = opened_time_series();
-        let export = o.export();
-        o.controller.populate_export_defaults(&o.ui);
-        export.set_output_dir("/tmp".into());
-        let settings = o.controller.read_export_settings(&o.ui).expect("settings");
-        assert!(!settings.with_track_summary);
-
-        export.set_with_tracks(true);
-        export.set_track_min_points(" 5 ".into());
-        export.set_track_from_start(true);
-        export.set_track_no_edge(true);
-        o.controller
-            ._app_state
-            .update_app_settings(|s| s.results_split.speed_unit = SpeedUnit::UmPerS);
-        let settings = o.controller.read_export_settings(&o.ui).expect("settings");
-        assert!(settings.with_track_summary);
-        let tracks = &settings.track_summary;
-        assert_eq!(tracks.statistics, [TimeCourseStat::Mean]);
-        assert_eq!(
-            (tracks.min_points, tracks.from_start, tracks.no_edge),
-            (5, true, true)
-        );
-        assert_eq!(tracks.speed_unit, SpeedUnit::UmPerS);
-    }
-
     #[test]
     fn every_chart_kind_draws_into_the_window() {
         let o = opened();
@@ -11959,130 +10221,6 @@ pub(crate) mod tests {
             has_intensity_header(&s),
             "grouped by image keeps the column"
         );
-    }
-
-    fn start_export(o: &Opened, folder: &std::path::Path) {
-        let export = o.export();
-        o.state().invoke_export_dialog_open();
-        drain_ui_queue();
-        export.invoke_pick_output_dir();
-        choose_file(&o.ui, folder);
-        assert_eq!(export.get_output_dir(), folder.to_string_lossy().as_ref());
-        export.invoke_start_clicked();
-        drain_ui_queue();
-    }
-
-    #[test]
-    fn export_writes_the_chosen_views_into_the_picked_folder() {
-        let o = opened();
-        let dir = tempfile::tempdir().unwrap();
-        let export = o.export();
-        o.state().invoke_export_dialog_open();
-        export.set_with_list_view(true);
-        export.set_with_grouped_by_image_list(true);
-        export.set_output_file_prefix("run1".into());
-        start_export(&o, dir.path());
-        assert!(!export.get_has_error(), "{}", export.get_error_message());
-        assert!(export.get_done());
-        assert!(!export.get_is_exporting());
-        let written: Vec<String> = std::fs::read_dir(dir.path())
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
-        assert!(!written.is_empty());
-        assert!(
-            written.iter().all(|f| f.starts_with("run1_")),
-            "{written:?}"
-        );
-    }
-
-    /// Every z-plane and time point unless a range is chosen - the hidden
-    /// range fields of "All" don't matter, even when they don't parse.
-    #[test]
-    fn export_covers_all_planes_unless_a_range_is_chosen() {
-        let o = opened();
-        let export = o.export();
-        o.state().invoke_export_dialog_open();
-        assert!(export.get_z_all() && export.get_t_all(), "All by default");
-        export.set_output_dir("/tmp".into());
-        export.set_t_start("x".into());
-        let settings = o.controller.read_export_settings(&o.ui).expect("settings");
-        assert!(settings.z_stacks.is_none() && settings.t_stacks.is_none());
-
-        export.set_t_all(false);
-        export.set_t_start("1".into());
-        export.set_t_end("3".into());
-        let settings = o.controller.read_export_settings(&o.ui).expect("settings");
-        assert!(settings.z_stacks.is_none());
-        let t = settings.t_stacks.expect("a range");
-        assert_eq!((t.start, t.end), (1, 3));
-    }
-
-    #[test]
-    fn export_reports_invalid_settings_instead_of_starting() {
-        let o = opened();
-        let export = o.export();
-        o.state().invoke_export_dialog_open();
-        export.set_output_dir("/tmp".into());
-        let fields = ["Z start", "Z end", "T start", "T end"];
-        for (broken, label) in fields.iter().enumerate() {
-            o.state().invoke_export_dialog_open();
-            let value = |i: usize| -> slint::SharedString {
-                if i == broken { "x".into() } else { "1".into() }
-            };
-            export.set_z_all(false);
-            export.set_t_all(false);
-            export.set_z_start(value(0));
-            export.set_z_end(value(1));
-            export.set_t_start(value(2));
-            export.set_t_end(value(3));
-            export.invoke_start_clicked();
-            assert!(export.get_has_error());
-            assert!(
-                export.get_error_message().contains(label),
-                "{}",
-                export.get_error_message()
-            );
-        }
-    }
-
-    #[test]
-    fn export_without_an_open_database_reports_it() {
-        let ui = test_ui_window();
-        let controller = make_controller_with_ui(ui.as_weak());
-        controller.run_export(ResultExport::default());
-        drain_ui_queue();
-        let export = ui.global::<ExportDialogState>();
-        assert!(export.get_has_error());
-        assert_eq!(export.get_error_message(), "No database is open.");
-    }
-
-    #[test]
-    fn export_progress_cancel_and_failure_are_shown() {
-        let o = opened();
-        o.controller.push_export_progress("Working".into(), 2, 5);
-        drain_ui_queue();
-        let export = o.export();
-        assert_eq!(export.get_progress_message(), "Working");
-        assert_eq!(export.get_progress_current(), 2);
-        assert_eq!(export.get_progress_total(), 5);
-
-        export.set_is_exporting(true);
-        o.controller.push_export_cancelled();
-        drain_ui_queue();
-        assert!(!export.get_is_exporting());
-        assert_eq!(export.get_progress_message(), "Export cancelled.");
-
-        // An export into a folder that can't be created fails visibly.
-        let file = o._dir.path().join("a-file");
-        std::fs::write(&file, "").unwrap();
-        o.controller.run_export(ResultExport {
-            output_dir: file.join("sub"),
-            with_list_view: true,
-            ..Default::default()
-        });
-        drain_ui_queue();
-        assert!(export.get_has_error());
     }
 
     // -- unknown, deselected and out-of-range input -------------------------
@@ -12605,71 +10743,6 @@ pub(crate) mod tests {
         assert!(!state.get_active_well_disabled());
     }
 
-    #[test]
-    fn cancelling_the_export_folder_picker_keeps_the_folder() {
-        let o = opened();
-        let export = o.export();
-        o.state().invoke_export_dialog_open();
-        export.set_output_dir("/kept".into());
-
-        export.invoke_pick_output_dir();
-        drain_ui_queue();
-        o.ui.global::<crate::FileBrowserState>().invoke_cancel();
-        drain_ui_queue();
-
-        assert_eq!(export.get_output_dir(), "/kept");
-    }
-
-    #[test]
-    fn export_reports_unknown_selections_instead_of_starting() {
-        let o = opened();
-        let export = o.export();
-        let unknown = || {
-            ModelRc::new(VecModel::from(vec![MultiSelectItem {
-                key: "no such entry".into(),
-                selected: true,
-                ..Default::default()
-            }]))
-        };
-        let cases: [(&str, &dyn Fn(&ExportDialogState)); 5] = [
-            ("Unknown class", &|e| e.set_class_items(unknown())),
-            ("Unknown column", &|e| e.set_column_items(unknown())),
-            ("Unknown aggregation", &|e| {
-                e.set_aggregation_items(unknown())
-            }),
-            ("Unknown color schema", &|e| {
-                e.set_color_schema_items(unknown())
-            }),
-            ("Unknown export format", &|e| e.set_format_items(unknown())),
-        ];
-        o.state().invoke_export_dialog_open();
-        drain_ui_queue();
-        let originals = (
-            export.get_class_items(),
-            export.get_column_items(),
-            export.get_aggregation_items(),
-            export.get_color_schema_items(),
-            export.get_format_items(),
-        );
-        for (message, break_it) in cases {
-            export.set_class_items(originals.0.clone());
-            export.set_column_items(originals.1.clone());
-            export.set_aggregation_items(originals.2.clone());
-            export.set_color_schema_items(originals.3.clone());
-            export.set_format_items(originals.4.clone());
-            export.set_output_dir("/tmp".into());
-            break_it(&export);
-            export.invoke_start_clicked();
-            assert!(export.get_has_error(), "{message}");
-            assert!(
-                export.get_error_message().starts_with(message),
-                "{}",
-                export.get_error_message()
-            );
-            export.set_has_error(false);
-        }
-    }
-
     // -- the window closed / nothing to show ----------------------------------
 
     fn closed_window_controller() -> Arc<ResultsStateController> {
@@ -12751,10 +10824,6 @@ pub(crate) mod tests {
         }
         controller.push_chart_error("broken".into());
         controller.set_max_z_and_t_stack_in_slint(2, 3);
-        controller.push_export_progress("Working".into(), 1, 2);
-        controller.push_export_done();
-        controller.push_export_error("failed".into());
-        controller.push_export_cancelled();
         drain_ui_queue();
 
         assert!(controller.matrix_cells.lock().unwrap().contains_key("A1"));

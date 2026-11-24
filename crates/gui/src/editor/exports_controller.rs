@@ -29,11 +29,14 @@ use evanalyzer_app::exports::{
 use evanalyzer_app::modules::Severity;
 use evanalyzer_app::results::view_settings::ViewSettings;
 use evanalyzer_app::results::{Column, ColumnEntry};
+use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::classification_settings::Class;
+use evanalyzer_cfg::settings::export_settings::TimeCourseOptions;
 use evanalyzer_cfg::settings::export_settings::{
-    DrawnBrightness, DrawnStyle, ExportAggregation, ExportEntry, ExportSettings, IfExists,
-    ImageScope, LengthUnit, OutputLocation, PlateGrid, ScriptLanguage, SplitInto, TableExport,
-    TableFileFormat, TableRows, TableSplit,
+    DrawnBrightness, DrawnStyle, ExportAggregation, ExportEntry, ExportSettings, HeatmapColors,
+    IfExists, ImageScope, LengthUnit, OutputLocation, Planes, PlateGrid, ProfileContent,
+    ProfileLineKind, ScriptLanguage, SplitInto, TableExport, TableFileFormat, TableRows,
+    TableSplit, TimeCourseLineKind, TimeCourseTableLayout,
 };
 use evanalyzer_cfg::settings::project_settings::ResultsView;
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
@@ -43,7 +46,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// The models' orders - the indexes the view's segments and selects use.
-const ROWS: [TableRows; 7] = [
+const ROWS: [TableRows; 9] = [
     TableRows::Object,
     TableRows::Image,
     TableRows::Well,
@@ -51,6 +54,40 @@ const ROWS: [TableRows; 7] = [
     TableRows::ColocPair,
     TableRows::Track,
     TableRows::Measurement,
+    TableRows::TimePoint,
+    TableRows::ProfilePosition,
+];
+const GRIDS: [PlateGrid; 3] = [PlateGrid::Plate, PlateGrid::Well, PlateGrid::Image];
+const SQUARES: [u32; 4] = [32, 64, 128, 256];
+const COLORS: [HeatmapColors; 11] = [
+    HeatmapColors::Excel,
+    HeatmapColors::Viridis,
+    HeatmapColors::Plasma,
+    HeatmapColors::Inferno,
+    HeatmapColors::Cividis,
+    HeatmapColors::Coolwarm,
+    HeatmapColors::RedBlue,
+    HeatmapColors::YlGnBu,
+    HeatmapColors::Haline,
+    HeatmapColors::Algae,
+    HeatmapColors::Thermal,
+];
+const TIME_LINES: [TimeCourseLineKind; 4] = [
+    TimeCourseLineKind::Class,
+    TimeCourseLineKind::Image,
+    TimeCourseLineKind::Well,
+    TimeCourseLineKind::Track,
+];
+const TIME_LAYOUTS: [TimeCourseTableLayout; 3] = [
+    TimeCourseTableLayout::Long,
+    TimeCourseTableLayout::Wide,
+    TimeCourseTableLayout::Both,
+];
+const PROFILE_LINES: [ProfileLineKind; 4] = [
+    ProfileLineKind::Class,
+    ProfileLineKind::Image,
+    ProfileLineKind::Well,
+    ProfileLineKind::All,
 ];
 const SPLITS: [TableSplit; 5] = [
     TableSplit::None,
@@ -87,6 +124,9 @@ struct Shown {
     after: AfterRun,
     /// Scripts asked about before a run (the trust prompt).
     trust: Option<TrustAsk>,
+    /// The scripts answered "Don't run" (as the exports name them) - the
+    /// report says so.
+    refused: std::collections::HashSet<String>,
     /// The view "Export this view" is open for (its id).
     quick_view: Option<u32>,
     /// The run going on: its cancel flag.
@@ -139,6 +179,8 @@ struct AfterRun {
 struct PickedFrom {
     raw: Vec<ColumnEntry>,
     classes: Vec<Class>,
+    /// The profile measurements (key, name) - what a profile table picks.
+    profiles: Vec<(String, String)>,
 }
 
 impl PickedFrom {
@@ -167,6 +209,31 @@ impl PickedFrom {
         (selected, missing)
     }
 
+    /// The links Relate Objects made (parent, child class ids) and the
+    /// parent classes, from the results' columns.
+    fn links(&self) -> (Vec<(u32, u32)>, Vec<u32>) {
+        let mut links = Vec::new();
+        let mut parents = Vec::new();
+        for entry in &self.raw {
+            match &entry.key {
+                Column::Children(c) if c.value == evanalyzer_app::results::ChildValue::Count => {
+                    if let (Some(p), Some(c)) = (c.parent_class.to_u32(), c.child_class.to_u32()) {
+                        links.push((p, c));
+                    }
+                }
+                Column::Parent(p) => {
+                    if let Some(id) = p.parent_class.to_u32()
+                        && !parents.contains(&id)
+                    {
+                        parents.push(id);
+                    }
+                }
+                _ => {}
+            }
+        }
+        (links, parents)
+    }
+
     fn source<'a>(
         &'a self,
         settings: &'a ColocSettings,
@@ -181,6 +248,24 @@ impl PickedFrom {
             filter,
         }
     }
+}
+
+/// A plate layout's columns as the picker shows a table's: grouped rows,
+/// its columns (the count without), its values.
+fn plate_table(
+    plate: &evanalyzer_cfg::settings::export_settings::PlateLayoutExport,
+) -> TableExport {
+    let mut table: TableExport =
+        serde_json::from_value(serde_json::json!({ "rows": "WELL" })).expect("a table");
+    table.columns = Some(
+        plate
+            .columns
+            .clone()
+            .unwrap_or_else(|| vec!["count".to_string()]),
+    );
+    table.aggregations = plate.aggregations.clone();
+    table.classes = plate.classes.clone();
+    table
 }
 
 /// The columns offered for a table of `rows`: never the leading ones; a
@@ -199,6 +284,12 @@ struct Pickable {
     views: evanalyzer_cfg::settings::project_settings::ResultsViews,
     /// The project's classes (ids) - all ticked is every class.
     classes: Vec<u32>,
+    /// The newest analysis' links (parent, child class ids) and parent
+    /// classes - for All of Children and Linked objects.
+    links: Vec<(u32, u32)>,
+    parent_classes: Vec<u32>,
+    /// The newest analysis' profile measurements (key, name).
+    profiles: Vec<(String, String)>,
 }
 
 pub struct ExportsController {
@@ -339,7 +430,18 @@ impl ExportsController {
                         .map(|class| class.id)
                         .filter(|id| *id != 0)
                         .collect(),
+                    links: Vec::new(),
+                    parent_classes: Vec::new(),
+                    profiles: Vec::new(),
                 }
+            };
+            let pickable = {
+                let mut pickable = pickable;
+                if let Some(from) = &this.shown.lock().expect("Poisoned").picked_from {
+                    (pickable.links, pickable.parent_classes) = from.links();
+                    pickable.profiles = from.profiles.clone();
+                }
+                pickable
             };
             this.edit(id, |export| {
                 if let Some(entry) = export.entries.get_mut(index) {
@@ -917,7 +1019,7 @@ impl ExportsController {
         };
         // What it shows, from the view alone (its columns named once it
         // runs on the analysis).
-        let Some(entry) = evanalyzer_app::exports::entry_from_view(&view, &[], &[]) else {
+        let Some(entry) = evanalyzer_app::exports::entry_from_view(&view) else {
             return;
         };
         let export = new_export(0, view.name.clone());
@@ -963,21 +1065,6 @@ impl ExportsController {
         state.set_shown(true);
     }
 
-    /// The view `view_id` as an export entry, its columns named by the
-    /// results `database` (also those of the related objects it shows).
-    fn entry_of_view(&self, view: &ResultsView, database: Option<&Path>) -> Option<ExportEntry> {
-        let (classes, available) = database
-            .and_then(|db| {
-                let results = self.app_state.backend().open_results(db).ok()?;
-                Some((
-                    results.get_object_classes().ok()?,
-                    results.get_available_columns().ok()?,
-                ))
-            })
-            .unwrap_or_default();
-        evanalyzer_app::exports::entry_from_view(view, &classes, &available)
-    }
-
     /// Exports the view now - and keeps it in the project when ticked;
     /// `open_after`: then shows the kept export in the Exports tab.
     fn quick_export(self: &Arc<Self>, open_after: bool) {
@@ -1016,9 +1103,23 @@ impl ExportsController {
         let this = self.clone();
         ui_thread::spawn(move || {
             let result = (|| {
-                let mut entry = this
-                    .entry_of_view(&view, Some(&database))
+                let mut entry = evanalyzer_app::exports::entry_from_view(&view)
                     .ok_or("this view can't be exported")?;
+                // A profile chart without one chosen shows the first profile.
+                if let ExportEntry::Table(table) = &mut entry
+                    && let Some(profile) = &mut table.profile
+                    && profile.key.is_empty()
+                {
+                    profile.key = this
+                        .app_state
+                        .backend()
+                        .open_results(&database)
+                        .and_then(|results| results.profile_columns())
+                        .ok()
+                        .and_then(|columns| columns.into_iter().next())
+                        .map(|column| column.key)
+                        .unwrap_or_default();
+                }
                 match &mut entry {
                     ExportEntry::Table(table) => {
                         table.name = file.clone();
@@ -1051,7 +1152,7 @@ impl ExportsController {
                     |_| {},
                 )?;
                 if !report.all_written() {
-                    let (lines, ..) = report_lines(&export, &report);
+                    let (lines, ..) = report_lines(&export, &report, &Default::default());
                     return Err(lines.join(" · "));
                 }
                 Ok((entry, report))
@@ -1155,20 +1256,13 @@ impl ExportsController {
     /// A view's ⋯ › Save as export…: a new export of it (named like the
     /// view), opened in the Exports tab - nothing written now.
     fn quick_save_view(self: &Arc<Self>, view_id: i32) {
-        let Some((view, database)) = self.view_and_results(view_id) else {
+        let Some((view, _)) = self.view_and_results(view_id) else {
             return;
         };
-        let this = self.clone();
-        ui_thread::spawn(move || {
-            let entry = this.entry_of_view(&view, database.as_deref());
-            ui_thread::invoke_from_event_loop(move || {
-                if let Some(entry) = entry {
-                    let id = this.keep_entry(entry, 0, "", &view.name, false);
-                    this.open_export(id);
-                }
-            })
-            .ok();
-        });
+        if let Some(entry) = evanalyzer_app::exports::entry_from_view(&view) {
+            let id = self.keep_entry(entry, 0, "", &view.name, false);
+            self.open_export(id);
+        }
     }
 
     /// The scripts `exports` run that the user hasn't allowed yet (by their
@@ -1308,6 +1402,14 @@ impl ExportsController {
                 None
             } else {
                 let script = ask.queue.remove(0);
+                if answer == 0 {
+                    shown.refused.insert(script.file.clone());
+                } else {
+                    shown.refused.remove(&script.file);
+                }
+                let Some(ask) = shown.trust.as_mut() else {
+                    return;
+                };
                 match answer {
                     1 => ask.once.push(script.hash),
                     2 => {
@@ -1382,7 +1484,7 @@ impl ExportsController {
                     shown.status.insert(id, ("⚠ did not run".into(), 2));
                 }
                 Ok((export, report)) => {
-                    let (lines, log, failed) = report_lines(&export, &report);
+                    let (lines, log, failed) = report_lines(&export, &report, &shown.refused);
                     shown.reports.insert(id, (lines, log));
                     let status = if failed > 0 {
                         (format!("⚠ {failed} failed · {time}"), 2)
@@ -1529,6 +1631,33 @@ impl ExportsController {
                 set_classes(&table.classes);
                 state.set_transposed(table.transposed);
                 state.set_empty_classes(table.empty_classes);
+                push_planes(&state, &table.planes);
+                let course = table.time_course.clone().unwrap_or_default();
+                state.set_time_lines(index_of(&TIME_LINES, &course.lines));
+                state.set_time_layout(index_of(&TIME_LAYOUTS, &course.layout));
+                state.set_time_relative(course.relative);
+                state.set_time_with_parents(course.with_parents);
+                let profile = table.profile.clone().unwrap_or_default();
+                state.set_profile_lines(index_of(&PROFILE_LINES, &profile.lines));
+                state.set_profile_objects(profile.content == ProfileContent::Objects);
+                let profiles = shown
+                    .picked_from
+                    .as_ref()
+                    .map(|from| from.profiles.clone())
+                    .unwrap_or_default();
+                state.set_profile_names(model(
+                    profiles
+                        .iter()
+                        .map(|(_, name)| SharedString::from(name.as_str()))
+                        .collect(),
+                ));
+                state.set_profile_name(
+                    profiles
+                        .iter()
+                        .find(|(key, _)| *key == profile.key)
+                        .map_or(profile.key.as_str(), |(_, name)| name.as_str())
+                        .into(),
+                );
                 push_picker(&state, table, &shown);
                 state.set_aggregations(model(
                     AGGREGATIONS
@@ -1553,13 +1682,30 @@ impl ExportsController {
                 ));
             }
             ExportEntry::PlateLayout(plate) => {
-                state.set_grid(match plate.grid {
-                    PlateGrid::Plate => 0,
-                    PlateGrid::Well => 1,
-                });
+                state.set_grid(index_of(&GRIDS, &plate.grid));
+                state.set_square(index_of(&SQUARES, &plate.square_size.unwrap_or(64)));
+                state.set_colors(index_of(&COLORS, &plate.colors));
+                state.set_images(index_of(&SCOPES, &plate.images));
+                push_planes(&state, &plate.planes);
                 set_classes(&plate.classes);
+                push_picker(&state, &plate_table(plate), &shown);
+                state.set_columns_default(plate.columns.is_none());
+                state.set_aggregations(model(
+                    AGGREGATIONS
+                        .iter()
+                        .map(|(aggregation, key, text)| MultiSelectItem {
+                            key: (*key).into(),
+                            value: (*text).into(),
+                            color: Default::default(),
+                            group: "".into(),
+                            selected: plate.aggregations.contains(aggregation),
+                        })
+                        .collect(),
+                ));
             }
             ExportEntry::DrawnImages(drawn) => {
+                push_planes(&state, &drawn.planes);
+                state.set_images(index_of(&SCOPES, &drawn.images));
                 state.set_style(index_of(&STYLES, &drawn.style));
                 state.set_brightness(match drawn.brightness {
                     DrawnBrightness::Viewer => 0,
@@ -1613,6 +1759,12 @@ impl ExportsController {
                 Ok::<_, evanalyzer_cfg::core_types::InternalErrors>(PickedFrom {
                     classes: results.get_object_classes()?,
                     raw: results.get_available_columns()?,
+                    profiles: results
+                        .profile_columns()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|column| (column.key.clone(), column.name.clone()))
+                        .collect(),
                 })
             })();
             ui_thread::invoke_from_event_loop(move || {
@@ -1668,7 +1820,7 @@ impl ExportsController {
         let (Some(id), Some(index)) = (self.selected(), self.entry()) else {
             return;
         };
-        let Some(ExportEntry::Table(table)) = self
+        let entry = self
             .app_state
             .get_project()
             .settings
@@ -1676,9 +1828,11 @@ impl ExportsController {
             .iter()
             .find(|e| e.id == id)
             .and_then(|e| e.entries.get(index))
-            .cloned()
-        else {
-            return;
+            .cloned();
+        let table = match entry {
+            Some(ExportEntry::Table(table)) => table,
+            Some(ExportEntry::PlateLayout(plate)) => plate_table(&plate),
+            _ => return,
         };
         let keys = {
             let mut shown = self.shown.lock().expect("Poisoned");
@@ -1761,10 +1915,10 @@ impl ExportsController {
         let Some(keys) = keys else {
             return;
         };
-        self.edit(id, |export| {
-            if let Some(ExportEntry::Table(table)) = export.entries.get_mut(index) {
-                table.columns = Some(keys);
-            }
+        self.edit(id, |export| match export.entries.get_mut(index) {
+            Some(ExportEntry::Table(table)) => table.columns = Some(keys),
+            Some(ExportEntry::PlateLayout(plate)) => plate.columns = Some(keys),
+            _ => {}
         });
     }
 
@@ -1790,6 +1944,41 @@ impl ExportsController {
     }
 }
 
+/// An entry's z-planes and time points: "" all, else "from" and "to".
+fn push_planes(state: &ExportsState, planes: &Planes) {
+    let text = |range: Option<[u32; 2]>, i: usize| {
+        range
+            .map_or(String::new(), |range| range[i].to_string())
+            .into()
+    };
+    state.set_z_range(planes.z.is_some());
+    state.set_z_from(text(planes.z, 0));
+    state.set_z_to(text(planes.z, 1));
+    state.set_t_range(planes.t.is_some());
+    state.set_t_from(text(planes.t, 0));
+    state.set_t_to(text(planes.t, 1));
+}
+
+/// A plane range setting: "all", or "<from>-<to>" (both from 0).
+fn set_planes(planes: &mut Planes, key: &str, value: &str) {
+    let range = if value == "all" {
+        None
+    } else {
+        let Some((from, to)) = value.split_once('-') else {
+            return;
+        };
+        let (Ok(from), Ok(to)) = (from.trim().parse::<u32>(), to.trim().parse::<u32>()) else {
+            return;
+        };
+        Some([from.min(to), from.max(to)])
+    };
+    match key {
+        "z-planes" => planes.z = range,
+        "t-planes" => planes.t = range,
+        _ => {}
+    }
+}
+
 /// The column picker of `table` (see `ColumnPicker`): over the newest
 /// analysis' columns, its columns picked.
 fn push_picker(state: &ExportsState, table: &TableExport, shown: &Shown) {
@@ -1807,6 +1996,8 @@ fn push_picker(state: &ExportsState, table: &TableExport, shown: &Shown) {
         state.set_picker_intensity_channels(model(Vec::new()));
         state.set_picker_has_coloc(false);
         state.set_picker_coloc_groups(model(Vec::new()));
+        state.set_related_children(model(Vec::new()));
+        state.set_related_parents(model(Vec::new()));
         return;
     };
     let (selected, missing) = from.selection(table);
@@ -1856,6 +2047,59 @@ fn push_picker(state: &ExportsState, table: &TableExport, shown: &Shown) {
     state.set_coloc_partner_order(parts.partner_order.into());
     state.set_coloc_count(parts.count);
     state.set_coloc_only_occurring(parts.only_occurring);
+    // Children and linked objects.
+    let related = picker::related_items(
+        &from.raw,
+        &from.classes,
+        &table
+            .children
+            .iter()
+            .map(|(p, c)| (ObjectClass::Global(*p), ObjectClass::Global(*c)))
+            .collect::<Vec<_>>(),
+        &table
+            .child_aggregations
+            .iter()
+            .map(|a| results_aggregation(*a))
+            .collect::<Vec<_>>(),
+        &table
+            .parents
+            .iter()
+            .map(|p| ObjectClass::Global(*p))
+            .collect::<Vec<_>>(),
+    );
+    state.set_related_children(model(related.children));
+    state.set_related_children_summary(related.children_summary.into());
+    state.set_related_aggregations(model(related.aggregations));
+    state.set_related_aggregate_summary(related.aggregate_summary);
+    state.set_related_parents(model(related.parents));
+    state.set_related_parent_summary(related.parent_summary.into());
+}
+
+/// An export's aggregation as the results name it, and back.
+fn results_aggregation(aggregation: ExportAggregation) -> evanalyzer_app::results::Aggregation {
+    use evanalyzer_app::results::Aggregation;
+    match aggregation {
+        ExportAggregation::Avg => Aggregation::Avg,
+        ExportAggregation::Median => Aggregation::Median,
+        ExportAggregation::Stddev => Aggregation::Stddev,
+        ExportAggregation::Sum => Aggregation::Sum,
+        ExportAggregation::Min => Aggregation::Min,
+        ExportAggregation::Max => Aggregation::Max,
+        ExportAggregation::Skewness => Aggregation::Skewness,
+    }
+}
+
+fn export_aggregation_of(aggregation: &evanalyzer_app::results::Aggregation) -> ExportAggregation {
+    use evanalyzer_app::results::Aggregation;
+    match aggregation {
+        Aggregation::Avg => ExportAggregation::Avg,
+        Aggregation::Median => ExportAggregation::Median,
+        Aggregation::Stddev => ExportAggregation::Stddev,
+        Aggregation::Sum => ExportAggregation::Sum,
+        Aggregation::Min => ExportAggregation::Min,
+        Aggregation::Max => ExportAggregation::Max,
+        Aggregation::Skewness => ExportAggregation::Skewness,
+    }
 }
 
 /// Opens `path` with the system's program for it (a script: the editor).
@@ -2006,6 +2250,15 @@ fn set_entry_field(entry: &mut ExportEntry, key: &str, value: &str, pickable: &P
             _ => {}
         }
     }
+    if key == "z-planes" || key == "t-planes" {
+        match entry {
+            ExportEntry::Table(t) => set_planes(&mut t.planes, key, value),
+            ExportEntry::PlateLayout(p) => set_planes(&mut p.planes, key, value),
+            ExportEntry::DrawnImages(d) => set_planes(&mut d.planes, key, value),
+            ExportEntry::Script(_) => {}
+        }
+        return;
+    }
     if key == "name" {
         let name = value.trim().to_string();
         match entry {
@@ -2020,8 +2273,44 @@ fn set_entry_field(entry: &mut ExportEntry, key: &str, value: &str, pickable: &P
         ExportEntry::Table(table) => set_table_field(table, key, value, pickable),
         ExportEntry::PlateLayout(plate) => match key {
             "grid" => {
-                if let Some(grid) = pick(&[PlateGrid::Plate, PlateGrid::Well], value) {
+                if let Some(grid) = pick(&GRIDS, value) {
                     plate.grid = grid;
+                }
+            }
+            "square" => {
+                if let Some(side) = pick(&SQUARES, value) {
+                    plate.square_size = Some(side);
+                }
+            }
+            "colors" => {
+                if let Some(colors) = pick(&COLORS, value) {
+                    plate.colors = colors;
+                }
+            }
+            "clear-columns" => plate.columns = None,
+            "all-aggregations" => {
+                plate.aggregations = AGGREGATIONS.iter().map(|(a, ..)| *a).collect();
+            }
+            "no-aggregations" => plate.aggregations.clear(),
+            _ if key.starts_with("aggregation:") => {
+                let name = &key["aggregation:".len()..];
+                if let Some((aggregation, ..)) = AGGREGATIONS.iter().find(|(_, k, _)| *k == name) {
+                    plate.aggregations.retain(|a| a != aggregation);
+                    if value == "1" {
+                        plate.aggregations.push(*aggregation);
+                        plate.aggregations.sort_by_key(|a| {
+                            AGGREGATIONS
+                                .iter()
+                                .position(|(b, ..)| b == a)
+                                .unwrap_or(usize::MAX)
+                        });
+                    }
+                }
+            }
+            _ if key.starts_with("columns-from-view:") => {
+                let name = &key["columns-from-view:".len()..];
+                if let Some(view) = pickable.views.views.iter().find(|v| v.name == name) {
+                    plate.columns = view_columns(view);
                 }
             }
             "images" => {
@@ -2079,7 +2368,60 @@ fn set_entry_field(entry: &mut ExportEntry, key: &str, value: &str, pickable: &P
 
 fn set_table_field(table: &mut TableExport, key: &str, value: &str, pickable: &Pickable) {
     let views = &pickable.views;
+    if let Some(link) = key.strip_prefix("child:") {
+        let Some((p, c)) = link
+            .split_once(':')
+            .and_then(|(p, c)| Some((p.parse::<u32>().ok()?, c.parse::<u32>().ok()?)))
+        else {
+            return;
+        };
+        table.children.retain(|l| *l != (p, c));
+        if value == "1" {
+            table.children.push((p, c));
+            table.children.sort_unstable();
+        }
+        return;
+    }
+    if let Some(name) = key.strip_prefix("child-aggregation:") {
+        let Some(aggregation) = crate::editor::results_state_controller::aggregation_from_key(name)
+        else {
+            return;
+        };
+        let aggregation = export_aggregation_of(&aggregation);
+        table.child_aggregations.retain(|a| *a != aggregation);
+        if value == "1" {
+            table.child_aggregations.push(aggregation);
+        }
+        return;
+    }
+    if let Some(id) = key.strip_prefix("parent:") {
+        let Ok(id) = id.parse::<u32>() else {
+            return;
+        };
+        table.parents.retain(|p| *p != id);
+        if value == "1" {
+            table.parents.push(id);
+            table.parents.sort_unstable();
+        }
+        return;
+    }
     match key {
+        "children-all" => {
+            table.children = pickable.links.clone();
+            return;
+        }
+        "children-none" => {
+            table.children.clear();
+            return;
+        }
+        "parents-all" => {
+            table.parents = pickable.parent_classes.clone();
+            return;
+        }
+        "parents-none" => {
+            table.parents.clear();
+            return;
+        }
         "all-aggregations" => {
             table.aggregations = AGGREGATIONS.iter().map(|(a, ..)| *a).collect();
             return;
@@ -2090,6 +2432,61 @@ fn set_table_field(table: &mut TableExport, key: &str, value: &str, pickable: &P
         }
         "empty-classes" => {
             table.empty_classes = value == "1";
+            return;
+        }
+        _ => {}
+    }
+    fn course(table: &mut TableExport) -> &mut TimeCourseOptions {
+        table.time_course.get_or_insert_with(Default::default)
+    }
+    fn profile(
+        table: &mut TableExport,
+    ) -> &mut evanalyzer_cfg::settings::export_settings::ProfileOptions {
+        table.profile.get_or_insert_with(Default::default)
+    }
+    match key {
+        "time-lines" => {
+            if let Some(lines) = pick(&TIME_LINES, value) {
+                course(table).lines = lines;
+            }
+            return;
+        }
+        "time-layout" => {
+            if let Some(layout) = pick(&TIME_LAYOUTS, value) {
+                course(table).layout = layout;
+            }
+            return;
+        }
+        "time-relative" => {
+            course(table).relative = value == "1";
+            return;
+        }
+        "time-with-parents" => {
+            course(table).with_parents = value == "1";
+            return;
+        }
+        "profile-lines" => {
+            if let Some(lines) = pick(&PROFILE_LINES, value) {
+                profile(table).lines = lines;
+            }
+            return;
+        }
+        "profile-objects" => {
+            profile(table).content = if value == "1" {
+                ProfileContent::Objects
+            } else {
+                ProfileContent::Lines
+            };
+            return;
+        }
+        "profile-pick" => {
+            if let Some((key, _)) = value
+                .parse::<usize>()
+                .ok()
+                .and_then(|i| pickable.profiles.get(i))
+            {
+                profile(table).key = key.clone();
+            }
             return;
         }
         _ => {}
@@ -2140,6 +2537,11 @@ fn set_table_field(table: &mut TableExport, key: &str, value: &str, pickable: &P
                 if !matches!(rows, TableRows::Object | TableRows::Image) {
                     table.transposed = false;
                 }
+                // Each kind's options with it.
+                table.time_course = (rows == TableRows::TimePoint)
+                    .then(|| table.time_course.clone().unwrap_or_default());
+                table.profile = (rows == TableRows::ProfilePosition)
+                    .then(|| table.profile.clone().unwrap_or_default());
             }
         }
         "format" => {
@@ -2214,6 +2616,8 @@ fn rows_text(rows: TableRows) -> &'static str {
         TableRows::ColocPair => "coloc pair",
         TableRows::Track => "track",
         TableRows::Measurement => "measurement",
+        TableRows::TimePoint => "time point",
+        TableRows::ProfilePosition => "profile position",
     }
 }
 
@@ -2235,7 +2639,7 @@ fn entry_row(export: &ExportSettings, entry: &ExportEntry) -> ExportEntryRow {
             });
             if matches!(
                 table.rows,
-                TableRows::Image | TableRows::Well | TableRows::Folder
+                TableRows::Image | TableRows::Well | TableRows::Folder | TableRows::TimePoint
             ) {
                 let aggregations: Vec<&str> = table
                     .aggregations
@@ -2267,9 +2671,24 @@ fn entry_row(export: &ExportSettings, entry: &ExportEntry) -> ExportEntryRow {
         }
         ExportEntry::PlateLayout(plate) => (
             format!("Plate layout · {file}.xlsx"),
-            match plate.grid {
-                PlateGrid::Plate => "The plate's grid".to_string(),
-                PlateGrid::Well => "The well's grid".to_string(),
+            {
+                let grid = match plate.grid {
+                    PlateGrid::Plate => "The plate's grid",
+                    PlateGrid::Well => "The well's grid",
+                    PlateGrid::Image => "A grid of squares per image",
+                };
+                let columns = match &plate.columns {
+                    None => "the count".to_string(),
+                    Some(c) if c.len() == 1 => "1 column".to_string(),
+                    Some(c) => format!("{} columns", c.len()),
+                };
+                let values: Vec<&str> = plate
+                    .aggregations
+                    .iter()
+                    .filter_map(|a| AGGREGATIONS.iter().find(|(b, ..)| b == a))
+                    .map(|(_, key, _)| *key)
+                    .collect();
+                format!("{grid} · {columns} · {}", values.join(", "))
             },
             "XLSX".to_string(),
         ),
@@ -2331,7 +2750,11 @@ fn problems_text(export: &ExportSettings) -> String {
 
 /// A run's report: its lines, the log of a script that didn't write, the
 /// number of entries that failed.
-fn report_lines(export: &ExportSettings, report: &ExportReport) -> (Vec<String>, String, usize) {
+fn report_lines(
+    export: &ExportSettings,
+    report: &ExportReport,
+    refused: &std::collections::HashSet<String>,
+) -> (Vec<String>, String, usize) {
     let mut lines = vec![format!("Into {}", report.folder.display())];
     let mut log = String::new();
     let mut failed = 0;
@@ -2348,6 +2771,20 @@ fn report_lines(export: &ExportSettings, report: &ExportReport) -> (Vec<String>,
                 entry.files.len(),
                 if entry.files.len() == 1 { "" } else { "s" }
             )),
+            // A script not allowed: what to do about it, here in the app.
+            EntryStatus::Skipped(why) if why == evanalyzer_app::exports::NOT_ALLOWED => {
+                let chosen = match export.entries.get(entry.entry) {
+                    Some(ExportEntry::Script(script)) => refused.contains(&script.file),
+                    _ => false,
+                };
+                lines.push(if chosen {
+                    format!(
+                        "{n}. {label}: not run - you chose \"Don't run\". Run the export again to be asked."
+                    )
+                } else {
+                    format!("{n}. {label}: not run - not allowed yet. Run the export to be asked.")
+                });
+            }
             EntryStatus::Skipped(why) => lines.push(format!("{n}. {label}: skipped - {why}")),
             EntryStatus::Failed(why) => {
                 failed += 1;

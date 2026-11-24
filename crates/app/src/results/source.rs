@@ -81,6 +81,19 @@ pub trait ResultsSource: Send + Sync {
     fn scatter(&self, filter: &ScatterFilter) -> Result<ScatterResult, InternalErrors>;
     /// Per time point, statistics over each line's objects (`TimeCourseFilter`).
     fn time_course(&self, filter: &TimeCourseFilter) -> Result<TimeCourseResult, InternalErrors>;
+    /// [`ResultsSource::time_course`] point by point as they come - a time
+    /// course per track has millions (an export writes them as it goes).
+    /// Here: all at once; the local results stream.
+    fn time_course_each(
+        &self,
+        filter: &TimeCourseFilter,
+        each: &mut dyn FnMut(&crate::results::TimeCoursePoint) -> Result<(), InternalErrors>,
+    ) -> Result<(), InternalErrors> {
+        for point in &self.time_course(filter)?.points {
+            each(point)?;
+        }
+        Ok(())
+    }
     /// The profile measurements (a value per object and position, e.g. the
     /// Sholl intersections per radius) - Charts › Profile's picker.
     fn profile_columns(&self) -> Result<Vec<crate::results::MeasurementColumn>, InternalErrors>;

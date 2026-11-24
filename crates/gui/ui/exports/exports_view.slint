@@ -8,7 +8,7 @@
 
 import { Ink, InkIcons, InkCheckList, InkButton, InkButtonKind, InkIconButton, InkCheckbox, InkSwitch, InkSegmented, InkSelect, InkTextField, InkListRow, InkLabel, InkCaption, InkHint, InkBanner, InkTone } from "../ink/ink.slint";
 import { ExportsState, ExportRow, ExportEntryRow } from "../api/exports.slint";
-import { ColumnPicker, ValuesClassesPart } from "../results/results_panel.slint";
+import { ColumnPicker, ValuesClassesPart, RelatedPart } from "../results/results_panel.slint";
 import { ViewPanel } from "../results/results_view_bar.slint";
 
 // A column's card.
@@ -245,6 +245,72 @@ component Classes inherits InkCheckList {
     }
 }
 
+// One plane range: All, or from - to (counted from 0).
+component PlaneRange inherits Setting {
+    in property <string> key;
+    in property <bool> ranged;
+    in property <string> from;
+    in property <string> to;
+    HorizontalLayout {
+        spacing: 8px;
+        InkSegmented {
+            width: 140px;
+            label: root.label;
+            model: ["All", "Range"];
+            selected: root.ranged ? 1 : 0;
+            picked(i) => {
+                ExportsState.set-entry-field(root.key, i == 0 ? "all" : (root.from == "" ? "0" : root.from) + "-" + (root.to == "" ? "0" : root.to));
+            }
+        }
+        if root.ranged: Field {
+            width: 64px;
+            label: root.label + " from";
+            mono: true;
+            value: root.from;
+            commit(text) => {
+                ExportsState.set-entry-field(root.key, text + "-" + root.to);
+            }
+        }
+        if root.ranged: Text {
+            text: "to";
+            color: Ink.text-dim;
+            font-size: Ink.fs-body;
+            vertical-alignment: center;
+        }
+        if root.ranged: Field {
+            width: 64px;
+            label: root.label + " to";
+            mono: true;
+            value: root.to;
+            commit(text) => {
+                ExportsState.set-entry-field(root.key, root.from + "-" + text);
+            }
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+    }
+}
+
+// The z-planes and time points an entry writes.
+component Planes inherits VerticalLayout {
+    spacing: 12px;
+    PlaneRange {
+        label: "Z-planes";
+        key: "z-planes";
+        ranged: ExportsState.z-range;
+        from: ExportsState.z-from;
+        to: ExportsState.z-to;
+    }
+    PlaneRange {
+        label: "Time points";
+        key: "t-planes";
+        ranged: ExportsState.t-range;
+        from: ExportsState.t-from;
+        to: ExportsState.t-to;
+    }
+}
+
 // The settings of the entry picked, by its kind.
 component EntrySettings inherits VerticalLayout {
     // A table's part shown (the Results List's: Columns, Images, Classes,
@@ -258,7 +324,7 @@ component EntrySettings inherits VerticalLayout {
                 label: "A row per";
                 InkSelect {
                     label: "A row per";
-                    model: ["Object", "Image", "Well", "Folder", "Coloc pair", "Track", "Measurement"];
+                    model: ["Object", "Image", "Well", "Folder", "Coloc pair", "Track", "Measurement", "Time point", "Profile position"];
                     selected: ExportsState.rows;
                     picked(i) => {
                         ExportsState.set-entry-field("rows", i);
@@ -316,6 +382,87 @@ component EntrySettings inherits VerticalLayout {
                 height: 1px;
                 background: Ink.border-soft;
             }
+            // A time course: what a line is, how it is laid out.
+            if ExportsState.rows == 7: VerticalLayout {
+                spacing: 12px;
+                Setting {
+                    label: "A line per";
+                    InkSegmented {
+                        label: "A line per";
+                        model: ["Class", "Image", "Well", "Track"];
+                        selected: ExportsState.time-lines;
+                        picked(i) => {
+                            ExportsState.set-entry-field("time-lines", i);
+                        }
+                    }
+                }
+                Setting {
+                    label: "Layout";
+                    InkSegmented {
+                        label: "Layout";
+                        model: ["Long (scripts)", "Wide", "Both"];
+                        tips: ["A row per time point and line", "A table per value: a row per time point, a column per line", "Both"];
+                        selected: ExportsState.time-layout;
+                        picked(i) => {
+                            ExportsState.set-entry-field("time-layout", i);
+                        }
+                    }
+                }
+                InkSwitch {
+                    text: "Relative to the first time point (%)";
+                    checked: ExportsState.time-relative;
+                    toggled(on) => {
+                        ExportsState.set-entry-field("time-relative", on ? "1" : "0");
+                    }
+                }
+                if ExportsState.time-lines == 3: InkSwitch {
+                    text: "Each track with its parents' history";
+                    checked: ExportsState.time-with-parents;
+                    toggled(on) => {
+                        ExportsState.set-entry-field("time-with-parents", on ? "1" : "0");
+                    }
+                }
+            }
+            // A profile: which, its lines or each object.
+            if ExportsState.rows == 8: VerticalLayout {
+                spacing: 12px;
+                Setting {
+                    label: "Profile";
+                    InkSelect {
+                        label: "Profile";
+                        placeholder: ExportsState.profile-names.length == 0 ? "No profile in the newest analysis" : "Pick the profile…";
+                        model: ExportsState.profile-names;
+                        value: ExportsState.profile-name;
+                        enabled: ExportsState.profile-names.length > 0;
+                        picked(i, name) => {
+                            ExportsState.set-entry-field("profile-pick", i);
+                        }
+                    }
+                }
+                Setting {
+                    label: "Rows";
+                    InkSegmented {
+                        label: "Rows";
+                        model: ["Lines (statistics)", "Each object"];
+                        selected: ExportsState.profile-objects ? 1 : 0;
+                        picked(i) => {
+                            ExportsState.set-entry-field("profile-objects", i == 1 ? "1" : "0");
+                        }
+                    }
+                }
+                if !ExportsState.profile-objects: Setting {
+                    label: "A line per";
+                    InkSegmented {
+                        label: "A line per";
+                        model: ["Class", "Image", "Well", "All"];
+                        selected: ExportsState.profile-lines;
+                        picked(i) => {
+                            ExportsState.set-entry-field("profile-lines", i);
+                        }
+                    }
+                }
+            }
+            if ExportsState.rows != 5 && ExportsState.rows != 8: Planes { }
             Setting {
                 label: "Images of the run";
                 InkSegmented {
@@ -333,7 +480,7 @@ component EntrySettings inherits VerticalLayout {
                 }
             }
     }
-    if ExportsState.entry-kind == "TABLE" && root.part == "Columns": VerticalLayout {
+    if (ExportsState.entry-kind == "TABLE" || ExportsState.entry-kind == "PLATE_LAYOUT") && root.part == "Columns": VerticalLayout {
         spacing: 12px;
             if ExportsState.columns-default: InkHint {
                 text: "The table's default columns - a pick makes them its own.";
@@ -392,6 +539,32 @@ component EntrySettings inherits VerticalLayout {
                     ExportsState.picker("coloc-only-occurring", "", on);
                 }
             }
+            // Children and linked objects: tables of objects, images, wells,
+            // folders and coloc pairs.
+            if ExportsState.entry-kind == "TABLE" && ExportsState.rows <= 4: RelatedPart {
+                pill-width: 380px;
+                children <=> ExportsState.related-children;
+                children-summary: ExportsState.related-children-summary;
+                aggregations <=> ExportsState.related-aggregations;
+                aggregate-summary: ExportsState.related-aggregate-summary;
+                parents <=> ExportsState.related-parents;
+                parent-summary: ExportsState.related-parent-summary;
+                child-selected(key, on) => {
+                    ExportsState.set-entry-field("child:" + key, on ? "1" : "0");
+                }
+                children-all(all) => {
+                    ExportsState.set-entry-field(all ? "children-all" : "children-none", "");
+                }
+                aggregation-selected(key, on) => {
+                    ExportsState.set-entry-field("child-aggregation:" + key, on ? "1" : "0");
+                }
+                parent-selected(key, on) => {
+                    ExportsState.set-entry-field("parent:" + key, on ? "1" : "0");
+                }
+                parents-all(all) => {
+                    ExportsState.set-entry-field(all ? "parents-all" : "parents-none", "");
+                }
+            }
             if ExportsState.columns-note != "": InkHint {
                 text: ExportsState.columns-note;
                 wrap: word-wrap;
@@ -420,8 +593,9 @@ component EntrySettings inherits VerticalLayout {
     }
     // Values, then classes - the Results List's part (canvas S1); a row
     // per object: the classes alone.
-    if ExportsState.entry-kind == "TABLE" && (root.part == "Values & classes" || root.part == "Classes"): ValuesClassesPart {
-        grouped: ExportsState.rows == 1 || ExportsState.rows == 2 || ExportsState.rows == 3;
+    if (ExportsState.entry-kind == "TABLE" || ExportsState.entry-kind == "PLATE_LAYOUT") && (root.part == "Values & classes" || root.part == "Classes"): ValuesClassesPart {
+        grouped: ExportsState.entry-kind == "PLATE_LAYOUT" || ExportsState.rows == 1 || ExportsState.rows == 2 || ExportsState.rows == 3 || ExportsState.rows == 7;
+        show-empty: ExportsState.entry-kind == "TABLE" && ExportsState.rows >= 1 && ExportsState.rows <= 3;
         values-title: "VALUES · OF EACH ROW";
         values <=> ExportsState.aggregations;
         classes-title: "CLASSES · " + ExportsState.classes-summary;
@@ -451,20 +625,54 @@ component EntrySettings inherits VerticalLayout {
         }
     }
 
-    if ExportsState.entry-kind == "PLATE_LAYOUT": VerticalLayout {
+    if ExportsState.entry-kind == "PLATE_LAYOUT" && root.part == "Layout": VerticalLayout {
         spacing: 14px;
         Setting {
             label: "Grid";
             InkSegmented {
                 label: "Grid";
-                model: ["Plate", "Well"];
+                model: ["Plate", "Well", "Image"];
+                tips: ["A cell per well", "A cell per image position inside the wells", "A workbook per image: its area as a grid of squares"];
                 selected: ExportsState.grid;
                 picked(i) => {
                     ExportsState.set-entry-field("grid", i);
                 }
             }
         }
-        Classes { }
+        if ExportsState.grid == 2: Setting {
+            label: "Square size";
+            InkSegmented {
+                label: "Square size";
+                model: ["32 px", "64 px", "128 px", "256 px"];
+                selected: ExportsState.square;
+                picked(i) => {
+                    ExportsState.set-entry-field("square", i);
+                }
+            }
+        }
+        Setting {
+            label: "Colors";
+            InkSelect {
+                label: "Colors";
+                model: ["Excel", "Viridis", "Plasma", "Inferno", "Cividis", "Coolwarm", "Red - blue", "Yellow - green - blue", "Haline", "Algae", "Thermal"];
+                selected: ExportsState.colors;
+                picked(i) => {
+                    ExportsState.set-entry-field("colors", i);
+                }
+            }
+        }
+        Planes { }
+        Setting {
+            label: "Images of the run";
+            InkSegmented {
+                label: "Images of the run";
+                model: ["All", "Included", "Left out"];
+                selected: ExportsState.images;
+                picked(i) => {
+                    ExportsState.set-entry-field("images", i);
+                }
+            }
+        }
     }
 
     if ExportsState.entry-kind == "DRAWN_IMAGES": VerticalLayout {
@@ -499,6 +707,18 @@ component EntrySettings inherits VerticalLayout {
                 selected: ExportsState.max-side;
                 picked(i) => {
                     ExportsState.set-entry-field("max-side", i);
+                }
+            }
+        }
+        Planes { }
+        Setting {
+            label: "Images of the run";
+            InkSegmented {
+                label: "Images of the run";
+                model: ["All", "Included", "Left out"];
+                selected: ExportsState.images;
+                picked(i) => {
+                    ExportsState.set-entry-field("images", i);
                 }
             }
         }
@@ -880,13 +1100,16 @@ export component ExportsView inherits Rectangle {
             width: clamp(root.width - 300px - 520px - 48px, 400px, 440px);
             foldable: false;
             property <bool> table: ExportsState.entry-kind == "TABLE";
-            property <bool> grouped: ExportsState.rows == 1 || ExportsState.rows == 2 || ExportsState.rows == 3;
+            property <bool> plate: ExportsState.entry-kind == "PLATE_LAYOUT";
+            property <bool> grouped: ExportsState.rows == 1 || ExportsState.rows == 2 || ExportsState.rows == 3 || ExportsState.rows == 7;
             title: ExportsState.entry >= 0 && ExportsState.entry < ExportsState.entries.length ? ExportsState.entries[ExportsState.entry].title : "Settings";
-            parts: !self.table ? [] : self.grouped ? ["Table", "Columns", "Values & classes"] : ["Table", "Columns", "Classes"];
+            parts: self.plate ? ["Layout", "Columns", "Values & classes"] : !self.table ? [] : self.grouped ? ["Table", "Columns", "Values & classes"] : ["Table", "Columns", "Classes"];
             // Classes stays open when the rows change it to Classes & values
             // and back.
             part: ExportsState.panel-part == "Classes" || ExportsState.panel-part == "Values & classes"
-                ? (self.grouped ? "Values & classes" : "Classes") : ExportsState.panel-part;
+                ? (self.grouped || self.plate ? "Values & classes" : "Classes")
+                : self.plate && ExportsState.panel-part == "Table" ? "Layout"
+                : !self.plate && ExportsState.panel-part == "Layout" ? "Table" : ExportsState.panel-part;
             part-picked(part) => {
                 ExportsState.panel-part = part;
             }
