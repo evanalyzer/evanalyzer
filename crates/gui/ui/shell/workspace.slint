@@ -6,7 +6,7 @@
 // Pipelines, images on the left in Images; classes, objects and the image
 // controls on the right; the annotate tools on top. Results fill it.
 
-import { Ink, InkIcons, InkPanel, InkPanelHead, InkIconButton, InkDivider, InkButton, InkButtonKind } from "../ink/ink.slint";
+import { Ink, InkIcons, InkPanel, InkPanelHead, InkIconButton, InkDivider, InkButton, InkButtonKind, InkToast, InkTone } from "../ink/ink.slint";
 import { Places, LayoutState, WorkspaceMode } from "../api/layout.slint";
 import { ChannelState, GlobalAppState, DialogType } from "../api/state.slint";
 import { Viewport } from "../editor/viewport.slint";
@@ -476,166 +476,79 @@ export component Workspace inherits Rectangle {
     // seconds when it went well, kept until closed when it didn't --
     // Its exports (run after analysis) are its last step: the note waits
     // for them and says how they went.
-    if PipelineRunningState.active && PipelineRunningState.done && !PipelineRunningState.exporting: Rectangle {
+    if PipelineRunningState.active && PipelineRunningState.done && !PipelineRunningState.exporting: InkToast {
         x: (parent.width - self.width) / 2;
         y: Float.gap + (LayoutState.annotate ? 52px : 0px) + (LayoutState.panels-hidden && root.on-image ? 42px : 0px);
-        width: toast-row.preferred-width;
-        height: 36px;
-        border-radius: Ink.radius-lg;
-        background: Ink.panel-blur ? Ink.glass : Ink.panel;
-        backdrop-blur: Ink.backdrop;
-        border-width: 1px;
-        border-color: PipelineRunningState.has-error ? Ink.err : PipelineRunningState.export-problem ? Ink.warn : Ink.border;
-        drop-shadow-blur: 24px;
-        drop-shadow-offset-y: 8px;
-        drop-shadow-color: Ink.shadow;
-        accessible-role: text;
-        accessible-label: toast-text.text;
-        TouchArea { }
-        Timer {
-            interval: 6s;
-            running: !PipelineRunningState.has-error && !PipelineRunningState.export-problem;
-            triggered => {
-                PipelineRunningState.close();
+        tone: PipelineRunningState.has-error ? InkTone.err : PipelineRunningState.export-problem ? InkTone.warn : InkTone.ok;
+        auto-close: PipelineRunningState.has-error || PipelineRunningState.export-problem ? 0ms : 6s;
+        text: PipelineRunningState.has-error ? "Analysis failed · " + PipelineRunningState.status-message
+            : PipelineRunningState.images-total > 0 && PipelineRunningState.images-done == PipelineRunningState.images-total
+                ? "Analysis finished · " + PipelineRunningState.images-total + (PipelineRunningState.images-total == 1 ? " image" : " images")
+                    + (PipelineRunningState.export-note != "" ? " · " + PipelineRunningState.export-note : "")
+            : PipelineRunningState.status-message
+                + (PipelineRunningState.export-note != "" ? " · " + PipelineRunningState.export-note : "");
+        closed => {
+            PipelineRunningState.close();
+        }
+        if PipelineRunningState.export-problem: VerticalLayout {
+            alignment: center;
+            InkButton {
+                small: true;
+                text: "Open in Exports";
+                clicked => {
+                    ExportsState.after-open();
+                    LayoutState.mode = WorkspaceMode.exports;
+                    PipelineRunningState.close();
+                }
             }
         }
-        toast-row := HorizontalLayout {
-            padding-left: 14px;
-            padding-right: 4px;
-            spacing: 10px;
-            Image {
-                width: 14px;
-                source: PipelineRunningState.has-error ? InkIcons.error : InkIcons.check;
-                colorize: PipelineRunningState.has-error ? Ink.err : Ink.ok;
-                image-fit: contain;
-            }
-            toast-text := Text {
-                text: PipelineRunningState.has-error ? "Analysis failed · " + PipelineRunningState.status-message
-                    : PipelineRunningState.images-total > 0 && PipelineRunningState.images-done == PipelineRunningState.images-total
-                        ? "Analysis finished · " + PipelineRunningState.images-total + (PipelineRunningState.images-total == 1 ? " image" : " images")
-                            + (PipelineRunningState.export-note != "" ? " · " + PipelineRunningState.export-note : "")
-                    : PipelineRunningState.status-message
-                        + (PipelineRunningState.export-note != "" ? " · " + PipelineRunningState.export-note : "");
-                font-size: Ink.fs-body;
-                color: Ink.text;
-                vertical-alignment: center;
-                max-width: 560px;
-                overflow: elide;
-            }
-            if PipelineRunningState.export-problem: VerticalLayout {
-                alignment: center;
-                InkButton {
-                    small: true;
-                    text: "Open in Exports";
-                    clicked => {
-                        ExportsState.after-open();
-                        LayoutState.mode = WorkspaceMode.exports;
-                        PipelineRunningState.close();
-                    }
-                }
-            }
-            if !PipelineRunningState.has-error: VerticalLayout {
-                alignment: center;
-                InkButton {
-                    small: true;
-                    kind: InkButtonKind.primary;
-                    text: "Open results";
-                    clicked => {
-                        PipelineRunningState.open-results();
-                        LayoutState.mode = WorkspaceMode.results;
-                        PipelineRunningState.close();
-                    }
-                }
-            }
-            VerticalLayout {
-                alignment: center;
-                InkIconButton {
-                    size: 26px;
-                    icon: InkIcons.close;
-                    label: "Close";
-                    clicked => {
-                        PipelineRunningState.close();
-                    }
+        if !PipelineRunningState.has-error: VerticalLayout {
+            alignment: center;
+            InkButton {
+                small: true;
+                kind: InkButtonKind.primary;
+                text: "Open results";
+                clicked => {
+                    PipelineRunningState.open-results();
+                    LayoutState.mode = WorkspaceMode.results;
+                    PipelineRunningState.close();
                 }
             }
         }
     }
 
-    // -- An export's note (run by hand, added from Results): where an
-    // analysis' note is - gone after a few seconds when all went well,
-    // kept on a problem (an analysis' own exports are in its note) --
-    if ExportsState.after-shown: Rectangle {
+    // -- An export's note (run by hand, added from Results): the same
+    // note as an analysis', in the same place - gone after a few seconds
+    // when all went well, kept on a problem (an analysis' own exports are
+    // in its note) --
+    if ExportsState.after-shown: InkToast {
         x: (parent.width - self.width) / 2;
         y: Float.gap + (LayoutState.annotate ? 52px : 0px) + (LayoutState.panels-hidden && root.on-image ? 42px : 0px);
-        width: after-row.preferred-width;
-        height: 36px;
-        border-radius: Ink.radius-lg;
-        background: Ink.panel-blur ? Ink.glass : Ink.panel;
-        backdrop-blur: Ink.backdrop;
-        border-width: 1px;
-        border-color: ExportsState.after-tone == 2 ? Ink.warn : Ink.border;
-        drop-shadow-blur: 24px;
-        drop-shadow-offset-y: 8px;
-        drop-shadow-color: Ink.shadow;
-        accessible-role: text;
-        accessible-label: after-text.text;
-        TouchArea { }
-        Timer {
-            interval: 8s;
-            running: ExportsState.after-tone == 1;
-            triggered => {
-                ExportsState.after-close();
+        tone: ExportsState.after-tone == 2 ? InkTone.warn : InkTone.ok;
+        auto-close: ExportsState.after-tone == 1 ? 6s : 0ms;
+        text: ExportsState.after-text;
+        closed => {
+            ExportsState.after-close();
+        }
+        if ExportsState.after-folder: VerticalLayout {
+            alignment: center;
+            InkButton {
+                small: true;
+                text: "Open folder";
+                icon: InkIcons.folder;
+                clicked => {
+                    ExportsState.after-open-folder();
+                }
             }
         }
-        after-row := HorizontalLayout {
-            padding-left: 14px;
-            padding-right: 4px;
-            spacing: 10px;
-            Image {
-                width: 14px;
-                source: ExportsState.after-busy ? InkIcons.busy : ExportsState.after-tone == 2 ? InkIcons.warning : InkIcons.check;
-                colorize: ExportsState.after-tone == 2 ? Ink.warn : ExportsState.after-tone == 1 ? Ink.ok : Ink.text-dim;
-                image-fit: contain;
-            }
-            after-text := Text {
-                text: ExportsState.after-text;
-                font-size: Ink.fs-body;
-                color: Ink.text;
-                vertical-alignment: center;
-                max-width: 560px;
-                overflow: elide;
-            }
-            if !ExportsState.after-busy && ExportsState.after-folder: VerticalLayout {
-                alignment: center;
-                InkButton {
-                    small: true;
-                    text: "Open folder";
-                    icon: InkIcons.folder;
-                    clicked => {
-                        ExportsState.after-open-folder();
-                    }
-                }
-            }
-            if !ExportsState.after-busy: VerticalLayout {
-                alignment: center;
-                InkButton {
-                    small: true;
-                    text: "Open in Exports";
-                    clicked => {
-                        ExportsState.after-open();
-                        LayoutState.mode = WorkspaceMode.exports;
-                    }
-                }
-            }
-            VerticalLayout {
-                alignment: center;
-                InkIconButton {
-                    size: 26px;
-                    icon: ExportsState.after-busy ? InkIcons.stop : InkIcons.close;
-                    label: ExportsState.after-busy ? "Stop the exports" : "Close";
-                    clicked => {
-                        ExportsState.after-close();
-                    }
+        VerticalLayout {
+            alignment: center;
+            InkButton {
+                small: true;
+                text: "Open in Exports";
+                clicked => {
+                    ExportsState.after-open();
+                    LayoutState.mode = WorkspaceMode.exports;
                 }
             }
         }

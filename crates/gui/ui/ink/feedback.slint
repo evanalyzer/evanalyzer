@@ -8,8 +8,11 @@ import { Ink } from "palette.slint";
 import { InkTipZone } from "tooltip.slint";
 import { InkIcons } from "icons.slint";
 import { InkTone } from "marker.slint";
+import { InkIconButton } from "button.slint";
 
 /// Progress, 0…1. `indeterminate`: a moving bar, for work without a known end.
+/// `info`: a run going on (an analysis, an export) - blue on a faint blue
+/// track, as in the top bar's run pill.
 export component InkProgressBar inherits Rectangle {
     in property <float> value;
     in property <bool> indeterminate: false;
@@ -21,7 +24,7 @@ export component InkProgressBar inherits Rectangle {
 
     track := Rectangle {
         border-radius: self.height / 2;
-        background: Ink.raised;
+        background: root.tone == InkTone.info ? Ink.focus.with-alpha(0.18) : Ink.raised;
         clip: true;
         Rectangle {
             x: root.indeterminate ? (parent.width + self.width) * mod(animation-tick() / 1.4s, 1) - self.width : 0px;
@@ -30,7 +33,73 @@ export component InkProgressBar inherits Rectangle {
             background: root.tone == InkTone.err ? Ink.err
                 : root.tone == InkTone.ok ? Ink.ok
                 : root.tone == InkTone.warn ? Ink.warn
+                : root.tone == InkTone.info ? Ink.focus
                 : Ink.primary;
+            animate width { duration: 200ms; }
+        }
+    }
+}
+
+/// A note that a run ended (an analysis, an export): under the top bar,
+/// floating - blurred like every floating surface. An icon by its `tone`
+/// (ok ✓, warn ⚠, err ✕), the text, its buttons (the children), ✕.
+/// `auto-close` > 0: gone after that long (`closed`), else it stays.
+/// Place it with `x` / `y`.
+export component InkToast inherits Rectangle {
+    in property <string> text;
+    in property <InkTone> tone: InkTone.ok;
+    in property <duration> auto-close: 0ms;
+    callback closed();
+
+    width: row.preferred-width;
+    height: 36px;
+    border-radius: Ink.radius-lg;
+    background: Ink.panel-blur ? Ink.glass : Ink.panel;
+    backdrop-blur: Ink.backdrop;
+    border-width: 1px;
+    border-color: root.tone == InkTone.err ? Ink.err : root.tone == InkTone.warn ? Ink.warn : Ink.border;
+    drop-shadow-blur: 24px;
+    drop-shadow-offset-y: 8px;
+    drop-shadow-color: Ink.shadow;
+    accessible-role: AccessibleRole.text;
+    accessible-label: root.text;
+    TouchArea { }
+    Timer {
+        interval: root.auto-close > 0ms ? root.auto-close : 1s;
+        running: root.auto-close > 0ms;
+        triggered => {
+            root.closed();
+        }
+    }
+    row := HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 4px;
+        spacing: 10px;
+        Image {
+            width: 14px;
+            source: root.tone == InkTone.err ? InkIcons.error : root.tone == InkTone.warn ? InkIcons.warning : InkIcons.check;
+            colorize: root.tone == InkTone.err ? Ink.err : root.tone == InkTone.warn ? Ink.warn : Ink.ok;
+            image-fit: contain;
+        }
+        Text {
+            text: root.text;
+            font-size: Ink.fs-body;
+            color: Ink.text;
+            vertical-alignment: center;
+            max-width: 560px;
+            overflow: elide;
+        }
+        @children
+        VerticalLayout {
+            alignment: center;
+            InkIconButton {
+                size: 26px;
+                icon: InkIcons.close;
+                label: "Close";
+                clicked => {
+                    root.closed();
+                }
+            }
         }
     }
 }

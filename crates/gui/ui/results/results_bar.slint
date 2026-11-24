@@ -7,6 +7,7 @@
 // Z/T and Export.
 
 import { QuickExportState } from "../api/quick_export.slint";
+import { ExportsState } from "../api/exports.slint";
 import {
     ResultsRailMode,
     ResultsState,
@@ -616,7 +617,8 @@ export component ResultsBarActions inherits HorizontalLayout {
         }
     }
 
-    VerticalLayout {
+    // An export running: its pill in the top bar instead (one at a time).
+    if !ExportsState.running: VerticalLayout {
         alignment: center;
         horizontal-stretch: 0;
         InkButton {

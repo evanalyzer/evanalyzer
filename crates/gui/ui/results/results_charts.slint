@@ -8,6 +8,7 @@
 // into `ResultsState.chart-*`) in the stretch area below.
 import { ChartHit, ResultsChartKind2, ResultsState } from "../api/results.slint";
 import { QuickExportState } from "../api/quick_export.slint";
+import { ExportsState } from "../api/exports.slint";
 import { InkScheme } from "../ink/palette.slint";
 import { InkSegmented, InkHint, InkNumberField, InkSwitch, InkButton, InkButtonKind } from "../ink/ink.slint";
 import { ColocCountRow, SettingsGroup } from "results_common.slint";
@@ -430,7 +431,8 @@ component OverTimeChart inherits Rectangle {
                 color: Ink.text-mute;
                 vertical-alignment: center;
             }
-            InkButton {
+            // An export running: its pill in the top bar instead.
+            if !ExportsState.running: InkButton {
                 small: true;
                 kind: InkButtonKind.secondary;
                 text: "Export data…";

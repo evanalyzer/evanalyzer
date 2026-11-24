@@ -1394,3 +1394,50 @@ fn an_export_waits_for_the_analysis_and_ends_with_its_note() {
     );
     assert!(state.get_after_folder(), "Open folder");
 }
+
+/// The run pills are in the top bar on every tab: an analysis' and an
+/// export's (run by hand), also in Results and Exports.
+#[test]
+fn the_run_pills_show_on_every_tab() {
+    use crate::{LayoutState, PipelineRunningState, StartState, WorkspaceMode};
+    use i_slint_backend_testing::ElementHandle;
+    let (ui, _ui_state, _controller) = setup(ProjectWithRuntime::default());
+    ui.window().set_size(slint::LogicalSize::new(1280.0, 680.0));
+    ui.global::<StartState>().set_active(false);
+    let shown = |label: &str| {
+        ElementHandle::find_by_accessible_label(&ui, label)
+            .any(|e| e.size().width > 0.0)
+    };
+    let state = ui.global::<ExportsState>();
+    for mode in [
+        WorkspaceMode::Images,
+        WorkspaceMode::Results,
+        WorkspaceMode::Exports,
+    ] {
+        ui.global::<LayoutState>().set_mode(mode);
+        // Set after the tab is made (on the first look): the Exports tab
+        // refreshes its state when it opens.
+        let _ = shown("");
+        drain_ui_queue();
+        state.set_running(true);
+        state.set_run_name("“Export”".into());
+        state.set_progress("2/2 · drawn_images".into());
+        assert!(
+            shown("Exporting, “Export” · 2/2 · drawn_images"),
+            "the export's pill in {mode:?} (running {})",
+            state.get_running()
+        );
+    }
+    // Its pill takes the place of Run (and Auto preview).
+    ui.global::<LayoutState>().set_mode(WorkspaceMode::Images);
+    state.set_running(true);
+    assert!(!shown("Run"), "no Run beside the pill");
+    state.set_running(false);
+    assert!(shown("Run"), "Run back");
+    let running = ui.global::<PipelineRunningState>();
+    running.set_active(true);
+    for mode in [WorkspaceMode::Results, WorkspaceMode::Exports] {
+        ui.global::<LayoutState>().set_mode(mode);
+        assert!(shown("Analyzing, starting"), "the analysis' pill in {mode:?}");
+    }
+}

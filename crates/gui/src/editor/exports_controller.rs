@@ -1389,6 +1389,10 @@ impl ExportsController {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
+        // One at a time: not while an export runs.
+        if self.shown.lock().expect("Poisoned").running.is_some() {
+            return;
+        }
         let Some((view, database)) = self.view_and_results(view_id) else {
             return;
         };

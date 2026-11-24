@@ -21,6 +21,8 @@ import {
     InkMenuSeparator,
     InkSearchField,
     InkTipZone,
+    InkProgressBar,
+    InkTone,
 } from "../ink/ink.slint";
 import { Appearance } from "../api/appearance.slint";
 import { LayoutState, WorkspaceMode } from "../api/layout.slint";
@@ -652,8 +654,8 @@ component PreviewGroup inherits Rectangle {
     }
 }
 
-// An analysis running: in place of Auto preview and Run - progress, the
-// count and the time left, Stop.
+// A run going on (an analysis, an export): in place of Auto preview and
+// Run - progress, the count and the time left, Stop.
 export global RunText {
     // "23 / 81 · ~4 min" (one image: its tiles).
     pure public function count() -> string {
@@ -722,18 +724,11 @@ component RunStatus inherits Rectangle {
 
         VerticalLayout {
             alignment: center;
-            Rectangle {
+            InkProgressBar {
                 width: 120px;
                 height: 6px;
-                border-radius: 3px;
-                background: Ink.focus.with-alpha(0.18);
-                clip: true;
-                Rectangle {
-                    x: 0px;
-                    width: parent.width * root.fraction;
-                    background: Ink.focus;
-                    animate width { duration: 200ms; }
-                }
+                tone: InkTone.info;
+                value: root.fraction;
             }
         }
 
@@ -777,6 +772,39 @@ component RunStatus inherits Rectangle {
     }
 }
 
+// The runs going on, on every tab: an analysis' pill (its exports as its
+// last step), else an export run by hand (design canvas "Quick export,
+// open folder, run on", board 6).
+component RunPills inherits HorizontalLayout {
+    property <bool> analysing: PipelineRunningState.active && (!PipelineRunningState.done || PipelineRunningState.exporting);
+    if root.analysing: VerticalLayout {
+        alignment: center;
+        RunStatus {
+            stop => {
+                PipelineRunningState.cancel();
+            }
+            clicked => {
+                LayoutState.mode = PipelineRunningState.exporting ? WorkspaceMode.exports : WorkspaceMode.pipelines;
+            }
+        }
+    }
+    if ExportsState.running && !root.analysing: VerticalLayout {
+        alignment: center;
+        RunStatus {
+            label: "Exporting";
+            count: ExportsState.run-name + (ExportsState.progress != "" ? " · " + ExportsState.progress : "");
+            fraction: ExportsState.progress-fraction;
+            stop-label: "Stop the export";
+            stop => {
+                ExportsState.cancel();
+            }
+            clicked => {
+                LayoutState.mode = WorkspaceMode.exports;
+            }
+        }
+    }
+}
+
 export component TopBar inherits Rectangle {
     /// The project's name (and an unsaved-changes mark).
     in property <string> title;
@@ -788,6 +816,9 @@ export component TopBar inherits Rectangle {
     property <bool> editing: !StartState.active && (LayoutState.mode == WorkspaceMode.images || LayoutState.mode == WorkspaceMode.pipelines);
     // An analysis in work (not yet finished).
     property <bool> running: PipelineRunningState.active && (!PipelineRunningState.done || PipelineRunningState.exporting);
+    // A run going on (an analysis, or an export by hand): its pill takes
+    // the place of Auto preview and Run.
+    property <bool> busy: root.running || ExportsState.running;
 
     height: Ink.bar-h;
     background: Ink.panel;
@@ -899,6 +930,8 @@ export component TopBar inherits Rectangle {
             horizontal-stretch: 1;
         }
 
+
+
         if root.editing: Text {
             horizontal-stretch: 1;
             text: root.title;
@@ -910,6 +943,13 @@ export component TopBar inherits Rectangle {
         }
 
         if root.results: ResultsBarActions { }
+
+        // Results, Exports: the runs going on - at the right, as on the
+        // other tabs.
+        if !root.editing && !StartState.active: RunPills {
+            padding-left: 8px;
+            padding-right: 6px;
+        }
 
         if root.editing: VerticalLayout {
             alignment: center;
@@ -929,9 +969,9 @@ export component TopBar inherits Rectangle {
                     }
                 }
                 PreviewGroup {
-                    running: root.running;
+                    running: root.busy;
                 }
-                if !root.running: InkButton {
+                if !root.busy: InkButton {
                     // With folders skipped or groups unticked: how many
                     // images it runs on.
                     text: ImagesListState.run-images < ImagesListState.total-images
@@ -946,33 +986,7 @@ export component TopBar inherits Rectangle {
                         PipelinesPanelState.run-all();
                     }
                 }
-                if root.running: VerticalLayout {
-                    alignment: center;
-                    RunStatus {
-                        stop => {
-                            PipelineRunningState.cancel();
-                        }
-                        clicked => {
-                            LayoutState.mode = PipelineRunningState.exporting ? WorkspaceMode.exports : WorkspaceMode.pipelines;
-                        }
-                    }
-                }
-                // An export started by hand: its pill, the same.
-                if ExportsState.running && !root.running: VerticalLayout {
-                    alignment: center;
-                    RunStatus {
-                        label: "Exporting";
-                        count: ExportsState.run-name + (ExportsState.progress != "" ? " · " + ExportsState.progress : "");
-                        fraction: ExportsState.progress-fraction;
-                        stop-label: "Stop the export";
-                        stop => {
-                            ExportsState.cancel();
-                        }
-                        clicked => {
-                            LayoutState.mode = WorkspaceMode.exports;
-                        }
-                    }
-                }
+                RunPills { }
                 VerticalLayout {
                     alignment: center;
                     InkBarSeparator { }

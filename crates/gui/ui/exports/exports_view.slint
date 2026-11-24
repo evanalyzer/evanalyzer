@@ -6,7 +6,7 @@
 // entry picked on the right with the last run's report. Sits on the ground,
 // not over other content: no blur.
 
-import { Ink, InkIcons, InkCheckList, InkButton, InkButtonKind, InkIconButton, InkCheckbox, InkSwitch, InkSegmented, InkSelect, InkTextField, InkListRow, InkLabel, InkCaption, InkHint, InkBanner, InkTone, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator } from "../ink/ink.slint";
+import { Ink, InkIcons, InkCheckList, InkButton, InkButtonKind, InkIconButton, InkCheckbox, InkSwitch, InkSegmented, InkSelect, InkTextField, InkListRow, InkLabel, InkCaption, InkHint, InkBanner, InkTone, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator, InkProgressBar } from "../ink/ink.slint";
 import { ExportsState, ExportRow, ExportEntryRow, RunPart } from "../api/exports.slint";
 import { PipelineRunningState } from "../api/pipeline_running.slint";
 import { ColumnPicker, ValuesClassesPart, RelatedPart } from "../results/results_panel.slint";
@@ -1367,17 +1367,10 @@ export component ExportsView inherits Rectangle {
                         }
                         if root.dock-open && ExportsState.running: VerticalLayout {
                             spacing: 6px;
-                            Rectangle {
+                            InkProgressBar {
                                 height: 6px;
-                                border-radius: 3px;
-                                background: Ink.focus.with-alpha(0.18);
-                                clip: true;
-                                Rectangle {
-                                    x: 0px;
-                                    width: parent.width * ExportsState.progress-fraction;
-                                    background: Ink.focus;
-                                    animate width { duration: 200ms; }
-                                }
+                                tone: InkTone.info;
+                                value: ExportsState.progress-fraction;
                             }
                             Text {
                                 text: ExportsState.progress;
