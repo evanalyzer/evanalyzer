@@ -310,9 +310,35 @@ export global ChannelState {
     }
 
 //
-// Image pixel info
+// Image pixel info: what lies under the pointer, shown in the bar at the
+// bottom of the image (editor/viewport_stack_bar.slint).
 //
+// One value under the pointer: a channel's, or R, G or B of a colour image -
+// in the colour it is drawn in.
+export struct PixelValue {
+    name: string,
+    text: string,
+    color: color,
+}
+
+// Something else under the pointer: the prediction, the breakpoint image's
+// value.
+export struct PixelExtra {
+    label: string,
+    text: string,
+}
+
 export global ImagePixelInfo {
-        in-out property <string> mouse_pos;
-        in-out property <string> pixel_value;
-    }
+    // "123.45, 67.89 µm" - "" until the pointer was over this image.
+    in-out property <string> position;
+    in-out property <[PixelValue]> values;
+    in-out property <[PixelExtra]> extras;
+    // The pointer is over the image now - off it the last values stay,
+    // dimmed.
+    in-out property <bool> over-image;
+    // The digits a value can have (from the image's bit depth): its cell
+    // keeps that width, so the bar doesn't jump while the pointer moves.
+    in-out property <int> digits: 5;
+    // The characters the position can take on this image.
+    in-out property <int> position-chars: 16;
+}

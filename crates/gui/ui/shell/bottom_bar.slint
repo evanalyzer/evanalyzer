@@ -152,9 +152,12 @@ export component BottomBar inherits Rectangle {
             horizontal-stretch: 1;
         }
 
+        // The status: at the right edge, whatever is shown.
         VerticalLayout {
             alignment: center;
+            horizontal-stretch: 0;
             HorizontalLayout {
+                alignment: end;
                 spacing: 2px;
                 // A running analysis: what it's at.
                 if root.running: InkStatusItem {
@@ -166,7 +169,7 @@ export component BottomBar inherits Rectangle {
                         + (PipelineRunningState.images-total > 0 ? " · image " + PipelineRunningState.images-done + " / " + PipelineRunningState.images-total : "");
                 }
                 // Idle over the image: how the panels go away.
-                if !root.running && !StartState.active && LayoutState.mode != WorkspaceMode.results && ImagePixelInfo.mouse_pos == "": HorizontalLayout {
+                if !root.running && !StartState.active && LayoutState.mode != WorkspaceMode.results && ImagePixelInfo.position == "": HorizontalLayout {
                     spacing: 4px;
                     padding-right: 6px;
                     HintText { text: "Click a panel's title to fold it ·"; }
@@ -192,19 +195,11 @@ export component BottomBar inherits Rectangle {
                 if RendererState.slow: SlowDrawingItem {
                     y: (parent.height - self.height) / 2;
                 }
-                // Under the pointer.
+                // The viewport: drawing, zoom. What lies under the pointer
+                // is in the bar at the bottom of the image.
                 if !StartState.active && LayoutState.mode != WorkspaceMode.results: HorizontalLayout {
+                    alignment: end;
                     spacing: 2px;
-                    InkStatusItem {
-                        visible: ImagePixelInfo.mouse_pos != "";
-                        text: ImagePixelInfo.mouse_pos;
-                        mono: true;
-                    }
-                    InkStatusItem {
-                        visible: ImagePixelInfo.pixel_value != "";
-                        text: ImagePixelInfo.pixel_value;
-                        mono: true;
-                    }
                     InkBarSeparator { }
                     InkStatusItem {
                         icon: ViewportState.opening || !ViewportState.high_res_ready ? InkIcons.busy : InkIcons.check;

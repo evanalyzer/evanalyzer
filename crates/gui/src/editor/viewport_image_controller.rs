@@ -14,7 +14,7 @@ use crate::editor::viewport_cache::{ViewportCache, effective_cache_mb, this_comp
 use crate::editor::viewport_controller::ViewportController;
 use crate::{
     AppWindow, ChannelInfo, ChannelState, DialogType, GlobalAppState, ImageMetaData,
-    ImagePixelInfo, IntensityProjection, LayoutState, ViewportMemoryState,
+    ImagePixelInfo, IntensityProjection, LayoutState, PixelExtra, PixelValue, ViewportMemoryState,
     ViewportState as ViewportSlintState, WarningState,
 };
 use evanalyzer_app::project::GlobalImageSettingsExt;
@@ -24,8 +24,9 @@ use evanalyzer_cfg::settings::images_settings::{
     TStackHandling, TStackSettings, ZStackHandling, ZStackSettings,
 };
 use log::warn;
-use slint::{ComponentHandle, Model, Timer, TimerMode};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -39,6 +40,9 @@ pub(crate) struct ViewportImageController {
     /// so the two don't cancel each other.
     pub(crate) pixel_info_throttle_timer: Timer,
     pub(crate) last_pixel_info_sync: Mutex<Instant>,
+    /// The pointer was over the image at the last pixel-info update - so
+    /// leaving it dims the values once, not on every move off the image.
+    pub(crate) pointer_on_image: AtomicBool,
     /// Trailing timer for the immediate low-res redraw throttle (see
     /// `trigger_redraw_low_res_throttled`) - separate from the other timers
     /// here so none of them cancel each other.
@@ -66,6 +70,7 @@ impl ViewportImageController {
             redraw_debounce_timer: Timer::default(),
             pixel_info_throttle_timer: Timer::default(),
             last_pixel_info_sync: Mutex::new(Instant::now()),
+            pointer_on_image: AtomicBool::new(false),
             low_res_throttle_timer: Timer::default(),
             last_low_res_redraw: Mutex::new(Instant::now()),
             viewport_controller,
@@ -617,23 +622,14 @@ impl ViewportImageController {
         }
     }
 
-    /// Synchronizes precise mouse interaction data and pixel-level information to the Slint UI.
+    /// What lies under the pointer, for the bar at the bottom of the image
+    /// (`ImagePixelInfo`): the position in µm, each channel's value in the
+    /// file's range (R, G and B for a colour image) in the colour it is
+    /// drawn in, the breakpoint image's value while comparing and the
+    /// prediction where the overlay shows values.
     ///
-    /// This method maps the current mouse cursor position from the UI's drawing coordinates
-    /// back to the underlying image data. It is used to display live tooltips
-    /// or status bars showing the pixel color values, coordinates, or channel data
-    /// under the cursor.
-    ///
-    /// ### Arguments
-    /// * `image_data` - A thread-safe reference to the raw image channels used for pixel sampling.
-    /// * `draw_x` / `draw_y` - The current mouse coordinates relative to the UI drawing surface.
-    /// * `image_w` / `image_h` - The dimensions of the source image being sampled.
-    /// * `zoomed_w` / `zoomed_h` - The current dimensions of the rendered (zoomed) viewport.
-    /// * `bit_depth` - The color depth of the image (e.g., 8, 10, or 16-bit), used for formatting value strings.
-    ///
-    /// ### Returns
-    /// * `Ok(())` if the coordinate mapping was successful and the UI was updated.
-    /// * `Err(InternalErrors)` if the coordinates fall outside valid bounds or image data is inaccessible.
+    /// Off the image nothing is read: the last values stay (dimmed - the
+    /// pointer left the image).
     pub fn sync_actual_mouse_position_information_to_slint(&self) {
         let project = self.app_state.get_project();
         let pixel_sizes = project.get_pixel_sizes();
@@ -661,93 +657,125 @@ impl ViewportImageController {
         let local_y =
             (viewport_state.mouse_pos_y - ctx.draw_y) / (ctx.zoomed_h / ctx.image_h as f32);
 
-        if local_x >= 0.0
+        let on_image = local_x >= 0.0
             && local_x < ctx.image_w as f32
             && local_y >= 0.0
-            && local_y < ctx.image_h as f32
-        {
-            let idx = (local_y as usize * ctx.image_w as usize) + local_x as usize;
+            && local_y < ctx.image_h as f32;
+        if !on_image {
+            if self.pointer_on_image.swap(false, Ordering::Relaxed) {
+                let ui_weak = self.ui.clone();
+                crate::helper::ui_thread::invoke_from_event_loop(move || {
+                    if let Some(ui) = ui_weak.upgrade() {
+                        ui.global::<ImagePixelInfo>().set_over_image(false);
+                    }
+                })
+                .ok();
+            }
+            return;
+        }
+        self.pointer_on_image.store(true, Ordering::Relaxed);
 
-            // Format the string right here
-            let mut pixel_values = Vec::new();
-            for channel in image_data.iter() {
-                if !channel.is_rgb {
-                    if let Some(raw_val) = channel.value_at(idx) {
-                        //let _normalized_val = raw_val * 100.0;
-                        let scaled_val =
-                            crate::editor::view_channel::raw_value(raw_val, ctx.bit_depth);
-                        // An image without channel names: the names the
-                        // channels panel shows ("Channel 0").
-                        let name = evanalyzer_app::project::utils::channel_display_name(
-                            &channel.name,
-                            channel.c_stack,
-                        );
-                        pixel_values.push(format!("{name}: {:.0}", scaled_val));
+        let idx = (local_y as usize * ctx.image_w as usize) + local_x as usize;
+        let bits = ctx.bit_depth;
+        let value_text = |normalized: f32| -> SharedString {
+            slint::format!(
+                "{:.0}",
+                crate::editor::view_channel::raw_value(normalized, bits)
+            )
+        };
+
+        let mut values = Vec::with_capacity(image_data.len());
+        for channel in image_data.iter() {
+            if channel.is_rgb {
+                if let Some(rgb) = channel.rgb_at(idx) {
+                    for (name, value, color) in [
+                        ("Red", rgb[0], [0.86, 0.15, 0.15]),
+                        ("Green", rgb[1], [0.09, 0.64, 0.29]),
+                        ("Blue", rgb[2], [0.16, 0.42, 0.87]),
+                    ] {
+                        values.push(PixelValue {
+                            name: name.into(),
+                            text: value_text(value),
+                            color: crate::helper::color_generators::color_from_rgb(color),
+                        });
                     }
                 }
+            } else if let Some(raw_val) = channel.value_at(idx) {
+                // An image without channel names: the names the channels
+                // panel shows ("Channel 0").
+                let name = evanalyzer_app::project::utils::channel_display_name(
+                    &channel.name,
+                    channel.c_stack,
+                );
+                values.push(PixelValue {
+                    name: name.into(),
+                    text: value_text(raw_val),
+                    color: crate::helper::color_generators::color_from_rgb(channel.color),
+                });
             }
-
-            // Comparing: the breakpoint image's value at the same pixel too.
-            if self.viewport_controller.comparing() && viewport_state.zoom > 0.0 {
-                let x =
-                    (viewport_state.mouse_pos_x - viewport_state.offset_x) / viewport_state.zoom;
-                let y =
-                    (viewport_state.mouse_pos_y - viewport_state.offset_y) / viewport_state.zoom;
-                if let Some(value) = self.viewport_controller.breakpoint_value_at(x, y) {
-                    pixel_values.push(format!("Breakpoint: {value}"));
-                }
-            }
-
-            // The prediction overlay: the class predicted here, how probable.
-            let prediction = self.viewport_controller.prediction.settings();
-            if prediction.on && prediction.show_values && viewport_state.zoom > 0.0 {
-                let x =
-                    (viewport_state.mouse_pos_x - viewport_state.offset_x) / viewport_state.zoom;
-                let y =
-                    (viewport_state.mouse_pos_y - viewport_state.offset_y) / viewport_state.zoom;
-                let value = self
-                    .viewport_controller
-                    .prediction
-                    .value_at(x, y)
-                    .or_else(|| {
-                        let objects = self.viewport_controller.prediction.has_objects();
-                        objects
-                            .then(|| {
-                                object_prediction_at(&project, &self.viewport_controller, x, y)
-                            })
-                            .flatten()
-                    });
-                if let Some((class, percent)) = value {
-                    pixel_values.push(format!("Prediction: {class} {percent} %"));
-                }
-            }
-
-            // Calculate position
-            let z_stack = match &project.get_z_stack() {
-                Some(stack) => match &stack.z_range {
-                    Some(range) => range.start().clone(),
-                    None => 0,
-                },
-                _ => 0,
-            };
-
-            let pos = format!(
-                "({:.1} {:.1} {:.1}) nm",
-                local_x * pixel_sizes.x,
-                local_y * pixel_sizes.y,
-                (z_stack as f32 + 1.0) * pixel_sizes.z.unwrap_or(0.0)
-            );
-
-            let ui_weak = self.ui.clone();
-            crate::helper::ui_thread::invoke_from_event_loop(move || {
-                if let Some(ui) = ui_weak.upgrade() {
-                    ui.global::<ImagePixelInfo>()
-                        .set_pixel_value(pixel_values.join(" | ").into());
-                    ui.global::<ImagePixelInfo>().set_mouse_pos(pos.into());
-                }
-            })
-            .ok();
         }
+
+        let mut extras = Vec::new();
+        // Comparing: the breakpoint image's value at the same pixel too.
+        if self.viewport_controller.comparing() && viewport_state.zoom > 0.0 {
+            let x = (viewport_state.mouse_pos_x - viewport_state.offset_x) / viewport_state.zoom;
+            let y = (viewport_state.mouse_pos_y - viewport_state.offset_y) / viewport_state.zoom;
+            if let Some(value) = self.viewport_controller.breakpoint_value_at(x, y) {
+                extras.push(PixelExtra {
+                    label: "Breakpoint".into(),
+                    text: slint::format!("{value}"),
+                });
+            }
+        }
+
+        // The prediction overlay: the class predicted here, how probable.
+        let prediction = self.viewport_controller.prediction.settings();
+        if prediction.on && prediction.show_values && viewport_state.zoom > 0.0 {
+            let x = (viewport_state.mouse_pos_x - viewport_state.offset_x) / viewport_state.zoom;
+            let y = (viewport_state.mouse_pos_y - viewport_state.offset_y) / viewport_state.zoom;
+            let value = self
+                .viewport_controller
+                .prediction
+                .value_at(x, y)
+                .or_else(|| {
+                    let objects = self.viewport_controller.prediction.has_objects();
+                    objects
+                        .then(|| object_prediction_at(&project, &self.viewport_controller, x, y))
+                        .flatten()
+                });
+            if let Some((class, percent)) = value {
+                extras.push(PixelExtra {
+                    label: "Prediction".into(),
+                    text: slint::format!("{class} {percent} %"),
+                });
+            }
+        }
+
+        // The pixel sizes are in nm.
+        let (um_x, um_y) = (pixel_sizes.x / 1000.0, pixel_sizes.y / 1000.0);
+        let position = slint::format!("{:.2}, {:.2} µm", local_x * um_x, local_y * um_y);
+        // As wide as the position can get on this image: its cell keeps that
+        // width.
+        let position_chars = position_chars(ctx.image_w as f32 * um_x, ctx.image_h as f32 * um_y);
+        let digits = value_digits(bits);
+
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                let info = ui.global::<ImagePixelInfo>();
+                if let Some(model) = replace_rows(info.get_values(), values) {
+                    info.set_values(model);
+                }
+                if let Some(model) = replace_rows(info.get_extras(), extras) {
+                    info.set_extras(model);
+                }
+                info.set_position(position);
+                info.set_position_chars(position_chars);
+                info.set_digits(digits);
+                info.set_over_image(true);
+            }
+        })
+        .ok();
     }
 
     /// Updates the image channel configurations and multi-dimensional playback settings within the project.
@@ -1106,6 +1134,34 @@ fn object_prediction_at(
         )
     }))?;
     viewport.prediction.object_value(&objects[i].id)
+}
+
+/// `rows` into `model` in place when it has as many rows (no new model
+/// while the pointer moves over the same image); otherwise the new model.
+fn replace_rows<T: Clone + 'static>(model: ModelRc<T>, rows: Vec<T>) -> Option<ModelRc<T>> {
+    if model.row_count() == rows.len() {
+        for (i, row) in rows.into_iter().enumerate() {
+            model.set_row_data(i, row);
+        }
+        None
+    } else {
+        Some(ModelRc::new(VecModel::from(rows)))
+    }
+}
+
+/// The characters of the longest position on an image `width_um` ×
+/// `height_um` µm ("1234.56, 789.01 µm").
+fn position_chars(width_um: f32, height_um: f32) -> i32 {
+    let digits = |v: f32| (v.abs().max(1.0).log10().floor() as i32) + 1;
+    // Each: its digits, ".", two decimals; ", " between, " µm" after.
+    digits(width_um) + 3 + 2 + digits(height_um) + 3 + 3
+}
+
+/// The digits a value of a `bits`-deep image can have (255: 3, 65535: 5) -
+/// at most 7, for images of floats.
+fn value_digits(bits: u16) -> i32 {
+    let max = evanalyzer_cfg::core_types::max_gray_value(bits).unwrap_or(1.0);
+    ((max.max(1.0).log10().floor() as i32) + 1).min(7)
 }
 
 #[cfg(test)]
@@ -1722,9 +1778,12 @@ mod tests {
         ui.global::<ViewportSlintState>().set_scale_bar_width(600.0);
         ui.global::<ViewportSlintState>().set_ortho(true);
 
-        let bar = ElementHandle::find_by_accessible_label(&ui, "Objects, Z and T")
-            .next()
-            .expect("the Z bar");
+        let bar = ElementHandle::find_by_accessible_label(
+            &ui,
+            "Objects, Z, T and the values under the pointer",
+        )
+        .next()
+        .expect("the Z bar");
         let (bar_at, bar_size) = (bar.absolute_position(), bar.size());
         for label in ["Orthogonal views", "3D view"] {
             let button = ElementHandle::find_by_accessible_label(&ui, label)
@@ -1736,6 +1795,276 @@ mod tests {
                 "{label} at {at:?} {size:?} outside the bar {bar_at:?} {bar_size:?}"
             );
         }
+    }
+
+    /// The bar at the bottom of the image with an image of `z` planes and
+    /// `channels` values under the pointer, the window `width` wide.
+    fn image_bar(z: i32, channels: usize, width: f32) -> (AppWindow, Arc<ViewportImageController>) {
+        use crate::ImageMetaData;
+        let (ui, _, controller) = attached();
+        let meta = ui.global::<ImageMetaData>();
+        meta.set_image_name("stack.tif".into());
+        meta.set_nr_z_stacks(z);
+        // The new image clears what was under the pointer on the last one.
+        advance(20);
+        let info = ui.global::<ImagePixelInfo>();
+        let values: Vec<PixelValue> = ["DAPI", "FITC", "Cy3", "Cy5", "Cy7"]
+            .iter()
+            .take(channels)
+            .map(|name| PixelValue {
+                name: (*name).into(),
+                text: "1234".into(),
+                color: slint::Color::from_rgb_u8(0, 0, 255),
+            })
+            .collect();
+        info.set_values(ModelRc::new(VecModel::from(values)));
+        info.set_position("123.45, 67.89 µm".into());
+        info.set_over_image(true);
+        ui.window().set_size(slint::LogicalSize::new(width, 720.0));
+        advance(20);
+        (ui, controller)
+    }
+
+    /// Where the element `label` is shown (hidden ones aren't found), if
+    /// all of it inside the bar at the bottom of the image.
+    fn in_image_bar(ui: &AppWindow, label: &str) -> Option<(f32, f32)> {
+        use i_slint_backend_testing::ElementHandle;
+        let bar = ElementHandle::find_by_accessible_label(
+            ui,
+            "Objects, Z, T and the values under the pointer",
+        )
+        .next()
+        .expect("the bar");
+        let (bar_at, bar_size) = (bar.absolute_position(), bar.size());
+        ElementHandle::find_by_accessible_label(ui, label)
+            .map(|e| (e.absolute_position().x, e.size().width))
+            .find(|(x, w)| *x >= bar_at.x && x + w <= bar_at.x + bar_size.width)
+    }
+
+    /// Wide enough: the objects' part, Z, the position and the values side
+    /// by side - no switch.
+    #[test]
+    fn a_wide_bar_shows_the_controls_and_the_values() {
+        let (ui, _c) = image_bar(57, 2, 1800.0);
+        for label in [
+            "Hide the objects",
+            "Objects' opacity",
+            "Previous slice",
+            "Next slice",
+        ] {
+            assert!(in_image_bar(&ui, label).is_some(), "{label}");
+        }
+        assert!(in_image_bar(&ui, "Position 123.45, 67.89 µm").is_some());
+        assert!(
+            in_image_bar(&ui, "DAPI 1234").is_some() && in_image_bar(&ui, "FITC 1234").is_some()
+        );
+        assert!(
+            in_image_bar(&ui, "Show the values under the pointer").is_none(),
+            "no switch"
+        );
+    }
+
+    /// Clicks the element `label` with the pointer (a real click).
+    fn click(ui: &AppWindow, label: &str) {
+        i_slint_backend_testing::ElementHandle::find_by_accessible_label(ui, label)
+            .next()
+            .unwrap_or_else(|| panic!("{label}"))
+            .mock_single_click(slint::platform::PointerEventButton::Left);
+        advance(20);
+    }
+
+    /// At the reference size (1280 wide) a Z-stack with five channels
+    /// doesn't fit both: with the values open Z shrinks to its chip; a click
+    /// on it (or on the values' ‹) folds the values to their dots and gives
+    /// Z its controls back; the dots open them again. The objects' part and
+    /// the fold button always stay, the fold button last.
+    #[test]
+    fn a_narrow_bar_shrinks_z_to_a_chip_while_the_values_are_open() {
+        let (ui, _c) = image_bar(57, 5, 1280.0);
+        let always = ["Hide the objects", "Objects' opacity", "Fold the bar"];
+        let dots = "Show the values under the pointer";
+        let z_chip = "Show the Z / T controls";
+
+        for label in always.iter().chain(&["DAPI 1234", "Cy7 1234", z_chip]) {
+            assert!(in_image_bar(&ui, label).is_some(), "open: {label}");
+        }
+        assert!(
+            in_image_bar(&ui, "Previous slice").is_none(),
+            "open: no Z controls"
+        );
+        let (fold_x, _) = in_image_bar(&ui, "Fold the bar").unwrap();
+        let (value_x, _) = in_image_bar(&ui, "Cy7 1234").unwrap();
+        assert!(fold_x > value_x, "the fold button last");
+
+        click(&ui, z_chip);
+        assert!(
+            ui.global::<crate::LayoutState>()
+                .get_stack_bar_values_folded(),
+            "kept"
+        );
+        for label in
+            always
+                .iter()
+                .chain(&["Previous slice", "Next slice", "Orthogonal views", dots])
+        {
+            assert!(in_image_bar(&ui, label).is_some(), "folded: {label}");
+        }
+        assert!(
+            in_image_bar(&ui, "DAPI 1234").is_none(),
+            "folded: no values"
+        );
+
+        click(&ui, dots);
+        assert!(in_image_bar(&ui, "DAPI 1234").is_some() && in_image_bar(&ui, z_chip).is_some());
+        // A click on a value folds them here too.
+        click(&ui, "DAPI 1234");
+        assert!(in_image_bar(&ui, dots).is_some() && in_image_bar(&ui, "Previous slice").is_some());
+    }
+
+    /// Wide enough for everything, a click on the values still folds them to
+    /// their dots (the Z controls stay); the dots open them again - in the
+    /// bar and in the pill.
+    #[test]
+    fn a_click_on_the_values_folds_them_to_their_dots_in_the_bar_and_the_pill() {
+        let dots = "Show the values under the pointer";
+        let (ui, _c) = image_bar(57, 3, 1800.0);
+        click(&ui, "FITC 1234");
+        assert!(
+            ui.global::<crate::LayoutState>()
+                .get_stack_bar_values_folded()
+        );
+        assert!(in_image_bar(&ui, "DAPI 1234").is_none());
+        assert!(in_image_bar(&ui, dots).is_some());
+        assert!(in_image_bar(&ui, "Previous slice").is_some(), "Z stays");
+
+        click(&ui, "Fold the bar");
+        assert!(in_image_bar(&ui, "Unfold the bar").is_some());
+        assert!(in_image_bar(&ui, "DAPI 1234").is_none(), "pill: no values");
+        click(&ui, dots);
+        assert!(
+            in_image_bar(&ui, "DAPI 1234").is_some(),
+            "pill: the values again"
+        );
+        click(&ui, "DAPI 1234");
+        assert!(in_image_bar(&ui, dots).is_some(), "pill: folded again");
+    }
+
+    /// A short value's dot sits right before it, not after the value
+    /// before: each value's room is in front of its dot.
+    #[test]
+    fn a_short_value_keeps_its_dot_next_to_it() {
+        use i_slint_backend_testing::ElementHandle;
+        let (ui, _c) = image_bar(1, 2, 1800.0);
+        let info = ui.global::<ImagePixelInfo>();
+        info.set_digits(5);
+        info.get_values().set_row_data(
+            0,
+            PixelValue {
+                name: "DAPI".into(),
+                text: "38".into(),
+                color: slint::Color::from_rgb_u8(0, 0, 255),
+            },
+        );
+        advance(20);
+        let value = ElementHandle::find_by_accessible_label(&ui, "DAPI 38")
+            .next()
+            .unwrap();
+        let (x, w) = (value.absolute_position().x, value.size().width);
+        // The dot: the 7 px rectangle inside the value.
+        let dot_x = value
+            .query_descendants()
+            .find_all()
+            .into_iter()
+            .filter(|e| e.size().width == 7.0 && e.size().height == 7.0)
+            .map(|e| e.absolute_position().x)
+            .next()
+            .expect("the dot");
+        // "38" takes 2 of the 5 digits' room: the dot is right before them,
+        // with the room of the 3 missing digits in front of it (it was at
+        // the start, the gap after the value).
+        assert!(dot_x >= x + 20.0, "dot at {dot_x} in {x}..{}", x + w);
+        assert!(
+            dot_x + 7.0 + 3.0 + 2.0 * 8.0 >= x + w,
+            "right before the value"
+        );
+    }
+
+    /// The scale bar sits on the image bar's line while there is room, and
+    /// moves up above it where the image bar needs the line.
+    #[test]
+    fn the_scale_bar_moves_up_where_the_image_bar_needs_its_room() {
+        use i_slint_backend_testing::ElementHandle;
+        let scale_y = |ui: &AppWindow| {
+            ElementHandle::find_by_accessible_label(ui, "Scale bar 20 µm")
+                .next()
+                .expect("the scale bar")
+                .absolute_position()
+                .y
+        };
+        let bar_y = |ui: &AppWindow| {
+            ElementHandle::find_by_accessible_label(
+                ui,
+                "Objects, Z, T and the values under the pointer",
+            )
+            .next()
+            .unwrap()
+            .absolute_position()
+            .y
+        };
+        for (width, channels, up) in [(1800.0, 1, false), (1280.0, 5, true)] {
+            let (ui, _c) = image_bar(57, channels, width);
+            let view = ui.global::<ViewportSlintState>();
+            view.set_scale_bar_width(100.0);
+            view.set_scale_bar_text("20 µm".into());
+            advance(20);
+            assert_eq!(
+                scale_y(&ui) + 34.0 <= bar_y(&ui),
+                up,
+                "{width} px: above the bar {up}"
+            );
+        }
+    }
+
+    /// A 2D image has no Z / T controls: nothing to switch, the values show.
+    #[test]
+    fn a_2d_image_shows_its_values_without_a_switch() {
+        let (ui, _c) = image_bar(1, 5, 1280.0);
+        assert!(
+            in_image_bar(&ui, "DAPI 1234").is_some() && in_image_bar(&ui, "Cy7 1234").is_some()
+        );
+        assert!(in_image_bar(&ui, "Show the values under the pointer").is_none());
+    }
+
+    /// The status (drawing, zoom, where the work runs) sits together at the
+    /// right edge of the status bar - not spread over its width.
+    #[test]
+    fn the_status_items_sit_together_at_the_right_edge() {
+        use crate::{LayoutState, StartState, WorkspaceMode};
+        use i_slint_backend_testing::ElementHandle;
+
+        let (ui, _, _controller) = attached();
+        ui.window().set_size(slint::LogicalSize::new(1400.0, 900.0));
+        ui.global::<StartState>().set_active(false);
+        ui.global::<LayoutState>().set_mode(WorkspaceMode::Images);
+        // The pointer was over the image: the panel hints are gone.
+        ui.global::<ImagePixelInfo>()
+            .set_position("1.00, 2.00 µm".into());
+        let zoom = ui.global::<ViewportSlintState>().get_zoom_factor();
+        let zoom_label = format!("Zoom {}%", (zoom * 100.0).round());
+        let item = |label: &str| {
+            let e = ElementHandle::find_by_accessible_label(&ui, label)
+                .next()
+                .unwrap_or_else(|| panic!("{label}"));
+            (e.absolute_position().x, e.size().width)
+        };
+        let (zoom_x, zoom_w) = item(&zoom_label);
+        let (ready_x, ready_w) = item("Ready");
+        assert!(zoom_x > 1000.0, "zoom at the right, at {zoom_x}");
+        assert!(
+            zoom_x - (ready_x + ready_w) < 20.0,
+            "Ready next to the zoom"
+        );
+        assert!(zoom_x + zoom_w > 1150.0, "near the edge");
     }
 
     /// A click in the navigator moves the view there - centered on the
@@ -2103,24 +2432,20 @@ mod tests {
         ));
     }
 
+    /// The values under the pointer as "name: value | …", the position.
     fn pixel_info(ui: &AppWindow) -> (String, String) {
         let info = ui.global::<ImagePixelInfo>();
-        (
-            info.get_pixel_value().to_string(),
-            info.get_mouse_pos().to_string(),
-        )
+        let values: Vec<String> = info
+            .get_values()
+            .iter()
+            .map(|v| format!("{}: {}", v.name, v.text))
+            .collect();
+        (values.join(" | "), info.get_position().to_string())
     }
 
     #[test]
     fn the_pixel_info_shows_the_values_and_position_under_the_cursor() {
         let (ui, ui_state, controller) = attached();
-        controller.update_channel_options_in_project(
-            vec![],
-            2,
-            0,
-            IntensityProjection::SingleStack,
-            1.0,
-        );
         seed_high_res_frame(&controller, 0.5);
         // Screen (15, 23) is image pixel (2.5, 1.5).
         controller.update_mouse_position_in_viewport_state(15.0, 23.0);
@@ -2134,20 +2459,30 @@ mod tests {
         assert_eq!(
             pos,
             format!(
-                "({:.1} {:.1} {:.1}) nm",
-                2.5 * sizes.x,
-                1.5 * sizes.y,
-                3.0 * sizes.z.unwrap()
-            ),
-            "the z of the shown plane"
+                "{:.2}, {:.2} µm",
+                2.5 * sizes.x / 1000.0,
+                1.5 * sizes.y / 1000.0
+            )
+        );
+        let info = ui.global::<ImagePixelInfo>();
+        assert!(info.get_over_image());
+        assert_eq!(info.get_digits(), 3, "8 bit: up to 255");
+        let dot = info.get_values().row_data(0).unwrap().color;
+        assert_eq!(
+            dot,
+            slint::Color::from_rgb_u8(255, 255, 255),
+            "drawn in white"
         );
     }
 
     #[test]
-    fn the_pixel_info_keeps_its_last_value_while_the_cursor_is_off_the_image() {
+    fn the_pixel_info_keeps_its_last_value_dimmed_while_the_cursor_is_off_the_image() {
         let (ui, _, controller) = attached();
         seed_high_res_frame(&controller, 0.5);
-        ui.global::<ImagePixelInfo>().set_pixel_value("old".into());
+        controller.update_mouse_position_in_viewport_state(15.0, 23.0);
+        controller.sync_actual_mouse_position_information_to_slint();
+        drain_ui_queue();
+        seed_high_res_frame(&controller, 0.25);
 
         for (x, y) in [(5.0, 23.0), (15.0, 10.0), (18.0, 23.0), (15.0, 28.0)] {
             controller.update_mouse_position_in_viewport_state(x, y);
@@ -2155,7 +2490,73 @@ mod tests {
         }
         drain_ui_queue();
 
-        assert_eq!(pixel_info(&ui).0, "old");
+        assert_eq!(pixel_info(&ui).0, "DAPI: 128", "the last value");
+        assert!(!ui.global::<ImagePixelInfo>().get_over_image(), "dimmed");
+    }
+
+    #[test]
+    fn a_colour_image_shows_red_green_and_blue() {
+        let (ui, _, controller) = attached();
+        let image = kornia_image::Image::<f32, 3>::new(
+            kornia_image::ImageSize {
+                width: 4,
+                height: 4,
+            },
+            [0.2, 0.4, 0.6].repeat(16),
+        )
+        .unwrap();
+        let channel = ImageChannel {
+            image: Arc::new(ImageContainer::F32Rgb(ManagedImage {
+                data: image,
+                tile_offset: Point2d { x: 0, y: 0 },
+                plane: None,
+                dimensionality: ImageDimensionality::Planar,
+            })),
+            color: [1.0, 1.0, 1.0],
+            is_visible: true,
+            c_stack: 0,
+            name: "RGB".into(),
+            is_rgb: true,
+        };
+        *controller
+            .viewport_cache
+            .active_high_res_data
+            .write()
+            .unwrap() = Some((
+            Arc::new(vec![ViewChannel::wrap(&channel)]),
+            ReadContext {
+                draw_x: 10.0,
+                draw_y: 20.0,
+                zoomed_w: 8.0,
+                zoomed_h: 8.0,
+                image_w: 4,
+                image_h: 4,
+                bit_depth: 8,
+                ..Default::default()
+            },
+        ));
+        controller.update_mouse_position_in_viewport_state(15.0, 23.0);
+        controller.sync_actual_mouse_position_information_to_slint();
+        drain_ui_queue();
+
+        assert_eq!(pixel_info(&ui).0, "Red: 51 | Green: 102 | Blue: 153");
+    }
+
+    #[test]
+    fn readout_cells_are_as_wide_as_the_longest_value() {
+        assert_eq!(value_digits(8), 3);
+        assert_eq!(value_digits(12), 4);
+        assert_eq!(value_digits(16), 5);
+        assert!(value_digits(32) <= 7);
+        // "1234.56, 789.01 µm"
+        assert_eq!(
+            position_chars(1234.0, 789.0),
+            "1234.56, 789.01 µm".chars().count() as i32
+        );
+        assert_eq!(
+            position_chars(0.5, 0.5),
+            "0.50, 0.50 µm".chars().count() as i32
+        );
     }
 
     #[test]
@@ -2183,6 +2584,77 @@ mod tests {
         advance(40);
         drain_ui_queue();
         assert_eq!(pixel_info(&ui).0, "DAPI: 64", "the trailing update");
+    }
+
+    /// Not a check: what one update of the values under the pointer costs
+    /// (read, formatted, shown) on a 1024² frame with three 16-bit channels.
+    /// `cargo test --target x86_64-unknown-linux-gnu --release -p evanalyzer_gui
+    /// --lib bench_pixel_info -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_pixel_info() {
+        let (_ui, _, controller) = attached();
+        let side = 1024usize;
+        let channels: Vec<ViewChannel> = ["DAPI", "GFP", "Cy5"]
+            .iter()
+            .enumerate()
+            .map(|(c, name)| {
+                let values: Vec<f32> = (0..side * side)
+                    .map(|i| ((i * (c + 7)) % 65536) as f32 / 65535.0)
+                    .collect();
+                let image = kornia_image::Image::<f32, 1>::new(
+                    kornia_image::ImageSize {
+                        width: side,
+                        height: side,
+                    },
+                    values,
+                )
+                .unwrap();
+                let channel = ImageChannel {
+                    image: Arc::new(ImageContainer::F32Gray(ManagedImage {
+                        data: image,
+                        tile_offset: Point2d { x: 0, y: 0 },
+                        plane: None,
+                        dimensionality: ImageDimensionality::Planar,
+                    })),
+                    color: [1.0, 1.0, 1.0],
+                    is_visible: true,
+                    c_stack: c as i32,
+                    name: (*name).into(),
+                    is_rgb: false,
+                };
+                ViewChannel::from_image_channel(&channel, 16)
+            })
+            .collect();
+        *controller
+            .viewport_cache
+            .active_high_res_data
+            .write()
+            .unwrap() = Some((
+            Arc::new(channels),
+            ReadContext {
+                zoomed_w: side as f32,
+                zoomed_h: side as f32,
+                image_w: side,
+                image_h: side,
+                bit_depth: 16,
+                ..Default::default()
+            },
+        ));
+        let n = 20_000;
+        let start = Instant::now();
+        for i in 0..n {
+            let x = (i * 37 % side) as f32 + 0.5;
+            let y = (i * 91 % side) as f32 + 0.5;
+            controller.update_mouse_position_in_viewport_state(x, y);
+            controller.sync_actual_mouse_position_information_to_slint();
+            drain_ui_queue();
+        }
+        let elapsed = start.elapsed();
+        println!(
+            "pixel info: {n} updates in {elapsed:?} = {:.2} µs each",
+            elapsed.as_secs_f64() * 1e6 / n as f64
+        );
     }
 
     #[test]

@@ -1226,6 +1226,7 @@ pub(crate) fn apply_panels(ui: &AppWindow, ui_state: &UiState) {
     layout.set_objects_folded(panels.objects_folded);
     layout.set_measurements_folded(panels.measurements_folded);
     layout.set_stack_bar_folded(panels.image_bar_folded);
+    layout.set_stack_bar_values_folded(panels.image_bar_values_folded);
     layout.set_pipelines_list_open(panels.pipelines_list_open);
     layout.set_navigator_mode(match panels.navigator {
         evanalyzer_app::user::NavigatorMode::Auto => 0,
@@ -1248,6 +1249,7 @@ fn panels_from_ui(ui: &AppWindow) -> evanalyzer_app::user::PanelSettings {
         objects_folded: layout.get_objects_folded(),
         measurements_folded: layout.get_measurements_folded(),
         image_bar_folded: layout.get_stack_bar_folded(),
+        image_bar_values_folded: layout.get_stack_bar_values_folded(),
         pipelines_list_open: layout.get_pipelines_list_open(),
         navigator: match layout.get_navigator_mode() {
             1 => evanalyzer_app::user::NavigatorMode::Always,
@@ -2075,17 +2077,23 @@ mod ui_state_tests {
 
         layout.set_image_folded(true);
         layout.set_stack_bar_folded(true);
+        layout.set_stack_bar_values_folded(true);
         layout.set_classes_open(false);
         layout.set_navigator_mode(2);
         layout.set_step_values_below(true);
         layout.invoke_panels_changed();
         let saved = ui_state.load_app_settings().panels;
         assert!(saved.image_folded && saved.image_bar_folded && !saved.classes_open);
+        assert!(
+            saved.image_bar_values_folded,
+            "the values folded in the image bar"
+        );
 
         let next = crate::editor::test_support::test_ui_window();
         apply_panels(&next, &ui_state);
         let layout = next.global::<LayoutState>();
         assert!(layout.get_image_folded() && layout.get_stack_bar_folded());
+        assert!(layout.get_stack_bar_values_folded());
         assert!(!layout.get_classes_open() && layout.get_objects_open());
         assert_eq!(layout.get_navigator_mode(), 2);
         assert!(layout.get_step_values_below());

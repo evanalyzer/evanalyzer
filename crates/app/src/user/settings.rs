@@ -217,6 +217,9 @@ pub struct PanelSettings {
     pub objects_folded: bool,
     pub measurements_folded: bool,
     pub image_bar_folded: bool,
+    /// The values under the pointer in the bar at the bottom of the image
+    /// folded to their dots.
+    pub image_bar_values_folded: bool,
     pub pipelines_list_open: bool,
     pub navigator: NavigatorMode,
     /// The step rows' values on a second line under the name (EVA › View).
@@ -247,6 +250,7 @@ impl Default for PanelSettings {
             objects_folded: false,
             measurements_folded: true,
             image_bar_folded: false,
+            image_bar_values_folded: false,
             pipelines_list_open: true,
             navigator: NavigatorMode::Auto,
             step_values_below: false,

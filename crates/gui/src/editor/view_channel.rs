@@ -138,6 +138,21 @@ impl ViewChannel {
         (i < slice.len()).then(|| slice.get(i))
     }
 
+    /// The normalized red, green and blue at pixel index `i` of a colour
+    /// (interleaved RGB) channel; `None` for any other.
+    pub fn rgb_at(&self, i: usize) -> Option<[f32; 3]> {
+        match &self.samples {
+            Samples::Image(img) => match &**img {
+                ImageContainer::F32Rgb(img) => {
+                    let rgb = img.as_slice().get(i * 3..i * 3 + 3)?;
+                    Some([rgb[0], rgb[1], rgb[2]])
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// The image as read (`f32`), expanded from compact samples if needed -
     /// for the few users that need an [`ImageContainer`].
     #[cfg(test)]

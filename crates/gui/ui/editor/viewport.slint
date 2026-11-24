@@ -896,8 +896,14 @@ export component Viewport inherits Rectangle {
         room: root.split-mode
             ? root.width - root.edge-left - root.edge-right - (navigator.visible ? navigator.width + 12px : 0px)
             // The scale bar is in the image's area then, not on this line.
-            : root.width - root.edge-left - root.edge-right-bottom - (scale-row.visible && !root.ortho-on ? scale-row.width + 12px : 0px);
+            : root.width - root.edge-left - root.edge-right-bottom - (root.scale-beside ? scale-row.width + 12px : 0px);
     }
+    // The line's width without the scale bar.
+    property <length> bar-line-w: root.width - root.edge-left - root.edge-right-bottom;
+    // The scale bar on the image bar's line - unless the bar needs that room:
+    // then the scale bar moves up out of the line.
+    property <bool> scale-on-line: scale-row.visible && !root.ortho-on && !root.split-mode;
+    property <bool> scale-beside: root.scale-on-line && stack-bar.need-w <= root.bar-line-w - scale-row.width - 12px;
 
     // The prediction overlay's legend: top left, beside the panels.
     if AiLearningState.prediction_on && ImageMetaData.image_name != "" && !root.volume-on && !root.split-mode: PredictionLegend {
@@ -929,7 +935,8 @@ export component Viewport inherits Rectangle {
             : parent.width - self.width - (root.split-mode ? root.edge-right : root.edge-right-bottom);
         y: root.ortho-on ? root.xy-h - self.height - root.margin
             : parent.height - self.height - root.margin - root.inset-bottom
-            - (root.split-mode && self.nav ? navigator.height + 8px : 0px);
+            - (root.split-mode && self.nav ? navigator.height + 8px : 0px)
+            - (root.scale-on-line && !root.scale-beside && stack-bar.visible ? stack-bar.height + 8px : 0px);
         alignment: end;
         // Not in the 3D view: turned and zoomed, it has no one scale.
         visible: ImageMetaData.image_name != "" && ViewportState.scale_bar_width > 0 && !root.volume-on;

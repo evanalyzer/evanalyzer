@@ -3,15 +3,16 @@
 
 // editor/viewport_stack_bar.slint — the bar at the bottom of the image: the
 // objects on / off (O) and their opacity; for a z-stack the projection or
-// slice, for a time series the frame and its playback. ◂ folds it to a pill
-// that still shows them; the objects toggle and the keys work folded too.
+// slice, for a time series the frame and its playback; last what lies under
+// the pointer. ◂ folds it to a pill that still shows them (without the
+// position); the objects toggle and the keys work folded too.
 
-import { ChannelState, IntensityProjection } from "../api/state.slint";
+import { ChannelState, ImagePixelInfo, IntensityProjection } from "../api/state.slint";
 import { ViewportState } from "../api/viewport.slint";
 import { ViewportObjectState } from "../api/viewport.slint";
 import { ImageMetaData } from "../api/image_meta.slint";
 import { LayoutState } from "../api/layout.slint";
-import { Ink, InkIcons, InkIconButton, InkSelect, InkCaption, InkTipZone } from "../ink/ink.slint";
+import { Ink, InkIcons, InkIconButton, InkSelect, InkCaption, InkTipZone, InkTipSide } from "../ink/ink.slint";
 
 // One step through the slices or the frames: the bar's ◀ ▶ and the keys.
 export global StackSteps {
@@ -156,6 +157,223 @@ component Sep inherits Rectangle {
     background: Ink.border;
 }
 
+// A digit of the mono font, for cells that keep their width.
+global ReadoutMetrics {
+    out property <length> digit: Ink.fs-body * 0.6;
+}
+
+// One value under the pointer: a dot in its channel's colour, the value -
+// the channel's name as tip. Dimmed while the pointer is off the image.
+component ReadoutValue inherits Rectangle {
+    in property <string> name;
+    in property <string> text;
+    in property <color> dot;
+    in property <bool> fresh;
+    // A click on a value folds the values (to their dots).
+    callback clicked();
+
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.name + " " + root.text;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    // As wide as the longest value, the dot right before its number: a
+    // short value leaves its room in front of the dot, not after it.
+    min-width: 7px + 3px + ImagePixelInfo.digits * ReadoutMetrics.digit;
+    HorizontalLayout {
+        alignment: end;
+        spacing: 3px;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 7px;
+                height: 7px;
+                border-radius: 3.5px;
+                background: root.dot;
+                opacity: root.fresh ? 1 : 0.5;
+            }
+        }
+        Text {
+            text: root.text;
+            font-family: Ink.font-mono;
+            font-size: Ink.fs-body;
+            color: root.fresh ? Ink.text : Ink.text-mute;
+            vertical-alignment: center;
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+    InkTipZone {
+        wanted: ta.has-hover;
+        text: root.name;
+        sub: "A click folds the values";
+        side: InkTipSide.above;
+    }
+}
+
+// What lies under the pointer: where (µm), each channel's value, the
+// prediction and the breakpoint image's value. Off the image the last
+// values stay, dimmed; before the pointer was over it, "–" per channel.
+component Readout inherits HorizontalLayout {
+    in property <bool> show-position: true;
+    // A value clicked: fold the values.
+    callback values-clicked();
+    // What the parts need, whether shown or not: the values (with the
+    // extras), and the position with its separator.
+    out property <length> values-w: vals.min-width;
+    out property <length> position-w: ImagePixelInfo.position-chars * ReadoutMetrics.digit + 1px + 2 * 8px;
+    property <bool> fresh: ImagePixelInfo.over-image;
+
+    spacing: 8px;
+
+    if root.show-position: Text {
+        text: ImagePixelInfo.position == "" ? "–" : ImagePixelInfo.position;
+        font-family: Ink.font-mono;
+        font-size: Ink.fs-body;
+        color: root.fresh ? Ink.text-dim : Ink.text-mute;
+        vertical-alignment: center;
+        min-width: ImagePixelInfo.position-chars * ReadoutMetrics.digit;
+        accessible-role: AccessibleRole.text;
+        accessible-label: "Position " + self.text;
+    }
+    if root.show-position: Sep { }
+    // The values 4 px apart: each one's dot already sets it off.
+    vals := HorizontalLayout {
+        spacing: 4px;
+        for v in ImagePixelInfo.values: ReadoutValue {
+            name: v.name;
+            text: v.text;
+            dot: v.color;
+            fresh: root.fresh;
+            clicked => {
+                root.values-clicked();
+            }
+        }
+        // Not yet over this image: the channels, without values.
+        if ImagePixelInfo.values.length == 0: HorizontalLayout {
+            spacing: 4px;
+            for ch in ChannelState.channels: ReadoutValue {
+                name: ch.name;
+                text: "–";
+                dot: ch.color;
+                fresh: false;
+                clicked => {
+                    root.values-clicked();
+                }
+            }
+        }
+        for e in ImagePixelInfo.extras: HorizontalLayout {
+            spacing: 8px;
+            Sep { }
+            Text {
+                text: e.label;
+                font-size: Ink.fs-secondary;
+                color: Ink.text-dim;
+                vertical-alignment: center;
+            }
+            Text {
+                text: e.text;
+                font-family: Ink.font-mono;
+                font-size: Ink.fs-body;
+                color: root.fresh ? Ink.text : Ink.text-mute;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+// A part of the bar shrunk to what it shows (the plane, the channels' dots)
+// and ▸: a click opens it - where the bar can't show both parts.
+component BarChip inherits Rectangle {
+    in property <string> label;
+    callback clicked();
+    // The wheel over the chip (delta y): not taken unless handled.
+    callback scrolled(length) -> bool;
+    scrolled(d) => {
+        false
+    }
+
+    height: 26px;
+    border-radius: Ink.radius-md;
+    border-width: 1px;
+    border-color: Ink.border;
+    background: ta.has-hover ? Ink.hover : Ink.field;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 6px;
+        spacing: 6px;
+        @children
+        Text {
+            text: "▸";
+            color: Ink.text-mute;
+            vertical-alignment: center;
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+        scroll-event(e) => {
+            root.scrolled(e.delta-y) ? EventResult.accept : EventResult.reject
+        }
+    }
+    InkTipZone {
+        wanted: ta.has-hover;
+        text: root.label;
+        side: InkTipSide.above;
+    }
+}
+
+// The values folded: the channels' dots and ▸, a click opens them.
+component DotsChip inherits Rectangle {
+    callback clicked();
+    width: chip.preferred-width;
+    height: 26px;
+    chip := BarChip {
+        label: "Show the values under the pointer";
+        clicked => {
+            root.clicked();
+        }
+        HorizontalLayout {
+            spacing: 2px;
+            for v in ImagePixelInfo.values: VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 6px;
+                    height: 6px;
+                    border-radius: 3px;
+                    background: v.color;
+                }
+            }
+            // Not yet over this image: the channels' colours.
+            if ImagePixelInfo.values.length == 0: HorizontalLayout {
+                spacing: 2px;
+                for ch in ChannelState.channels: VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 6px;
+                        height: 6px;
+                        border-radius: 3px;
+                        background: ch.color;
+                    }
+                }
+            }
+        }
+    }
+}
+
 export component StackBar inherits Rectangle {
     // The width there is next to the navigator; the tracks give way.
     in property <length> room: 10000px;
@@ -167,8 +385,53 @@ export component StackBar inherits Rectangle {
     property <[int]> fps-values: [1, 2, 5, 10, 20, 25];
     property <string> z-text: root.slice ? "\{ChannelState.selected_z_stack + 1} / \{ImageMetaData.nr_z_stacks}" : "all \{ImageMetaData.nr_z_stacks}";
     property <string> t-text: "\{ChannelState.selected_t_stack + 1} / \{ImageMetaData.nr_t_stacks}";
+    // The same, without spaces: for the chip, where room is short.
+    property <string> z-chip-text: root.slice ? "\{ChannelState.selected_z_stack + 1}/\{ImageMetaData.nr_z_stacks}" : "all \{ImageMetaData.nr_z_stacks}";
+    property <string> t-chip-text: "\{ChannelState.selected_t_stack + 1}/\{ImageMetaData.nr_t_stacks}";
     property <int> percent: round(ViewportObjectState.object_transparency * 100);
     property <bool> folded: LayoutState.stack-bar-folded;
+    // What the open bar shows. Always the objects' part and the fold
+    // button. Then the Z / T controls and the values under the pointer,
+    // with the position while it fits. Where the controls and the values
+    // don't both fit, one of them shrinks to a chip. The values can be
+    // folded to their dots by hand too. Worked out
+    // from what each part needs, not from what is shown - no loop.
+    property <bool> has-zt: root.has-z || root.has-t;
+    property <length> fixed-w: base.min-width + fold-part.min-width + bar.padding-left + bar.padding-right;
+    property <length> zt-w: root.has-zt ? zt.min-width : 0px;
+    // The values' part: separator and the values (a click on them folds
+    // them to their dots).
+    property <length> values-w: 8px + 1px + 8px + readout.values-w;
+    property <bool> both: root.fixed-w + root.zt-w + root.values-w <= root.room;
+    property <bool> switching: root.has-zt && !root.both;
+    // The values open or folded to their dots (one setting, kept): where
+    // Z / T and the values don't both fit, open values shrink Z / T to its
+    // chip, folded ones give Z / T its controls back.
+    property <bool> values-open: !LayoutState.stack-bar-values-folded;
+    property <bool> show-values: root.values-open;
+    property <bool> show-zt: root.has-zt && (!root.switching || !root.values-open);
+    property <bool> zt-chip: root.has-zt && !root.show-zt;
+    property <bool> values-chip: !root.values-open;
+    property <length> chip-w: root.zt-chip ? zt-chip-row.min-width : root.values-chip ? values-chip-row.min-width : 0px;
+    function fold-values(on: bool) {
+        LayoutState.stack-bar-values-folded = on;
+        LayoutState.panels-changed();
+    }
+    public pure function position-fits(room: length) -> bool {
+        root.fixed-w + (root.show-zt ? root.zt-w : 0px) + root.chip-w + root.values-w + readout.position-w <= room
+    }
+    // The bar's whole width with everything: where it is more than the
+    // room, the viewport moves the scale bar up out of its line.
+    out property <length> need-w: root.fixed-w + root.zt-w + root.values-w + readout.position-w;
+
+    // Another image: nothing of the last one stays.
+    changed image-name => {
+        ImagePixelInfo.position = "";
+        ImagePixelInfo.values = [];
+        ImagePixelInfo.extras = [];
+        ImagePixelInfo.over-image = false;
+    }
+    property <string> image-name: ImageMetaData.image_name;
 
     pure function fps-index(hz: int) -> int {
         hz >= 25 ? 5 : hz >= 20 ? 4 : hz >= 10 ? 3 : hz >= 5 ? 2 : hz >= 2 ? 1 : 0
@@ -198,7 +461,7 @@ export component StackBar inherits Rectangle {
     drop-shadow-color: Ink.shadow;
     clip: true;
     accessible-role: groupbox;
-    accessible-label: "Objects, Z and T";
+    accessible-label: "Objects, Z, T and the values under the pointer";
 
     // Clicks on the bar don't reach the image below.
     TouchArea { }
@@ -233,6 +496,23 @@ export component StackBar inherits Rectangle {
             text: root.t-text;
             min-width: 0px;
         }
+        // Only while folded: the hidden pill doesn't follow the pointer.
+        // Folded values: their dots, a click opens them.
+        if root.folded: Sep { }
+        if root.folded && root.values-open: Readout {
+            show-position: false;
+            values-clicked => {
+                root.fold-values(true);
+            }
+        }
+        if root.folded && !root.values-open: VerticalLayout {
+            alignment: center;
+            DotsChip {
+                clicked => {
+                    root.fold-values(false);
+                }
+            }
+        }
         InkIconButton {
             size: 26px;
             icon: InkIcons.caret-right;
@@ -243,184 +523,313 @@ export component StackBar inherits Rectangle {
         }
     }
 
-    // -- Open --
+    // -- Open: the objects' part, Z / T or the values, the switch, fold --
     bar := HorizontalLayout {
         visible: !root.folded;
-        padding-left: 4px;
-        padding-right: 8px;
+        alignment: start;
+        padding-left: 6px;
+        padding-right: 4px;
         padding-top: 7px;
         padding-bottom: 7px;
-        spacing: 8px;
-
-        InkIconButton {
-            size: 26px;
-            icon: InkIcons.caret-left;
-            label: "Fold the bar";
-            clicked => {
-                root.fold(true);
-            }
-        }
+        spacing: 0px;
 
         // -- Objects: on / off, opacity (dimmed while off, still set) --
-        ObjectsToggle { }
-        StackTrack {
-            min-width: 48px;
-            preferred-width: 64px;
-            horizontal-stretch: 0;
-            opacity: ViewportObjectState.show_objects ? 1 : 0.4;
-            label: "Objects' opacity";
-            value: root.percent;
-            count: 101;
-            unit: " %";
-            picked(v) => {
-                OverlaySet.opacity(v);
-            }
-        }
-        PlaneText {
-            text: root.percent + " %";
-            min-width: 34px;
-            horizontal-alignment: left;
-            color: ViewportObjectState.show_objects ? Ink.text : Ink.text-mute;
-        }
-
-        // -- Z --
-        if root.has-z: Sep { }
-        if root.has-z: InkCaption {
-            text: "Z";
-        }
-        if root.has-z: InkSelect {
-            width: 76px;
-            height: 26px;
-            horizontal-stretch: 0;
-            label: "Z projection";
-            model: ["Slice", "Max", "Min", "Avg", "Sum", "Mid", "3D"];
-            selected: ChannelState.intensity_projection == IntensityProjection.max ? 1
-                : ChannelState.intensity_projection == IntensityProjection.min ? 2
-                : ChannelState.intensity_projection == IntensityProjection.avg ? 3
-                : ChannelState.intensity_projection == IntensityProjection.sum ? 4
-                : ChannelState.intensity_projection == IntensityProjection.middle ? 5
-                : ChannelState.intensity_projection == IntensityProjection.volume ? 6
-                : 0;
-            picked(i) => {
-                root.projection(i == 1 ? IntensityProjection.max
-                    : i == 2 ? IntensityProjection.min
-                    : i == 3 ? IntensityProjection.avg
-                    : i == 4 ? IntensityProjection.sum
-                    : i == 5 ? IntensityProjection.middle
-                    : i == 6 ? IntensityProjection.volume
-                    : IntensityProjection.single-stack);
-            }
-        }
-        // A projection: every slice, nothing to step.
-        if root.has-z && !root.slice: Text {
-            text: "all \{ImageMetaData.nr_z_stacks} slices";
-            font-family: Ink.font-mono;
-            font-size: Ink.fs-secondary;
-            color: Ink.text-mute;
-            vertical-alignment: center;
-        }
-        if root.has-z && root.slice: InkIconButton {
-            size: 26px;
-            icon: InkIcons.caret-left;
-            label: "Previous slice";
-            keys: ["Page Up"];
-            enabled: ChannelState.selected_z_stack > 0;
-            disabled-reason: "The first slice";
-            clicked => {
-                StackSteps.step-z(-1);
-            }
-        }
-        if root.has-z && root.slice: PlaneText {
-            text: root.z-text;
-        }
-        if root.has-z && root.slice: InkIconButton {
-            size: 26px;
-            icon: InkIcons.caret-right;
-            label: "Next slice";
-            keys: ["Page Down"];
-            enabled: ChannelState.selected_z_stack < ImageMetaData.nr_z_stacks - 1;
-            disabled-reason: "The last slice";
-            clicked => {
-                StackSteps.step-z(1);
-            }
-        }
-        if root.has-z && root.slice: StackTrack {
-            label: "Z slice";
-            value: ChannelState.selected_z_stack;
-            count: ImageMetaData.nr_z_stacks;
-            picked(z) => {
-                StackSteps.set-z(z);
-            }
-        }
-        // The 3D view: the stack's brightest voxels, turned with the mouse.
-        // It and the orthogonal views are either / or: turning one on turns the other off.
-        if root.has-z && root.slice: InkIconButton {
-            size: 26px;
-            icon: InkIcons.volume;
-            label: "3D view";
-            active: ViewportState.volume_view;
-            clicked => {
-                ViewportState.volume_view = !ViewportState.volume_view;
-                if ViewportState.volume_view && ViewportState.ortho {
-                    ViewportState.ortho = false;
-                    ViewportState.ortho_changed(false);
+        base := HorizontalLayout {
+            spacing: 8px;
+            ObjectsToggle { }
+            StackTrack {
+                min-width: 48px;
+                preferred-width: 64px;
+                horizontal-stretch: 0;
+                opacity: ViewportObjectState.show_objects ? 1 : 0.4;
+                label: "Objects' opacity";
+                value: root.percent;
+                count: 101;
+                unit: " %";
+                picked(v) => {
+                    OverlaySet.opacity(v);
                 }
-                ViewportState.volume_view_changed(ViewportState.volume_view, ViewportState.volume_yaw, ViewportState.volume_pitch, ViewportState.volume_zoom, false);
             }
-        }
-        // The XZ and YZ views through a crosshair.
-        if root.has-z && root.slice: InkIconButton {
-            size: 26px;
-            icon: InkIcons.ortho;
-            label: "Orthogonal views";
-            active: ViewportState.ortho;
-            clicked => {
-                ViewportState.ortho = !ViewportState.ortho;
-                if ViewportState.ortho && ViewportState.volume_view {
-                    ViewportState.volume_view = false;
-                    ViewportState.volume_view_changed(false, ViewportState.volume_yaw, ViewportState.volume_pitch, ViewportState.volume_zoom, false);
-                }
-                ViewportState.ortho_changed(ViewportState.ortho);
+            PlaneText {
+                text: root.percent + " %";
+                min-width: 34px;
+                horizontal-alignment: left;
+                color: ViewportObjectState.show_objects ? Ink.text : Ink.text-mute;
             }
         }
 
-        // -- T --
-        if root.has-t: Sep { }
-        if root.has-t: InkCaption {
-            text: "T";
-        }
-        if root.has-t: InkIconButton {
-            size: 26px;
-            icon: ChannelState.is_play_active ? InkIcons.pause : InkIcons.play;
-            label: ChannelState.is_play_active ? "Pause" : "Play";
-            active: ChannelState.is_play_active;
-            clicked => {
-                ChannelState.is_play_active = !ChannelState.is_play_active;
-                ChannelState.toggle_play(ChannelState.is_play_active);
+        // -- Z / T shrunk: where it is, ▸ opens the controls --
+        Rectangle {
+            visible: root.zt-chip;
+            min-width: root.zt-chip ? zt-chip-row.min-width : 0px;
+            max-width: root.zt-chip ? zt-chip-row.preferred-width : 0px;
+            zt-chip-row := HorizontalLayout {
+                padding-left: 8px;
+                spacing: 8px;
+                Sep { }
+                VerticalLayout {
+                    alignment: center;
+                    BarChip {
+                        label: "Show the Z / T controls";
+                        clicked => {
+                            root.fold-values(true);
+                        }
+                        // The wheel over it still steps through the planes
+                        // (Z, else T).
+                        scrolled(d) => {
+                            if root.has-z {
+                                StackSteps.step-z(d > 0 ? -1 : 1);
+                            } else {
+                                StackSteps.step-t(d > 0 ? -1 : 1);
+                            }
+                            true
+                        }
+                        // Never squeezed: the plane is what the chip says.
+                        if root.has-z: InkCaption {
+                            text: "Z";
+                        }
+                        if root.has-z: PlaneText {
+                            text: root.z-chip-text;
+                            min-width: self.preferred-width;
+                        }
+                        if root.has-t: InkCaption {
+                            text: "T";
+                        }
+                        if root.has-t: PlaneText {
+                            text: root.t-chip-text;
+                            min-width: self.preferred-width;
+                        }
+                    }
+                }
             }
         }
-        if root.has-t: PlaneText {
-            text: root.t-text;
-        }
-        if root.has-t: StackTrack {
-            label: "Frame";
-            value: ChannelState.selected_t_stack;
-            count: ImageMetaData.nr_t_stacks;
-            picked(t) => {
-                StackSteps.set-t(t);
+
+        // -- Z and T: measured always, shown as picked --
+        Rectangle {
+            visible: root.show-zt;
+            clip: true;
+            min-width: root.show-zt ? zt.min-width : 0px;
+            preferred-width: root.show-zt ? zt.preferred-width : 0px;
+            max-width: root.show-zt ? zt.preferred-width : 0px;
+            // A little tighter than the rest: it is the widest part.
+            zt := HorizontalLayout {
+                padding-left: 8px;
+                spacing: 6px;
+                // -- Z --
+                if root.has-z: Sep { }
+                if root.has-z: InkCaption {
+                    text: "Z";
+                }
+                if root.has-z: InkSelect {
+                    width: 76px;
+                    height: 26px;
+                    horizontal-stretch: 0;
+                    label: "Z projection";
+                    model: ["Slice", "Max", "Min", "Avg", "Sum", "Mid", "3D"];
+                    selected: ChannelState.intensity_projection == IntensityProjection.max ? 1
+                        : ChannelState.intensity_projection == IntensityProjection.min ? 2
+                        : ChannelState.intensity_projection == IntensityProjection.avg ? 3
+                        : ChannelState.intensity_projection == IntensityProjection.sum ? 4
+                        : ChannelState.intensity_projection == IntensityProjection.middle ? 5
+                        : ChannelState.intensity_projection == IntensityProjection.volume ? 6
+                        : 0;
+                    picked(i) => {
+                        root.projection(i == 1 ? IntensityProjection.max
+                            : i == 2 ? IntensityProjection.min
+                            : i == 3 ? IntensityProjection.avg
+                            : i == 4 ? IntensityProjection.sum
+                            : i == 5 ? IntensityProjection.middle
+                            : i == 6 ? IntensityProjection.volume
+                            : IntensityProjection.single-stack);
+                    }
+                }
+                // A projection: every slice, nothing to step.
+                if root.has-z && !root.slice: Text {
+                    text: "all \{ImageMetaData.nr_z_stacks} slices";
+                    font-family: Ink.font-mono;
+                    font-size: Ink.fs-secondary;
+                    color: Ink.text-mute;
+                    vertical-alignment: center;
+                }
+                if root.has-z && root.slice: InkIconButton {
+                    size: 26px;
+                    icon: InkIcons.caret-left;
+                    label: "Previous slice";
+                    keys: ["Page Up"];
+                    enabled: ChannelState.selected_z_stack > 0;
+                    disabled-reason: "The first slice";
+                    clicked => {
+                        StackSteps.step-z(-1);
+                    }
+                }
+                // The wheel over the plane steps through the slices.
+                if root.has-z && root.slice: PlaneText {
+                    text: root.z-text;
+                    TouchArea {
+                        scroll-event(e) => {
+                            StackSteps.step-z(e.delta-y > 0 ? -1 : 1);
+                            accept
+                        }
+                    }
+                }
+                if root.has-z && root.slice: InkIconButton {
+                    size: 26px;
+                    icon: InkIcons.caret-right;
+                    label: "Next slice";
+                    keys: ["Page Down"];
+                    enabled: ChannelState.selected_z_stack < ImageMetaData.nr_z_stacks - 1;
+                    disabled-reason: "The last slice";
+                    clicked => {
+                        StackSteps.step-z(1);
+                    }
+                }
+                // The 3D view: the stack's brightest voxels, turned with the mouse.
+                // It and the orthogonal views are either / or: turning one on turns the other off.
+                if root.has-z && root.slice: InkIconButton {
+                    size: 26px;
+                    icon: InkIcons.volume;
+                    label: "3D view";
+                    active: ViewportState.volume_view;
+                    clicked => {
+                        ViewportState.volume_view = !ViewportState.volume_view;
+                        if ViewportState.volume_view && ViewportState.ortho {
+                            ViewportState.ortho = false;
+                            ViewportState.ortho_changed(false);
+                        }
+                        ViewportState.volume_view_changed(ViewportState.volume_view, ViewportState.volume_yaw, ViewportState.volume_pitch, ViewportState.volume_zoom, false);
+                    }
+                }
+                // The XZ and YZ views through a crosshair.
+                if root.has-z && root.slice: InkIconButton {
+                    size: 26px;
+                    icon: InkIcons.ortho;
+                    label: "Orthogonal views";
+                    active: ViewportState.ortho;
+                    clicked => {
+                        ViewportState.ortho = !ViewportState.ortho;
+                        if ViewportState.ortho && ViewportState.volume_view {
+                            ViewportState.volume_view = false;
+                            ViewportState.volume_view_changed(false, ViewportState.volume_yaw, ViewportState.volume_pitch, ViewportState.volume_zoom, false);
+                        }
+                        ViewportState.ortho_changed(ViewportState.ortho);
+                    }
+                }
+
+                // -- T --
+                if root.has-t: Sep { }
+                if root.has-t: InkCaption {
+                    text: "T";
+                }
+                if root.has-t: InkIconButton {
+                    size: 26px;
+                    icon: ChannelState.is_play_active ? InkIcons.pause : InkIcons.play;
+                    label: ChannelState.is_play_active ? "Pause" : "Play";
+                    active: ChannelState.is_play_active;
+                    clicked => {
+                        ChannelState.is_play_active = !ChannelState.is_play_active;
+                        ChannelState.toggle_play(ChannelState.is_play_active);
+                    }
+                }
+                if root.has-t: InkIconButton {
+                    size: 26px;
+                    icon: InkIcons.caret-left;
+                    label: "Previous frame";
+                    enabled: ChannelState.selected_t_stack > 0;
+                    disabled-reason: "The first frame";
+                    clicked => {
+                        StackSteps.step-t(-1);
+                    }
+                }
+                // The wheel over the frame steps through the frames.
+                if root.has-t: PlaneText {
+                    text: root.t-text;
+                    TouchArea {
+                        scroll-event(e) => {
+                            StackSteps.step-t(e.delta-y > 0 ? -1 : 1);
+                            accept
+                        }
+                    }
+                }
+                if root.has-t: InkIconButton {
+                    size: 26px;
+                    icon: InkIcons.caret-right;
+                    label: "Next frame";
+                    enabled: ChannelState.selected_t_stack < ImageMetaData.nr_t_stacks - 1;
+                    disabled-reason: "The last frame";
+                    clicked => {
+                        StackSteps.step-t(1);
+                    }
+                }
+                if root.has-t: InkSelect {
+                    width: 76px;
+                    height: 26px;
+                    horizontal-stretch: 0;
+                    label: "Playback speed";
+                    model: root.fps-names;
+                    selected: root.fps-index(ChannelState.play_back_speed_hz);
+                    picked(i, name) => {
+                        ChannelState.play_back_speed_hz = root.fps-values[i];
+                        ChannelState.is_play_active = false;
+                        ChannelState.toggle_play(false);
+                    }
+                }
             }
         }
-        if root.has-t: InkSelect {
-            width: 76px;
-            height: 26px;
-            horizontal-stretch: 0;
-            label: "Playback speed";
-            model: root.fps-names;
-            selected: root.fps-index(ChannelState.play_back_speed_hz);
-            picked(i, name) => {
-                ChannelState.play_back_speed_hz = root.fps-values[i];
-                ChannelState.is_play_active = false;
-                ChannelState.toggle_play(false);
+
+        // -- Under the pointer (only while open and shown: the hidden bar
+        // doesn't follow the pointer) --
+        // The part that gives way where the bar is too narrow even so (many
+        // channels): its end is cut off, the fold button always stays.
+        Rectangle {
+            visible: root.show-values && !root.folded;
+            clip: true;
+            horizontal-stretch: 1;
+            min-width: 0px;
+            preferred-width: self.visible ? values-row.preferred-width : 0px;
+            max-width: self.visible ? values-row.preferred-width : 0px;
+            values-row := HorizontalLayout {
+                padding-left: 8px;
+                spacing: 8px;
+                Sep { }
+                readout := Readout {
+                    show-position: root.show-values && root.position-fits(root.room);
+                    values-clicked => {
+                        root.fold-values(true);
+                    }
+                }
+            }
+        }
+
+        // -- The values folded: the channels' dots, ▸ opens the values --
+        Rectangle {
+            visible: root.values-chip;
+            min-width: root.values-chip ? values-chip-row.min-width : 0px;
+            max-width: root.values-chip ? values-chip-row.preferred-width : 0px;
+            values-chip-row := HorizontalLayout {
+                padding-left: 8px;
+                spacing: 8px;
+                Sep { }
+                VerticalLayout {
+                    alignment: center;
+                    DotsChip {
+                        clicked => {
+                            root.fold-values(false);
+                        }
+                    }
+                }
+            }
+        }
+
+        // -- Fold: always at the far right --
+        fold-part := HorizontalLayout {
+            padding-left: 4px;
+            InkIconButton {
+                size: 26px;
+                icon: InkIcons.caret-left;
+                label: "Fold the bar";
+                clicked => {
+                    root.fold(true);
+                }
             }
         }
     }

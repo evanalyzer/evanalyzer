@@ -1,7 +1,7 @@
 // Copyright 2026 Joachim Danmayr.
 // Licensed under the PolyForm Noncommercial License 1.0.0.
 
-import { AnalysisRunningCloseState, AppInfoState, ChannelInfo, ChannelState, ConnectState, ConnectionState, DialogType, GlobalAppState, HistogramData, HistogramState, ImagePixelInfo, IntensityProjection, RecentServerRow, UnsavedChangesState, WarningState } from "api/state.slint";
+import { AnalysisRunningCloseState, AppInfoState, ChannelInfo, ChannelState, ConnectState, ConnectionState, DialogType, GlobalAppState, HistogramData, HistogramState, ImagePixelInfo, IntensityProjection, PixelExtra, PixelValue, RecentServerRow, UnsavedChangesState, WarningState } from "api/state.slint";
 import { ToolbarState } from "api/toolbar.slint";
 import { RetainedTile, ToolState, ViewportObjectState, ViewportState } from "api/viewport.slint";
 import { ImageMetaData } from "api/image_meta.slint";
@@ -103,6 +103,8 @@ export {
     ProjectSettingsSlint,
     ProjectSettingsState,
     ImagePixelInfo,
+    PixelValue,
+    PixelExtra,
     DialogType,
     HistogramState,
     ViewportState,
@@ -205,10 +207,12 @@ export component AppWindow inherits Window {
     icon: @image-url("icons/icon.png");
     preferred-width: 1500px;
     preferred-height: 900px;
-    // What the views need (the widest, Images and the List, ~1012 px) -
-    // not the preferred size, or a 1440 x 900 screen can't hold the window.
-    min-width: 1024px;
-    min-height: 600px;
+    // The reference size every screen is designed and checked at: 1280 x 720
+    // (a 1920 x 1080 laptop at 150 %, 1600 x 900 at 125 %, 1366 x 768).
+    // The height leaves room for a 768 px screen's taskbar and title bar.
+    // Not the preferred size, or a 1440 x 900 screen can't hold the window.
+    min-width: 1280px;
+    min-height: 680px;
     background: Ink.ground;
     default-font-family: Ink.font-sans;
     default-font-size: Ink.fs-body;

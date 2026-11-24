@@ -44,6 +44,9 @@ export global LayoutState {
     /// The bar at the bottom of the image (objects, Z, T) is folded to a
     /// pill.
     in-out property <bool> stack-bar-folded: false;
+    // The values under the pointer in the bar at the bottom of the image
+    // folded to their dots (the Z / T controls get their room).
+    in-out property <bool> stack-bar-values-folded: false;
     /// The Pipelines panel shows the list of pipelines above the steps.
     in-out property <bool> pipelines-list-open: true;
 
