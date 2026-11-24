@@ -1,0 +1,45 @@
+// Copyright 2026 Joachim Danmayr.
+// Licensed under the PolyForm Noncommercial License 1.0.0.
+
+// dialogs/delete_export_dialog.slint — "Delete the export …?" before the
+// Exports tab's trash deletes one. Floats over the window: blurred like
+// every dialog (InkDialog). Cancel has the safe place on the left.
+
+import { Ink, InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
+import { ExportsState } from "../api/exports.slint";
+
+export component DeleteExportDialog inherits InkDialog {
+    title: "Delete the export “" + ExportsState.delete-asked-name + "”?";
+    card-width: 420px;
+    modal: true;
+    close => {
+        ExportsState.delete-asked = -1;
+    }
+
+    VerticalLayout {
+        spacing: 10px;
+        Text {
+            text: "Its entries and settings go from the project. Files it wrote stay where they are. Undo brings it back.";
+            wrap: word-wrap;
+            color: Ink.text;
+            font-size: Ink.fs-body;
+        }
+    }
+
+    InkDialogFooter {
+        InkButton {
+            text: "Cancel";
+            clicked => {
+                ExportsState.delete-asked = -1;
+            }
+        }
+        InkButton {
+            kind: InkButtonKind.danger;
+            text: "Delete";
+            clicked => {
+                ExportsState.delete(ExportsState.delete-asked);
+                ExportsState.delete-asked = -1;
+            }
+        }
+    }
+}

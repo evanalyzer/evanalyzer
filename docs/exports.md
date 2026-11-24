@@ -241,13 +241,19 @@ command then fails, naming the export.
 ### 1.6 In the app
 
 - **Exports tab** (Ctrl+4): the project's exports, the one picked and the
-  settings of its entry; Run runs it on the project's newest analysis.
+  settings of its entry; Run runs it on the project's newest analysis, the
+  ▾ beside it on the analyses ticked there (the Results list's, newest
+  first), one after the other, each into its own results folder - the
+  report has a part per analysis. "Open exported folder" beside "Last run"
+  opens where it wrote (a folder per analysis; not for results on a
+  server).
 - **After a run**: the run dialog lists the exports with
   `runAfterEveryRun` under "Afterwards"; one switched off there stays off
   for that run only. They run on this computer when the analysis is done,
   into its results folder (also in remote mode: the results stay on the
   server, the export runs where they are). A note says what they wrote;
-  "Open in Exports" shows an export's report.
+  "Open folder" opens where (on this computer), "Open in Exports" shows an
+  export's report.
 - **Scripts**: before an export runs a script the user hasn't allowed yet,
   the app shows it and asks: don't run it, run it once, or always allow
   this version (its content's SHA-256, kept in the user's settings - a
@@ -257,10 +263,11 @@ command then fails, naming the export.
   layout, Tracks and Paths as a table of tracks, a chart as the table behind
   it (over time: a time course; a profile; a histogram, scatter or boxplot:
   its values), Trees as the measurements - a file of that name stays, the new one gets
-  `_2`. Ticked, it is also kept in the project: as a new export or added
-  to one there is. A view's ⋯ › "Save as export…" keeps it without writing,
-  "Add to export…" opens the dialog with the tick on. A chart's picture is
-  Charts › "Save chart…".
+  `_2`; then it says what it wrote, with "Open exported folder". "Add to
+  project exports" (in the dialog, or after Export) keeps it as a new
+  export of the project, named like the view - nothing written then. A
+  view's ⋯ › "Save as export…" keeps it without writing and opens it in
+  the Exports tab. A chart's picture is Charts › "Save chart…".
 
 ### 1.7 Versions
 

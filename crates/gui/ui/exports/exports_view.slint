@@ -6,7 +6,7 @@
 // entry picked on the right with the last run's report. Sits on the ground,
 // not over other content: no blur.
 
-import { Ink, InkIcons, InkCheckList, InkButton, InkButtonKind, InkIconButton, InkCheckbox, InkSwitch, InkSegmented, InkSelect, InkTextField, InkListRow, InkLabel, InkCaption, InkHint, InkBanner, InkTone } from "../ink/ink.slint";
+import { Ink, InkIcons, InkCheckList, InkButton, InkButtonKind, InkIconButton, InkCheckbox, InkSwitch, InkSegmented, InkSelect, InkTextField, InkListRow, InkLabel, InkCaption, InkHint, InkBanner, InkTone, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator } from "../ink/ink.slint";
 import { ExportsState, ExportRow, ExportEntryRow } from "../api/exports.slint";
 import { ColumnPicker, ValuesClassesPart, RelatedPart } from "../results/results_panel.slint";
 import { ViewPanel } from "../results/results_view_bar.slint";
@@ -905,17 +905,94 @@ export component ExportsView inherits Rectangle {
                             }
                         }
                     }
-                    VerticalLayout {
+                    // Run | ▾: on the newest, or on the analyses picked
+                    // (design canvas "Quick export, open folder, run on",
+                    // board 3 R1).
+                    run-on-anchor := VerticalLayout {
                         alignment: center;
-                        InkButton {
-                            text: ExportsState.running ? "Running…" : "Run";
-                            kind: InkButtonKind.primary;
-                            icon: InkIcons.run;
-                            enabled: !ExportsState.running && ExportsState.problems == "";
-                            disabled-reason: ExportsState.problems;
-                            tip: "Runs it on the project's newest analysis";
-                            clicked => {
-                                ExportsState.run();
+                        HorizontalLayout {
+                            spacing: 1px;
+                            InkButton {
+                                text: ExportsState.running ? "Running…" : "Run";
+                                kind: InkButtonKind.primary;
+                                icon: InkIcons.run;
+                                join-right: true;
+                                enabled: !ExportsState.running && ExportsState.problems == "";
+                                disabled-reason: ExportsState.problems;
+                                tip: "Runs it on the project's newest analysis";
+                                clicked => {
+                                    ExportsState.run();
+                                }
+                            }
+                            InkButton {
+                                width: 30px;
+                                kind: InkButtonKind.primary;
+                                icon: InkIcons.caret-down;
+                                join-left: true;
+                                tip: "Run on…";
+                                enabled: !ExportsState.running && ExportsState.problems == "";
+                                disabled-reason: ExportsState.problems;
+                                clicked => {
+                                    ExportsState.run-on-open();
+                                    run-on-menu.show();
+                                }
+                            }
+                        }
+                    }
+                    run-on-menu := PopupWindow {
+                        x: run-on-anchor.x + run-on-anchor.width - 320px;
+                        y: run-on-anchor.y + run-on-anchor.height - 8px;
+                        close-policy: close-on-click-outside;
+                        InkMenuFrame {
+                            menu-width: 320px;
+                            open-y: run-on-anchor.absolute-position.y + run-on-anchor.height - 8px;
+                            InkMenuCaption {
+                                text: "Run on";
+                            }
+                            if ExportsState.run-on.length == 0: InkMenuItem {
+                                text: "No analysis in the Results list";
+                                enabled: false;
+                            }
+                            for row[i] in ExportsState.run-on: InkMenuItem {
+                                text: row.name + (row.when == "" ? "" : "  ·  " + row.when);
+                                checked: row.on;
+                                clicked => {
+                                    ExportsState.run-on-pick(i, !row.on);
+                                }
+                            }
+                            InkMenuSeparator { }
+                            HorizontalLayout {
+                                padding: 6px;
+                                spacing: 8px;
+                                InkButton {
+                                    small: true;
+                                    text: "All";
+                                    clicked => {
+                                        ExportsState.run-on-pick(-1, true);
+                                    }
+                                }
+                                InkButton {
+                                    small: true;
+                                    text: "Newest only";
+                                    clicked => {
+                                        ExportsState.run-on-pick(-1, false);
+                                    }
+                                }
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                }
+                                InkButton {
+                                    small: true;
+                                    kind: InkButtonKind.primary;
+                                    icon: InkIcons.run;
+                                    property <int> ticked: ExportsState.run-on-ticked;
+                                    text: self.ticked == 1 ? "Run on 1 analysis" : "Run on " + self.ticked + " analyses";
+                                    enabled: self.ticked > 0;
+                                    clicked => {
+                                        run-on-menu.close();
+                                        ExportsState.run-on-picked();
+                                    }
+                                }
                             }
                         }
                     }
@@ -937,7 +1014,8 @@ export component ExportsView inherits Rectangle {
                             icon: InkIcons.delete;
                             label: "Delete this export";
                             clicked => {
-                                ExportsState.delete(ExportsState.selected-id);
+                                ExportsState.delete-asked-name = ExportsState.name;
+                                ExportsState.delete-asked = ExportsState.selected-id;
                             }
                         }
                     }
@@ -1090,11 +1168,47 @@ export component ExportsView inherits Rectangle {
                         }
                         if ExportsState.report.length > 0: VerticalLayout {
                             spacing: 4px;
-                            Text {
-                                text: "Last run";
-                                font-size: Ink.fs-body;
-                                font-weight: 600;
-                                color: Ink.text;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Text {
+                                    text: "Last run";
+                                    font-size: Ink.fs-body;
+                                    font-weight: 600;
+                                    color: Ink.text;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                }
+                                // A run on one analysis: its folder here.
+                                if ExportsState.report-folders.length == 1 && ExportsState.report-folders[0].name == "": InkButton {
+                                    small: true;
+                                    text: "Open exported folder";
+                                    icon: InkIcons.folder;
+                                    clicked => {
+                                        ExportsState.open-folder(ExportsState.report-folders[0].path);
+                                    }
+                                }
+                            }
+                            // On several: a folder per analysis.
+                            for folder in ExportsState.report-folders: HorizontalLayout {
+                                visible: folder.name != "";
+                                height: folder.name != "" ? self.preferred-height : 0px;
+                                spacing: 8px;
+                                Text {
+                                    text: folder.name;
+                                    font-size: Ink.fs-secondary;
+                                    color: Ink.text-dim;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                    horizontal-stretch: 1;
+                                }
+                                InkButton {
+                                    small: true;
+                                    text: "Open exported folder";
+                                    icon: InkIcons.folder;
+                                    clicked => {
+                                        ExportsState.open-folder(folder.path);
+                                    }
+                                }
                             }
                             for line in ExportsState.report: Text {
                                 text: line;

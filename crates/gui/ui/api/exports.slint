@@ -45,6 +45,21 @@ export struct DataOutputRow {
     on: bool,
 }
 
+/// A folder the last run wrote into: the analysis' name ("" for a run on
+/// one) and the folder.
+export struct ReportFolder {
+    name: string,
+    path: string,
+}
+
+/// An analysis the Run ▾ lists: its results file, name, when, ticked.
+export struct AnalysisRow {
+    path: string,
+    name: string,
+    when: string,
+    on: bool,
+}
+
 export global ExportsState {
     // -- The list --
     in property <[ExportRow]> exports: [];
@@ -178,6 +193,9 @@ export global ExportsState {
     in property <bool> after-busy;
     callback after-close();
     callback after-open();
+    // Where the exports wrote is on this computer: Open folder.
+    in property <bool> after-folder;
+    callback after-open-folder();
 
     // The last run's report, line by line.
     in property <[string]> report: [];
@@ -190,6 +208,9 @@ export global ExportsState {
     callback new-export();
     callback duplicate(int);
     callback delete(int);
+    // The trash asked about this export (its id, -1 none): the confirm.
+    in-out property <int> delete-asked: -1;
+    in-out property <string> delete-asked-name;
     callback set-after(int, bool);
     // A setting of the export being edited: "name", "prefix", "location",
     // "folder", "if-exists", "length-unit", "after".
@@ -215,5 +236,15 @@ export global ExportsState {
     callback picker(string, string, bool);
     // Runs the export on the project's newest analysis.
     callback run();
+    // -- Run ▾: on the analyses picked --
+    in property <[AnalysisRow]> run-on: [];
+    in property <int> run-on-ticked;
+    callback run-on-open();
+    // A tick (its index), or All / Newest only (-1, on = all).
+    callback run-on-pick(int, bool);
+    callback run-on-picked();
+    // -- Open exported folder --
+    in property <[ReportFolder]> report-folders: [];
+    callback open-folder(string);
     callback cancel();
 }

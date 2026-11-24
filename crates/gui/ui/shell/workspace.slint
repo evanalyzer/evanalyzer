@@ -588,6 +588,17 @@ export component Workspace inherits Rectangle {
                 max-width: 560px;
                 overflow: elide;
             }
+            if !ExportsState.after-busy && ExportsState.after-folder: VerticalLayout {
+                alignment: center;
+                InkButton {
+                    small: true;
+                    text: "Open folder";
+                    icon: InkIcons.folder;
+                    clicked => {
+                        ExportsState.after-open-folder();
+                    }
+                }
+            }
             if !ExportsState.after-busy: VerticalLayout {
                 alignment: center;
                 InkButton {

@@ -482,14 +482,6 @@ export component ResultsBarNav inherits HorizontalLayout {
             }
 
             InkMenuItem {
-                icon: InkIcons.add;
-                text: "Add to export…";
-                clicked => {
-                    QuickExportState.open(root.menu-id);
-                }
-            }
-
-            InkMenuItem {
                 icon: InkIcons.undo;
                 text: "Back to how it was saved";
                 enabled: root.menu-index >= 0 && root.menu-index < ResultsState.views-revertable.length && ResultsState.views-revertable[root.menu-index];

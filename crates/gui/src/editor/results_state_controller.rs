@@ -10216,8 +10216,11 @@ pub(crate) mod tests {
             assert!(per_class > 0, "{rows}");
             s.invoke_list_transpond_changed(true);
             drain_ui_queue();
-            let headers: Vec<String> =
-                s.get_list_column_headers().iter().map(|h| h.to_string()).collect();
+            let headers: Vec<String> = s
+                .get_list_column_headers()
+                .iter()
+                .map(|h| h.to_string())
+                .collect();
             assert!(
                 !headers.iter().any(|h| h.eq_ignore_ascii_case("class")),
                 "{rows}: {headers:?}"

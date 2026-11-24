@@ -28,6 +28,10 @@ export component InkButton inherits Rectangle {
     in property <string> tip;
     in property <[string]> keys;
     in property <string> disabled-reason;
+    /// Joined to a button on its left / right (a split button: Run | ▾) -
+    /// square corners on that side.
+    in property <bool> join-left;
+    in property <bool> join-right;
     callback clicked;
 
     property <bool> filled: root.kind == InkButtonKind.primary || root.kind == InkButtonKind.danger;
@@ -39,10 +43,10 @@ export component InkButton inherits Rectangle {
 
     height: root.small ? 24px : Ink.button-h;
     horizontal-stretch: 0;
-    min-width: root.kind == InkButtonKind.quiet || root.small ? 0px : 64px;
+    min-width: root.kind == InkButtonKind.quiet || root.small || root.join-left ? 0px : 64px;
     preferred-width: label.preferred-width + (root.has-icon ? 20px : 0px) + (root.small ? 16px : 24px);
     accessible-role: button;
-    accessible-label: root.text;
+    accessible-label: root.text != "" ? root.text : root.tip;
     accessible-enabled: root.enabled;
     forward-focus: keys;
     accessible-action-default => {
@@ -52,7 +56,10 @@ export component InkButton inherits Rectangle {
     }
 
     face := Rectangle {
-        border-radius: Ink.radius-md;
+        border-top-left-radius: root.join-left ? 0px : Ink.radius-md;
+        border-bottom-left-radius: root.join-left ? 0px : Ink.radius-md;
+        border-top-right-radius: root.join-right ? 0px : Ink.radius-md;
+        border-bottom-right-radius: root.join-right ? 0px : Ink.radius-md;
         border-width: keys.has-focus ? 2px : root.kind == InkButtonKind.secondary ? 1px : 0px;
         border-color: keys.has-focus ? Ink.focus : ta.has-hover && root.enabled ? Ink.text-faint : Ink.border;
         background: root.kind == InkButtonKind.primary ? (ta.has-hover && root.enabled ? Ink.primary-hover : Ink.primary)
@@ -64,7 +71,7 @@ export component InkButton inherits Rectangle {
 
         HorizontalLayout {
             alignment: center;
-            spacing: 6px;
+            spacing: root.text == "" ? 0px : 6px;
             if root.has-icon: Image {
                 source: root.icon;
                 width: 14px;

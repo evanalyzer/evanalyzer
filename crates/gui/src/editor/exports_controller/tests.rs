@@ -735,7 +735,7 @@ fn open_the_analysis(ui: &AppWindow, dir: &std::path::Path) -> std::path::PathBu
 }
 
 /// Results › Export… on the List: written once into the folder chosen, as
-/// the view shows it; the note says so; nothing kept.
+/// the view shows it; the done step says what was written; nothing kept.
 #[test]
 fn export_this_view_writes_the_list_once() {
     use crate::QuickExportState;
@@ -745,6 +745,7 @@ fn export_this_view_writes_the_list_once() {
     let quick = ui.global::<QuickExportState>();
     quick.invoke_open(-1);
     assert!(quick.get_shown());
+    assert!(!quick.get_done());
     assert_eq!(quick.get_view_name(), "List");
     assert!(quick.get_table());
     assert!(quick.get_what().contains("columns"), "{}", quick.get_what());
@@ -752,7 +753,7 @@ fn export_this_view_writes_the_list_once() {
         quick.get_folder().ends_with("20261124T090000Z__run"),
         "beside the analysis"
     );
-    assert!(!quick.get_keep());
+    assert!(quick.get_can_open_folder(), "on this computer");
     assert_eq!(quick.get_error(), "");
 
     let out = dir.path().join("out");
@@ -763,18 +764,23 @@ fn export_this_view_writes_the_list_once() {
     quick.invoke_export();
     drain_ui_queue();
     assert_eq!(quick.get_error(), "");
-    assert!(!quick.get_shown());
     assert!(out.join("for_r_objects.xlsx").is_file());
-    let state = ui.global::<ExportsState>();
+    // The done step: what, where; Done closes.
+    assert!(quick.get_shown());
+    assert!(quick.get_done());
+    assert_eq!(quick.get_done_text(), "Written: for_r_objects.xlsx");
     assert!(
-        state.get_after_text().contains("Exported “List”"),
+        quick.get_done_path().ends_with("for_r_objects.xlsx"),
         "{}",
-        state.get_after_text()
+        quick.get_done_path()
     );
+    quick.invoke_cancel();
+    assert!(!quick.get_shown());
     assert!(exports(&ui_state).is_empty(), "nothing kept");
 
     // Again: the file there stays, the new one gets "_2".
     quick.invoke_open(-1);
+    assert!(!quick.get_done(), "the form again");
     quick.set_file("for_r".into());
     quick.set_format(1);
     quick.invoke_export();
@@ -782,53 +788,146 @@ fn export_this_view_writes_the_list_once() {
     assert!(out.join("for_r_objects_2.xlsx").is_file());
 }
 
-/// Ticked: kept as a new export (named like the view, run after every run
-/// as chosen) or added to one there is; "and open" shows it.
+/// Add to project exports: the view as a new export (named like the view,
+/// its name and format as set) - nothing written; the note opens it. From
+/// the done step too: exported and kept.
 #[test]
-fn export_this_view_keeps_it_as_an_export() {
-    use crate::{LayoutState, QuickExportState, WorkspaceMode};
+fn export_this_view_adds_it_to_the_project() {
+    use crate::QuickExportState;
     let dir = tempfile::tempdir().unwrap();
     let (ui, ui_state, _controller) = setup(saved_project_with_an_analysis(dir.path()));
     open_the_analysis(&ui, dir.path());
     let quick = ui.global::<QuickExportState>();
+    let state = ui.global::<ExportsState>();
     let out = dir.path().join("out");
     std::fs::create_dir_all(&out).unwrap();
 
-    // From the Plate view's ⋯ › Add to export…: the tick on.
+    // The Plate view: added, nothing written.
     quick.invoke_open(2);
-    assert!(quick.get_keep());
     assert!(!quick.get_table(), "a plate layout");
     quick.set_folder(out.to_string_lossy().as_ref().into());
-    quick.set_keep_after(true);
-    quick.invoke_export_and_open();
+    quick.set_file("ctrl".into());
+    quick.invoke_add_to_project();
     drain_ui_queue();
-    assert_eq!(quick.get_error(), "");
-    assert!(out.join("plate.xlsx").is_file());
+    assert!(!quick.get_shown());
+    assert_eq!(
+        std::fs::read_dir(&out).unwrap().count(),
+        0,
+        "nothing written"
+    );
     let all = exports(&ui_state);
     assert_eq!(all.len(), 1);
     assert_eq!(all[0].name, "Plate");
-    assert!(all[0].run_after_every_run);
-    assert!(matches!(all[0].entries[0], ExportEntry::Data(_)));
-    assert_eq!(
-        ui.global::<LayoutState>().get_mode(),
-        WorkspaceMode::Exports
+    assert!(!all[0].run_after_every_run);
+    match &all[0].entries[0] {
+        ExportEntry::Data(data) => assert_eq!(data.name, "ctrl"),
+        _ => panic!("a data export"),
+    }
+    assert!(state.get_after_shown());
+    assert!(
+        state
+            .get_after_text()
+            .contains("Added to Exports as “Plate”"),
+        "{}",
+        state.get_after_text()
     );
-    assert_eq!(
-        ui.global::<ExportsState>().get_selected_id(),
-        all[0].id as i32
-    );
+    state.invoke_after_open();
+    assert_eq!(state.get_selected_id(), all[0].id as i32);
 
-    // The List added to it.
+    // The List: exported, then added from the done step.
     quick.invoke_open(1);
     quick.set_folder(out.to_string_lossy().as_ref().into());
-    quick.set_keep(true);
-    quick.set_keep_target(1);
+    quick.set_format(1);
     quick.invoke_export();
     drain_ui_queue();
+    assert!(quick.get_done());
+    quick.invoke_add_to_project();
+    drain_ui_queue();
+    assert!(!quick.get_shown());
     let all = exports(&ui_state);
-    assert_eq!(all.len(), 1);
-    assert_eq!(all[0].entries.len(), 2);
-    assert!(matches!(all[0].entries[1], ExportEntry::Data(_)));
+    assert_eq!(all.len(), 2);
+    assert_eq!(all[1].name, "List");
+    match &all[1].entries[0] {
+        ExportEntry::Data(data) => assert_eq!(data.format, TableFileFormat::Xlsx),
+        _ => panic!("a data export"),
+    }
+}
+
+/// Run ▾: the Results list's analyses, the newest ticked; run on the ones
+/// ticked, each into its own folder - a part of the report and a folder to
+/// open per analysis. Run alone: the newest, its folder beside "Last run".
+#[test]
+fn an_export_runs_on_the_analyses_picked() {
+    let dir = tempfile::tempdir().unwrap();
+    let (ui, _ui_state, _controller) = setup(saved_project_with_an_analysis(dir.path()));
+    let older = dir.path().join("results").join("20261120T080000Z__run");
+    std::fs::create_dir_all(&older).unwrap();
+    seed_test_db(&older.join("run.evadb"));
+    let newer = dir.path().join("results/20261124T090000Z__run");
+    let list = ui.global::<crate::ResultsListState>();
+    list.set_results_list(model(vec![
+        crate::ResultItemData {
+            name: "run".into(),
+            path: newer.join("run.evadb").to_string_lossy().as_ref().into(),
+            modified: "24 Nov 09:00".into(),
+            ..Default::default()
+        },
+        crate::ResultItemData {
+            name: "run".into(),
+            path: older.join("run.evadb").to_string_lossy().as_ref().into(),
+            modified: "20 Nov 08:00".into(),
+            ..Default::default()
+        },
+    ]));
+    let state = ui.global::<ExportsState>();
+    state.invoke_new_export();
+    state.invoke_set_entry_field("images".into(), "0".into());
+
+    // Run alone: the newest; its folder beside "Last run".
+    state.invoke_run();
+    drain_ui_queue();
+    assert!(newer.join("images.csv").is_file());
+    assert!(!older.join("images.csv").exists());
+    let folders: Vec<_> = state.get_report_folders().iter().collect();
+    assert_eq!(folders.len(), 1);
+    assert_eq!(folders[0].name, "");
+    assert_eq!(std::path::PathBuf::from(folders[0].path.as_str()), newer);
+    std::fs::remove_file(newer.join("images.csv")).unwrap();
+
+    // The ▾: both listed, the newest ticked.
+    state.invoke_run_on_open();
+    let rows: Vec<_> = state.get_run_on().iter().collect();
+    assert_eq!(rows.len(), 2);
+    assert!(rows[0].on && !rows[1].on);
+    assert_eq!(state.get_run_on_ticked(), 1);
+    state.invoke_run_on_pick(-1, true);
+    assert_eq!(state.get_run_on_ticked(), 2, "All");
+    state.invoke_run_on_pick(-1, false);
+    assert_eq!(state.get_run_on_ticked(), 1, "Newest only");
+    state.invoke_run_on_pick(0, false);
+    state.invoke_run_on_pick(1, true);
+    state.invoke_run_on_picked();
+    drain_ui_queue();
+    assert!(older.join("images.csv").is_file(), "the older alone");
+    assert!(!newer.join("images.csv").exists());
+
+    // Both: a part of the report and a folder per analysis.
+    state.invoke_run_on_open();
+    state.invoke_run_on_pick(-1, true);
+    state.invoke_run_on_picked();
+    drain_ui_queue();
+    assert!(newer.join("images.csv").is_file());
+    let report: Vec<String> = state.get_report().iter().map(|l| l.to_string()).collect();
+    assert_eq!(
+        report.iter().filter(|l| l.starts_with("— run · ")).count(),
+        2,
+        "{report:?}"
+    );
+    let folders: Vec<_> = state.get_report_folders().iter().collect();
+    assert_eq!(folders.len(), 2);
+    assert!(folders[0].name.contains("24 Nov"), "{}", folders[0].name);
+    let row = state.get_exports().row_data(0).unwrap();
+    assert_eq!(row.status_tone, 1, "{report:?}");
 }
 
 /// A view's ⋯ › Save as export…: a new export of it, opened in the tab -
@@ -889,8 +988,7 @@ fn the_export_dialogs_fit_the_smallest_window() {
     let quick = ui.global::<QuickExportState>();
     quick.invoke_open(1);
     inside("Export");
-    inside("Export and open in Exports");
-    inside("Also keep in the project as an export");
+    inside("Add to project exports");
     quick.invoke_cancel();
 
     ui.global::<ExportsState>().invoke_run();

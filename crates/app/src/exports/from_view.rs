@@ -61,12 +61,11 @@ pub fn entry_from_view(view: &ResultsView) -> Option<ExportEntry> {
             table.parents = list.parents.clone();
             table.aggregations = aggregations;
             table.empty_classes = list.empty_classes;
-            table.transposed =
-                list.transposed
-                    && matches!(
-                        rows,
-                        TableRows::Object | TableRows::Image | TableRows::Well | TableRows::Folder
-                    );
+            table.transposed = list.transposed
+                && matches!(
+                    rows,
+                    TableRows::Object | TableRows::Image | TableRows::Well | TableRows::Folder
+                );
             table.images = match list.images.as_str() {
                 "all" => ImageScope::All,
                 "disabled" => ImageScope::LeftOut,

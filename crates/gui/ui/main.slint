@@ -26,7 +26,7 @@ import { AiLearningState, AiTrainingSettingsSlint, BrightnessRowSlint, ChannelCh
 import { RunAnalysisState } from "api/run_analysis.slint";
 import { ResultsListState } from "api/results_list.slint";
 import { ResultsState } from "api/results.slint";
-import { DataOutputRow, ExportEntryRow, ExportRow, ExportsState } from "api/exports.slint";
+import { AnalysisRow, DataOutputRow, ExportEntryRow, ExportRow, ExportsState, ReportFolder } from "api/exports.slint";
 import { FileBrowserCrumb, FileBrowserEntry, FileBrowserMode, FileBrowserPlace, FileBrowserState } from "api/file_browser.slint";
 
 import { GlobalShortcuts, DialogShortcuts } from "shortcuts.slint";
@@ -56,6 +56,7 @@ import {
 import { DeleteAnalysisDialog } from "dialogs/delete_analysis_dialog.slint";
 import { ScriptTrustDialog } from "dialogs/script_trust_dialog.slint";
 import { QuickExportDialog } from "dialogs/quick_export_dialog.slint";
+import { DeleteExportDialog } from "dialogs/delete_export_dialog.slint";
 import { QuickExportState } from "api/quick_export.slint";
 import { ScriptTrustState } from "api/script_trust.slint";
 
@@ -194,7 +195,9 @@ export {
     QuickExportState,
     ExportRow,
     ExportEntryRow,
+    AnalysisRow,
     DataOutputRow,
+    ReportFolder,
     FileBrowserState,
     FileBrowserMode,
     FileBrowserPlace,
@@ -485,6 +488,13 @@ export component AppWindow inherits Window {
             width: 100%;
             height: 100%;
             QuickExportDialog { }
+        }
+
+        // The Exports tab's trash: asked first.
+        if ExportsState.delete-asked >= 0: Rectangle {
+            width: 100%;
+            height: 100%;
+            DeleteExportDialog { }
         }
 
         // An export's script not allowed yet: asked over everything else

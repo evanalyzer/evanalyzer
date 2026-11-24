@@ -2,8 +2,8 @@
 // Licensed under the PolyForm Noncommercial License 1.0.0.
 
 // api/quick_export.slint — Results › Export…: the view shown as it is now,
-// written once (table format 1) - and, ticked, kept in the project as an
-// export (a new one, or added to one there is).
+// written once (table format 1), or added to the project's exports
+// (design canvas "Quick export, open folder, run on", board 1 A, board 2).
 
 export global QuickExportState {
     in property <bool> shown;
@@ -19,27 +19,30 @@ export global QuickExportState {
     in-out property <string> file;
     in property <string> file-placeholder;
 
-    // -- Also keep in the project --
-    in-out property <bool> keep;
-    // "New export", then the project's exports.
-    in property <[string]> keep-targets: [];
-    in-out property <int> keep-target;
-    in-out property <string> keep-name;
-    in-out property <bool> keep-after;
+    // -- Written: the done step --
+    in property <bool> done;
+    // "Written: images.csv" / "Written: 3 files".
+    in property <string> done-text;
+    // Where: the file (one) or the folder.
+    in property <string> done-path;
+    // The folder is on this computer (not on a server): it can be opened.
+    in property <bool> can-open-folder;
 
     in property <bool> busy;
     // What went wrong ("" nothing).
     in property <string> error;
 
-    // Export… on the view shown (`open(-1)`) or a view's ⋯ › Add to
-    // export… (its id: the tick on).
+    // Export… on the view shown (`open(-1)`, else the view's id).
     callback open(int);
     // A view's ⋯ › Save as export…: kept as a new export, opened in the
     // Exports tab.
     callback save-view(int);
     callback choose-folder();
     callback export();
-    // Export, then open the kept export in the Exports tab.
-    callback export-and-open();
+    // Adds the view to the project's exports as a new export - nothing
+    // written now; closes with a note.
+    callback add-to-project();
+    // The done step: the folder written into, in the file manager.
+    callback open-folder();
     callback cancel();
 }
