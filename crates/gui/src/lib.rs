@@ -47,6 +47,9 @@ mod undo_history;
 // Wraps AppHandle and the Slint window handle
 // ----------------------------------------------------------------
 
+/// See [`UiState::on_analysis_finished`].
+type AnalysisFinishedListener = Box<dyn Fn(&std::path::Path) + Send + Sync>;
+
 pub struct UiState {
     pub app: AppHandle, // cloneable handle - no Arc needed, AppHandle is already Arc inside
     pub ui_handle: slint::Weak<AppWindow>,
@@ -101,6 +104,11 @@ pub struct UiState {
     image_states_listener: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
     results_views_listener: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
     exports_listener: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+    /// Called with a finished analysis' folder (not a preview's).
+    analysis_finished_listener: Mutex<Option<AnalysisFinishedListener>>,
+    /// The exports the run dialog left on for the run going on (`None`:
+    /// those set to run after every run).
+    exports_for_run: Mutex<Option<Vec<u32>>>,
     /// Called once another image (or series) is shown - see `image_opened`.
     image_opened_listeners: Mutex<Vec<Box<dyn Fn() + Send + Sync>>>,
     /// Called once a trained model is saved - see `model_saved`.
@@ -150,6 +158,8 @@ impl UiState {
             image_states_listener: Mutex::new(None),
             results_views_listener: Mutex::new(None),
             exports_listener: Mutex::new(None),
+            analysis_finished_listener: Mutex::new(None),
+            exports_for_run: Mutex::new(None),
             image_opened_listeners: Mutex::new(Vec::new()),
             model_saved_listeners: Mutex::new(Vec::new()),
             pipeline_added_listeners: Mutex::new(Vec::new()),
@@ -225,6 +235,35 @@ impl UiState {
         if let Some(listener) = self.exports_listener.lock().expect("Poisoned").as_ref() {
             listener();
         }
+    }
+
+    /// Calls `f` with the folder of every analysis that finished (on the
+    /// worker's thread).
+    pub fn on_analysis_finished(&self, f: impl Fn(&std::path::Path) + Send + Sync + 'static) {
+        *self.analysis_finished_listener.lock().expect("Poisoned") = Some(Box::new(f));
+    }
+
+    /// An analysis finished into `output_dir`.
+    pub fn analysis_finished(&self, output_dir: &std::path::Path) {
+        if let Some(listener) = self
+            .analysis_finished_listener
+            .lock()
+            .expect("Poisoned")
+            .as_ref()
+        {
+            listener(output_dir);
+        }
+    }
+
+    /// The exports to run after the run being started (the run dialog's
+    /// "Afterwards").
+    pub fn set_exports_for_run(&self, ids: Option<Vec<u32>>) {
+        *self.exports_for_run.lock().expect("Poisoned") = ids;
+    }
+
+    /// The exports to run after the run that just finished - asked once.
+    pub fn take_exports_for_run(&self) -> Option<Vec<u32>> {
+        self.exports_for_run.lock().expect("Poisoned").take()
     }
 
     fn results_views_restored(&self) {

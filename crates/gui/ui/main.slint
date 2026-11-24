@@ -55,6 +55,10 @@ import {
 } from "dialogs/classification_confirm_delete.slint";
 
 import { DeleteAnalysisDialog } from "dialogs/delete_analysis_dialog.slint";
+import { ScriptTrustDialog } from "dialogs/script_trust_dialog.slint";
+import { QuickExportDialog } from "dialogs/quick_export_dialog.slint";
+import { QuickExportState } from "api/quick_export.slint";
+import { ScriptTrustState } from "api/script_trust.slint";
 
 import {
     ConfirmAutoAddClassesDialog,
@@ -189,6 +193,8 @@ export {
     ResultsState,
     ExportDialogState,
     ExportsState,
+    ScriptTrustState,
+    QuickExportState,
     ExportRow,
     ExportEntryRow,
     FileBrowserState,
@@ -479,6 +485,21 @@ export component AppWindow inherits Window {
         if ExportDialogState.active: ExportDialog {
             width: 100%;
             height: 100%;
+        }
+
+        // Results › Export…: the view shown, once - or kept as an export.
+        if QuickExportState.shown: Rectangle {
+            width: 100%;
+            height: 100%;
+            QuickExportDialog { }
+        }
+
+        // An export's script not allowed yet: asked over everything else
+        // (also after a run, with another dialog open).
+        if ScriptTrustState.shown: Rectangle {
+            width: 100%;
+            height: 100%;
+            ScriptTrustDialog { }
         }
 
         // The file browser sits above every other overlay: some dialogs (e.g.

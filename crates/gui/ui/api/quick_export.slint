@@ -1,0 +1,45 @@
+// Copyright 2026 Joachim Danmayr.
+// Licensed under the PolyForm Noncommercial License 1.0.0.
+
+// api/quick_export.slint — Results › Export…: the view shown as it is now,
+// written once (table format 1) - and, ticked, kept in the project as an
+// export (a new one, or added to one there is).
+
+export global QuickExportState {
+    in property <bool> shown;
+    // The view's name and what it shows: "a row per image · 22 columns · 3
+    // classes · mean".
+    in property <string> view-name;
+    in property <string> what;
+    // A table (CSV / XLSX); a plate layout is XLSX only.
+    in property <bool> table;
+    in-out property <int> format;
+    in-out property <string> folder;
+    // The file's name without its extension ("" the automatic one).
+    in-out property <string> file;
+    in property <string> file-placeholder;
+
+    // -- Also keep in the project --
+    in-out property <bool> keep;
+    // "New export", then the project's exports.
+    in property <[string]> keep-targets: [];
+    in-out property <int> keep-target;
+    in-out property <string> keep-name;
+    in-out property <bool> keep-after;
+
+    in property <bool> busy;
+    // What went wrong ("" nothing).
+    in property <string> error;
+
+    // Export… on the view shown (`open(-1)`) or a view's ⋯ › Add to
+    // export… (its id: the tick on).
+    callback open(int);
+    // A view's ⋯ › Save as export…: kept as a new export, opened in the
+    // Exports tab.
+    callback save-view(int);
+    callback choose-folder();
+    callback export();
+    // Export, then open the kept export in the Exports tab.
+    callback export-and-open();
+    callback cancel();
+}

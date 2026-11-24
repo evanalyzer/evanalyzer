@@ -389,6 +389,22 @@ impl PipelinesController {
             });
 
             // Run-analysis dialog cancelled: just close it, nothing to run.
+            // Afterwards: an export switched off (or on) for this run.
+            let weak = ui.as_weak();
+            ui.global::<RunAnalysisState>()
+                .on_export_toggled(move |index, on| {
+                    let Some(ui) = weak.upgrade() else {
+                        return;
+                    };
+                    let rows = ui.global::<RunAnalysisState>().get_exports();
+                    if let Ok(index) = usize::try_from(index)
+                        && let Some(mut row) = rows.row_data(index)
+                    {
+                        row.on = on;
+                        rows.set_row_data(index, row);
+                    }
+                });
+
             let manager = self.clone();
             ui.global::<RunAnalysisState>().on_cancel(move || {
                 if let Some(ui) = manager.ui.upgrade() {
@@ -3341,6 +3357,22 @@ impl PipelinesController {
         state.set_base_names(ModelRc::new(VecModel::from(names)));
         state.set_base_paths(ModelRc::new(VecModel::from(paths)));
         state.set_base_index(open as i32);
+        // Afterwards: the exports set to run after every run, all on.
+        let exports: Vec<crate::RunExportRow> = self
+            .app_state
+            .get_project()
+            .settings
+            .exports
+            .iter()
+            .filter(|export| export.run_after_every_run)
+            .map(|export| crate::RunExportRow {
+                id: export.id as i32,
+                name: export.name.as_str().into(),
+                summary: crate::editor::exports_controller::summary(export).into(),
+                on: true,
+            })
+            .collect();
+        state.set_exports(ModelRc::new(VecModel::from(exports)));
         ui.global::<GlobalAppState>()
             .set_active_dialog(DialogType::RunAnalysisConfirm);
     }
@@ -3369,6 +3401,14 @@ impl PipelinesController {
             .map(|path| PathBuf::from(path.as_str()));
         ui.global::<GlobalAppState>()
             .set_active_dialog(DialogType::None);
+        // The exports left on run when it is done.
+        let exports: Vec<u32> = state
+            .get_exports()
+            .iter()
+            .filter(|row| row.on)
+            .filter_map(|row| u32::try_from(row.id).ok())
+            .collect();
+        self.app_state.set_exports_for_run(Some(exports));
 
         let job_name = (!job_name.trim().is_empty()).then_some(job_name);
         self.trigger_pipeline_full_run(job_name, base_results);
@@ -12696,6 +12736,41 @@ mod tests {
                 .get_message()
                 .contains("save the project")
         );
+    }
+
+    /// Afterwards: the exports set to run after every run, all on; one
+    /// switched off stays off for this run only - what is left on goes
+    /// with the run.
+    #[test]
+    fn the_run_dialog_lists_the_exports_to_run_afterwards() {
+        let (ui, ui_state, _controller) = selected(vec![]);
+        {
+            let mut project = ui_state.get_project_write();
+            project.tmp_settings.current_project = Some(PathBuf::from("/data/exp/project.evaproj"));
+            project.settings.exports = serde_json::from_value(serde_json::json!([
+                { "id": 1, "name": "Per image", "runAfterEveryRun": true,
+                  "entries": [{ "kind": "TABLE", "rows": "IMAGE" }] },
+                { "id": 2, "name": "By hand only" },
+                { "id": 3, "name": "Tracks", "runAfterEveryRun": true }
+            ]))
+            .unwrap();
+        }
+        ui.global::<PipelinesPanelState>().invoke_run_all();
+        let state = ui.global::<RunAnalysisState>();
+        let rows: Vec<crate::RunExportRow> = state.get_exports().iter().collect();
+        let names: Vec<String> = rows.iter().map(|r| r.name.to_string()).collect();
+        assert_eq!(names, ["Per image", "Tracks"]);
+        assert!(rows.iter().all(|r| r.on));
+        assert_eq!(rows[0].summary, "a table");
+
+        state.invoke_export_toggled(1, false);
+        assert!(!state.get_exports().row_data(1).unwrap().on);
+        state.invoke_confirm();
+        assert_eq!(ui_state.take_exports_for_run(), Some(vec![1]));
+        // Asked once.
+        assert_eq!(ui_state.take_exports_for_run(), None);
+        // The project's setting is untouched.
+        assert!(ui_state.get_project().settings.exports[2].run_after_every_run);
     }
 
     #[test]

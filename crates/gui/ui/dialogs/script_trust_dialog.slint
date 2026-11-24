@@ -1,0 +1,99 @@
+// Copyright 2026 Joachim Danmayr.
+// Licensed under the PolyForm Noncommercial License 1.0.0.
+
+// dialogs/script_trust_dialog.slint — "Run the script …?" before an export
+// runs a script not allowed yet (design canvas "Result exports",
+// TrustPrompt). Floats over the window: blurred like every dialog
+// (InkDialog). Don't run has the safe place on the left.
+
+import { Ink, InkButton, InkButtonKind, InkDialog, InkDialogFooter, InkHint } from "../ink/ink.slint";
+import { ScriptTrustState } from "../api/script_trust.slint";
+
+export component ScriptTrustDialog inherits InkDialog {
+    title: "Run the script " + ScriptTrustState.name + "?";
+    subtitle: ScriptTrustState.more > 0 ? (ScriptTrustState.more + 1) + " scripts to allow" : "";
+    card-width: 560px;
+    modal: true;
+    close => {
+        ScriptTrustState.answer(0);
+    }
+
+    VerticalLayout {
+        spacing: 10px;
+
+        Text {
+            text: "The export “" + ScriptTrustState.export-name + "” runs a script that came with this project. A script can do anything on this computer that you can - only allow it if you trust where the project came from.";
+            wrap: word-wrap;
+            color: Ink.text;
+            font-size: Ink.fs-body;
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: ScriptTrustState.about;
+                color: Ink.text-dim;
+                font-size: Ink.fs-secondary;
+                horizontal-stretch: 1;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+            if ScriptTrustState.can-open: InkButton {
+                small: true;
+                kind: InkButtonKind.quiet;
+                text: "Open in editor";
+                clicked => {
+                    ScriptTrustState.open-in-editor();
+                }
+            }
+        }
+
+        Rectangle {
+            background: Ink.viewport;
+            border-radius: Ink.radius-md;
+            height: 200px;
+            clip: true;
+            VerticalLayout {
+                padding: 12px;
+                alignment: start;
+                Text {
+                    text: ScriptTrustState.preview;
+                    font-family: Ink.font-mono;
+                    font-size: Ink.fs-secondary;
+                    color: #E8E8EA;
+                    accessible-label: "The script";
+                }
+            }
+        }
+
+        InkHint {
+            text: "“This version” is the script's content: when the file changes, you are asked again. The export's tables and images are written either way.";
+            wrap: word-wrap;
+        }
+
+        InkDialogFooter {
+            InkButton {
+                text: "Don't run";
+                clicked => {
+                    ScriptTrustState.answer(0);
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+            InkButton {
+                text: "Run once";
+                clicked => {
+                    ScriptTrustState.answer(1);
+                }
+            }
+            InkButton {
+                kind: InkButtonKind.primary;
+                text: "Always allow this version";
+                clicked => {
+                    ScriptTrustState.answer(2);
+                }
+            }
+        }
+    }
+}

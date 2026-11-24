@@ -1,0 +1,151 @@
+// Copyright 2026 Joachim Danmayr.
+// Licensed under the PolyForm Noncommercial License 1.0.0.
+
+// dialogs/quick_export_dialog.slint — "Export this view" (design canvas
+// "Result exports", board 1): format, folder, file, and the tick that keeps
+// it in the project as an export. Floats over Results: blurred like every
+// dialog (InkDialog).
+
+import { Ink, InkButton, InkButtonKind, InkDialog, InkDialogFooter, InkHint, InkSegmented, InkTextField, InkCheckbox, InkSelect, InkSwitch, InkBanner, InkTone } from "../ink/ink.slint";
+import { QuickExportState } from "../api/quick_export.slint";
+
+// A labelled row: the label at the left, the control beside it.
+component Row inherits HorizontalLayout {
+    in property <string> label;
+    spacing: 12px;
+    Text {
+        width: 70px;
+        text: root.label;
+        font-size: Ink.fs-body;
+        color: Ink.text-dim;
+        vertical-alignment: center;
+    }
+    @children
+}
+
+export component QuickExportDialog inherits InkDialog {
+    title: "Export this view";
+    subtitle: "“" + QuickExportState.view-name + "” as it is shown now: " + QuickExportState.what;
+    card-width: 540px;
+    modal: true;
+    close => {
+        if !QuickExportState.busy {
+            QuickExportState.cancel();
+        }
+    }
+
+    VerticalLayout {
+        spacing: 12px;
+
+        if QuickExportState.table: Row {
+            label: "Format";
+            InkSegmented {
+                width: 160px;
+                label: "Format";
+                model: ["CSV", "XLSX"];
+                selected: QuickExportState.format;
+                picked(i) => {
+                    QuickExportState.format = i;
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+        }
+        Row {
+            label: "Folder";
+            InkTextField {
+                label: "Folder";
+                mono: true;
+                text <=> QuickExportState.folder;
+            }
+            InkButton {
+                text: "Choose…";
+                clicked => {
+                    QuickExportState.choose-folder();
+                }
+            }
+        }
+        Row {
+            label: "File";
+            InkTextField {
+                label: "File";
+                mono: true;
+                placeholder: QuickExportState.file-placeholder;
+                text <=> QuickExportState.file;
+            }
+        }
+
+        Rectangle {
+            border-radius: Ink.radius-lg;
+            border-width: 1px;
+            border-color: QuickExportState.keep ? Ink.focus : Ink.border;
+            background: QuickExportState.keep ? Ink.info-tint : transparent;
+            VerticalLayout {
+                padding: 12px;
+                spacing: 8px;
+                InkCheckbox {
+                    text: "Also keep in the project as an export";
+                    checked <=> QuickExportState.keep;
+                }
+                InkHint {
+                    text: "Listed in the Exports tab and shipped with the project - every run can write the same file.";
+                    wrap: word-wrap;
+                }
+                if QuickExportState.keep: VerticalLayout {
+                    spacing: 8px;
+                    padding-left: 24px;
+                    Row {
+                        label: "Into";
+                        InkSelect {
+                            label: "Keep it in";
+                            model: QuickExportState.keep-targets;
+                            selected <=> QuickExportState.keep-target;
+                        }
+                    }
+                    if QuickExportState.keep-target == 0: Row {
+                        label: "Name";
+                        InkTextField {
+                            label: "The export's name";
+                            text <=> QuickExportState.keep-name;
+                        }
+                    }
+                    if QuickExportState.keep-target == 0: InkSwitch {
+                        text: "Run after every run";
+                        checked <=> QuickExportState.keep-after;
+                    }
+                }
+            }
+        }
+
+        if QuickExportState.error != "": InkBanner {
+            tone: InkTone.warn;
+            text: QuickExportState.error;
+        }
+
+        InkDialogFooter {
+            InkButton {
+                text: "Cancel";
+                enabled: !QuickExportState.busy;
+                clicked => {
+                    QuickExportState.cancel();
+                }
+            }
+            if QuickExportState.keep: InkButton {
+                text: "Export and open in Exports";
+                enabled: !QuickExportState.busy;
+                clicked => {
+                    QuickExportState.export-and-open();
+                }
+            }
+            InkButton {
+                kind: InkButtonKind.primary;
+                text: QuickExportState.busy ? "Exporting…" : "Export";
+                enabled: !QuickExportState.busy;
+                clicked => {
+                    QuickExportState.export();
+                }
+            }
+        }
+    }
+}

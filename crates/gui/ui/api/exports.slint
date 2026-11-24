@@ -115,6 +115,16 @@ export global ExportsState {
     // -- Running --
     in property <bool> running;
     in property <string> progress;
+    // -- After an analysis: the exports set to run afterwards (a note) --
+    in property <bool> after-shown;
+    in property <string> after-text;
+    // 0 running, 1 done, 2 a problem.
+    in property <int> after-tone;
+    // Running (Stop instead of close).
+    in property <bool> after-busy;
+    callback after-close();
+    callback after-open();
+
     // The last run's report, line by line.
     in property <[string]> report: [];
     // A script's output of the last run.

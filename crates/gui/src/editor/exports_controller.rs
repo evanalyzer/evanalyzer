@@ -18,7 +18,10 @@ use crate::editor::column_picker::{
     self as picker, COLOC_BOX, ColocGroupUi, ColocSettings, PickerSource, SectionUi,
 };
 use crate::helper::ui_thread;
-use crate::{AppWindow, ExportEntryRow, ExportRow, ExportsState, MultiSelectItem};
+use crate::{
+    AppWindow, ExportEntryRow, ExportRow, ExportsState, MultiSelectItem, QuickExportState,
+    ScriptTrustState,
+};
 use evanalyzer_app::exports::{
     EntryStatus, ExportReport, ScriptPermission, check::check_export, default_columns,
     is_leading_column, naming, prepare_run, results_database,
@@ -32,6 +35,7 @@ use evanalyzer_cfg::settings::export_settings::{
     ImageScope, LengthUnit, OutputLocation, PlateGrid, ScriptLanguage, SplitInto, TableExport,
     TableFileFormat, TableRows, TableSplit,
 };
+use evanalyzer_cfg::settings::project_settings::ResultsView;
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -77,9 +81,14 @@ struct Shown {
     entry: Option<usize>,
     /// The last run here, per export: (text, tone).
     status: BTreeMap<u32, (String, i32)>,
-    /// The last run's report and a failed script's log.
-    report: Vec<String>,
-    log: String,
+    /// Per export its last run's report and a failed script's log.
+    reports: BTreeMap<u32, (Vec<String>, String)>,
+    /// The exports running after an analysis (the note over the window).
+    after: AfterRun,
+    /// Scripts asked about before a run (the trust prompt).
+    trust: Option<TrustAsk>,
+    /// The view "Export this view" is open for (its id).
+    quick_view: Option<u32>,
     /// The run going on: its cancel flag.
     running: Option<Arc<AtomicBool>>,
     progress: String,
@@ -93,6 +102,36 @@ struct Shown {
     coloc: ColocSettings,
     sections_open: HashMap<String, bool>,
     column_filter: String,
+}
+
+/// A script an export runs that the user hasn't allowed yet.
+struct Untrusted {
+    export: String,
+    /// As the export names it: `scripts/stats.R`.
+    file: String,
+    path: PathBuf,
+    hash: String,
+    content: String,
+    language: ScriptLanguage,
+}
+
+/// The scripts still to ask about before a run, those allowed for it once,
+/// and the run to start then.
+struct TrustAsk {
+    queue: Vec<Untrusted>,
+    once: Vec<String>,
+    then: Box<dyn FnOnce(Vec<String>) + Send>,
+}
+
+/// The exports running after an analysis: the note's text, its tone (0
+/// running, 1 done, 2 a problem), the export to open, the cancel flag.
+#[derive(Default)]
+struct AfterRun {
+    shown: bool,
+    text: String,
+    tone: i32,
+    open: Option<u32>,
+    cancel: Option<Arc<AtomicBool>>,
 }
 
 /// What the column picker is made of: the results' own columns and classes.
@@ -319,6 +358,90 @@ impl ExportsController {
             }
         });
 
+        // An analysis finished: the exports set to run afterwards.
+        let this = self.clone();
+        self.app_state
+            .on_analysis_finished(move |output_dir| this.run_after(output_dir));
+
+        let this = self.clone();
+        state.on_after_close(move || {
+            if let Some(cancel) = &this.shown.lock().expect("Poisoned").after.cancel {
+                cancel.store(true, Ordering::Relaxed);
+            }
+            this.shown.lock().expect("Poisoned").after.shown = false;
+            this.push_after();
+        });
+
+        // "Open in Exports": the export with the problem (else the one
+        // picked) and its report.
+        let this = self.clone();
+        state.on_after_open(move || {
+            {
+                let mut shown = this.shown.lock().expect("Poisoned");
+                if let Some(id) = shown.after.open {
+                    shown.selected = Some(id);
+                    shown.entry = None;
+                }
+                shown.after.shown = false;
+            }
+            this.push();
+            this.push_after();
+        });
+
+        // Results › Export…, a view's ⋯ › Save as export / Add to export.
+        let quick = ui.global::<QuickExportState>();
+        let this = self.clone();
+        quick.on_open(move |view| this.quick_open(view));
+        let this = self.clone();
+        quick.on_save_view(move |view| this.quick_save_view(view));
+        let this = self.clone();
+        quick.on_export(move || this.quick_export(false));
+        let this = self.clone();
+        quick.on_export_and_open(move || this.quick_export(true));
+        let this = self.clone();
+        quick.on_cancel(move || {
+            this.shown.lock().expect("Poisoned").quick_view = None;
+            if let Some(ui) = this.ui.upgrade() {
+                ui.global::<QuickExportState>().set_shown(false);
+            }
+        });
+        let weak = ui.as_weak();
+        let files = self.app_state.file_browser.clone();
+        quick.on_choose_folder(move || {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let start = ui.global::<QuickExportState>().get_folder().to_string();
+            let weak = weak.clone();
+            let request =
+                crate::FileRequest::open_folder("Export into").start_in(PathBuf::from(start));
+            files.open(request, move |folder| {
+                if let (Some(folder), Some(ui)) = (folder, weak.upgrade()) {
+                    ui.global::<QuickExportState>()
+                        .set_folder(folder.to_string_lossy().as_ref().into());
+                }
+            });
+        });
+
+        // The trust prompt.
+        let trust = ui.global::<ScriptTrustState>();
+        let this = self.clone();
+        trust.on_answer(move |answer| this.trust_answer(answer));
+        let this = self.clone();
+        trust.on_open_in_editor(move || {
+            let path = this
+                .shown
+                .lock()
+                .expect("Poisoned")
+                .trust
+                .as_ref()
+                .and_then(|ask| ask.queue.first())
+                .map(|script| script.path.clone());
+            if let Some(path) = path {
+                open_in_system(&path);
+            }
+        });
+
         // An undo or redo of the exports: shown anew (on the UI thread).
         let this = self.clone();
         self.app_state.on_exports_restored(move || {
@@ -496,56 +619,743 @@ impl ExportsController {
             );
             return;
         };
+        // A script not allowed yet: asked first.
+        let this = self.clone();
+        let exports = vec![export.clone()];
+        self.ask_scripts(&project_dir.clone(), &exports, move |once| {
+            this.start_run(id, export, project_dir, once);
+        });
+    }
+
+    /// Runs `export` by hand, the scripts allowed `once` with them.
+    fn start_run(
+        self: &Arc<Self>,
+        id: u32,
+        export: ExportSettings,
+        project_dir: PathBuf,
+        once: Vec<String>,
+    ) {
         let cancel = Arc::new(AtomicBool::new(false));
         {
             let mut shown = self.shown.lock().expect("Poisoned");
             shown.running = Some(cancel.clone());
             shown.progress = "Starting…".into();
-            shown.report.clear();
-            shown.log.clear();
+            shown.reports.remove(&id);
         }
         self.push();
 
         let this = self.clone();
         ui_thread::spawn(move || {
             let backend = this.app_state.backend();
-            let result = (|| {
-                let database = results_database(backend.files(), &project_dir, None)?;
-                let trusted = backend
-                    .load_app_settings()
-                    .unwrap_or_default()
-                    .trusted_scripts;
-                let (results, run) = {
-                    let project = this.app_state.get_project();
-                    prepare_run(
-                        backend.as_ref(),
-                        &project,
+            let progress_to = this.clone();
+            let result = results_database(backend.files(), &project_dir, None)
+                .map_err(|e| e.to_string())
+                .and_then(|database| {
+                    this.run_one(
                         &project_dir,
-                        export.clone(),
+                        &export,
                         &database,
-                        None,
-                        ScriptPermission::Trusted(trusted),
-                    )?
-                };
-                let progress_to = this.clone();
-                results.run_export(&run, &cancel, &mut |message, current, total| {
-                    let text = if current < total {
-                        format!("{}/{total} · {message}", current + 1)
-                    } else {
-                        message.to_string()
-                    };
-                    let this = progress_to.clone();
-                    ui_thread::invoke_from_event_loop(move || {
-                        this.shown.lock().expect("Poisoned").progress = text;
-                        this.push();
-                    })
-                    .ok();
-                })
-            })();
-            let result = result.map_err(|e| e.to_string());
+                        &once,
+                        &cancel,
+                        move |text| {
+                            let this = progress_to.clone();
+                            ui_thread::invoke_from_event_loop(move || {
+                                this.shown.lock().expect("Poisoned").progress = text;
+                                this.push();
+                            })
+                            .ok();
+                        },
+                    )
+                });
             ui_thread::invoke_from_event_loop(move || this.finish(id, result.map(|r| (export, r))))
                 .ok();
         });
+    }
+
+    /// Runs `export` on the results `database` (here or on the server) -
+    /// its report; `progress` gets what it is at. The scripts the user
+    /// allowed run, the others are skipped (said in the report).
+    fn run_one(
+        &self,
+        project_dir: &Path,
+        export: &ExportSettings,
+        database: &Path,
+        once: &[String],
+        cancel: &AtomicBool,
+        progress: impl Fn(String),
+    ) -> Result<ExportReport, String> {
+        self.run_one_into(project_dir, export, database, None, once, cancel, progress)
+    }
+
+    /// [`Self::run_one`] into `output` (`None`: the export's own folder).
+    #[allow(clippy::too_many_arguments)]
+    fn run_one_into(
+        &self,
+        project_dir: &Path,
+        export: &ExportSettings,
+        database: &Path,
+        output: Option<PathBuf>,
+        once: &[String],
+        cancel: &AtomicBool,
+        progress: impl Fn(String),
+    ) -> Result<ExportReport, String> {
+        let backend = self.app_state.backend();
+        let mut trusted = backend
+            .load_app_settings()
+            .unwrap_or_default()
+            .trusted_scripts;
+        trusted.extend(once.iter().cloned());
+        let (results, run) = {
+            let project = self.app_state.get_project();
+            prepare_run(
+                backend.as_ref(),
+                &project,
+                project_dir,
+                export.clone(),
+                database,
+                output,
+                ScriptPermission::Trusted(trusted),
+            )
+            .map_err(|e| e.to_string())?
+        };
+        results
+            .run_export(&run, cancel, &mut |message, current, total| {
+                progress(if current < total {
+                    format!("{}/{total} · {message}", current + 1)
+                } else {
+                    message.to_string()
+                });
+            })
+            .map_err(|e| e.to_string())
+    }
+
+    /// An analysis finished into `output_dir`: the exports left on in the
+    /// run dialog (else those set to run after every run) run on its
+    /// results, one after the other, in the background.
+    fn run_after(self: &Arc<Self>, output_dir: &Path) {
+        let wanted = self.app_state.take_exports_for_run();
+        let exports: Vec<ExportSettings> = self
+            .app_state
+            .get_project()
+            .settings
+            .exports
+            .iter()
+            .filter(|export| match &wanted {
+                Some(ids) => ids.contains(&export.id),
+                None => export.run_after_every_run,
+            })
+            .cloned()
+            .collect();
+        if exports.is_empty() {
+            return;
+        }
+        let Some(project_dir) = self.project_dir() else {
+            return;
+        };
+        let output_dir = output_dir.to_path_buf();
+        let this = self.clone();
+        // Asked on the UI thread: a script not allowed yet first.
+        ui_thread::invoke_from_event_loop(move || {
+            let run = this.clone();
+            let asked = exports.clone();
+            this.ask_scripts(&project_dir.clone(), &asked, move |once| {
+                run.start_after(exports, project_dir, output_dir, once);
+            });
+        })
+        .ok();
+    }
+
+    /// Runs `exports` after an analysis into `output_dir`, the scripts
+    /// allowed `once` with them.
+    fn start_after(
+        self: &Arc<Self>,
+        exports: Vec<ExportSettings>,
+        project_dir: PathBuf,
+        output_dir: PathBuf,
+        once: Vec<String>,
+    ) {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let note_cancel = cancel.clone();
+        self.set_after(move |after| {
+            *after = AfterRun {
+                shown: true,
+                text: "Exports · starting…".into(),
+                tone: 0,
+                open: None,
+                cancel: Some(note_cancel),
+            };
+        });
+        let this = self.clone();
+        ui_thread::spawn(move || {
+            let backend = this.app_state.backend();
+            let database = match results_database(backend.files(), &project_dir, Some(&output_dir))
+            {
+                Ok(database) => database,
+                Err(e) => {
+                    let why = e.to_string();
+                    this.set_after(move |after| {
+                        *after = AfterRun {
+                            shown: true,
+                            text: format!("Exports didn't run: {why}"),
+                            tone: 2,
+                            ..AfterRun::default()
+                        };
+                    });
+                    return;
+                }
+            };
+            let total = exports.len();
+            let mut failed = 0;
+            let mut files = 0;
+            let mut first_problem = None;
+            for (i, export) in exports.into_iter().enumerate() {
+                if cancel.load(Ordering::Relaxed) {
+                    break;
+                }
+                let name = export.name.clone();
+                let counter = if total > 1 {
+                    format!("{}/{total} · ", i + 1)
+                } else {
+                    String::new()
+                };
+                let at = format!("Exports · {counter}{name}");
+                this.set_after({
+                    let at = at.clone();
+                    move |after| after.text = at
+                });
+                let note_to = this.clone();
+                let result = this.run_one(
+                    &project_dir,
+                    &export,
+                    &database,
+                    &once,
+                    &cancel,
+                    move |text| {
+                        let at = format!("{at} · {text}");
+                        note_to.set_after(move |after| after.text = at);
+                    },
+                );
+                let id = export.id;
+                let problem = match &result {
+                    Err(_) => true,
+                    Ok(report) => {
+                        files += report.entries.iter().map(|e| e.files.len()).sum::<usize>();
+                        !report.all_written()
+                    }
+                };
+                if problem {
+                    failed += 1;
+                    first_problem.get_or_insert(id);
+                }
+                let this2 = this.clone();
+                ui_thread::invoke_from_event_loop(move || {
+                    this2.record(id, result.map(|r| (export, r)));
+                })
+                .ok();
+            }
+            let cancelled = cancel.load(Ordering::Relaxed);
+            this.set_after(move |after| {
+                *after = if cancelled {
+                    AfterRun {
+                        shown: true,
+                        text: "Exports stopped".into(),
+                        tone: 2,
+                        ..AfterRun::default()
+                    }
+                } else if failed > 0 {
+                    AfterRun {
+                        shown: true,
+                        text: format!(
+                            "Exports · {failed} of {total} with a problem - see its report"
+                        ),
+                        tone: 2,
+                        open: first_problem,
+                        cancel: None,
+                    }
+                } else {
+                    AfterRun {
+                        shown: true,
+                        text: format!(
+                            "Exports written · {total} {} · {files} {}",
+                            if total == 1 { "export" } else { "exports" },
+                            if files == 1 { "file" } else { "files" }
+                        ),
+                        tone: 1,
+                        open: None,
+                        cancel: None,
+                    }
+                };
+            });
+        });
+    }
+
+    /// The view `view_id` (`< 0`: the one shown) and the analysis open in
+    /// Results (its database), if any.
+    fn view_and_results(&self, view_id: i32) -> Option<(ResultsView, Option<PathBuf>)> {
+        let project = self.app_state.get_project();
+        let views = &project.settings.results_views;
+        let wanted = u32::try_from(view_id).unwrap_or(views.active);
+        let view = views.views.iter().find(|v| v.id == wanted)?.clone();
+        drop(project);
+        let database = self.ui.upgrade().and_then(|ui| {
+            let list = ui.global::<crate::ResultsListState>();
+            let index = usize::try_from(list.get_selected_result_index()).ok()?;
+            slint::Model::row_data(&list.get_results_list(), index)
+                .map(|row| PathBuf::from(row.path.as_str()))
+        });
+        Some((view, database))
+    }
+
+    /// Opens "Export this view" for `view_id` (`< 0`: the one shown; else
+    /// from its ⋯ › Add to export: the tick on).
+    fn quick_open(self: &Arc<Self>, view_id: i32) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let Some((view, database)) = self.view_and_results(view_id) else {
+            return;
+        };
+        // What it shows, from the view alone (its columns named once it
+        // runs on the analysis).
+        let Some(entry) = evanalyzer_app::exports::entry_from_view(&view, &[], &[]) else {
+            return;
+        };
+        let export = new_export(0, view.name.clone());
+        let state = ui.global::<QuickExportState>();
+        state.set_view_name(view.name.as_str().into());
+        state.set_what(entry_row(&export, &entry).subtitle);
+        state.set_table(matches!(entry, ExportEntry::Table(_)));
+        state.set_format(0);
+        // Beside the analysis, unless chosen before.
+        if state.get_folder().is_empty() {
+            let folder = database
+                .as_ref()
+                .and_then(|db| db.parent())
+                .map(|dir| dir.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            state.set_folder(folder.into());
+        }
+        state.set_file("".into());
+        state.set_file_placeholder(
+            naming::entry_name(&entry)
+                .map(|name| naming::with_prefix(&export, &name))
+                .unwrap_or_default()
+                .into(),
+        );
+        let exports = &self.app_state.get_project().settings.exports;
+        let mut targets = vec![SharedString::from("New export")];
+        targets.extend(exports.iter().map(|e| SharedString::from(e.name.as_str())));
+        state.set_keep_targets(model(targets));
+        state.set_keep(view_id >= 0);
+        state.set_keep_target(0);
+        state.set_keep_name(free_export_name(exports, &view.name).into());
+        state.set_keep_after(false);
+        state.set_busy(false);
+        state.set_error(
+            if database.is_none() {
+                "Open an analysis first - this view is written from it."
+            } else {
+                ""
+            }
+            .into(),
+        );
+        self.shown.lock().expect("Poisoned").quick_view = Some(view.id);
+        state.set_shown(true);
+    }
+
+    /// The view `view_id` as an export entry, its columns named by the
+    /// results `database` (also those of the related objects it shows).
+    fn entry_of_view(&self, view: &ResultsView, database: Option<&Path>) -> Option<ExportEntry> {
+        let (classes, available) = database
+            .and_then(|db| {
+                let results = self.app_state.backend().open_results(db).ok()?;
+                Some((
+                    results.get_object_classes().ok()?,
+                    results.get_available_columns().ok()?,
+                ))
+            })
+            .unwrap_or_default();
+        evanalyzer_app::exports::entry_from_view(view, &classes, &available)
+    }
+
+    /// Exports the view now - and keeps it in the project when ticked;
+    /// `open_after`: then shows the kept export in the Exports tab.
+    fn quick_export(self: &Arc<Self>, open_after: bool) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let state = ui.global::<QuickExportState>();
+        let Some(view_id) = self.shown.lock().expect("Poisoned").quick_view else {
+            return;
+        };
+        let Some((view, Some(database))) = self.view_and_results(view_id as i32) else {
+            state.set_error("Open an analysis first - this view is written from it.".into());
+            return;
+        };
+        let folder = state.get_folder().trim().to_string();
+        if folder.is_empty() {
+            state.set_error("Choose the folder to write into.".into());
+            return;
+        }
+        let Some(project_dir) = self.project_dir() else {
+            state.set_error("Save the project first.".into());
+            return;
+        };
+        let file = state.get_file().trim().to_string();
+        let xlsx = state.get_format() == 1;
+        let keep = state.get_keep().then(|| {
+            (
+                usize::try_from(state.get_keep_target()).unwrap_or(0),
+                state.get_keep_name().trim().to_string(),
+                state.get_keep_after(),
+            )
+        });
+        state.set_busy(true);
+        state.set_error("".into());
+
+        let this = self.clone();
+        ui_thread::spawn(move || {
+            let result = (|| {
+                let mut entry = this
+                    .entry_of_view(&view, Some(&database))
+                    .ok_or("this view can't be exported")?;
+                match &mut entry {
+                    ExportEntry::Table(table) => {
+                        table.name = file.clone();
+                        if xlsx {
+                            table.format = TableFileFormat::Xlsx;
+                        }
+                    }
+                    ExportEntry::PlateLayout(plate) => plate.name = file.clone(),
+                    _ => {}
+                }
+                let mut export = new_export(0, view.name.clone());
+                // A file of that name already there stays: the new one
+                // gets "_2".
+                export.output.if_exists = IfExists::Rename;
+                export.entries.push(entry.clone());
+                if let Some(problem) = check_export(&export)
+                    .into_iter()
+                    .find(|p| p.severity == Severity::Error)
+                {
+                    return Err(problem.message);
+                }
+                let cancel = AtomicBool::new(false);
+                let report = this.run_one_into(
+                    &project_dir,
+                    &export,
+                    &database,
+                    Some(PathBuf::from(&folder)),
+                    &[],
+                    &cancel,
+                    |_| {},
+                )?;
+                if !report.all_written() {
+                    let (lines, ..) = report_lines(&export, &report);
+                    return Err(lines.join(" · "));
+                }
+                Ok((entry, report))
+            })();
+            ui_thread::invoke_from_event_loop(move || {
+                this.quick_done(
+                    view.name.clone(),
+                    result.map_err(|e| e.to_string()),
+                    keep,
+                    open_after,
+                );
+            })
+            .ok();
+        });
+    }
+
+    /// "Export this view" wrote its files (or didn't): the note, the
+    /// export kept when ticked.
+    fn quick_done(
+        self: &Arc<Self>,
+        view_name: String,
+        result: Result<(ExportEntry, ExportReport), String>,
+        keep: Option<(usize, String, bool)>,
+        open_after: bool,
+    ) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let state = ui.global::<QuickExportState>();
+        state.set_busy(false);
+        let (entry, report) = match result {
+            Ok(done) => done,
+            Err(why) => {
+                state.set_error(why.into());
+                return;
+            }
+        };
+        state.set_shown(false);
+        self.shown.lock().expect("Poisoned").quick_view = None;
+        let kept = keep
+            .map(|(target, name, after)| self.keep_entry(entry, target, &name, &view_name, after));
+        let files = report.entries.iter().map(|e| e.files.len()).sum::<usize>();
+        self.set_after(move |note| {
+            *note = AfterRun {
+                shown: true,
+                text: format!(
+                    "Exported “{view_name}” · {files} {} into {}",
+                    if files == 1 { "file" } else { "files" },
+                    report.folder.display()
+                ),
+                tone: 1,
+                open: kept,
+                cancel: None,
+            };
+        });
+        if open_after && let Some(id) = kept {
+            self.open_export(id);
+        }
+    }
+
+    /// Keeps `entry` in the project: as a new export (`target` 0, named
+    /// `name`, else the view's) or added to the `target`-th export.
+    /// Its id.
+    fn keep_entry(
+        &self,
+        entry: ExportEntry,
+        target: usize,
+        name: &str,
+        view_name: &str,
+        after: bool,
+    ) -> u32 {
+        self.change_exports(|exports| {
+            if let Some(export) = target.checked_sub(1).and_then(|i| exports.get_mut(i)) {
+                export.entries.push(entry);
+                return export.id;
+            }
+            let id = exports.iter().map(|e| e.id).max().map_or(1, |max| max + 1);
+            let wanted = if name.is_empty() { view_name } else { name };
+            let mut export = new_export(id, free_export_name(exports, wanted));
+            export.run_after_every_run = after;
+            export.entries.push(entry);
+            exports.push(export);
+            id
+        })
+    }
+
+    /// Shows the export `id` in the Exports tab.
+    fn open_export(&self, id: u32) {
+        {
+            let mut shown = self.shown.lock().expect("Poisoned");
+            shown.selected = Some(id);
+            shown.entry = Some(0);
+        }
+        if let Some(ui) = self.ui.upgrade() {
+            ui.global::<crate::LayoutState>()
+                .set_mode(crate::WorkspaceMode::Exports);
+        }
+        self.push();
+    }
+
+    /// A view's ⋯ › Save as export…: a new export of it (named like the
+    /// view), opened in the Exports tab - nothing written now.
+    fn quick_save_view(self: &Arc<Self>, view_id: i32) {
+        let Some((view, database)) = self.view_and_results(view_id) else {
+            return;
+        };
+        let this = self.clone();
+        ui_thread::spawn(move || {
+            let entry = this.entry_of_view(&view, database.as_deref());
+            ui_thread::invoke_from_event_loop(move || {
+                if let Some(entry) = entry {
+                    let id = this.keep_entry(entry, 0, "", &view.name, false);
+                    this.open_export(id);
+                }
+            })
+            .ok();
+        });
+    }
+
+    /// The scripts `exports` run that the user hasn't allowed yet (by their
+    /// content), each once.
+    fn untrusted_scripts(&self, project_dir: &Path, exports: &[ExportSettings]) -> Vec<Untrusted> {
+        let backend = self.app_state.backend();
+        let trusted = backend
+            .load_app_settings()
+            .unwrap_or_default()
+            .trusted_scripts;
+        let mut found: Vec<Untrusted> = Vec::new();
+        for export in exports {
+            for entry in &export.entries {
+                let ExportEntry::Script(script) = entry else {
+                    continue;
+                };
+                if script.file.is_empty() {
+                    continue;
+                }
+                let path = project_dir.join(&script.file);
+                // Missing or unreadable: the run says so.
+                let Ok(bytes) = backend.files().read_file(&path) else {
+                    continue;
+                };
+                let hash = evanalyzer_app::exports::script_hash(&bytes);
+                if trusted.contains(&hash) || found.iter().any(|u| u.hash == hash) {
+                    continue;
+                }
+                found.push(Untrusted {
+                    export: export.name.clone(),
+                    file: script.file.clone(),
+                    path,
+                    hash,
+                    content: String::from_utf8_lossy(&bytes).into_owned(),
+                    language: script.language,
+                });
+            }
+        }
+        found
+    }
+
+    /// Asks about each script of `exports` not allowed yet, then calls
+    /// `then` with those allowed for this run only (right away when there
+    /// is none to ask about). On the UI thread.
+    fn ask_scripts(
+        self: &Arc<Self>,
+        project_dir: &Path,
+        exports: &[ExportSettings],
+        then: impl FnOnce(Vec<String>) + Send + 'static,
+    ) {
+        let queue = self.untrusted_scripts(project_dir, exports);
+        if queue.is_empty() {
+            then(Vec::new());
+            return;
+        }
+        {
+            let mut shown = self.shown.lock().expect("Poisoned");
+            // Asked already (another run waits): this one follows it.
+            if let Some(ask) = shown.trust.take() {
+                let earlier = ask.then;
+                let mut queue = ask.queue;
+                for script in self.untrusted_scripts(project_dir, exports) {
+                    if !queue.iter().any(|u| u.hash == script.hash) {
+                        queue.push(script);
+                    }
+                }
+                shown.trust = Some(TrustAsk {
+                    queue,
+                    once: ask.once,
+                    then: Box::new(move |once: Vec<String>| {
+                        earlier(once.clone());
+                        then(once);
+                    }),
+                });
+            } else {
+                shown.trust = Some(TrustAsk {
+                    queue,
+                    once: Vec::new(),
+                    then: Box::new(then),
+                });
+            }
+        }
+        self.push_trust();
+    }
+
+    /// The trust prompt: the first script still to ask about, or none.
+    fn push_trust(&self) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let state = ui.global::<ScriptTrustState>();
+        let shown = self.shown.lock().expect("Poisoned");
+        let Some(script) = shown.trust.as_ref().and_then(|ask| ask.queue.first()) else {
+            state.set_shown(false);
+            return;
+        };
+        let lines = script.content.lines().count();
+        let name = Path::new(&script.file)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| script.file.clone());
+        state.set_name(name.into());
+        state.set_export_name(script.export.as_str().into());
+        state.set_about(
+            format!(
+                "{} · {lines} {} · {}",
+                script.file,
+                if lines == 1 { "line" } else { "lines" },
+                match script.language {
+                    ScriptLanguage::R => "R",
+                    ScriptLanguage::Python => "Python",
+                }
+            )
+            .into(),
+        );
+        let preview: Vec<&str> = script.content.lines().take(40).collect();
+        state.set_preview(preview.join("\n").into());
+        state.set_can_open(!self.app_state.backend().is_remote());
+        state.set_more(
+            shown
+                .trust
+                .as_ref()
+                .map_or(0, |ask| ask.queue.len() as i32 - 1),
+        );
+        state.set_shown(true);
+    }
+
+    /// The answer about the first script: 0 don't run, 1 run once, 2
+    /// always allow this version - then the next, or the run.
+    fn trust_answer(&self, answer: i32) {
+        let done = {
+            let mut shown = self.shown.lock().expect("Poisoned");
+            let Some(ask) = shown.trust.as_mut() else {
+                return;
+            };
+            if ask.queue.is_empty() {
+                None
+            } else {
+                let script = ask.queue.remove(0);
+                match answer {
+                    1 => ask.once.push(script.hash),
+                    2 => {
+                        let hash = script.hash;
+                        self.app_state.update_app_settings(|settings| {
+                            if !settings.trusted_scripts.contains(&hash) {
+                                settings.trusted_scripts.push(hash.clone());
+                            }
+                        });
+                        ask.once.push(hash);
+                    }
+                    _ => {}
+                }
+                if ask.queue.is_empty() {
+                    shown.trust.take()
+                } else {
+                    None
+                }
+            }
+        };
+        self.push_trust();
+        if let Some(ask) = done {
+            (ask.then)(ask.once);
+        }
+    }
+
+    /// Changes the note of the exports after a run, then shows it (from
+    /// any thread).
+    fn set_after(self: &Arc<Self>, change: impl FnOnce(&mut AfterRun) + Send + 'static) {
+        let this = self.clone();
+        ui_thread::invoke_from_event_loop(move || {
+            change(&mut this.shown.lock().expect("Poisoned").after);
+            this.push_after();
+        })
+        .ok();
+    }
+
+    /// The note of the exports after a run.
+    fn push_after(&self) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let state = ui.global::<ExportsState>();
+        let shown = self.shown.lock().expect("Poisoned");
+        state.set_after_shown(shown.after.shown);
+        state.set_after_text(shown.after.text.as_str().into());
+        state.set_after_tone(shown.after.tone);
+        state.set_after_busy(shown.after.cancel.is_some());
     }
 
     /// A run of the export `id` ended: its report and status.
@@ -554,17 +1364,26 @@ impl ExportsController {
             let mut shown = self.shown.lock().expect("Poisoned");
             shown.running = None;
             shown.progress.clear();
+        }
+        self.record(id, result);
+    }
+
+    /// The report and status of a run of the export `id` (by hand or after
+    /// an analysis).
+    fn record(&self, id: u32, result: Result<(ExportSettings, ExportReport), String>) {
+        {
+            let mut shown = self.shown.lock().expect("Poisoned");
             let time = chrono::Local::now().format("%H:%M").to_string();
             match result {
                 Err(why) => {
-                    shown.report = vec![format!("Did not run: {why}")];
-                    shown.log.clear();
+                    shown
+                        .reports
+                        .insert(id, (vec![format!("Did not run: {why}")], String::new()));
                     shown.status.insert(id, ("⚠ did not run".into(), 2));
                 }
                 Ok((export, report)) => {
                     let (lines, log, failed) = report_lines(&export, &report);
-                    shown.report = lines;
-                    shown.log = log;
+                    shown.reports.insert(id, (lines, log));
                     let status = if failed > 0 {
                         (format!("⚠ {failed} failed · {time}"), 2)
                     } else {
@@ -613,8 +1432,13 @@ impl ExportsController {
         state.set_selected_id(shown.selected.map_or(-1, |id| id as i32));
         state.set_running(shown.running.is_some());
         state.set_progress(shown.progress.as_str().into());
-        state.set_report(model(shown.report.iter().map(SharedString::from).collect()));
-        state.set_log(shown.log.as_str().into());
+        let (report, log) = shown
+            .selected
+            .and_then(|id| shown.reports.get(&id))
+            .cloned()
+            .unwrap_or_default();
+        state.set_report(model(report.iter().map(SharedString::from).collect()));
+        state.set_log(log.as_str().into());
 
         let Some(export) = shown
             .selected
@@ -1034,6 +1858,19 @@ fn push_picker(state: &ExportsState, table: &TableExport, shown: &Shown) {
     state.set_coloc_only_occurring(parts.only_occurring);
 }
 
+/// Opens `path` with the system's program for it (a script: the editor).
+fn open_in_system(path: &Path) {
+    #[cfg(target_os = "linux")]
+    let _ = std::process::Command::new("xdg-open").arg(path).spawn();
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(path).spawn();
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("cmd")
+        .args(["/C", "start", ""])
+        .arg(path)
+        .spawn();
+}
+
 fn model<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
     ModelRc::new(VecModel::from(items))
 }
@@ -1339,7 +2176,7 @@ fn kind_name(entry: &ExportEntry) -> &'static str {
 }
 
 /// "2 tables · drawn images · script".
-fn summary(export: &ExportSettings) -> String {
+pub(crate) fn summary(export: &ExportSettings) -> String {
     let count = |kind: &str| {
         export
             .entries

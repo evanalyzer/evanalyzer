@@ -20,10 +20,12 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 pub mod check;
+mod from_view;
 pub(crate) mod local;
 pub mod naming;
 mod types;
 
+pub use from_view::entry_from_view;
 pub use types::{
     EntryReport, EntryStatus, ExportReport, ExportRun, Interpreters, ScriptPermission,
 };

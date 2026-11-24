@@ -204,7 +204,29 @@ instead, `--no-exports` none, `--allow-scripts` lets their scripts run
 without asking. The analysis is kept even where an export fails; the
 command then fails, naming the export.
 
-### 1.6 Versions
+### 1.6 In the app
+
+- **Exports tab** (Ctrl+4): the project's exports, the one picked and the
+  settings of its entry; Run runs it on the project's newest analysis.
+- **After a run**: the run dialog lists the exports with
+  `runAfterEveryRun` under "Afterwards"; one switched off there stays off
+  for that run only. They run on this computer when the analysis is done,
+  into its results folder (also in remote mode: the results stay on the
+  server, the export runs where they are). A note says what they wrote;
+  "Open in Exports" shows an export's report.
+- **Scripts**: before an export runs a script the user hasn't allowed yet,
+  the app shows it and asks: don't run it, run it once, or always allow
+  this version (its content's SHA-256, kept in the user's settings - a
+  changed file asks again). Its tables and images are written either way.
+- **Results › Export…** on a List, Plate or Tracks view: "Export this view"
+  writes the view as it is shown (a table, a plate layout, a table of
+  tracks) into a folder, once - a file of that name stays, the new one gets
+  `_2`. Ticked, it is also kept in the project: as a new export or added
+  to one there is. A view's ⋯ › "Save as export…" keeps it without writing,
+  "Add to export…" opens the dialog with the tick on. Charts, Paths and
+  Trees keep the results' export dialog.
+
+### 1.7 Versions
 
 Exports come with project schema 5. The step from 4 to 5 changes nothing
 in the file; it exists so that an app that doesn't know exports refuses the

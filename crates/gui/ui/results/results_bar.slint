@@ -6,6 +6,7 @@
 // analysis shown (a menu of all), where in the plate one is; on the right
 // Z/T and Export.
 
+import { QuickExportState } from "../api/quick_export.slint";
 import {
     ResultsRailMode,
     ResultsState,
@@ -472,6 +473,26 @@ export component ResultsBarNav inherits HorizontalLayout {
                 }
             }
 
+            // Exports write tables and images: not of a chart, paths or
+            // trees.
+            InkMenuItem {
+                icon: InkIcons.export;
+                text: "Save as export…";
+                enabled: root.menu-tab.kind == "LIST" || root.menu-tab.kind == "PLATE" || root.menu-tab.kind == "TRACKS";
+                clicked => {
+                    QuickExportState.save-view(root.menu-id);
+                }
+            }
+
+            InkMenuItem {
+                icon: InkIcons.add;
+                text: "Add to export…";
+                enabled: root.menu-tab.kind == "LIST" || root.menu-tab.kind == "PLATE" || root.menu-tab.kind == "TRACKS";
+                clicked => {
+                    QuickExportState.open(root.menu-id);
+                }
+            }
+
             InkMenuItem {
                 icon: InkIcons.undo;
                 text: "Back to how it was saved";
@@ -617,7 +638,13 @@ export component ResultsBarActions inherits HorizontalLayout {
             enabled: ResultsState.database-name != "";
             disabled-reason: "Open an analysis first";
             clicked => {
-                ResultsState.export-dialog-open();
+                // A List, Plate or Tracks view: export it as it is shown
+                // (and keep it, ticked); the others: the export dialog.
+                if ResultsState.rail-mode == ResultsRailMode.list || ResultsState.rail-mode == ResultsRailMode.matrix || ResultsState.rail-mode == ResultsRailMode.tracks {
+                    QuickExportState.open(-1);
+                } else {
+                    ResultsState.export-dialog-open();
+                }
             }
         }
     }

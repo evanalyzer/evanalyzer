@@ -26,6 +26,7 @@ import { MeasurementsState } from "../api/measurements.slint";
 import { AnnotateBar } from "annotate_bar.slint";
 import { ResultsView } from "../results/results_view.slint";
 import { ExportsView } from "../exports/exports_view.slint";
+import { ExportsState } from "../api/exports.slint";
 import { SplitDivider, SplitFilmstrip, SplitHint, SplitImageHead, SplitMissing, SplitSelection, SplitTracksBar } from "../results/results_split.slint";
 import { ResultsPeek } from "results_peek.slint";
 import { SeriesChooser } from "series_chooser.slint";
@@ -538,6 +539,74 @@ export component Workspace inherits Rectangle {
                     label: "Close";
                     clicked => {
                         PipelineRunningState.close();
+                    }
+                }
+            }
+        }
+    }
+
+    // -- The exports after an analysis: a note at the bottom - gone after
+    // a few seconds when all went well, kept on a problem --
+    if ExportsState.after-shown: Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: parent.height - self.height - Float.gap - root.bottom-room;
+        width: after-row.preferred-width;
+        height: 36px;
+        border-radius: Ink.radius-lg;
+        background: Ink.panel-blur ? Ink.glass : Ink.panel;
+        backdrop-blur: Ink.backdrop;
+        border-width: 1px;
+        border-color: ExportsState.after-tone == 2 ? Ink.warn : Ink.border;
+        drop-shadow-blur: 24px;
+        drop-shadow-offset-y: 8px;
+        drop-shadow-color: Ink.shadow;
+        accessible-role: text;
+        accessible-label: after-text.text;
+        TouchArea { }
+        Timer {
+            interval: 8s;
+            running: ExportsState.after-tone == 1;
+            triggered => {
+                ExportsState.after-close();
+            }
+        }
+        after-row := HorizontalLayout {
+            padding-left: 14px;
+            padding-right: 4px;
+            spacing: 10px;
+            Image {
+                width: 14px;
+                source: ExportsState.after-busy ? InkIcons.busy : ExportsState.after-tone == 2 ? InkIcons.warning : InkIcons.check;
+                colorize: ExportsState.after-tone == 2 ? Ink.warn : ExportsState.after-tone == 1 ? Ink.ok : Ink.text-dim;
+                image-fit: contain;
+            }
+            after-text := Text {
+                text: ExportsState.after-text;
+                font-size: Ink.fs-body;
+                color: Ink.text;
+                vertical-alignment: center;
+                max-width: 560px;
+                overflow: elide;
+            }
+            if !ExportsState.after-busy: VerticalLayout {
+                alignment: center;
+                InkButton {
+                    small: true;
+                    text: "Open in Exports";
+                    clicked => {
+                        ExportsState.after-open();
+                        LayoutState.mode = WorkspaceMode.exports;
+                    }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                InkIconButton {
+                    size: 26px;
+                    icon: ExportsState.after-busy ? InkIcons.stop : InkIcons.close;
+                    label: ExportsState.after-busy ? "Stop the exports" : "Close";
+                    clicked => {
+                        ExportsState.after-close();
                     }
                 }
             }

@@ -497,3 +497,360 @@ fn the_table_panel_has_values_then_classes() {
     assert!(shown("Nucleus").is_some(), "still on the classes");
     assert!(shown("Mean").is_none(), "no values for objects");
 }
+
+/// After an analysis: the exports left on in the run dialog run on its
+/// results - into its folder - and the note says what they wrote.
+#[test]
+fn the_exports_run_after_an_analysis() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = saved_project_with_an_analysis(dir.path());
+    let (ui, ui_state, _controller) = setup(project);
+    let state = ui.global::<ExportsState>();
+    state.invoke_new_export(); // "Export": images.csv, not after every run
+    state.invoke_set_entry_field("images".into(), "0".into());
+    let run = dir.path().join("results").join("20261124T090000Z__run");
+
+    // Not set to run after every run, nothing left on: nothing runs.
+    ui_state.analysis_finished(&run);
+    drain_ui_queue();
+    assert!(!state.get_after_shown());
+    assert!(!run.join("images.csv").exists());
+
+    // Left on in the run dialog.
+    let id = state.get_selected_id() as u32;
+    ui_state.set_exports_for_run(Some(vec![id]));
+    ui_state.analysis_finished(&run);
+    drain_ui_queue();
+    assert!(run.join("images.csv").is_file());
+    assert!(state.get_after_shown());
+    assert_eq!(state.get_after_tone(), 1, "{}", state.get_after_text());
+    assert!(
+        state.get_after_text().contains("1 file"),
+        "{}",
+        state.get_after_text()
+    );
+    assert!(!state.get_after_busy());
+    // Its report in the tab, its status in the list.
+    assert!(state.get_report().iter().any(|l| l.contains("1 file")));
+    assert_eq!(state.get_exports().row_data(0).unwrap().status_tone, 1);
+
+    // Set to run after every run (no run dialog): runs too.
+    std::fs::remove_file(run.join("images.csv")).unwrap();
+    state.invoke_set_after(id as i32, true);
+    ui_state.analysis_finished(&run);
+    drain_ui_queue();
+    assert!(run.join("images.csv").is_file());
+    state.invoke_after_close();
+    assert!(!state.get_after_shown());
+}
+
+/// A problem stays on the note, and "Open in Exports" picks that export.
+#[test]
+fn a_problem_after_an_analysis_opens_that_export() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = saved_project_with_an_analysis(dir.path());
+    let (ui, ui_state, _controller) = setup(project);
+    let state = ui.global::<ExportsState>();
+    state.invoke_new_export();
+    let id = state.get_selected_id();
+    state.invoke_set_after(id, true);
+    let run = dir.path().join("results").join("20261124T090000Z__run");
+    // Where the table should go, a folder: it can't be written.
+    std::fs::create_dir_all(run.join("images.csv")).unwrap();
+    state.invoke_select(-1);
+
+    ui_state.analysis_finished(&run);
+    drain_ui_queue();
+    assert_eq!(state.get_after_tone(), 2, "{}", state.get_after_text());
+    assert!(state.get_after_text().contains("problem"));
+    state.invoke_after_open();
+    assert_eq!(state.get_selected_id(), id);
+    assert!(state.get_report().iter().any(|l| l.contains("failed")));
+    assert!(!state.get_after_shown());
+}
+
+/// A saved project with an analysis and an export running the script
+/// `scripts/stats.py` - picked in the tab.
+fn project_with_a_script(
+    dir: &std::path::Path,
+) -> (AppWindow, Arc<UiState>, Arc<ExportsController>) {
+    std::fs::create_dir_all(dir.join("scripts")).unwrap();
+    std::fs::write(dir.join("scripts/stats.py"), "print('stats')\n").unwrap();
+    let (ui, ui_state, controller) = setup(saved_project_with_an_analysis(dir));
+    let state = ui.global::<ExportsState>();
+    state.invoke_new_export();
+    state.invoke_remove_entry(0);
+    state.invoke_add_entry("SCRIPT".into());
+    state.invoke_set_entry_field("script-file".into(), "scripts/stats.py".into());
+    (ui, ui_state, controller)
+}
+
+fn trusted(ui_state: &UiState) -> Vec<String> {
+    ui_state
+        .app_settings
+        .lock()
+        .unwrap()
+        .trusted_scripts
+        .clone()
+}
+
+/// A script not allowed yet: asked before the run. Don't run skips it (and
+/// asks again next time), always allow keeps its content's hash - not asked
+/// again; run once allows it for that run only.
+#[test]
+fn a_script_not_allowed_yet_is_asked_about_before_the_run() {
+    use crate::ScriptTrustState;
+    let dir = tempfile::tempdir().unwrap();
+    let (ui, ui_state, _controller) = project_with_a_script(dir.path());
+    let state = ui.global::<ExportsState>();
+    let trust = ui.global::<ScriptTrustState>();
+
+    state.invoke_run();
+    drain_ui_queue();
+    assert!(trust.get_shown(), "asked first");
+    assert_eq!(trust.get_name(), "stats.py");
+    assert!(trust.get_preview().contains("print('stats')"));
+    assert!(trust.get_about().contains("1 line"));
+    assert!(!state.get_running(), "nothing runs while asked");
+
+    trust.invoke_answer(0);
+    drain_ui_queue();
+    assert!(!trust.get_shown());
+    let report: Vec<String> = state.get_report().iter().map(|l| l.to_string()).collect();
+    assert!(report.iter().any(|l| l.contains("skipped")), "{report:?}");
+    assert!(trusted(&ui_state).is_empty());
+
+    // Asked again; run once: allowed for this run, not kept.
+    state.invoke_run();
+    drain_ui_queue();
+    assert!(trust.get_shown());
+    trust.invoke_answer(1);
+    drain_ui_queue();
+    let report: Vec<String> = state.get_report().iter().map(|l| l.to_string()).collect();
+    assert!(!report.iter().any(|l| l.contains("allowed")), "{report:?}");
+    assert!(trusted(&ui_state).is_empty());
+
+    // Always allow this version: kept, not asked again.
+    state.invoke_run();
+    drain_ui_queue();
+    trust.invoke_answer(2);
+    drain_ui_queue();
+    assert_eq!(trusted(&ui_state).len(), 1);
+    state.invoke_run();
+    drain_ui_queue();
+    assert!(!trust.get_shown(), "this version is allowed");
+
+    // A changed script is another version: asked again.
+    std::fs::write(dir.path().join("scripts/stats.py"), "print('changed')\n").unwrap();
+    state.invoke_run();
+    drain_ui_queue();
+    assert!(trust.get_shown());
+    trust.invoke_answer(0);
+    drain_ui_queue();
+}
+
+/// After an analysis: the exports wait for the answer, then run.
+#[test]
+fn the_exports_after_an_analysis_wait_for_the_scripts_answer() {
+    use crate::ScriptTrustState;
+    let dir = tempfile::tempdir().unwrap();
+    let (ui, ui_state, _controller) = project_with_a_script(dir.path());
+    let state = ui.global::<ExportsState>();
+    let trust = ui.global::<ScriptTrustState>();
+    let id = state.get_selected_id();
+    state.invoke_set_after(id, true);
+    let run = dir.path().join("results").join("20261124T090000Z__run");
+
+    ui_state.analysis_finished(&run);
+    drain_ui_queue();
+    assert!(trust.get_shown());
+    assert!(!state.get_after_shown(), "nothing runs while asked");
+    trust.invoke_answer(0);
+    drain_ui_queue();
+    assert!(state.get_after_shown());
+    assert!(!state.get_after_busy());
+}
+
+/// The analysis of `saved_project_with_an_analysis` open in Results.
+fn open_the_analysis(ui: &AppWindow, dir: &std::path::Path) -> std::path::PathBuf {
+    let db = dir.join("results/20261124T090000Z__run/run.evadb");
+    let list = ui.global::<crate::ResultsListState>();
+    list.set_results_list(model(vec![crate::ResultItemData {
+        name: "run".into(),
+        path: db.to_string_lossy().as_ref().into(),
+        ..Default::default()
+    }]));
+    list.set_selected_result_index(0);
+    db
+}
+
+/// Results › Export… on the List: written once into the folder chosen, as
+/// the view shows it; the note says so; nothing kept.
+#[test]
+fn export_this_view_writes_the_list_once() {
+    use crate::QuickExportState;
+    let dir = tempfile::tempdir().unwrap();
+    let (ui, ui_state, _controller) = setup(saved_project_with_an_analysis(dir.path()));
+    open_the_analysis(&ui, dir.path());
+    let quick = ui.global::<QuickExportState>();
+    quick.invoke_open(-1);
+    assert!(quick.get_shown());
+    assert_eq!(quick.get_view_name(), "List");
+    assert!(quick.get_table());
+    assert!(
+        quick.get_what().contains("A row per"),
+        "{}",
+        quick.get_what()
+    );
+    assert!(
+        quick.get_folder().ends_with("20261124T090000Z__run"),
+        "beside the analysis"
+    );
+    assert!(!quick.get_keep());
+    assert_eq!(quick.get_error(), "");
+
+    let out = dir.path().join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    quick.set_folder(out.to_string_lossy().as_ref().into());
+    quick.set_file("for_r".into());
+    quick.set_format(1);
+    quick.invoke_export();
+    drain_ui_queue();
+    assert_eq!(quick.get_error(), "");
+    assert!(!quick.get_shown());
+    assert!(out.join("for_r.xlsx").is_file());
+    let state = ui.global::<ExportsState>();
+    assert!(
+        state.get_after_text().contains("Exported “List”"),
+        "{}",
+        state.get_after_text()
+    );
+    assert!(exports(&ui_state).is_empty(), "nothing kept");
+
+    // Again: the file there stays, the new one gets "_2".
+    quick.invoke_open(-1);
+    quick.set_file("for_r".into());
+    quick.set_format(1);
+    quick.invoke_export();
+    drain_ui_queue();
+    assert!(out.join("for_r_2.xlsx").is_file());
+}
+
+/// Ticked: kept as a new export (named like the view, run after every run
+/// as chosen) or added to one there is; "and open" shows it.
+#[test]
+fn export_this_view_keeps_it_as_an_export() {
+    use crate::{LayoutState, QuickExportState, WorkspaceMode};
+    let dir = tempfile::tempdir().unwrap();
+    let (ui, ui_state, _controller) = setup(saved_project_with_an_analysis(dir.path()));
+    open_the_analysis(&ui, dir.path());
+    let quick = ui.global::<QuickExportState>();
+    let out = dir.path().join("out");
+    std::fs::create_dir_all(&out).unwrap();
+
+    // From the Plate view's ⋯ › Add to export…: the tick on.
+    quick.invoke_open(2);
+    assert!(quick.get_keep());
+    assert!(!quick.get_table(), "a plate layout");
+    quick.set_folder(out.to_string_lossy().as_ref().into());
+    quick.set_keep_after(true);
+    quick.invoke_export_and_open();
+    drain_ui_queue();
+    assert_eq!(quick.get_error(), "");
+    assert!(out.join("plate.xlsx").is_file());
+    let all = exports(&ui_state);
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].name, "Plate");
+    assert!(all[0].run_after_every_run);
+    assert!(matches!(all[0].entries[0], ExportEntry::PlateLayout(_)));
+    assert_eq!(
+        ui.global::<LayoutState>().get_mode(),
+        WorkspaceMode::Exports
+    );
+    assert_eq!(
+        ui.global::<ExportsState>().get_selected_id(),
+        all[0].id as i32
+    );
+
+    // The List added to it.
+    quick.invoke_open(1);
+    quick.set_folder(out.to_string_lossy().as_ref().into());
+    quick.set_keep(true);
+    quick.set_keep_target(1);
+    quick.invoke_export();
+    drain_ui_queue();
+    let all = exports(&ui_state);
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].entries.len(), 2);
+    assert!(matches!(all[0].entries[1], ExportEntry::Table(_)));
+}
+
+/// A view's ⋯ › Save as export…: a new export of it, opened in the tab -
+/// nothing written; charts have none.
+#[test]
+fn save_a_view_as_export() {
+    use crate::{LayoutState, QuickExportState, WorkspaceMode};
+    let dir = tempfile::tempdir().unwrap();
+    let (ui, ui_state, _controller) = setup(saved_project_with_an_analysis(dir.path()));
+    open_the_analysis(&ui, dir.path());
+    let quick = ui.global::<QuickExportState>();
+    quick.invoke_save_view(4);
+    drain_ui_queue();
+    let all = exports(&ui_state);
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].name, "Tracks");
+    match &all[0].entries[0] {
+        ExportEntry::Table(table) => assert_eq!(table.rows, TableRows::Track),
+        _ => panic!("a table of tracks"),
+    }
+    assert_eq!(
+        ui.global::<LayoutState>().get_mode(),
+        WorkspaceMode::Exports
+    );
+
+    // The Charts view: no export of it.
+    quick.invoke_save_view(3);
+    quick.invoke_open(3);
+    drain_ui_queue();
+    assert_eq!(exports(&ui_state).len(), 1);
+    assert!(!quick.get_shown());
+}
+
+/// At the smallest window the new dialogs show whole: their buttons inside.
+#[test]
+fn the_export_dialogs_fit_the_smallest_window() {
+    use crate::{LayoutState, QuickExportState, ScriptTrustState, StartState, WorkspaceMode};
+    use i_slint_backend_testing::ElementHandle;
+    let dir = tempfile::tempdir().unwrap();
+    let (ui, _ui_state, _controller) = project_with_a_script(dir.path());
+    ui.window().set_size(slint::LogicalSize::new(1280.0, 680.0));
+    ui.global::<StartState>().set_active(false);
+    ui.global::<LayoutState>().set_mode(WorkspaceMode::Results);
+    open_the_analysis(&ui, dir.path());
+    let inside = |label: &str| {
+        let e = ElementHandle::find_by_accessible_label(&ui, label)
+            .find(|e| e.size().width > 0.0)
+            .unwrap_or_else(|| panic!("{label} shown"));
+        let (p, s) = (e.absolute_position(), e.size());
+        assert!(
+            p.x >= 0.0 && p.y >= 0.0 && p.x + s.width <= 1280.0 && p.y + s.height <= 680.0,
+            "{label} inside: {p:?} {s:?}"
+        );
+    };
+
+    let quick = ui.global::<QuickExportState>();
+    quick.invoke_open(1);
+    inside("Export");
+    inside("Export and open in Exports");
+    inside("Also keep in the project as an export");
+    quick.invoke_cancel();
+
+    ui.global::<ExportsState>().invoke_run();
+    drain_ui_queue();
+    assert!(ui.global::<ScriptTrustState>().get_shown());
+    inside("Always allow this version");
+    inside("Don't run");
+    inside("Run once");
+    ui.global::<ScriptTrustState>().invoke_answer(0);
+    drain_ui_queue();
+}
