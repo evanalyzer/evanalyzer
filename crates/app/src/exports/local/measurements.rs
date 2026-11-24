@@ -13,9 +13,9 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::table::{Out, Part, Rows, Sink, scope_images};
+use crate::exports::jobs::TableExport;
 use crate::results::{Column, MeasurementRow, MeasurementRowsFilter, ResultsSource};
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
-use evanalyzer_cfg::settings::export_settings::TableExport;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Rows per query page.

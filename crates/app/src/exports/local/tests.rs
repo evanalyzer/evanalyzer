@@ -59,7 +59,7 @@ fn an_object_table_has_the_leading_columns_and_lengths_in_um() {
     let run_ = run_of(
         dir.path(),
         json!({ "id": 1, "name": "Objects", "entries": [
-            { "kind": "TABLE", "rows": "OBJECT", "columns": ["area_px", "area_nm2"] }
+            { "kind": "DATA", "outputs": ["OBJECTS"], "columns": ["area_px", "area_nm2"] }
         ]}),
     );
     let report = run(&results, &run_);
@@ -84,7 +84,7 @@ fn image_rows_aggregate_and_count_once() {
     let run_ = run_of(
         dir.path(),
         json!({ "id": 1, "name": "Images", "lengthUnit": "NM", "entries": [
-            { "kind": "TABLE", "rows": "IMAGE", "columns": ["count", "area_px"],
+            { "kind": "DATA", "outputs": ["IMAGES"], "columns": ["count", "area_px"],
               "aggregations": ["AVG", "MAX"], "classes": [1] }
         ]}),
     );
@@ -112,17 +112,17 @@ fn transposed_image_rows_have_a_column_per_value_and_class() {
     let run_ = run_of(
         dir.path(),
         json!({ "id": 1, "name": "Images", "entries": [
-            { "kind": "TABLE", "rows": "IMAGE", "columns": ["count", "area_px"],
+            { "kind": "DATA", "outputs": ["IMAGES"], "columns": ["count", "area_px"],
               "aggregations": ["AVG", "MAX"], "classes": [1, 2], "transposed": true,
               "format": "XLSX" },
-            { "kind": "TABLE", "rows": "IMAGE", "columns": ["count", "area_px"],
+            { "kind": "DATA", "outputs": ["IMAGES"], "columns": ["count", "area_px"],
               "aggregations": ["AVG", "MAX"], "classes": [1, 2], "transposed": true,
               "name": "wide" }
         ]}),
     );
     let report = run(&results, &run_);
     assert!(report.all_written(), "{report:?}");
-    let lines = lines(&dir.path().join("wide.csv"));
+    let lines = lines(&dir.path().join("wide_images.csv"));
     assert_eq!(
         lines[0],
         "image,count_nucleus,area_px_avg_nucleus,area_px_max_nucleus,\
@@ -143,6 +143,92 @@ fn transposed_image_rows_have_a_column_per_value_and_class() {
     );
 }
 
+/// Track ID ticked: object rows get a `track_id` column after `object_id`
+/// (also per class side by side); per image rows have none.
+#[test]
+fn track_id_ticked_writes_a_track_column() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("results.evadb");
+    seed_db(
+        &path,
+        &[
+            ObjectSpec::new("A1/img.tif", "Nucleus", 1, 100).in_track(7),
+            ObjectSpec::new("A1/img.tif", "Spot", 2, 5).in_track(9),
+        ],
+    );
+    let results = LocalResults::open(path, LocalFileSystem::default()).unwrap();
+    let run_ = run_of(
+        dir.path(),
+        json!({ "id": 1, "name": "Tracks", "entries": [
+            { "kind": "DATA", "outputs": ["OBJECTS", "IMAGES"],
+              "columns": ["track_id", "count", "area_px"] },
+            { "kind": "DATA", "name": "wide", "outputs": ["OBJECTS"],
+              "columns": ["track_id", "area_px"], "transposed": true }
+        ]}),
+    );
+    let report = run(&results, &run_);
+    assert!(report.all_written(), "{report:?}");
+    let objects = lines(&dir.path().join("objects.csv"));
+    assert_eq!(objects[0], "image,class,object_id,track_id,area_px");
+    let nucleus: Vec<&str> = objects
+        .iter()
+        .find(|l| l.contains(",Nucleus,"))
+        .unwrap()
+        .split(',')
+        .collect();
+    assert_eq!(nucleus[3], "7", "{objects:?}");
+    let images = lines(&dir.path().join("images.csv"));
+    assert!(!images[0].contains("track"), "{images:?}");
+    let wide = lines(&dir.path().join("wide_objects.csv"));
+    assert!(wide[0].contains("track_id_nucleus"), "{wide:?}");
+    assert!(wide[1].split(',').any(|cell| cell == "9"), "{wide:?}");
+}
+
+/// Classes side by side without classes picked, with a Background and a
+/// class without objects in the results, and empty classes off (as the
+/// tab starts): the query gets the export's classes, so its columns match -
+/// every class but Background, the empty one included.
+#[test]
+fn transposed_without_classes_picked_matches_the_query() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("results.evadb");
+    seed_db(
+        &path,
+        &[
+            ObjectSpec::new("A1/img.tif", "Nucleus", 1, 100),
+            ObjectSpec::new("A1/img.tif", "Spot", 2, 5),
+        ],
+    );
+    {
+        let conn = duckdb::Connection::open(&path).unwrap();
+        conn.execute_batch("INSERT INTO classes VALUES (0, 'Background', 0), (3, 'Cell', 0);")
+            .unwrap();
+    }
+    let results = LocalResults::open(path, LocalFileSystem::default()).unwrap();
+    let run_ = run_of(
+        dir.path(),
+        json!({ "id": 1, "name": "Wide", "entries": [
+            { "kind": "DATA", "outputs": ["OBJECTS", "IMAGES"], "columns": ["count", "area_px"],
+              "transposed": true, "emptyClasses": false }
+        ]}),
+    );
+    let report = run(&results, &run_);
+    assert!(report.all_written(), "{report:?}");
+    let images = lines(&dir.path().join("images.csv"));
+    assert_eq!(
+        images[0],
+        "image,count_nucleus,area_px_avg_nucleus,count_spot,area_px_avg_spot,\
+         count_cell,area_px_avg_cell"
+    );
+    assert_eq!(images[1], "A1/img.tif,1,100,1,5,0,");
+    let objects = lines(&dir.path().join("objects.csv"));
+    assert_eq!(
+        objects[0],
+        "image,object_id_nucleus,area_px_nucleus,object_id_spot,area_px_spot,\
+         object_id_cell,area_px_cell"
+    );
+}
+
 /// Transposed object rows: per image the n-th object of each class side by
 /// side.
 #[test]
@@ -152,7 +238,7 @@ fn transposed_object_rows_put_the_classes_side_by_side() {
     let run_ = run_of(
         dir.path(),
         json!({ "id": 1, "name": "Objects", "entries": [
-            { "kind": "TABLE", "rows": "OBJECT", "columns": ["area_px"],
+            { "kind": "DATA", "outputs": ["OBJECTS"], "columns": ["area_px"],
               "classes": [1, 2], "transposed": true }
         ]}),
     );
@@ -175,21 +261,68 @@ fn transposed_object_rows_put_the_classes_side_by_side() {
     assert_eq!(a1[1][3], "", "no second spot");
 }
 
-/// Transposed well rows can't be: refused by the checks.
+/// Transposed is for objects, images, wells and folders: kept on the data
+/// export, the other outputs (coloc pairs, plate layouts …) are written as
+/// they are - no error.
 #[test]
-fn transposed_well_rows_are_refused() {
+fn transposed_is_for_the_row_per_tables() {
+    let data: evanalyzer_cfg::settings::export_settings::DataExport = serde_json::from_value(
+        json!({ "outputs": ["OBJECTS", "WELLS", "FOLDERS", "COLOC_PAIRS"], "transposed": true }),
+    )
+    .unwrap();
+    let transposed: Vec<bool> = crate::exports::jobs::jobs_of(&data)
+        .into_iter()
+        .map(|(_, job)| match job {
+            crate::exports::jobs::Job::Table(table) => table.transposed,
+            _ => false,
+        })
+        .collect();
+    assert_eq!(transposed, [true, true, true, false]);
     let problems = crate::exports::check::check_export(
         &serde_json::from_value(json!({ "id": 1, "name": "W", "entries": [
-            { "kind": "TABLE", "rows": "WELL", "transposed": true }
+            { "kind": "DATA", "outputs": ["WELLS", "PLATE"], "transposed": true }
         ]}))
         .unwrap(),
     );
-    assert!(
-        problems
-            .iter()
-            .any(|p| p.severity == crate::modules::Severity::Error
-                && p.message.contains("transposed")),
-        "{problems:?}"
+    assert!(problems.is_empty(), "{problems:?}");
+}
+
+/// Wells and folders with the classes side by side: a row per well
+/// (folder), per class its values - as many rows as wells, also over
+/// several pages.
+#[test]
+fn transposed_wells_and_folders_have_a_row_per_group() {
+    let dir = tempfile::tempdir().unwrap();
+    let results = results(dir.path());
+    let run_ = run_of(
+        dir.path(),
+        json!({ "id": 1, "name": "Wide", "entries": [
+            { "kind": "DATA", "outputs": ["WELLS", "FOLDERS"], "columns": ["count", "area_px"],
+              "classes": [1, 2], "transposed": true }
+        ]}),
+    );
+    let report = run(&results, &run_);
+    assert!(report.all_written(), "{report:?}");
+    let wells = lines(&dir.path().join("wells.csv"));
+    assert_eq!(
+        wells[0],
+        "well,count_per_image_avg_nucleus,area_px_avg_nucleus,\
+         count_per_image_avg_spot,area_px_avg_spot"
+    );
+    let folders = lines(&dir.path().join("folders.csv"));
+    // The image names have no well: one group.
+    assert_eq!(wells.len(), 2, "{wells:?}");
+    // A1 and B1 as folders, and the images right in the image folder.
+    let folders = lines(&dir.path().join("folders.csv"));
+    assert_eq!(
+        folders,
+        [
+            "folder,count_per_image_avg_nucleus,area_px_avg_nucleus,\
+             count_per_image_avg_spot,area_px_avg_spot",
+            "Top folder,0,,1,7",
+            "A1,2,200,1,5",
+            "B1,1,200,0,",
+        ]
     );
 }
 
@@ -201,7 +334,7 @@ fn a_file_per_image_has_the_shortest_unique_names_and_the_prefix() {
         dir.path(),
         json!({ "id": 1, "name": "Split", "prefix": "exp1",
             "output": { "location": "RESULTS_FOLDER", "folder": "tables" },
-            "entries": [{ "kind": "TABLE", "rows": "OBJECT", "split": "IMAGE" }] }),
+            "entries": [{ "kind": "DATA", "outputs": ["OBJECTS"], "split": "IMAGE" }] }),
     );
     let report = run(&results, &run_);
     assert_eq!(report.folder, dir.path().join("tables"));
@@ -228,7 +361,7 @@ fn a_file_per_class_and_left_out_images() {
     let run_ = run_of(
         dir.path(),
         json!({ "id": 1, "name": "Classes",
-            "entries": [{ "kind": "TABLE", "rows": "OBJECT", "split": "CLASS" }] }),
+            "entries": [{ "kind": "DATA", "outputs": ["OBJECTS"], "split": "CLASS" }] }),
     );
     let report = run(&results, &run_);
     let mut files = report.entries[0].files.clone();
@@ -256,7 +389,7 @@ fn rename_keeps_the_old_file() {
         dir.path(),
         json!({ "id": 1, "name": "Again",
             "output": { "location": "RESULTS_FOLDER", "folder": "", "ifExists": "RENAME" },
-            "entries": [{ "kind": "TABLE", "rows": "IMAGE" }] }),
+            "entries": [{ "kind": "DATA", "outputs": ["IMAGES"] }] }),
     );
     run(&results, &run_);
     let second = run(&results, &run_);
@@ -271,7 +404,7 @@ fn an_xlsx_workbook_has_a_sheet_per_part_and_the_about_sheet() {
     let run_ = run_of(
         dir.path(),
         json!({ "id": 1, "name": "Workbook", "entries": [
-            { "kind": "TABLE", "rows": "OBJECT", "format": "XLSX", "split": "CLASS", "splitInto": "SHEETS" }
+            { "kind": "DATA", "outputs": ["OBJECTS"], "format": "XLSX", "split": "CLASS", "splitInto": "SHEETS" }
         ]}),
     );
     let report = run(&results, &run_);
@@ -289,7 +422,7 @@ fn a_fixed_folder_is_below_the_project_and_output_overrides_it() {
         dir.path(),
         json!({ "id": 1, "name": "Fixed",
             "output": { "location": "FIXED_FOLDER", "folder": "exports" },
-            "entries": [{ "kind": "TABLE", "rows": "IMAGE" }] }),
+            "entries": [{ "kind": "DATA", "outputs": ["IMAGES"] }] }),
     );
     assert_eq!(
         run(&results, &run_).folder,
@@ -310,8 +443,8 @@ fn missing_columns_are_noted_and_a_failing_entry_doesnt_stop_the_others() {
     let run_ = run_of(
         dir.path(),
         json!({ "id": 1, "name": "Mixed", "entries": [
-            { "kind": "TABLE", "rows": "OBJECT" },
-            { "kind": "TABLE", "rows": "IMAGE", "columns": ["count", "measurement:gone"] }
+            { "kind": "DATA", "outputs": ["OBJECTS"] },
+            { "kind": "DATA", "outputs": ["IMAGES"], "columns": ["count", "measurement:gone"] }
         ]}),
     );
     let report = run(&results, &run_);
@@ -341,7 +474,7 @@ fn a_file_per_well() {
     let run_ = run_of(
         dir.path(),
         json!({ "id": 1, "name": "Wells", "entries": [
-            { "kind": "TABLE", "rows": "OBJECT", "split": "WELL" }
+            { "kind": "DATA", "outputs": ["OBJECTS"], "split": "WELL" }
         ]}),
     );
     let report = run(&results, &run_);
@@ -364,7 +497,7 @@ fn an_export_with_errors_doesnt_run() {
     let results = results(dir.path());
     let run_ = run_of(
         dir.path(),
-        json!({ "id": 1, "name": "", "entries": [{ "kind": "TABLE", "rows": "IMAGE" }] }),
+        json!({ "id": 1, "name": "", "entries": [{ "kind": "DATA", "outputs": ["IMAGES"] }] }),
     );
     let cancel = AtomicBool::new(false);
     let refused = results.run_export(&run_, &cancel, &mut |_, _, _| {});
@@ -397,7 +530,7 @@ fn a_track_table_has_a_row_per_track() {
     let run_ = run_of(
         dir.path(),
         json!({ "id": 1, "name": "Tracks", "entries": [
-            { "kind": "TABLE", "rows": "TRACK", "columns": ["area_px"], "aggregations": ["AVG", "MAX"] }
+            { "kind": "DATA", "outputs": ["TRACKS"], "columns": ["area_px"], "aggregations": ["AVG", "MAX"] }
         ]}),
     );
     let report = run(&results, &run_);
@@ -455,7 +588,7 @@ fn a_measurement_table_has_a_row_per_value() {
     let run_ = run_of(
         dir.path(),
         json!({ "id": 1, "name": "Measurements", "entries": [
-            { "kind": "TABLE", "rows": "MEASUREMENT", "columns": ["measurement:threshold_01/threshold", "count"] }
+            { "kind": "DATA", "outputs": ["MEASUREMENTS"], "columns": ["measurement:threshold_01/threshold", "count"] }
         ]}),
     );
     let report = run(&results, &run_);
@@ -492,7 +625,7 @@ fn a_plate_layout_is_a_workbook_under_its_name() {
     let run_ = run_of(
         dir.path(),
         json!({ "id": 1, "name": "Plate", "prefix": "p",
-            "entries": [{ "kind": "PLATE_LAYOUT" }] }),
+            "entries": [{ "kind": "DATA", "outputs": ["PLATE"] }] }),
     );
     let report = run(&results, &run_);
     assert!(report.all_written(), "{report:?}");
@@ -565,7 +698,7 @@ fn script_run(dir: &Path, name: &str, source: &str, scripts: ScriptPermission) -
     let mut run_ = run_of(
         dir,
         json!({ "id": 1, "name": "With script", "entries": [
-            { "kind": "TABLE", "rows": "IMAGE" },
+            { "kind": "DATA", "outputs": ["IMAGES"] },
             { "kind": "SCRIPT", "language": "PYTHON", "file": format!("scripts/{name}") }
         ]}),
     );
@@ -712,7 +845,7 @@ fn children_and_linked_objects_add_their_columns() {
     let run_ = run_of(
         dir.path(),
         json!({ "id": 1, "name": "Linked", "entries": [
-            { "kind": "TABLE", "rows": "OBJECT", "columns": ["area_px"], "images": "ALL",
+            { "kind": "DATA", "outputs": ["OBJECTS"], "columns": ["area_px"], "images": "ALL",
               "children": [[1, 2]], "childAggregations": ["MAX"], "parents": [1] }
         ]}),
     );
@@ -775,7 +908,7 @@ fn a_time_course_is_long_and_wide() {
     let run_ = run_of(
         dir.path(),
         json!({ "id": 1, "name": "Course", "entries": [
-            { "kind": "TABLE", "rows": "TIME_POINT", "columns": ["area_px", "count"],
+            { "kind": "DATA", "outputs": ["TIME_COURSE"], "columns": ["area_px", "count"],
               "aggregations": ["AVG", "STDDEV"], "images": "ALL",
               "timeCourse": { "layout": "BOTH" } }
         ]}),
@@ -815,7 +948,7 @@ fn a_time_course_per_image_relative() {
     let run_ = run_of(
         dir.path(),
         json!({ "id": 1, "name": "Course", "entries": [
-            { "kind": "TABLE", "rows": "TIME_POINT", "columns": ["area_px"], "images": "ALL",
+            { "kind": "DATA", "outputs": ["TIME_COURSE"], "columns": ["area_px"], "images": "ALL",
               "timeCourse": { "lines": "IMAGE", "relative": true } }
         ]}),
     );
@@ -834,8 +967,7 @@ fn a_time_course_per_image_relative() {
 
     let problems = crate::exports::check::check_export(
         &serde_json::from_value(json!({ "id": 1, "name": "W", "entries": [
-            { "kind": "TABLE", "rows": "TIME_POINT",
-              "timeCourse": { "lines": "TRACK", "layout": "WIDE" } }
+            { "kind": "DATA", "outputs": ["TIME_COURSE"], "timeCourse": { "lines": "TRACK", "layout": "WIDE" } }
         ]}))
         .unwrap(),
     );
@@ -856,9 +988,9 @@ fn a_profile_has_lines_or_objects() {
     let run_ = run_of(
         dir.path(),
         json!({ "id": 1, "name": "Sholl", "entries": [
-            { "kind": "TABLE", "rows": "PROFILE_POSITION", "images": "ALL",
+            { "kind": "DATA", "outputs": ["PROFILE"], "images": "ALL",
               "profile": { "key": "sholl_01/intersections" } },
-            { "kind": "TABLE", "rows": "PROFILE_POSITION", "images": "ALL", "name": "each",
+            { "kind": "DATA", "outputs": ["PROFILE"], "images": "ALL", "name": "each",
               "profile": { "key": "sholl_01/intersections", "content": "OBJECTS" } }
         ]}),
     );
@@ -871,13 +1003,13 @@ fn a_profile_has_lines_or_objects() {
         lines_.iter().any(|l| l.starts_with("A,10,2,3,")),
         "{lines_:?}"
     );
-    let each = lines(&dir.path().join("each.csv"));
+    let each = lines(&dir.path().join("each_profile.csv"));
     assert_eq!(each[0], "image,class,object_id,position,value");
     assert_eq!(each.len(), 7, "a row per object and position: {each:?}");
 
     let problems = crate::exports::check::check_export(
         &serde_json::from_value(json!({ "id": 1, "name": "P", "entries": [
-            { "kind": "TABLE", "rows": "PROFILE_POSITION" }
+            { "kind": "DATA", "outputs": ["PROFILE"] }
         ]}))
         .unwrap(),
     );
@@ -897,7 +1029,7 @@ fn an_image_heatmap_is_a_workbook_per_image() {
     let run_ = run_of(
         dir.path(),
         json!({ "id": 1, "name": "Heat", "entries": [
-            { "kind": "PLATE_LAYOUT", "grid": "IMAGE", "squareSize": 32, "images": "ALL" }
+            { "kind": "DATA", "outputs": ["IMAGE_HEATMAP"], "heatmap": { "squareSize": 32 }, "images": "ALL" }
         ]}),
     );
     let report = run(&results, &run_);
@@ -926,9 +1058,9 @@ fn a_time_point_range_writes_only_those() {
     let run_ = run_of(
         dir.path(),
         json!({ "id": 1, "name": "Range", "entries": [
-            { "kind": "TABLE", "rows": "OBJECT", "columns": ["area_px"], "images": "ALL",
+            { "kind": "DATA", "outputs": ["OBJECTS"], "columns": ["area_px"], "images": "ALL",
               "planes": { "t": [1, 1] } },
-            { "kind": "TABLE", "rows": "TIME_POINT", "columns": ["area_px"], "images": "ALL",
+            { "kind": "DATA", "outputs": ["TIME_COURSE"], "columns": ["area_px"], "images": "ALL",
               "planes": { "t": [0, 1] } }
         ]}),
     );
@@ -949,11 +1081,83 @@ fn a_plate_layout_with_several_values() {
     let run_ = run_of(
         dir.path(),
         json!({ "id": 1, "name": "Plate", "entries": [
-            { "kind": "PLATE_LAYOUT", "columns": ["area_px"], "aggregations": ["AVG", "MAX"],
-              "colors": "VIRIDIS", "images": "ALL" }
+            { "kind": "DATA", "outputs": ["PLATE"], "heatmap": { "colors": "VIRIDIS" }, "columns": ["area_px"], "aggregations": ["AVG", "MAX"],
+              "images": "ALL" }
         ]}),
     );
     let report = run(&results, &run_);
     assert!(report.all_written(), "{report:?}");
     assert!(dir.path().join("plate.xlsx").is_file());
+}
+
+/// One data export, several outputs, one filter: every file written with
+/// the same columns and classes; the wells as a list too.
+#[test]
+fn a_data_export_writes_each_output_with_one_filter() {
+    let dir = tempfile::tempdir().unwrap();
+    let results = results(dir.path());
+    let run_ = run_of(
+        dir.path(),
+        json!({ "id": 1, "name": "All", "entries": [
+            { "kind": "DATA", "name": "ctrl",
+              "outputs": ["OBJECTS", "IMAGES", "PLATE", "WELL_LIST"],
+              "columns": ["area_px"], "classes": [1], "images": "ALL" }
+        ]}),
+    );
+    let report = run(&results, &run_);
+    assert!(report.all_written(), "{report:?}");
+    let mut files: Vec<String> = report.entries[0]
+        .files
+        .iter()
+        .map(|f| f.to_string_lossy().into_owned())
+        .collect();
+    files.sort();
+    assert_eq!(
+        files,
+        [
+            "ctrl_images.csv",
+            "ctrl_objects.csv",
+            "ctrl_plate.xlsx",
+            "ctrl_well_list.xlsx"
+        ]
+    );
+    let objects = lines(&dir.path().join("ctrl_objects.csv"));
+    assert_eq!(objects[0], "image,class,object_id,area_px");
+    assert!(
+        objects[1..].iter().all(|l| l.contains(",Nucleus,")),
+        "class 1 only: {objects:?}"
+    );
+    let images = lines(&dir.path().join("ctrl_images.csv"));
+    assert_eq!(images[0], "image,class,area_px_avg");
+}
+
+/// An output that fails fails alone: the others are written, the entry
+/// says which failed; notes name their output.
+#[test]
+fn a_failing_output_leaves_the_others_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let results = results(dir.path());
+    // Where the objects table should go: a folder.
+    std::fs::create_dir_all(dir.path().join("objects.csv")).unwrap();
+    let run_ = run_of(
+        dir.path(),
+        json!({ "id": 1, "name": "All", "entries": [
+            { "kind": "DATA", "outputs": ["OBJECTS", "IMAGES"],
+              "columns": ["area_px", "no_such_column"], "images": "ALL" }
+        ]}),
+    );
+    let report = run(&results, &run_);
+    let entry = &report.entries[0];
+    assert!(
+        matches!(&entry.status, EntryStatus::Failed(why) if why.starts_with("objects:")),
+        "{entry:?}"
+    );
+    assert!(dir.path().join("images.csv").is_file());
+    assert!(
+        entry
+            .notes
+            .iter()
+            .any(|n| n.starts_with("images: ") && n.contains("no_such_column")),
+        "{entry:?}"
+    );
 }

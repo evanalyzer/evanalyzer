@@ -34,6 +34,17 @@ export struct ExportEntryRow {
     format: string,
 }
 
+// An output of a data export, as the Outputs part lists it.
+export struct DataOutputRow {
+    key: string,
+    text: string,
+    // What it writes, as a tip ("" = none).
+    tip: string,
+    // The group's caption on its first output ("" on the others).
+    group: string,
+    on: bool,
+}
+
 export global ExportsState {
     // -- The list --
     in property <[ExportRow]> exports: [];
@@ -55,7 +66,7 @@ export global ExportsState {
     in property <[ExportEntryRow]> entries: [];
     in property <int> entry: -1;
     // The part of a table's settings shown (kept by the view).
-    in-out property <string> panel-part: "Table";
+    in-out property <string> panel-part: "Outputs";
 
     // -- The entry picked (entry), by its kind --
     in property <string> entry-kind;
@@ -89,7 +100,21 @@ export global ExportsState {
     in property <string> coloc-partner-order;
     in property <int> coloc-count;
     in property <bool> coloc-only-occurring;
-    // A time course (`rows` 7): line kind, layout (indexes), relative,
+    // A data export: its outputs, whether its values are summed up (the
+    // Values part), rows per image / well / folder (classes without
+    // objects), something to transpose, a heatmap ticked.
+    in property <[DataOutputRow]> outputs: [];
+    in property <bool> grouped;
+    in property <bool> show-empty;
+    in property <bool> can-transpose;
+    in property <bool> any-heatmap;
+    // The tracks: at least N time points, from the start, not at the
+    // edge, the speed unit (index).
+    in property <string> tracks-min-points;
+    in property <bool> tracks-from-start;
+    in property <bool> tracks-no-edge;
+    in property <int> tracks-speed;
+    // A time course: line kind, layout (indexes), relative,
     // with the parents' history.
     in property <int> time-lines;
     in property <int> time-layout;
@@ -118,7 +143,7 @@ export global ExportsState {
     in property <string> related-aggregate-summary;
     in-out property <[MultiSelectItem]> related-parents: [];
     in property <string> related-parent-summary;
-    // The classes side by side (object and image rows).
+    // The classes side by side (object, image, well and folder rows).
     in property <bool> transposed;
     // Grouped rows: a row also for classes without objects.
     in property <bool> empty-classes;

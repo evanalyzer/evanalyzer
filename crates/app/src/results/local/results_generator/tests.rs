@@ -3976,6 +3976,82 @@ fn grouped_by_well_aggregates_the_objects_and_counts_of_its_images() {
     );
 }
 
+/// Wells with the classes side by side: a row per well, per class its
+/// values in its block (empty where a well has none of a class, Count 0
+/// with empty classes) - and page by page every well once, whatever the
+/// page size, a well never cut between pages.
+#[test]
+fn transposed_wells_put_each_class_of_a_well_in_one_row_across_pages() {
+    let generator = open(&[
+        ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+        ObjectSpec::new("A1_02.tif", "ClassB", 2, 30),
+        ObjectSpec::new("A2_01.tif", "ClassA", 1, 20),
+        ObjectSpec::new("B1_01.tif", "ClassB", 2, 40),
+        ObjectSpec::new("B2_01.tif", "ClassA", 1, 50),
+        ObjectSpec::new("B2_01.tif", "ClassB", 2, 60),
+    ]);
+    let query = |limit: i32, after: Option<String>, empty_classes: bool| {
+        generator
+            .get_grouped_by_image(&GroupedByImageFilter {
+                plane: plane(),
+                images: None,
+                object_classes: Some(vec![ObjectClass::Global(1), ObjectClass::Global(2)]),
+                columns: vec![Column::Count, Column::AreaSizePx],
+                aggregation: vec![Aggregation::Sum],
+                page: Pagination { limit, after },
+                transpond_table: true,
+                grouping: Some(Grouping::Auto),
+                empty_classes,
+                sort: None,
+            })
+            .unwrap()
+    };
+    let text = |result: &DatabaseResult| -> Vec<String> {
+        result
+            .rows
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|cell| match &cell.value {
+                        CellValue::String(s) => s.clone(),
+                        CellValue::Float(v) => v.to_string(),
+                        _ => String::new(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
+            .collect()
+    };
+    for empty_classes in [false, true] {
+        let all = query(1000, None, empty_classes);
+        assert_eq!(all.column_names.len(), 1 + 2 * 2, "{:?}", all.column_names);
+        assert_eq!(all.column_names[0], "well");
+        let rows = text(&all);
+        // Without empty classes a class a well lacks has no row to place:
+        // empty, as in the normal view.
+        let expected = if empty_classes {
+            ["A1,1,10,1,30", "A2,1,20,0,0", "B1,0,0,1,40", "B2,1,50,1,60"]
+        } else {
+            ["A1,1,10,1,30", "A2,1,20,,", "B1,,,1,40", "B2,1,50,1,60"]
+        };
+        assert_eq!(rows, expected, "empty classes {empty_classes}");
+        for limit in [1, 2, 3] {
+            let mut paged = Vec::new();
+            let mut after = None;
+            loop {
+                let page = query(limit, after.take(), empty_classes);
+                paged.extend(text(&page));
+                if page.source_object_count < limit as usize {
+                    break;
+                }
+                after = page.row_names.last().cloned();
+                assert!(paged.len() <= 4, "no repeats: {paged:?}");
+            }
+            assert_eq!(paged, rows, "limit {limit}, empty classes {empty_classes}");
+        }
+    }
+}
+
 /// Wells in plate order (A2 before A10, B1 after them), page by page
 /// without a gap.
 #[test]

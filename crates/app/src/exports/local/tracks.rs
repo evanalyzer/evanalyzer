@@ -15,6 +15,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::table::{Out, Part, Rows, Sink, column_name, scope_images, unit_label};
+use crate::exports::jobs::TableExport;
 use crate::results::view_settings::resolve_columns;
 use crate::results::{
     Column, Grouping, MotionKind, ResultsSource, SpeedUnit, TimeCourseStat, TrackMotion,
@@ -22,7 +23,7 @@ use crate::results::{
 };
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use evanalyzer_cfg::settings::export_settings::{
-    ExportAggregation, ExportSettings, LengthUnit, TableExport, TrackOptions,
+    ExportAggregation, ExportSettings, LengthUnit, TrackOptions,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 

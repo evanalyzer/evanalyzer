@@ -258,15 +258,15 @@ fn entries_summary(export: &ExportSettings) -> String {
 }
 
 fn entry_text(export: &ExportSettings, entry: &ExportEntry) -> String {
-    let name = naming::entry_name(entry).map(|name| naming::with_prefix(export, &name));
+    let names: Vec<String> = naming::entry_names(entry)
+        .iter()
+        .map(|name| naming::with_prefix(export, name))
+        .collect();
     match entry {
-        ExportEntry::Table(table) => format!(
-            "{} ({:?}{})",
-            name.unwrap_or_default(),
-            table.format,
-            match table.split {
+        ExportEntry::Data(data) => {
+            let split = match data.split {
                 evanalyzer_cfg::settings::export_settings::TableSplit::None => String::new(),
-                split => match table.split_into {
+                split => match data.split_into {
                     evanalyzer_cfg::settings::export_settings::SplitInto::Sheets => {
                         format!(", a sheet per {split:?}").to_lowercase()
                     }
@@ -274,10 +274,10 @@ fn entry_text(export: &ExportSettings, entry: &ExportEntry) -> String {
                         format!(", a file per {split:?}").to_lowercase()
                     }
                 },
-            }
-        ),
-        ExportEntry::PlateLayout(_) => format!("{} (XLSX)", name.unwrap_or_default()),
-        ExportEntry::DrawnImages(_) => format!("{} (PNG per image)", name.unwrap_or_default()),
+            };
+            format!("data: {} ({:?}{split})", names.join(", "), data.format)
+        }
+        ExportEntry::DrawnImages(_) => format!("{} (PNG per image)", names.join(", ")),
         ExportEntry::Script(script) => format!(
             "script {} → {}",
             script.file,
@@ -357,25 +357,34 @@ fn entry_details(entry: &ExportEntry) -> String {
         Some(keys) => keys.join(", "),
     };
     let lines: Vec<String> = match entry {
-        ExportEntry::Table(table) => {
+        ExportEntry::Data(data) => {
             let mut lines = vec![
-                format!("rows: {:?}", table.rows),
-                format!("classes: {}", classes(&table.classes)),
-                format!("columns: {}", columns(&table.columns, "the default ones")),
-                format!("aggregations: {:?}", table.aggregations),
-                format!("images: {:?}", table.images),
+                format!("outputs: {:?}", data.outputs),
+                format!("classes: {}", classes(&data.classes)),
+                format!(
+                    "columns: {}",
+                    columns(&data.columns, "each output's default ones")
+                ),
+                format!("aggregations: {:?}", data.aggregations),
+                format!("images: {:?}", data.images),
             ];
-            if table.transposed {
+            if data.planes.z.is_some() || data.planes.t.is_some() {
+                lines.push(format!(
+                    "planes: z {:?}, t {:?}",
+                    data.planes.z, data.planes.t
+                ));
+            }
+            if data.transposed {
                 lines.push("transposed: the classes side by side".into());
+            }
+            if !data.children.is_empty() || !data.parents.is_empty() {
+                lines.push(format!(
+                    "children: {:?} ({:?}), linked objects: {:?}",
+                    data.children, data.child_aggregations, data.parents
+                ));
             }
             lines
         }
-        ExportEntry::PlateLayout(plate) => vec![
-            format!("grid: {:?}", plate.grid),
-            format!("classes: {}", classes(&plate.classes)),
-            format!("columns: {}", columns(&plate.columns, "count")),
-            format!("aggregations: {:?}", plate.aggregations),
-        ],
         ExportEntry::DrawnImages(drawn) => vec![
             format!("classes: {}", classes(&drawn.classes)),
             format!(
@@ -404,12 +413,12 @@ mod tests {
         serde_json::from_value(json!([
             { "id": 3, "name": "Per image for R", "prefix": "exp1", "runAfterEveryRun": true,
               "entries": [
-                { "kind": "TABLE", "rows": "OBJECT", "split": "IMAGE" },
+                { "kind": "DATA", "outputs": ["OBJECTS"], "split": "IMAGE" },
                 { "kind": "DRAWN_IMAGES" },
                 { "kind": "SCRIPT", "language": "R", "file": "scripts/stats.R" }
               ] },
             { "id": 4, "name": "Plate", "output": { "location": "FIXED_FOLDER", "folder": "exports" },
-              "entries": [{ "kind": "PLATE_LAYOUT" }] }
+              "entries": [{ "kind": "DATA", "outputs": ["PLATE"] }] }
         ]))
         .unwrap()
     }
@@ -423,7 +432,7 @@ mod tests {
         assert!(lines[1].contains("exp1_objects (Csv, a file per image)"));
         assert!(lines[1].contains("script scripts/stats.R → exp1_stats"));
         assert!(lines[1].ends_with("the results folder"));
-        assert!(lines[2].contains("plate (XLSX)") && lines[2].ends_with("exports"));
+        assert!(lines[2].contains("data: plate (Csv)") && lines[2].ends_with("exports"));
         assert_eq!(list_text(&[]), "The project has no exports.\n");
     }
 
@@ -434,8 +443,8 @@ mod tests {
         assert!(text.starts_with("Export 3: Per image for R\n"));
         assert!(text.contains("Prefix:      exp1"));
         assert!(text.contains("Lengths in:  µm"));
-        assert!(text.contains("1. exp1_objects"));
-        assert!(text.contains("rows: Object"));
+        assert!(text.contains("1. data: exp1_objects"));
+        assert!(text.contains("outputs: [Objects]"));
         assert!(text.contains("3. script scripts/stats.R"));
     }
 
@@ -446,8 +455,8 @@ mod tests {
         let mut settings = ProjectSettings::default();
         settings.exports = serde_json::from_value(json!([
             { "id": 1, "name": "Tables", "entries": [
-                { "kind": "TABLE", "rows": "OBJECT" },
-                { "kind": "TABLE", "rows": "IMAGE" }
+                { "kind": "DATA", "outputs": ["OBJECTS"] },
+                { "kind": "DATA", "outputs": ["IMAGES"] }
             ] }
         ]))
         .unwrap();

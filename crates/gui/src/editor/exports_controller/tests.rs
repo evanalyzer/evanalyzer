@@ -9,6 +9,7 @@ use crate::editor::results_state_controller::tests::seed_test_db;
 use crate::editor::test_support::{test_ui_window, ui_state_with_window};
 use crate::helper::ui_thread::drain_ui_queue;
 use evanalyzer_app::project::ProjectWithRuntime;
+use evanalyzer_cfg::settings::export_settings::DataExport;
 use slint::Model;
 
 fn setup(project: ProjectWithRuntime) -> (AppWindow, Arc<UiState>, Arc<ExportsController>) {
@@ -17,6 +18,16 @@ fn setup(project: ProjectWithRuntime) -> (AppWindow, Arc<UiState>, Arc<ExportsCo
     let controller = Arc::new(ExportsController::new(ui.as_weak(), ui_state.clone()));
     controller.attach_callbacks();
     (ui, ui_state, controller)
+}
+
+/// Ticks `key` alone among a data export's outputs.
+fn only(state: &ExportsState, key: &str) {
+    for row in state.get_outputs().iter() {
+        if row.key.as_str() != key && row.on {
+            state.invoke_set_entry_field(format!("output:{}", row.key).into(), "0".into());
+        }
+    }
+    state.invoke_set_entry_field(format!("output:{key}").into(), "1".into());
 }
 
 fn entries(ui: &AppWindow) -> Vec<ExportEntryRow> {
@@ -41,15 +52,12 @@ fn a_new_export_has_a_table_and_is_picked() {
     assert_ne!(all[0].id, all[1].id);
     assert!(matches!(
         all[1].entries.as_slice(),
-        [ExportEntry::Table(TableExport {
-            rows: TableRows::Image,
-            ..
-        })]
+        [ExportEntry::Data(DataExport { outputs, .. })] if outputs == &[DataOutput::Images]
     ));
     assert_eq!(state.get_exports().row_count(), 2);
     assert_eq!(state.get_selected_id(), all[1].id as i32);
     assert_eq!(state.get_entry(), 0);
-    assert_eq!(state.get_entry_kind(), "TABLE");
+    assert_eq!(state.get_entry_kind(), "DATA");
     assert!(entries(&ui)[0].title.contains("images.csv"));
 }
 
@@ -64,7 +72,7 @@ fn edits_land_in_the_project_and_undo_shows_the_old_ones() {
     state.invoke_set_export_field("location".into(), "1".into());
     state.invoke_set_export_field("folder".into(), " exports ".into());
     state.invoke_set_export_field("length-unit".into(), "1".into());
-    state.invoke_set_entry_field("rows".into(), "0".into());
+    only(&state, "OBJECTS");
     state.invoke_set_entry_field("format".into(), "1".into());
     state.invoke_set_entry_field("aggregation:median".into(), "1".into());
     state.invoke_set_entry_field("aggregation:avg".into(), "0".into());
@@ -74,10 +82,10 @@ fn edits_land_in_the_project_and_undo_shows_the_old_ones() {
     assert_eq!(export.output.location, OutputLocation::FixedFolder);
     assert_eq!(export.output.folder, "exports");
     assert_eq!(export.length_unit, LengthUnit::Nm);
-    let ExportEntry::Table(table) = &export.entries[0] else {
+    let ExportEntry::Data(table) = &export.entries[0] else {
         panic!("a table");
     };
-    assert_eq!(table.rows, TableRows::Object);
+    assert_eq!(table.outputs, vec![DataOutput::Objects]);
     assert_eq!(table.format, TableFileFormat::Xlsx);
     assert_eq!(table.aggregations, vec![ExportAggregation::Median]);
     assert_eq!(state.get_name(), "Per image");
@@ -90,7 +98,7 @@ fn edits_land_in_the_project_and_undo_shows_the_old_ones() {
     // tab.
     assert!(ui_state.undo());
     drain_ui_queue();
-    let ExportEntry::Table(table) = &exports(&ui_state)[0].entries[0] else {
+    let ExportEntry::Data(table) = &exports(&ui_state)[0].entries[0] else {
         panic!("a table");
     };
     assert_eq!(
@@ -127,7 +135,7 @@ fn all_classes_ticked_is_every_class() {
     let state = ui.global::<ExportsState>();
     state.invoke_new_export();
     let classes = |ui_state: &UiState| match &exports(ui_state)[0].entries[0] {
-        ExportEntry::Table(table) => table.classes.clone(),
+        ExportEntry::Data(table) => table.classes.clone(),
         _ => panic!("a table"),
     };
     let ticked = |ui: &AppWindow| -> Vec<String> {
@@ -173,7 +181,7 @@ fn moving_and_removing_entries_keeps_the_pick() {
     assert_eq!(entries(&ui)[1].kind, "SCRIPT");
     // Past the ends: nothing.
     state.invoke_move_entry(0, -1);
-    assert_eq!(entries(&ui)[0].kind, "TABLE");
+    assert_eq!(entries(&ui)[0].kind, "DATA");
     state.invoke_remove_entry(0);
     assert_eq!(state.get_entry(), 0);
     assert_eq!(state.get_entry_kind(), "SCRIPT");
@@ -276,7 +284,7 @@ fn saved_project_with_an_analysis(dir: &std::path::Path) -> ProjectWithRuntime {
 
 fn table_columns(ui_state: &UiState) -> Option<Vec<String>> {
     match &exports(ui_state)[0].entries[0] {
-        ExportEntry::Table(table) => table.columns.clone(),
+        ExportEntry::Data(table) => table.columns.clone(),
         _ => panic!("a table"),
     }
 }
@@ -311,9 +319,36 @@ fn columns_are_picked_with_the_results_column_picker() {
         .map(|item| item.key.to_string())
         .collect();
     assert!(offered.contains(&"area_px".to_string()), "{offered:?}");
+    // Image, class and object id: always written - ticked and greyed;
+    // the track id to pick.
+    let locked: Vec<String> = state
+        .get_picker_sections()
+        .iter()
+        .flat_map(|section| {
+            let locked: Vec<bool> = section.locked.iter().collect();
+            section
+                .items
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| locked.get(*i).copied().unwrap_or(false))
+                .map(|(_, item)| item.key.to_string())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    for key in ["image_name", "object_class", "object_id"] {
+        let key = evanalyzer_app::results::Column::from_key(key, &[])
+            .map(|column| column.as_key(&[]))
+            .unwrap_or_else(|| key.to_string());
+        if offered.contains(&key) {
+            assert!(locked.contains(&key), "{key} greyed: {locked:?}");
+            assert!(ticked_in_picker(&ui).contains(&key), "{key} ticked");
+        }
+    }
+    assert!(offered.contains(&"object_id".to_string()), "{offered:?}");
+    assert!(offered.contains(&"track_id".to_string()), "{offered:?}");
     assert!(
-        !offered.contains(&"object_id".to_string()),
-        "no leading columns"
+        !locked.contains(&"track_id".to_string()),
+        "track id to pick"
     );
     assert!(
         state.get_picker_presets().row_count() > 0,
@@ -332,9 +367,13 @@ fn columns_are_picked_with_the_results_column_picker() {
     assert!(!state.get_columns_default());
     let columns = table_columns(&ui_state).unwrap();
     assert!(columns.contains(&"area_px".to_string()), "{columns:?}");
-    for default in &defaults {
+    for default in defaults.iter().filter(|key| !locked.contains(key)) {
         assert!(columns.contains(default), "{default} stays: {columns:?}");
     }
+    assert!(
+        !columns.iter().any(|key| locked.contains(key)),
+        "the greyed ones aren't stored: {columns:?}"
+    );
     assert!(ticked_in_picker(&ui).contains(&"area_px".to_string()));
 
     // A whole channel of the intensity grid: on, then off again.
@@ -380,7 +419,7 @@ fn keys_the_newest_analysis_lacks_are_kept() {
     state.invoke_new_export();
     {
         let mut project = ui_state.get_project_write();
-        if let ExportEntry::Table(table) = &mut project.settings.exports[0].entries[0] {
+        if let ExportEntry::Data(table) = &mut project.settings.exports[0].entries[0] {
             table.columns = Some(vec!["count".into(), "measurement:gone".into()]);
         }
     }
@@ -404,7 +443,7 @@ fn empty_classes_and_values_like_the_list() {
     state.invoke_new_export();
     state.invoke_set_entry_field("empty-classes".into(), "1".into());
     state.invoke_set_entry_field("all-aggregations".into(), "".into());
-    let ExportEntry::Table(table) = &exports(&ui_state)[0].entries[0] else {
+    let ExportEntry::Data(table) = &exports(&ui_state)[0].entries[0] else {
         panic!("a table");
     };
     assert!(table.empty_classes);
@@ -415,9 +454,9 @@ fn empty_classes_and_values_like_the_list() {
     assert!(state.get_problems().contains("aggregation"));
 }
 
-/// Side by side: on for image rows, gone when the rows can't have it.
+/// Side by side: for objects, images, wells and folders.
 #[test]
-fn transposed_is_for_object_and_image_rows() {
+fn transposed_is_for_the_row_per_tables() {
     let (ui, ui_state, _controller) = setup(ProjectWithRuntime::default());
     let state = ui.global::<ExportsState>();
     state.invoke_new_export();
@@ -425,14 +464,19 @@ fn transposed_is_for_object_and_image_rows() {
     assert!(state.get_transposed());
     assert!(entries(&ui)[0].subtitle.contains("side by side"));
     let transposed = |ui_state: &UiState| match &exports(ui_state)[0].entries[0] {
-        ExportEntry::Table(table) => table.transposed,
+        ExportEntry::Data(table) => table.transposed,
         _ => panic!("a table"),
     };
     assert!(transposed(&ui_state));
-    // Well rows.
-    state.invoke_set_entry_field("rows".into(), "2".into());
-    assert!(!transposed(&ui_state));
-    assert!(!state.get_transposed());
+    only(&state, "WELLS");
+    assert!(state.get_can_transpose());
+    assert!(entries(&ui)[0].subtitle.contains("side by side"));
+    // Only coloc pairs: nothing to transpose - the setting stays, not
+    // offered, not on the card.
+    only(&state, "COLOC_PAIRS");
+    assert!(transposed(&ui_state));
+    assert!(!state.get_can_transpose());
+    assert!(!entries(&ui)[0].subtitle.contains("side by side"));
 }
 
 /// The tab on screen at the smallest window: a table picked shows its
@@ -493,7 +537,7 @@ fn the_table_panel_has_values_then_classes() {
     );
 
     // A row per object: Classes alone, still open.
-    state.invoke_set_entry_field("rows".into(), "0".into());
+    only(&state, "OBJECTS");
     assert!(shown("Nucleus").is_some(), "still on the classes");
     assert!(shown("Mean").is_none(), "no values for objects");
 }
@@ -703,11 +747,7 @@ fn export_this_view_writes_the_list_once() {
     assert!(quick.get_shown());
     assert_eq!(quick.get_view_name(), "List");
     assert!(quick.get_table());
-    assert!(
-        quick.get_what().contains("A row per"),
-        "{}",
-        quick.get_what()
-    );
+    assert!(quick.get_what().contains("columns"), "{}", quick.get_what());
     assert!(
         quick.get_folder().ends_with("20261124T090000Z__run"),
         "beside the analysis"
@@ -724,7 +764,7 @@ fn export_this_view_writes_the_list_once() {
     drain_ui_queue();
     assert_eq!(quick.get_error(), "");
     assert!(!quick.get_shown());
-    assert!(out.join("for_r.xlsx").is_file());
+    assert!(out.join("for_r_objects.xlsx").is_file());
     let state = ui.global::<ExportsState>();
     assert!(
         state.get_after_text().contains("Exported “List”"),
@@ -739,7 +779,7 @@ fn export_this_view_writes_the_list_once() {
     quick.set_format(1);
     quick.invoke_export();
     drain_ui_queue();
-    assert!(out.join("for_r_2.xlsx").is_file());
+    assert!(out.join("for_r_objects_2.xlsx").is_file());
 }
 
 /// Ticked: kept as a new export (named like the view, run after every run
@@ -768,7 +808,7 @@ fn export_this_view_keeps_it_as_an_export() {
     assert_eq!(all.len(), 1);
     assert_eq!(all[0].name, "Plate");
     assert!(all[0].run_after_every_run);
-    assert!(matches!(all[0].entries[0], ExportEntry::PlateLayout(_)));
+    assert!(matches!(all[0].entries[0], ExportEntry::Data(_)));
     assert_eq!(
         ui.global::<LayoutState>().get_mode(),
         WorkspaceMode::Exports
@@ -788,7 +828,7 @@ fn export_this_view_keeps_it_as_an_export() {
     let all = exports(&ui_state);
     assert_eq!(all.len(), 1);
     assert_eq!(all[0].entries.len(), 2);
-    assert!(matches!(all[0].entries[1], ExportEntry::Table(_)));
+    assert!(matches!(all[0].entries[1], ExportEntry::Data(_)));
 }
 
 /// A view's ⋯ › Save as export…: a new export of it, opened in the tab -
@@ -806,7 +846,7 @@ fn save_a_view_as_export() {
     assert_eq!(all.len(), 1);
     assert_eq!(all[0].name, "Tracks");
     match &all[0].entries[0] {
-        ExportEntry::Table(table) => assert_eq!(table.rows, TableRows::Track),
+        ExportEntry::Data(table) => assert_eq!(table.outputs, vec![DataOutput::Tracks]),
         _ => panic!("a table of tracks"),
     }
     assert_eq!(
@@ -819,7 +859,7 @@ fn save_a_view_as_export() {
     drain_ui_queue();
     let all = exports(&ui_state);
     assert_eq!(all.len(), 2);
-    assert!(matches!(all[1].entries[0], ExportEntry::Table(_)));
+    assert!(matches!(all[1].entries[0], ExportEntry::Data(_)));
     quick.invoke_open(3);
     assert!(quick.get_shown());
 }
@@ -883,7 +923,7 @@ fn children_and_linked_objects_are_picked_like_the_list() {
     let (ui, ui_state, _controller) = setup(project);
     let state = ui.global::<ExportsState>();
     state.invoke_new_export();
-    state.invoke_set_entry_field("rows".into(), "0".into());
+    only(&state, "OBJECTS");
     state.invoke_refresh();
     drain_ui_queue();
 
@@ -897,7 +937,7 @@ fn children_and_linked_objects_are_picked_like_the_list() {
     state.invoke_set_entry_field("child:1:2".into(), "1".into());
     state.invoke_set_entry_field("child-aggregation:Maximum".into(), "1".into());
     state.invoke_set_entry_field("parents-all".into(), "".into());
-    let ExportEntry::Table(table) = &exports(&ui_state)[0].entries[0] else {
+    let ExportEntry::Data(table) = &exports(&ui_state)[0].entries[0] else {
         panic!("a table");
     };
     assert_eq!(table.children, vec![(1, 2)]);
@@ -925,10 +965,10 @@ fn time_course_and_profile_options() {
     let state = ui.global::<ExportsState>();
     state.invoke_new_export();
     let table = |ui_state: &UiState| match &exports(ui_state)[0].entries[0] {
-        ExportEntry::Table(table) => table.clone(),
+        ExportEntry::Data(table) => table.clone(),
         _ => panic!("a table"),
     };
-    state.invoke_set_entry_field("rows".into(), "7".into());
+    only(&state, "TIME_COURSE");
     state.invoke_set_entry_field("time-lines".into(), "3".into());
     state.invoke_set_entry_field("time-layout".into(), "0".into());
     state.invoke_set_entry_field("time-with-parents".into(), "1".into());
@@ -942,10 +982,11 @@ fn time_course_and_profile_options() {
         entries(&ui)[0].title
     );
 
-    state.invoke_set_entry_field("rows".into(), "8".into());
-    assert!(
-        table(&ui_state).time_course.is_none(),
-        "its options go with it"
+    only(&state, "PROFILE");
+    // An output's options stay while it is unticked (ticked again: as set).
+    assert_eq!(
+        table(&ui_state).time_course.unwrap().lines,
+        TimeCourseLineKind::Track
     );
     state.invoke_set_entry_field("profile-objects".into(), "1".into());
     assert_eq!(
@@ -964,7 +1005,7 @@ fn plane_ranges() {
     state.invoke_new_export();
     state.invoke_set_entry_field("t-planes".into(), "4-2".into());
     let planes = |ui_state: &UiState| match &exports(ui_state)[0].entries[0] {
-        ExportEntry::Table(table) => table.planes,
+        ExportEntry::Data(table) => table.planes,
         _ => panic!("a table"),
     };
     assert_eq!(planes(&ui_state).t, Some([2, 4]), "from the smaller");
@@ -984,11 +1025,12 @@ fn a_plate_layout_picks_columns_and_values() {
     let state = ui.global::<ExportsState>();
     state.invoke_new_export();
     state.invoke_remove_entry(0);
-    state.invoke_add_entry("PLATE_LAYOUT".into());
+    state.invoke_add_entry("DATA".into());
+    only(&state, "PLATE");
     state.invoke_refresh();
     drain_ui_queue();
     let plate = |ui_state: &UiState| match &exports(ui_state)[0].entries[0] {
-        ExportEntry::PlateLayout(plate) => plate.clone(),
+        ExportEntry::Data(plate) => plate.clone(),
         _ => panic!("a plate layout"),
     };
     assert!(state.get_columns_default(), "the count");
@@ -1004,15 +1046,147 @@ fn a_plate_layout_picks_columns_and_values() {
         vec![ExportAggregation::Avg, ExportAggregation::Max]
     );
     state.invoke_set_entry_field("colors".into(), "1".into());
-    state.invoke_set_entry_field("grid".into(), "2".into());
+    only(&state, "IMAGE_HEATMAP");
     state.invoke_set_entry_field("square".into(), "3".into());
     let p = plate(&ui_state);
     assert_eq!(
-        p.colors,
+        p.heatmap.colors,
         evanalyzer_cfg::settings::export_settings::HeatmapColors::Viridis
     );
-    assert_eq!(p.grid, PlateGrid::Image);
-    assert_eq!(p.square_size, Some(256));
+    assert_eq!(p.outputs, vec![DataOutput::ImageHeatmap]);
+    assert_eq!(p.heatmap.square_size, Some(256));
     state.invoke_set_entry_field("clear-columns".into(), "".into());
     assert_eq!(plate(&ui_state).columns, None);
+}
+
+/// A data export's outputs: ticked in any order, kept in the list's; the
+/// panel follows them (values, classes without objects, transpose,
+/// heatmap colours); the tracks' settings under their tick.
+#[test]
+fn a_data_export_ticks_its_outputs() {
+    let (ui, ui_state, _controller) = setup(ProjectWithRuntime::default());
+    let state = ui.global::<ExportsState>();
+    state.invoke_new_export();
+    let data = |ui_state: &UiState| match &exports(ui_state)[0].entries[0] {
+        ExportEntry::Data(data) => data.clone(),
+        _ => panic!("a data export"),
+    };
+    // A new one: per image.
+    assert_eq!(data(&ui_state).outputs, vec![DataOutput::Images]);
+    assert!(state.get_grouped() && state.get_show_empty() && state.get_can_transpose());
+    assert!(!state.get_any_heatmap());
+
+    state.invoke_set_entry_field("output:PLATE".into(), "1".into());
+    state.invoke_set_entry_field("output:OBJECTS".into(), "1".into());
+    state.invoke_set_entry_field("output:TRACKS".into(), "1".into());
+    assert_eq!(
+        data(&ui_state).outputs,
+        vec![
+            DataOutput::Objects,
+            DataOutput::Images,
+            DataOutput::Tracks,
+            DataOutput::Plate
+        ]
+    );
+    assert!(state.get_any_heatmap());
+    let ticked: Vec<String> = state
+        .get_outputs()
+        .iter()
+        .filter(|row| row.on)
+        .map(|row| row.key.to_string())
+        .collect();
+    assert_eq!(ticked, ["OBJECTS", "IMAGES", "TRACKS", "PLATE"]);
+    // The first of each group carries its caption.
+    let captions: Vec<String> = state
+        .get_outputs()
+        .iter()
+        .filter(|row| !row.group.is_empty())
+        .map(|row| row.group.to_string())
+        .collect();
+    assert_eq!(
+        captions,
+        [
+            "A ROW PER",
+            "OVER TIME AND RADIUS",
+            "PLATE AND WELLS (XLSX)"
+        ]
+    );
+    assert!(
+        entries(&ui)[0].title.contains("4 outputs"),
+        "{}",
+        entries(&ui)[0].title
+    );
+
+    state.invoke_set_entry_field("tracks-min-points".into(), "5".into());
+    state.invoke_set_entry_field("tracks-no-edge".into(), "1".into());
+    state.invoke_set_entry_field("tracks-speed".into(), "2".into());
+    let tracks = data(&ui_state).tracks.unwrap();
+    assert_eq!(tracks.min_points, 5);
+    assert!(tracks.no_edge && !tracks.from_start);
+    assert_eq!(
+        tracks.speed_unit,
+        evanalyzer_cfg::settings::export_settings::SpeedUnit::UmS
+    );
+    assert_eq!(state.get_tracks_min_points(), "5");
+
+    // Only objects: no values, no classes without objects, no heatmap.
+    only(&state, "OBJECTS");
+    assert!(!state.get_grouped() && !state.get_show_empty() && !state.get_any_heatmap());
+    // None ticked: it can't run.
+    state.invoke_set_entry_field("output:OBJECTS".into(), "0".into());
+    assert!(
+        state.get_problems().contains("output"),
+        "{}",
+        state.get_problems()
+    );
+}
+
+/// A run of a data export writes every ticked output, one filter.
+#[test]
+fn a_data_export_run_writes_each_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let (ui, _ui_state, _controller) = setup(saved_project_with_an_analysis(dir.path()));
+    let state = ui.global::<ExportsState>();
+    state.invoke_new_export();
+    state.invoke_set_entry_field("output:OBJECTS".into(), "1".into());
+    state.invoke_set_entry_field("images".into(), "0".into());
+    state.invoke_run();
+    drain_ui_queue();
+    let run = dir.path().join("results/20261124T090000Z__run");
+    assert!(run.join("objects.csv").is_file());
+    assert!(run.join("images.csv").is_file());
+    assert!(
+        state.get_report().iter().any(|l| l.contains("2 files")),
+        "{:?}",
+        state.get_report().iter().collect::<Vec<_>>()
+    );
+}
+
+/// Classes side by side from the tab: per image and objects written
+/// transposed.
+#[test]
+fn classes_side_by_side_from_the_tab() {
+    let dir = tempfile::tempdir().unwrap();
+    let (ui, _ui_state, _controller) = setup(saved_project_with_an_analysis(dir.path()));
+    let state = ui.global::<ExportsState>();
+    state.invoke_new_export();
+    state.invoke_set_entry_field("output:OBJECTS".into(), "1".into());
+    state.invoke_set_entry_field("images".into(), "0".into());
+    state.invoke_set_entry_field("transposed".into(), "1".into());
+    state.invoke_run();
+    drain_ui_queue();
+    let run = dir.path().join("results/20261124T090000Z__run");
+    let images = std::fs::read_to_string(run.join("images.csv")).unwrap();
+    let header = images.lines().next().unwrap();
+    assert!(
+        !header.contains(",class,"),
+        "per image transposed: {header}"
+    );
+    assert!(header.contains("_classa"), "per image transposed: {header}");
+    let objects = std::fs::read_to_string(run.join("objects.csv")).unwrap();
+    let header = objects.lines().next().unwrap();
+    assert!(
+        header.contains("object_id_classa"),
+        "objects transposed: {header}"
+    );
 }

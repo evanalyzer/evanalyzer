@@ -752,6 +752,251 @@
         }
       }
     },
+    "DataExport": {
+      "description": "Data of the results - tables and heatmaps - with one filter: each\noutput in `outputs` is written with the same columns, values, classes,\nplanes and images (an output that can't take one of them leaves it out,\nsaid in the report). Different filters: a second data export.",
+      "type": "object",
+      "properties": {
+        "aggregations": {
+          "description": "How values are summed up where rows group objects (per image, well,\nfolder, track, time point, heatmap cell).",
+          "type": "array",
+          "default": [
+            "AVG"
+          ],
+          "items": {
+            "$ref": "#/$defs/ExportAggregation"
+          }
+        },
+        "childAggregations": {
+          "description": "How the children's values are summed up (besides their count).",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ExportAggregation"
+          }
+        },
+        "children": {
+          "description": "The children linked to each object (Relate Objects), as the Results\nList shows them: (parent class id, child class id).",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "array",
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              }
+            ]
+          }
+        },
+        "classes": {
+          "description": "The classes (class ids); `None`: all classes.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "columns": {
+          "description": "The value columns by column key (`count`, `area_nm2`,\n`intensity_mean_gray_ch1`, `measurement:<key>`, ...); `None`: each\noutput's default columns.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "string"
+          }
+        },
+        "emptyClasses": {
+          "description": "Rows per image, well and folder: a row also for classes without\nobjects.",
+          "type": "boolean",
+          "default": false
+        },
+        "format": {
+          "description": "The tables' file format (heatmaps are always `xlsx`).",
+          "$ref": "#/$defs/TableFileFormat",
+          "default": "CSV"
+        },
+        "heatmap": {
+          "description": "The heatmaps' colours and the image heatmap's squares.",
+          "$ref": "#/$defs/HeatmapOptions",
+          "default": {
+            "colors": "EXCEL",
+            "squareSize": null
+          }
+        },
+        "images": {
+          "description": "Which images of the run.",
+          "$ref": "#/$defs/ImageScope",
+          "default": "INCLUDED"
+        },
+        "name": {
+          "description": "A name part in front of the files' automatic names\n(`ctrl_objects.csv`); `\"\"`: the automatic names alone.",
+          "type": "string",
+          "default": ""
+        },
+        "outputs": {
+          "description": "What it writes - at least one.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DataOutput"
+          }
+        },
+        "parents": {
+          "description": "The linked objects (parents) by class id.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "planes": {
+          "description": "Which z-planes and time points (not for tracks and profiles).",
+          "$ref": "#/$defs/Planes",
+          "default": {
+            "t": null,
+            "z": null
+          }
+        },
+        "profile": {
+          "description": "The `Profile` output: which profile, what a line is.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProfileOptions"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "split": {
+          "description": "One file (or sheet) per image, well, folder or class - for the tables.",
+          "$ref": "#/$defs/TableSplit",
+          "default": "NONE"
+        },
+        "splitInto": {
+          "description": "The split parts as files or as sheets of one workbook (`Xlsx` only).",
+          "$ref": "#/$defs/SplitInto",
+          "default": "FILES"
+        },
+        "timeCourse": {
+          "description": "The `TimeCourse` output: what a line is, the layout.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeCourseOptions"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "tracks": {
+          "description": "The `Tracks` output's tracks and speed unit.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrackOptions"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "transposed": {
+          "description": "Objects and per image: the classes side by side.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "DataOutput": {
+      "description": "What a data export writes - the old export dialog's ticks.",
+      "oneOf": [
+        {
+          "description": "A row per object: `objects`.",
+          "type": "string",
+          "const": "OBJECTS"
+        },
+        {
+          "description": "A row per image and class: `images`.",
+          "type": "string",
+          "const": "IMAGES"
+        },
+        {
+          "description": "A row per well and class: `wells`.",
+          "type": "string",
+          "const": "WELLS"
+        },
+        {
+          "description": "A row per image folder and class: `folders`.",
+          "type": "string",
+          "const": "FOLDERS"
+        },
+        {
+          "description": "A row per pair of overlapping objects: `coloc_pairs`.",
+          "type": "string",
+          "const": "COLOC_PAIRS"
+        },
+        {
+          "description": "A row per measurement value: `measurements`.",
+          "type": "string",
+          "const": "MEASUREMENTS"
+        },
+        {
+          "description": "A row per track: `tracks`.",
+          "type": "string",
+          "const": "TRACKS"
+        },
+        {
+          "description": "A row per time point and line: `time_course`.",
+          "type": "string",
+          "const": "TIME_COURSE"
+        },
+        {
+          "description": "A row per position of a profile: `profile`.",
+          "type": "string",
+          "const": "PROFILE"
+        },
+        {
+          "description": "The plate as a heatmap, a cell per well: `plate.xlsx`.",
+          "type": "string",
+          "const": "PLATE"
+        },
+        {
+          "description": "The wells as a heatmap, a cell per image position: `well.xlsx`.",
+          "type": "string",
+          "const": "WELL_GRID"
+        },
+        {
+          "description": "The wells as a list, a row per image position: `well_list.xlsx`.",
+          "type": "string",
+          "const": "WELL_LIST"
+        },
+        {
+          "description": "A heatmap per image, its area as squares: `heatmap_<image>.xlsx`.",
+          "type": "string",
+          "const": "IMAGE_HEATMAP"
+        }
+      ]
+    },
     "DifferenceOfGaussiansSettings": {
       "description": "Enhances spots of one size with a band-pass: a slightly blurred minus a\nmore blurred copy of the image keeps the details of a spot's size and\nremoves finer noise and coarser background and structures.\n\n[Difference of Gaussians] -> [Find Maxima] -> [Extract Objects]\n\nBright spots become positive peaks, dark spots negative ones, flat\nbackground 0. Measure intensities on the original channel, not on this\nimage.",
       "type": "object",
@@ -1049,23 +1294,10 @@
           "properties": {
             "kind": {
               "type": "string",
-              "const": "TABLE"
+              "const": "DATA"
             }
           },
-          "$ref": "#/$defs/TableExport",
-          "required": [
-            "kind"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "kind": {
-              "type": "string",
-              "const": "PLATE_LAYOUT"
-            }
-          },
-          "$ref": "#/$defs/PlateLayoutExport",
+          "$ref": "#/$defs/DataExport",
           "required": [
             "kind"
           ]
@@ -1919,6 +2151,26 @@
           "const": "EXCEL"
         }
       ]
+    },
+    "HeatmapOptions": {
+      "description": "The heatmaps of a data export.",
+      "type": "object",
+      "properties": {
+        "colors": {
+          "$ref": "#/$defs/HeatmapColors",
+          "default": "EXCEL"
+        },
+        "squareSize": {
+          "description": "The image heatmap's square side in pixels (`None`: 64).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "default": null,
+          "minimum": 0
+        }
+      }
     },
     "HessianSettings": {
       "description": "Extracts continuous structural ridges, tubular vessels, and blobs using second-order spatial derivatives.\n\nThis algorithm constructs a localized Hessian matrix for each pixel to analyze local curvature\nand intensity topography. By evaluating the eigenvalues of this matrix, it differentiates\nbetween directional ridges (like blood vessels or filaments), distinct intensity peaks (blobs),\nand flat regions, making it highly effective for curvilinear feature extraction.",
@@ -6166,101 +6418,6 @@
         }
       }
     },
-    "PlateGrid": {
-      "description": "See [`PlateLayoutExport::grid`].",
-      "oneOf": [
-        {
-          "description": "A cell per well.",
-          "type": "string",
-          "const": "PLATE"
-        },
-        {
-          "description": "A cell per image position inside the wells.",
-          "type": "string",
-          "const": "WELL"
-        },
-        {
-          "description": "A workbook per image: its area as a grid of squares\n(`square_size` pixels), the objects' values summed up per square.",
-          "type": "string",
-          "const": "IMAGE"
-        }
-      ]
-    },
-    "PlateLayoutExport": {
-      "description": "The values laid out as the plate (or well) grid - an `xlsx` workbook, a\nsheet per class and value.",
-      "type": "object",
-      "properties": {
-        "aggregations": {
-          "description": "How each column is summed up per cell: a sheet per class, column\nand aggregation.",
-          "type": "array",
-          "default": [
-            "AVG"
-          ],
-          "items": {
-            "$ref": "#/$defs/ExportAggregation"
-          }
-        },
-        "classes": {
-          "description": "Class ids; `None`: all classes.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "default": null,
-          "items": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          }
-        },
-        "colors": {
-          "description": "The heatmap's colours.",
-          "$ref": "#/$defs/HeatmapColors",
-          "default": "EXCEL"
-        },
-        "columns": {
-          "description": "Column keys; `None`: the count.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "default": null,
-          "items": {
-            "type": "string"
-          }
-        },
-        "grid": {
-          "$ref": "#/$defs/PlateGrid",
-          "default": "PLATE"
-        },
-        "images": {
-          "$ref": "#/$defs/ImageScope",
-          "default": "INCLUDED"
-        },
-        "name": {
-          "description": "Replaces the automatic file name (`plate`, `well`); `\"\"`: the\nautomatic one.",
-          "type": "string",
-          "default": ""
-        },
-        "planes": {
-          "$ref": "#/$defs/Planes",
-          "default": {
-            "t": null,
-            "z": null
-          }
-        },
-        "squareSize": {
-          "description": "`grid: Image`: the side of a square in pixels (`None`: 64).",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "default": null,
-          "minimum": 0
-        }
-      }
-    },
     "PlateSettings": {
       "type": "object",
       "properties": {
@@ -6342,7 +6499,7 @@
       ]
     },
     "ProfileOptions": {
-      "description": "A profile (`rows: ProfilePosition`): which, and of what.",
+      "description": "A profile (the `Profile` output): which, and of what.",
       "type": "object",
       "properties": {
         "content": {
@@ -7244,7 +7401,7 @@
       ]
     },
     "SplitInto": {
-      "description": "See [`TableExport::split_into`].",
+      "description": "See [`DataExport::split_into`].",
       "oneOf": [
         {
           "type": "string",
@@ -7510,171 +7667,6 @@
         "tStack"
       ]
     },
-    "TableExport": {
-      "description": "A table of the results (table format: `ExportSettings::table_format`).",
-      "type": "object",
-      "properties": {
-        "aggregations": {
-          "description": "Grouped rows only (`Image`, `Well`, `Folder`, `Track`).",
-          "type": "array",
-          "default": [
-            "AVG"
-          ],
-          "items": {
-            "$ref": "#/$defs/ExportAggregation"
-          }
-        },
-        "childAggregations": {
-          "description": "How the children's values are summed up (besides their count).",
-          "type": "array",
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/ExportAggregation"
-          }
-        },
-        "children": {
-          "description": "The children linked to each object (Relate Objects), as the Results\nList shows them: (parent class id, child class id) - per link their\ncount and each `child_aggregations` of each column.",
-          "type": "array",
-          "default": [],
-          "items": {
-            "type": "array",
-            "maxItems": 2,
-            "minItems": 2,
-            "prefixItems": [
-              {
-                "type": "integer",
-                "format": "uint32",
-                "minimum": 0
-              },
-              {
-                "type": "integer",
-                "format": "uint32",
-                "minimum": 0
-              }
-            ]
-          }
-        },
-        "classes": {
-          "description": "The classes in the table (class ids); `None`: all classes.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "default": null,
-          "items": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          }
-        },
-        "columns": {
-          "description": "The value columns by column key (`count`, `area_nm2`,\n`intensity_mean_gray_ch1`, `measurement:<key>`, ...); `None`: the\ndefault columns.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "default": null,
-          "items": {
-            "type": "string"
-          }
-        },
-        "emptyClasses": {
-          "description": "Grouped rows: a row also for classes without objects.",
-          "type": "boolean",
-          "default": false
-        },
-        "format": {
-          "$ref": "#/$defs/TableFileFormat",
-          "default": "CSV"
-        },
-        "images": {
-          "description": "Which images of the run.",
-          "$ref": "#/$defs/ImageScope",
-          "default": "INCLUDED"
-        },
-        "name": {
-          "description": "Replaces the automatic file name (`objects`, `images`, ...); `\"\"`:\nthe automatic one.",
-          "type": "string",
-          "default": ""
-        },
-        "parents": {
-          "description": "The linked objects (parents) by class id: their id and each column.",
-          "type": "array",
-          "default": [],
-          "items": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          }
-        },
-        "planes": {
-          "description": "Not for tracks and profiles (they span the planes).",
-          "$ref": "#/$defs/Planes",
-          "default": {
-            "t": null,
-            "z": null
-          }
-        },
-        "profile": {
-          "description": "`rows: ProfilePosition` only: which profile, what a line is.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ProfileOptions"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "rows": {
-          "description": "What a row is.",
-          "$ref": "#/$defs/TableRows"
-        },
-        "split": {
-          "description": "One file (or sheet) per image, well, folder or class.",
-          "$ref": "#/$defs/TableSplit",
-          "default": "NONE"
-        },
-        "splitInto": {
-          "description": "The split parts as files or as sheets of one workbook (`Xlsx` only).",
-          "$ref": "#/$defs/SplitInto",
-          "default": "FILES"
-        },
-        "timeCourse": {
-          "description": "`rows: TimePoint` only: what a line is, the layout.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TimeCourseOptions"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "tracks": {
-          "description": "`rows: Track` only.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TrackOptions"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "transposed": {
-          "description": "The classes side by side: a column per value and class instead of a\nrow per class - `Object` and `Image` rows only.",
-          "type": "boolean",
-          "default": false
-        }
-      },
-      "required": [
-        "rows"
-      ]
-    },
     "TableFileFormat": {
       "description": "The file format of a table.",
       "type": "string",
@@ -7683,58 +7675,8 @@
         "XLSX"
       ]
     },
-    "TableRows": {
-      "description": "What a row of a table is.",
-      "oneOf": [
-        {
-          "description": "An object.",
-          "type": "string",
-          "const": "OBJECT"
-        },
-        {
-          "description": "An image and class.",
-          "type": "string",
-          "const": "IMAGE"
-        },
-        {
-          "description": "A well and class.",
-          "type": "string",
-          "const": "WELL"
-        },
-        {
-          "description": "An image folder and class.",
-          "type": "string",
-          "const": "FOLDER"
-        },
-        {
-          "description": "A pair of overlapping objects (Colocalize Objects' partners).",
-          "type": "string",
-          "const": "COLOC_PAIR"
-        },
-        {
-          "description": "A track.",
-          "type": "string",
-          "const": "TRACK"
-        },
-        {
-          "description": "A measurement value (image, plane, object or region, step,\nmeasurement, value, unit).",
-          "type": "string",
-          "const": "MEASUREMENT"
-        },
-        {
-          "description": "A time point of a line (the time course): its values summed up\nover the line's objects there.",
-          "type": "string",
-          "const": "TIME_POINT"
-        },
-        {
-          "description": "A position of a profile (e.g. a Sholl ring's radius): of a line, or\nof an object.",
-          "type": "string",
-          "const": "PROFILE_POSITION"
-        }
-      ]
-    },
     "TableSplit": {
-      "description": "See [`TableExport::split`].",
+      "description": "See [`DataExport::split`].",
       "type": "string",
       "enum": [
         "NONE",
@@ -7866,7 +7808,7 @@
       ]
     },
     "TimeCourseOptions": {
-      "description": "A time course (`rows: TimePoint`): what a line is, and how it is laid\nout.",
+      "description": "A time course (the `TimeCourse` output): what a line is, and how it is\nlaid out.",
       "type": "object",
       "properties": {
         "layout": {
@@ -8132,7 +8074,7 @@
       }
     },
     "TrackOptions": {
-      "description": "Which tracks a `rows: Track` table has, and the unit of their speed.",
+      "description": "Which tracks the `Tracks` output has, and the unit of their speed.",
       "type": "object",
       "properties": {
         "fromStart": {

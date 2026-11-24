@@ -20,6 +20,7 @@
 use super::Output;
 use super::table::{Out, Part, Rows, Sink, column_name, scope_images, unit_label};
 use super::tracks::{statistic, suffix};
+use crate::exports::jobs::TableExport;
 use crate::exports::naming;
 use crate::exports::types::EntryReport;
 use crate::results::view_settings::resolve_columns;
@@ -30,7 +31,7 @@ use crate::results::{
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_cfg::settings::export_settings::{
-    ExportSettings, LengthUnit, ProfileContent, ProfileLineKind, TableExport, TableFileFormat,
+    ExportSettings, LengthUnit, ProfileContent, ProfileLineKind, TableFileFormat,
     TimeCourseLineKind, TimeCourseOptions, TimeCourseTableLayout,
 };
 use std::collections::BTreeMap;

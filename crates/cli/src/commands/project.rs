@@ -50,9 +50,7 @@ pub fn run(args: ProjectInfoArgs, backend: &dyn Backend) -> Result<(), InternalE
             "pipelines": pipelines.iter().map(|(name, enabled, steps)| json!({
                 "name": name,
                 "enabled": enabled,
-                "steps": steps,
-            })).collect::<Vec<_>>(),
-        });
+                "steps": steps })).collect::<Vec<_>>() });
         println!("{}", serde_json::to_string_pretty(&out).unwrap());
         return Ok(());
     }
@@ -424,7 +422,7 @@ mod tests {
     fn validate_checks_the_exports() {
         let mut settings = ProjectSettings::default();
         settings.exports = serde_json::from_value(serde_json::json!([
-            { "id": 1, "name": "Tables", "entries": [{ "kind": "TABLE", "rows": "OBJECT" }] },
+            { "id": 1, "name": "Tables", "entries": [{ "kind": "DATA", "outputs": ["OBJECTS"] }] },
             { "id": 2, "name": "tables" }
         ]))
         .unwrap();

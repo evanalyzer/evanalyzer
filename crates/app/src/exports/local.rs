@@ -82,11 +82,8 @@ pub(crate) fn run_export(
             log: String::new(),
         };
         let result = match entry {
-            ExportEntry::Table(table) => {
-                table::write(results, export, table, &output, &mut report, cancel)
-            }
-            ExportEntry::PlateLayout(plate) => {
-                reused::plate_layout(results, export, plate, &output, &mut report, cancel)
+            ExportEntry::Data(data) => {
+                data_export(results, export, data, &output, &mut report, cancel)
             }
             ExportEntry::DrawnImages(drawn) => match &run.drawing {
                 Some(drawing) => reused::drawn_images(
@@ -117,6 +114,47 @@ pub(crate) fn run_export(
     Ok(ExportReport { folder, entries })
 }
 
+/// A data export: each output with the shared filter - an output that fails
+/// fails alone (said in the report), the others are written.
+fn data_export(
+    results: &dyn ResultsSource,
+    export: &evanalyzer_cfg::settings::export_settings::ExportSettings,
+    data: &evanalyzer_cfg::settings::export_settings::DataExport,
+    output: &Output,
+    report: &mut EntryReport,
+    cancel: &AtomicBool,
+) -> Result<(), InternalErrors> {
+    let mut failed: Vec<String> = Vec::new();
+    for (_, job) in crate::exports::jobs::jobs_of(data) {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(InternalErrors::Cancelled);
+        }
+        let name = naming::job_name(&job);
+        // Notes of this output, named by it.
+        let notes_before = report.notes.len();
+        let result = match &job {
+            crate::exports::jobs::Job::Table(table) => {
+                table::write(results, export, table, output, report, cancel)
+            }
+            crate::exports::jobs::Job::PlateLayout(plate) => {
+                reused::plate_layout(results, export, plate, output, report, cancel)
+            }
+        };
+        for note in &mut report.notes[notes_before..] {
+            *note = format!("{name}: {note}");
+        }
+        match result {
+            Ok(()) => {}
+            Err(InternalErrors::Cancelled) => return Err(InternalErrors::Cancelled),
+            Err(e) => failed.push(format!("{name}: {e}")),
+        }
+    }
+    if !failed.is_empty() {
+        report.status = EntryStatus::Failed(failed.join("; "));
+    }
+    Ok(())
+}
+
 /// Where `run` writes: `--output` if given, else the results folder (and
 /// its subfolder) or the fixed folder, relative to the project.
 pub(crate) fn output_folder(run: &ExportRun) -> PathBuf {
@@ -145,7 +183,11 @@ fn entry_label(
 ) -> String {
     match entry {
         ExportEntry::Script(script) => format!("Script {}", script.file),
-        other => naming::with_prefix(export, &naming::entry_name(other).unwrap_or_default()),
+        other => naming::entry_names(other)
+            .iter()
+            .map(|name| naming::with_prefix(export, name))
+            .collect::<Vec<_>>()
+            .join(", "),
     }
 }
 

@@ -13,9 +13,8 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use evanalyzer_cfg::settings::export_settings::{
-    ExportEntry, ExportSettings, PlateGrid, ScriptExport, TableRows,
-};
+use crate::exports::jobs::{PlateGrid, PlateLayoutExport, TableExport, TableRows};
+use evanalyzer_cfg::settings::export_settings::{ExportEntry, ExportSettings, ScriptExport};
 use std::collections::{BTreeMap, HashMap};
 
 /// A part of a file name made from user text: letters, digits, `-` and `_`
@@ -32,32 +31,57 @@ pub fn sanitize(part: &str) -> String {
         .collect()
 }
 
-/// The name an entry writes without the export's prefix: its own `name`,
-/// else the automatic one (`objects`, `images`, `plate`, ...). `None` for a
-/// script, which writes into its `output` folder instead.
-pub fn entry_name(entry: &ExportEntry) -> Option<String> {
-    let (own, automatic) = match entry {
-        ExportEntry::Table(table) => (&table.name, rows_name(table.rows)),
-        ExportEntry::PlateLayout(plate) => (
-            &plate.name,
-            match plate.grid {
-                PlateGrid::Plate => "plate",
-                PlateGrid::Well => "well",
-                PlateGrid::Image => "heatmap",
-            },
-        ),
-        ExportEntry::DrawnImages(drawn) => (&drawn.name, "drawn_images"),
-        ExportEntry::Script(_) => return None,
-    };
-    Some(if own.trim().is_empty() {
+/// The names an entry writes without the export's prefix: a data export's
+/// per output (`objects`, `images`, `plate`, ... - its `name` in front),
+/// drawn images' own name or `drawn_images`. None for a script, which writes
+/// into its `output` folder instead.
+pub fn entry_names(entry: &ExportEntry) -> Vec<String> {
+    match entry {
+        ExportEntry::Data(data) => crate::exports::jobs::jobs_of(data)
+            .iter()
+            .map(|(_, job)| job_name(job))
+            .collect(),
+        ExportEntry::DrawnImages(drawn) => vec![own_or(&drawn.name, "drawn_images")],
+        ExportEntry::Script(_) => Vec::new(),
+    }
+}
+
+/// The name an output's job writes (without the export's prefix).
+pub fn job_name(job: &crate::exports::jobs::Job) -> String {
+    match job {
+        crate::exports::jobs::Job::Table(table) => table_name(table),
+        crate::exports::jobs::Job::PlateLayout(plate) => plate_name(plate),
+    }
+}
+
+/// A table's own name, else the automatic one by its rows.
+pub fn table_name(table: &TableExport) -> String {
+    own_or(&table.name, rows_name(table.rows))
+}
+
+/// A plate layout's own name, else the automatic one by its grid.
+pub fn plate_name(plate: &PlateLayoutExport) -> String {
+    own_or(
+        &plate.name,
+        match plate.grid {
+            PlateGrid::Plate => "plate",
+            PlateGrid::Well => "well",
+            PlateGrid::WellList => "well_list",
+            PlateGrid::Image => "heatmap",
+        },
+    )
+}
+
+fn own_or(own: &str, automatic: &str) -> String {
+    if own.trim().is_empty() {
         automatic.to_string()
     } else {
         sanitize(own.trim())
-    })
+    }
 }
 
 /// The automatic name of a table by what its rows are.
-fn rows_name(rows: TableRows) -> &'static str {
+pub fn rows_name(rows: TableRows) -> &'static str {
     match rows {
         TableRows::Object => "objects",
         TableRows::Image => "images",
@@ -247,35 +271,27 @@ mod tests {
     }
 
     #[test]
-    fn entries_have_their_automatic_name_unless_they_name_themselves() {
+    fn entries_have_their_automatic_names_with_their_name_in_front() {
         assert_eq!(
-            entry_name(&entry(json!({"kind": "TABLE", "rows": "OBJECT"}))).unwrap(),
-            "objects"
+            entry_names(&entry(json!({"kind": "DATA",
+                "outputs": ["OBJECTS", "COLOC_PAIRS", "WELL_GRID", "WELL_LIST", "IMAGE_HEATMAP"]}))),
+            ["objects", "coloc_pairs", "well", "well_list", "heatmap"]
         );
         assert_eq!(
-            entry_name(&entry(json!({"kind": "TABLE", "rows": "COLOC_PAIR"}))).unwrap(),
-            "coloc_pairs"
+            entry_names(&entry(
+                json!({"kind": "DATA", "name": "ctrl", "outputs": ["IMAGES"]})
+            )),
+            ["ctrl_images"]
         );
         assert_eq!(
-            entry_name(&entry(
-                json!({"kind": "TABLE", "rows": "IMAGE", "name": "per image"})
-            ))
-            .unwrap(),
-            "per_image"
-        );
-        assert_eq!(
-            entry_name(&entry(json!({"kind": "PLATE_LAYOUT", "grid": "WELL"}))).unwrap(),
-            "well"
-        );
-        assert_eq!(
-            entry_name(&entry(json!({"kind": "DRAWN_IMAGES"}))).unwrap(),
-            "drawn_images"
+            entry_names(&entry(json!({"kind": "DRAWN_IMAGES"}))),
+            ["drawn_images"]
         );
         assert!(
-            entry_name(&entry(
+            entry_names(&entry(
                 json!({"kind": "SCRIPT", "language": "R", "file": "scripts/a.R"})
             ))
-            .is_none()
+            .is_empty()
         );
     }
 

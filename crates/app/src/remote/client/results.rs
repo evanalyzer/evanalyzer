@@ -236,7 +236,7 @@ mod tests {
         let run = ExportRun {
             export: serde_json::from_value(serde_json::json!({
                 "id": 1, "name": "Remote", "entries": [
-                    { "kind": "TABLE", "rows": "IMAGE" },
+                    { "kind": "DATA", "outputs": ["IMAGES"] },
                     { "kind": "SCRIPT", "language": "PYTHON", "file": "scripts/touch.py" }
                 ]
             }))

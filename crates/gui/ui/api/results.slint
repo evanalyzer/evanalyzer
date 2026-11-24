@@ -16,6 +16,9 @@ export struct ColumnSection {
     title: string,
     open: bool,
     items: [MultiSelectItem],
+    // Per item: always picked, shown ticked and greyed - not to untick
+    // (the Exports tab's image, class, object id). Empty = none.
+    locked: [bool],
 }
 
 /// A cell of the List's intensity grid (channels × values): the column's

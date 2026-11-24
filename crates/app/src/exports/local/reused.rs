@@ -13,6 +13,7 @@
 
 use super::Output;
 use super::table::scope_images;
+use crate::exports::jobs::{PlateGrid, PlateLayoutExport};
 use crate::exports::naming;
 use crate::exports::types::EntryReport;
 use crate::results::view_settings::resolve_columns;
@@ -23,7 +24,7 @@ use crate::results::{
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use evanalyzer_cfg::settings::export_settings::{
     DrawnBrightness, DrawnImagesExport, DrawnStyle, ExportAggregation, ExportEntry, ExportSettings,
-    HeatmapColors, PlateGrid, PlateLayoutExport,
+    HeatmapColors,
 };
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -72,14 +73,16 @@ pub(super) fn plate_layout(
         t_stacks: super::plane_range(plate.planes.t),
         with_plate_view_heatmap: plate.grid == PlateGrid::Plate,
         with_well_view_heatmap: plate.grid == PlateGrid::Well,
+        with_well_view_list: plate.grid == PlateGrid::WellList,
         ..Default::default()
     };
     results.export(&job, cancel, &mut |_, _, _| {})?;
     let written = match plate.grid {
         PlateGrid::Plate => "plate.xlsx",
+        PlateGrid::WellList => "well_list.xlsx",
         _ => "well.xlsx",
     };
-    let name = entry_file_name(export, &ExportEntry::PlateLayout(plate.clone()));
+    let name = naming::with_prefix(export, &naming::plate_name(plate));
     let file = output.file(&format!("{name}.xlsx"));
     scratch.take(Path::new(written), &output.path(&file))?;
     report.files.push(file);
@@ -101,7 +104,7 @@ fn image_heatmaps(
     report: &mut EntryReport,
     cancel: &AtomicBool,
 ) -> Result<(), InternalErrors> {
-    let name = entry_file_name(export, &ExportEntry::PlateLayout(plate.clone()));
+    let name = naming::with_prefix(export, &naming::plate_name(plate));
     let parts = naming::unique_image_parts(&images);
     for image in &images {
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
@@ -175,7 +178,10 @@ pub(super) fn drawn_images(
 
     // The export wrote `images/<folder>/<stem>[_z…][_t…].png`: the image is
     // the longest path the file starts with.
-    let name = entry_file_name(export, &ExportEntry::DrawnImages(drawn.clone()));
+    let name = naming::with_prefix(
+        export,
+        &naming::entry_names(&ExportEntry::DrawnImages(drawn.clone()))[0],
+    );
     let parts = naming::unique_image_parts(&images);
     let mut bases: Vec<(String, &String)> = images
         .iter()
@@ -215,11 +221,6 @@ pub(super) fn drawn_images(
     }
     report.files.sort();
     Ok(())
-}
-
-/// An entry's file name with the export's prefix.
-fn entry_file_name(export: &ExportSettings, entry: &ExportEntry) -> String {
-    naming::with_prefix(export, &naming::entry_name(entry).unwrap_or_default())
 }
 
 fn classes(classes: &Option<Vec<u32>>) -> Vec<ObjectClass> {

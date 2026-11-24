@@ -509,10 +509,10 @@ mod tests {
         // Runs after the analysis, into its results folder.
         settings.exports = serde_json::from_value(serde_json::json!([
             { "id": 1, "name": "After", "runAfterEveryRun": true, "entries": [
-                { "kind": "TABLE", "rows": "IMAGE" },
+                { "kind": "DATA", "outputs": ["IMAGES"] },
                 { "kind": "DRAWN_IMAGES", "maxSide": 128 }
             ] },
-            { "id": 2, "name": "Not after", "entries": [{ "kind": "TABLE", "rows": "OBJECT" }] }
+            { "id": 2, "name": "Not after", "entries": [{ "kind": "DATA", "outputs": ["OBJECTS"] }] }
         ]))
         .unwrap();
 

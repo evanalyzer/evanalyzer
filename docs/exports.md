@@ -36,10 +36,10 @@ SCREAMING_SNAKE_CASE, like the rest of the project file.
     "runAfterEveryRun": true,
     "tableFormat": 1,
     "entries": [
-      { "kind": "TABLE", "rows": "OBJECT", "format": "CSV", "split": "IMAGE" },
-      { "kind": "TABLE", "rows": "IMAGE", "format": "CSV", "name": "per_image",
-        "classes": [3, 5], "columns": ["count", "area_nm2", "intensity_mean_gray_ch1"],
-        "aggregations": ["AVG", "MEDIAN"] },
+      { "kind": "DATA", "outputs": ["OBJECTS", "IMAGES", "PLATE"],
+        "format": "CSV", "classes": [3, 5],
+        "columns": ["count", "area_nm2", "intensity_mean_gray_ch1"],
+        "aggregations": ["AVG", "MEDIAN"], "heatmap": { "colors": "VIRIDIS" } },
       { "kind": "DRAWN_IMAGES", "classes": [3], "style": "OUTLINE" },
       { "kind": "SCRIPT", "language": "R", "file": "scripts/uptake_stats.R", "output": "stats" }
     ]
@@ -74,79 +74,78 @@ Every entry has a `kind`. Entries that write files have an optional `name`
 that replaces their automatic name (§2.2) - needed when two entries of the
 same kind would write the same name.
 
-#### `table`
+#### `data`
+
+Data of the results - tables and heatmaps - with **one filter**: each
+output in `outputs` is written with the same columns, values, classes,
+planes and images. An output that can't take one of them leaves it out
+and says so once in the run's report (never an error). Different filters
+for different outputs: a second `data` entry.
 
 | Key | Type | Default | Meaning and rules |
 |---|---|---|---|
-| `rows` | see below | required | What a row is. |
-| `format` | `"CSV"` \| `"XLSX"` | `"CSV"` | |
-| `classes` | list of class ids | all classes | The classes in the table. |
-| `columns` | list of column keys | the default columns | The value columns, by the column keys the results views use (`count`, `area_nm2`, `intensity_mean_gray_ch1`, `measurement:<key>`, `children:…`, `parent:…`, `coloc:…`). The keys name the value; the unit in the written file follows `lengthUnit`. |
-| `aggregations` | list of `"AVG"`, `"MEDIAN"`, `"STDDEV"`, `"SUM"`, `"MIN"`, `"MAX"`, `"SKEWNESS"` | `["AVG"]` | Grouped rows only (`image`, `well`, `folder`, `track`). |
+| `outputs` | list, see below | none | What it writes - at least one, each once. |
+| `name` | text | none | A name part in front of the automatic file names (`ctrl` → `ctrl_objects.csv`). Two data entries with the same outputs need different names. |
+| `format` | `"CSV"` \| `"XLSX"` | `"CSV"` | The tables' format; heatmaps are always `xlsx`. |
+| `classes` | list of class ids | all classes | |
+| `columns` | list of column keys | each output's default columns | The value columns, by the column keys the results views use (`count`, `area_nm2`, `intensity_mean_gray_ch1`, `measurement:<key>`, `coloc:…`). The keys name the value; the unit in the written file follows `lengthUnit`. Measurements take only measurement columns, the time course only values (not the count). |
+| `aggregations` | list of `"AVG"`, `"MEDIAN"`, `"STDDEV"`, `"SUM"`, `"MIN"`, `"MAX"`, `"SKEWNESS"` | `["AVG"]` | Where rows group objects: per image, well, folder, track, time point, heatmap cell (a sheet each). The time course has no skewness. |
 | `images` | `"ALL"` \| `"INCLUDED"` \| `"LEFT_OUT"` | `"INCLUDED"` | Which images of the run. |
-| `emptyClasses` | bool | `false` | Grouped rows: a row also for classes without objects. |
-| `transposed` | bool | `false` | The classes side by side: a column per value and class instead of a row per class (§3.2). `object` and `image` rows only. |
-| `children` | list of `[parent class id, child class id]` | none | The children linked to each object (Relate Objects), as the Results List shows them: per link their count and each `childAggregations` value of each column. Not for tracks or measurements. |
+| `planes` | `{ "z": [from, to], "t": [from, to] }` | all | Which z-planes and time points (both ends included, from 0). Not for tracks and profiles (they span them). |
+| `emptyClasses` | bool | `false` | Per image, well, folder: a row also for classes without objects. |
+| `transposed` | bool | `false` | Objects, images, wells and folders: the classes side by side (§3.2). |
+| `children` | list of `[parent class id, child class id]` | none | The children linked to each object (Relate Objects), as the Results List shows them: per link their count and each `childAggregations` value of each column. Objects, per image, well, folder, coloc pairs. |
 | `childAggregations` | list of aggregations | none | How the children's values are summed up, besides their count. |
 | `parents` | list of class ids | none | The linked objects (parents): their id and each column. |
-| `split` | `"NONE"` \| `"IMAGE"` \| `"WELL"` \| `"FOLDER"` \| `"CLASS"` | `"NONE"` | One file (or sheet) per image, well, folder or class. |
+| `split` | `"NONE"` \| `"IMAGE"` \| `"WELL"` \| `"FOLDER"` \| `"CLASS"` | `"NONE"` | One file (or sheet) per image, well, folder or class - for the tables. |
 | `splitInto` | `"FILES"` \| `"SHEETS"` | `"FILES"` | `sheets`: one workbook, a sheet each. `xlsx` only. |
-| `tracks` | object | see below | `rows: "TRACK"` only. |
+| `tracks` | object | see below | The `TRACKS` output. |
+| `timeCourse` | object | see below | The `TIME_COURSE` output. |
+| `profile` | object | see below | The `PROFILE` output (needed there). |
+| `heatmap` | object | see below | The heatmap outputs. |
 
-`rows`:
+`outputs` (the old export dialog's ticks):
 
-| Value | A row is |
+| Value | Writes |
 |---|---|
-| `object` | an object |
-| `image` | an image and class |
-| `well` | a well and class |
-| `folder` | an image folder and class |
-| `colocPair` | a pair of overlapping objects (Colocalize Objects' partners) |
-| `track` | a track |
-| `measurement` | a measurement value (image, plane, object or region, step, measurement, value, unit) |
-| `timePoint` | a time point of a line (the time course): the values summed up over the line's objects there - `aggregations` say how |
-| `profilePosition` | a position of a profile (e.g. a Sholl ring's radius): of a line, or of an object |
+| `OBJECTS` | `objects`: a row per object |
+| `IMAGES` | `images`: a row per image and class |
+| `WELLS` | `wells`: a row per well and class (the plate as a list) |
+| `FOLDERS` | `folders`: a row per image folder and class |
+| `COLOC_PAIRS` | `coloc_pairs`: a row per pair of overlapping objects (Colocalize Objects' partners) |
+| `MEASUREMENTS` | `measurements`: a row per measurement value (image, plane, object or region, step, measurement, value, unit) |
+| `TRACKS` | `tracks`: a row per track |
+| `TIME_COURSE` | `time_course`: a row per time point and line, its values summed up over the line's objects there |
+| `PROFILE` | `profile`: a row per position of a profile (e.g. a Sholl ring's radius), of a line or of an object |
+| `PLATE` | `plate.xlsx`: the plate as a heatmap, a cell per well |
+| `WELL_GRID` | `well.xlsx`: the wells as a heatmap, a cell per image position |
+| `WELL_LIST` | `well_list.xlsx`: the wells as a list, a row per image position |
+| `IMAGE_HEATMAP` | `heatmap_<image>.xlsx`: a workbook per image, its area as a grid of squares |
 
 `tracks`: `minPoints` (integer, default `1`), `fromStart` (bool, `false`),
 `noEdge` (bool, `false`), `speedUnit` (`"PX_FRAME"` \| `"UM_MIN"` \| `"UM_S"`,
 default `"UM_MIN"`).
 
-`timeCourse` (`rows: "TIME_POINT"` only): `lines` (`"CLASS"` \| `"IMAGE"` \|
-`"WELL"` \| `"TRACK"`, default `"CLASS"`), `layout` (`"LONG"` \| `"WIDE"` \|
-`"BOTH"`, default `"LONG"`; wide: a table per value - a row per time point, a
-column per line - in `<name>_wide.xlsx` or `<name>_wide_<value>.csv`; not per
-track, not split), `relative` (bool, `false`: the values in % of the line's
-first time point with objects), `withParents` (bool, `false`: track lines
-with their parents' history). The values are the objects' (not the count,
-not an image's own measurements); `SKEWNESS` has none.
+`timeCourse`: `lines` (`"CLASS"` \| `"IMAGE"` \| `"WELL"` \| `"TRACK"`,
+default `"CLASS"`), `layout` (`"LONG"` \| `"WIDE"` \| `"BOTH"`, default
+`"LONG"`; wide: a table per value - a row per time point, a column per line
+- in `<name>_wide.xlsx` or `<name>_wide_<value>.csv`; not per track, not
+split), `relative` (bool, `false`: the values in % of the line's first time
+point with objects), `withParents` (bool, `false`: track lines with their
+parents' history).
 
-`profile` (`rows: "PROFILE_POSITION"` only, required there): `key` (the
-profile measurement, e.g. `"sholl_01/intersections"`), `lines` (`"CLASS"`
-\| `"IMAGE"` \| `"WELL"` \| `"ALL"`, default `"CLASS"`), `content`
-(`"LINES"` \| `"OBJECTS"`, default `"LINES"`: per line and position n, mean,
-SD, median, Q1, Q3 - an object without a value at a position counts 0;
-objects: each object's value per position).
+`profile`: `key` (the profile measurement, e.g.
+`"sholl_01/intersections"`), `lines` (`"CLASS"` \| `"IMAGE"` \| `"WELL"` \|
+`"ALL"`, default `"CLASS"`), `content` (`"LINES"` \| `"OBJECTS"`, default
+`"LINES"`: per line and position n, mean, SD, median, Q1, Q3 - an object
+without a value at a position counts 0; objects: each object's value per
+position).
 
-`planes` (tables, plate layouts, drawn images; not tracks and profiles):
-`z` and `t`, each `[from, to]` (both included, counted from 0); left out:
-all of them.
-
-#### `plateLayout`
-
-The values laid out as the plate (or well) grid, for Excel.
-
-| Key | Type | Default | Meaning and rules |
-|---|---|---|---|
-| `grid` | `"PLATE"` \| `"WELL"` \| `"IMAGE"` | `"PLATE"` | Plate: a cell per well. Well: a cell per image position inside the wells. Image: a workbook per image (`<name>_<image>.xlsx`), its area as a grid of squares. |
-| `squareSize` | integer (px) | `64` | `grid: "IMAGE"`: the side of a square. |
-| `classes` | list of class ids | all classes | |
-| `columns` | list of column keys | `["count"]` | |
-| `aggregations` | list of aggregations (as above) | `["AVG"]` | How each column is summed up per cell. |
-| `colors` | `"EXCEL"` \| `"VIRIDIS"` \| `"PLASMA"` \| `"INFERNO"` \| `"CIVIDIS"` \| `"COOLWARM"` \| `"RED_BLUE"` \| `"YL_GN_BU"` \| `"HALINE"` \| `"ALGAE"` \| `"THERMAL"` | `"EXCEL"` | The heatmap's colours. |
-| `images` | as in `table` | `"INCLUDED"` | |
-| `planes` | as in `table` | all | |
-
-Always `xlsx`, a sheet per class, column and aggregation.
+`heatmap`: `colors` (`"EXCEL"` \| `"VIRIDIS"` \| `"PLASMA"` \| `"INFERNO"` \|
+`"CIVIDIS"` \| `"COOLWARM"` \| `"RED_BLUE"` \| `"YL_GN_BU"` \| `"HALINE"` \|
+`"ALGAE"` \| `"THERMAL"`, default `"EXCEL"`), `squareSize` (the image
+heatmap's square side in px, default `64`). Heatmaps write a sheet per
+class, column and aggregation; without `columns` the count.
 
 #### `drawnImages`
 
@@ -158,8 +157,8 @@ A PNG per image (and plane) with the objects drawn on it.
 | `style` | `"OUTLINE"` \| `"FILLED"` \| `"BOX"` | `"OUTLINE"` | |
 | `brightness` | `"VIEWER"` \| `"AUTO"` | `"VIEWER"` | Each channel's display range: as set in the viewer, or automatic per image. |
 | `maxSide` | integer (px) | `2048` | The longer side at most. |
-| `images` | as in `table` | `"INCLUDED"` | |
-| `planes` | as in `table` | all | |
+| `images` | as in `data` | `"INCLUDED"` | |
+| `planes` | as in `data` | all | |
 
 Channel colours and display settings are the project's when the export runs.
 
@@ -196,17 +195,17 @@ default. The user's OKs are kept in their settings on the server.
 Errors:
 
 - `id` or `name` missing, duplicate (`name` ignoring case) or empty.
-- An unknown `kind`, `rows`, `format`, `split`, `location`, … value.
+- An unknown `kind`, output, `format`, `split`, `location`, … value.
 - `folder` with `..`; a `name`, `prefix` or script `output` that isn't a
   single safe name.
-- Grouped `rows` without any `aggregations` (non-grouped rows ignore
-  them); `splitInto: "SHEETS"` with `"CSV"`; `tracks` with `rows` other
-  than `"TRACK"`; a `split` finer than the rows (`"IMAGE"` for well or
-  folder rows, `"WELL"` for folder rows and back, `"CLASS"` for
-  measurement rows).
-- `timeCourse` / `profile` on other rows; `rows: "PROFILE_POSITION"`
-  without `profile.key`; a wide time course per track or split; a plane
-  range whose `from` is after its `to`.
+- A `data` entry without outputs, or with an output twice. A problem of
+  several outputs is said once, naming them.
+- Outputs that sum values up without any `aggregations`; `splitInto:
+  "SHEETS"` with `"CSV"`; a `split` finer than an output's rows
+  (`"IMAGE"` for wells or folders, `"WELL"` for folders and back,
+  `"CLASS"` for measurements).
+- `PROFILE` without `profile.key`; a wide time course per track or split;
+  a plane range whose `from` is after its `to`.
 - `classes` given but empty (it would write nothing; left out it means
   all classes).
 - Two entries of one export, or two exports writing into the same folder,
@@ -217,9 +216,9 @@ Warnings:
 
 - An absolute `folder` (not portable).
 - `transposed` with `split: "CLASS"` (each file has a single class).
-- `planes` on tracks or profiles (they span the planes); children or
-  linked objects on tables of tracks, measurements, time points or
-  profiles.
+- Settings an output can't use are left out for it and said in the
+  report - never an error, so ticking one more output never breaks an
+  export.
 - Class ids or column keys the project doesn't have (a class may be absent
   from some runs; the table then has no such column or rows).
 
@@ -269,8 +268,7 @@ Exports come with project schema 5. The step from 4 to 5 changes nothing
 in the file; it exists so that an app that doesn't know exports refuses the
 file instead of saving it back without them.
 
-Later additions (new `rows` values such as time course or profiles, new
-entry kinds, new optional keys) are added with defaults, so older files keep
+Later additions (new outputs, new entry kinds, new optional keys) are added with defaults, so older files keep
 their meaning. Renaming or removing a key or value needs a schema version
 and a migration step.
 
@@ -288,13 +286,13 @@ else becomes `_`.
 
 | Entry | Name |
 |---|---|
-| `table` | by `rows`: `objects`, `images`, `wells`, `folders`, `coloc_pairs`, `tracks`, `measurements` |
-| `plateLayout` | `plate` or `well` |
+| `data` | per output: `objects`, `images`, `wells`, `folders`, `coloc_pairs`, `measurements`, `tracks`, `time_course`, `profile`, `plate`, `well`, `well_list`, `heatmap_<image>` |
 | `drawnImages` | `drawn_images` |
 | `script` | (its `output` folder) |
 
-With a `prefix`: `{prefix}_{name}`. An entry's own `name` replaces the
-automatic one. The extension follows the format: `.csv`, `.xlsx`, `.png`.
+With a `prefix`: `{prefix}_{name}`. A `data` entry's `name` goes in front
+of its automatic names (`{prefix}_{name}_objects`); drawn images' `name`
+replaces theirs. The extension follows the format: `.csv`, `.xlsx`, `.png`.
 
 ### 2.3 One file per image, well, folder or class
 
@@ -326,7 +324,7 @@ named by the same parts, shortened and made unique to Excel's limits.
 
 ## 3. Table format 1
 
-What a script can rely on. Written by every `table` entry with
+What a script can rely on. Written by every table of a `data` entry with
 `tableFormat: 1`. There is no separate metadata file: the column names say
 what a column is and in which unit.
 
@@ -342,14 +340,19 @@ separators.
 1. Where the row belongs: `image` (relative path; not in `well` and
    `folder` rows), `well` and `folder` where the rows are grouped by them,
    `class` (the class name; left out in a file split by class), `object_id`
-   for objects, `track_id` for tracks.
+   for objects, `track_id` for tracks - and for objects too when the column
+   `track_id` is picked. `image`, `class` and `object_id` are always
+   written, picked or not (the Exports tab shows them ticked and greyed).
 2. `t` and `z` (counted from 0), only where the results have several.
 3. The value columns, in the format's fixed order of column types (not the
    order they were ticked in).
 
 `transposed`: no `class` column - the classes are side by side, in the
-order of their ids, each with all value columns. An `image` row holds an
-image's values of every class; an `object` row the n-th object of each
+order of their ids, each with all value columns. The classes are those
+picked, else every class but Background - a class without objects
+included (`emptyClasses` doesn't take it out), so every file has the same
+columns. An `image` (`well`, `folder`) row holds an image's (well's,
+folder's) values of every class; an `object` row the n-th object of each
 class of an image (`object_id` per class; a class with fewer objects is
 empty in the rows past its last).
 
@@ -380,7 +383,7 @@ Made for scripts: lower case, only `a-z`, `0-9` and `_`.
   (with its id where two classes would give the same): `count_nucleus`,
   `area_um2_avg_nucleus`, `object_id_cell`.
 - Measurement columns have no unit in their name (it isn't stored per
-  column); a `rows: "MEASUREMENT"` table has the unit as a column.
+  column); the `MEASUREMENTS` table has the unit as a column.
 
 ### 3.4 XLSX
 

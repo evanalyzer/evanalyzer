@@ -16,11 +16,12 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use crate::exports::jobs::{PlateGrid, PlateLayoutExport, TableExport, TableRows};
 use crate::results::view_settings::ViewSettings;
 use crate::results::{Aggregation, ProfileLines, TimeCourseLines, TrackHistory};
 use evanalyzer_cfg::settings::export_settings::{
-    ExportAggregation, ExportEntry, HeatmapColors, ImageScope, PlateGrid, PlateLayoutExport,
-    ProfileLineKind, ProfileOptions, TableExport, TableRows, TimeCourseLineKind, TimeCourseOptions,
+    DataExport, DataOutput, ExportAggregation, ExportEntry, HeatmapColors, HeatmapOptions,
+    ImageScope, ProfileLineKind, ProfileOptions, TimeCourseLineKind, TimeCourseOptions,
 };
 use evanalyzer_cfg::settings::project_settings::{ResultsView, ResultsViewKind};
 
@@ -67,11 +68,11 @@ pub fn entry_from_view(view: &ResultsView) -> Option<ExportEntry> {
                 "disabled" => ImageScope::LeftOut,
                 _ => ImageScope::Included,
             };
-            Some(ExportEntry::Table(table))
+            Some(ExportEntry::Data(data_of_table(table)))
         }
         ResultsViewKind::Plate => {
             let plate = &settings.plate;
-            Some(ExportEntry::PlateLayout(PlateLayoutExport {
+            Some(ExportEntry::Data(data_of_plate(PlateLayoutExport {
                 name: String::new(),
                 grid: PlateGrid::Plate,
                 classes: plate.class.map(|class| vec![class]),
@@ -81,12 +82,12 @@ pub fn entry_from_view(view: &ResultsView) -> Option<ExportEntry> {
                 square_size: None,
                 colors: colors(&plate.color_schema),
                 planes: Default::default(),
-            }))
+            })))
         }
         ResultsViewKind::Tracks => {
             let mut table = table(TableRows::Track);
             table.columns = settings.tracks.columns.clone();
-            Some(ExportEntry::Table(table))
+            Some(ExportEntry::Data(data_of_table(table)))
         }
         ResultsViewKind::Charts => {
             let chart = &settings.chart;
@@ -150,13 +151,72 @@ pub fn entry_from_view(view: &ResultsView) -> Option<ExportEntry> {
             };
             table.classes = classes;
             table.images = ImageScope::All;
-            Some(ExportEntry::Table(table))
+            Some(ExportEntry::Data(data_of_table(table)))
         }
         // The tracks the paths are of.
-        ResultsViewKind::Paths => Some(ExportEntry::Table(table(TableRows::Track))),
+        ResultsViewKind::Paths => Some(ExportEntry::Data(data_of_table(table(TableRows::Track)))),
         // The traced neurons' values are measurements (Measure Filament Tree).
-        ResultsViewKind::Trees => Some(ExportEntry::Table(table(TableRows::Measurement))),
+        ResultsViewKind::Trees => Some(ExportEntry::Data(data_of_table(table(
+            TableRows::Measurement,
+        )))),
     }
+}
+
+/// A data export of `table`'s one output, with its filter.
+fn data_of_table(table: TableExport) -> DataExport {
+    let output = match table.rows {
+        TableRows::Object => DataOutput::Objects,
+        TableRows::Image => DataOutput::Images,
+        TableRows::Well => DataOutput::Wells,
+        TableRows::Folder => DataOutput::Folders,
+        TableRows::ColocPair => DataOutput::ColocPairs,
+        TableRows::Measurement => DataOutput::Measurements,
+        TableRows::Track => DataOutput::Tracks,
+        TableRows::TimePoint => DataOutput::TimeCourse,
+        TableRows::ProfilePosition => DataOutput::Profile,
+    };
+    DataExport {
+        name: String::new(),
+        outputs: vec![output],
+        format: table.format,
+        classes: table.classes,
+        columns: table.columns,
+        aggregations: table.aggregations,
+        images: table.images,
+        planes: table.planes,
+        empty_classes: table.empty_classes,
+        transposed: table.transposed,
+        children: table.children,
+        child_aggregations: table.child_aggregations,
+        parents: table.parents,
+        split: table.split,
+        split_into: table.split_into,
+        tracks: table.tracks,
+        time_course: table.time_course,
+        profile: table.profile,
+        heatmap: Default::default(),
+    }
+}
+
+/// A data export of `plate`'s one output, with its filter.
+fn data_of_plate(plate: PlateLayoutExport) -> DataExport {
+    let mut data = data_of_table(table(TableRows::Image));
+    data.outputs = vec![match plate.grid {
+        PlateGrid::Plate => DataOutput::Plate,
+        PlateGrid::Well => DataOutput::WellGrid,
+        PlateGrid::WellList => DataOutput::WellList,
+        PlateGrid::Image => DataOutput::ImageHeatmap,
+    }];
+    data.classes = plate.classes;
+    data.columns = plate.columns;
+    data.aggregations = plate.aggregations;
+    data.images = plate.images;
+    data.planes = plate.planes;
+    data.heatmap = HeatmapOptions {
+        colors: plate.colors,
+        square_size: plate.square_size,
+    };
+    data
 }
 
 /// A table of `rows` with its defaults.
@@ -205,8 +265,11 @@ mod tests {
     }
 
     fn table_of(entry: Option<ExportEntry>) -> TableExport {
-        match entry {
-            Some(ExportEntry::Table(table)) => table,
+        let Some(ExportEntry::Data(data)) = entry else {
+            panic!("a data export");
+        };
+        match crate::exports::jobs::jobs_of(&data).remove(0).1 {
+            crate::exports::jobs::Job::Table(table) => table,
             _ => panic!("a table"),
         }
     }
@@ -290,7 +353,12 @@ mod tests {
             "plate",
             json!({ "plate": { "class": 3, "column": "area_px", "aggregation": "Median" } }),
         );
-        let Some(ExportEntry::PlateLayout(layout)) = entry_from_view(&plate) else {
+        let Some(ExportEntry::Data(data)) = entry_from_view(&plate) else {
+            panic!("a data export");
+        };
+        let crate::exports::jobs::Job::PlateLayout(layout) =
+            crate::exports::jobs::jobs_of(&data).remove(0).1
+        else {
             panic!("a plate layout");
         };
         assert_eq!(layout.classes, Some(vec![3]));

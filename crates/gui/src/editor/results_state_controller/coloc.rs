@@ -320,6 +320,8 @@ pub(crate) struct SectionUi {
     pub title: String,
     pub open: bool,
     pub items: Vec<MultiSelectItem>,
+    /// Per item: always picked, greyed (see `ColumnSection::locked`).
+    pub locked: Vec<bool>,
 }
 
 impl SectionUi {
@@ -329,6 +331,7 @@ impl SectionUi {
             title: self.title.into(),
             open: self.open,
             items: ModelRc::from(Rc::new(VecModel::from(self.items))),
+            locked: ModelRc::from(Rc::new(VecModel::from(self.locked))),
         }
     }
 }
@@ -354,6 +357,7 @@ pub(crate) fn picker_sections(
             title: String::new(),
             open: true,
             items: Vec::new(),
+            locked: Vec::new(),
         })
         .collect();
     for entry in available {
@@ -388,6 +392,7 @@ pub(crate) fn picker_sections(
                 title: String::new(),
                 open: true,
                 items: vec![item],
+                locked: Vec::new(),
             }),
         }
     }

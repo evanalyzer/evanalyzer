@@ -12749,7 +12749,7 @@ mod tests {
             project.tmp_settings.current_project = Some(PathBuf::from("/data/exp/project.evaproj"));
             project.settings.exports = serde_json::from_value(serde_json::json!([
                 { "id": 1, "name": "Per image", "runAfterEveryRun": true,
-                  "entries": [{ "kind": "TABLE", "rows": "IMAGE" }] },
+                  "entries": [{ "kind": "DATA", "outputs": ["IMAGES"] }] },
                 { "id": 2, "name": "By hand only" },
                 { "id": 3, "name": "Tracks", "runAfterEveryRun": true }
             ]))
@@ -12761,7 +12761,7 @@ mod tests {
         let names: Vec<String> = rows.iter().map(|r| r.name.to_string()).collect();
         assert_eq!(names, ["Per image", "Tracks"]);
         assert!(rows.iter().all(|r| r.on));
-        assert_eq!(rows[0].summary, "a table");
+        assert_eq!(rows[0].summary, "a data export");
 
         state.invoke_export_toggled(1, false);
         assert!(!state.get_exports().row_data(1).unwrap().on);

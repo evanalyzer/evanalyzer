@@ -113,105 +113,128 @@ pub enum IfExists {
 #[derive(Serialize, Deserialize, Debug, JsonSchema, Clone, PartialEq)]
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ExportEntry {
-    Table(TableExport),
-    PlateLayout(PlateLayoutExport),
+    Data(DataExport),
     DrawnImages(DrawnImagesExport),
     Script(ScriptExport),
 }
 
-/// A table of the results (table format: `ExportSettings::table_format`).
+/// Data of the results - tables and heatmaps - with one filter: each
+/// output in `outputs` is written with the same columns, values, classes,
+/// planes and images (an output that can't take one of them leaves it out,
+/// said in the report). Different filters: a second data export.
 #[derive(Serialize, Deserialize, Debug, JsonSchema, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct TableExport {
-    /// Replaces the automatic file name (`objects`, `images`, ...); `""`:
-    /// the automatic one.
+pub struct DataExport {
+    /// A name part in front of the files' automatic names
+    /// (`ctrl_objects.csv`); `""`: the automatic names alone.
     #[serde(default)]
     pub name: String,
-    /// What a row is.
-    pub rows: TableRows,
+    /// What it writes - at least one.
+    #[serde(default)]
+    pub outputs: Vec<DataOutput>,
+    /// The tables' file format (heatmaps are always `xlsx`).
     #[serde(default)]
     pub format: TableFileFormat,
-    /// The classes in the table (class ids); `None`: all classes.
+    /// The classes (class ids); `None`: all classes.
     #[serde(default)]
     pub classes: Option<Vec<u32>>,
     /// The value columns by column key (`count`, `area_nm2`,
-    /// `intensity_mean_gray_ch1`, `measurement:<key>`, ...); `None`: the
-    /// default columns.
+    /// `intensity_mean_gray_ch1`, `measurement:<key>`, ...); `None`: each
+    /// output's default columns.
     #[serde(default)]
     pub columns: Option<Vec<String>>,
-    /// Grouped rows only (`Image`, `Well`, `Folder`, `Track`).
+    /// How values are summed up where rows group objects (per image, well,
+    /// folder, track, time point, heatmap cell).
     #[serde(default = "default_aggregations")]
     pub aggregations: Vec<ExportAggregation>,
     /// Which images of the run.
     #[serde(default)]
     pub images: ImageScope,
-    /// Grouped rows: a row also for classes without objects.
+    /// Which z-planes and time points (not for tracks and profiles).
+    #[serde(default)]
+    pub planes: Planes,
+    /// Rows per image, well and folder: a row also for classes without
+    /// objects.
     #[serde(default)]
     pub empty_classes: bool,
-    /// The classes side by side: a column per value and class instead of a
-    /// row per class - `Object` and `Image` rows only.
+    /// Objects and per image: the classes side by side.
     #[serde(default)]
     pub transposed: bool,
     /// The children linked to each object (Relate Objects), as the Results
-    /// List shows them: (parent class id, child class id) - per link their
-    /// count and each `child_aggregations` of each column.
+    /// List shows them: (parent class id, child class id).
     #[serde(default)]
     pub children: Vec<(u32, u32)>,
     /// How the children's values are summed up (besides their count).
     #[serde(default)]
     pub child_aggregations: Vec<ExportAggregation>,
-    /// The linked objects (parents) by class id: their id and each column.
+    /// The linked objects (parents) by class id.
     #[serde(default)]
     pub parents: Vec<u32>,
-    /// One file (or sheet) per image, well, folder or class.
+    /// One file (or sheet) per image, well, folder or class - for the tables.
     #[serde(default)]
     pub split: TableSplit,
     /// The split parts as files or as sheets of one workbook (`Xlsx` only).
     #[serde(default)]
     pub split_into: SplitInto,
-    /// `rows: Track` only.
+    /// The `Tracks` output's tracks and speed unit.
     #[serde(default)]
     pub tracks: Option<TrackOptions>,
-    /// `rows: TimePoint` only: what a line is, the layout.
+    /// The `TimeCourse` output: what a line is, the layout.
     #[serde(default)]
     pub time_course: Option<TimeCourseOptions>,
-    /// `rows: ProfilePosition` only: which profile, what a line is.
+    /// The `Profile` output: which profile, what a line is.
     #[serde(default)]
     pub profile: Option<ProfileOptions>,
-    /// Not for tracks and profiles (they span the planes).
+    /// The heatmaps' colours and the image heatmap's squares.
     #[serde(default)]
-    pub planes: Planes,
+    pub heatmap: HeatmapOptions,
+}
+
+/// What a data export writes - the old export dialog's ticks.
+#[derive(Serialize, Deserialize, Debug, JsonSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DataOutput {
+    /// A row per object: `objects`.
+    Objects,
+    /// A row per image and class: `images`.
+    Images,
+    /// A row per well and class: `wells`.
+    Wells,
+    /// A row per image folder and class: `folders`.
+    Folders,
+    /// A row per pair of overlapping objects: `coloc_pairs`.
+    ColocPairs,
+    /// A row per measurement value: `measurements`.
+    Measurements,
+    /// A row per track: `tracks`.
+    Tracks,
+    /// A row per time point and line: `time_course`.
+    TimeCourse,
+    /// A row per position of a profile: `profile`.
+    Profile,
+    /// The plate as a heatmap, a cell per well: `plate.xlsx`.
+    Plate,
+    /// The wells as a heatmap, a cell per image position: `well.xlsx`.
+    WellGrid,
+    /// The wells as a list, a row per image position: `well_list.xlsx`.
+    WellList,
+    /// A heatmap per image, its area as squares: `heatmap_<image>.xlsx`.
+    ImageHeatmap,
+}
+
+/// The heatmaps of a data export.
+#[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct HeatmapOptions {
+    #[serde(default)]
+    pub colors: HeatmapColors,
+    /// The image heatmap's square side in pixels (`None`: 64).
+    #[serde(default)]
+    pub square_size: Option<u32>,
 }
 
 fn default_aggregations() -> Vec<ExportAggregation> {
     vec![ExportAggregation::Avg]
-}
-
-/// What a row of a table is.
-#[derive(Serialize, Deserialize, Debug, JsonSchema, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum TableRows {
-    /// An object.
-    Object,
-    /// An image and class.
-    Image,
-    /// A well and class.
-    Well,
-    /// An image folder and class.
-    Folder,
-    /// A pair of overlapping objects (Colocalize Objects' partners).
-    ColocPair,
-    /// A track.
-    Track,
-    /// A measurement value (image, plane, object or region, step,
-    /// measurement, value, unit).
-    Measurement,
-    /// A time point of a line (the time course): its values summed up
-    /// over the line's objects there.
-    TimePoint,
-    /// A position of a profile (e.g. a Sholl ring's radius): of a line, or
-    /// of an object.
-    ProfilePosition,
 }
 
 /// The file format of a table.
@@ -247,7 +270,7 @@ pub enum ImageScope {
     LeftOut,
 }
 
-/// See [`TableExport::split`].
+/// See [`DataExport::split`].
 #[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum TableSplit {
@@ -259,7 +282,7 @@ pub enum TableSplit {
     Class,
 }
 
-/// See [`TableExport::split_into`].
+/// See [`DataExport::split_into`].
 #[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SplitInto {
@@ -269,8 +292,8 @@ pub enum SplitInto {
     Sheets,
 }
 
-/// A time course (`rows: TimePoint`): what a line is, and how it is laid
-/// out.
+/// A time course (the `TimeCourse` output): what a line is, and how it is
+/// laid out.
 #[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TimeCourseOptions {
@@ -311,7 +334,7 @@ pub enum TimeCourseTableLayout {
     Both,
 }
 
-/// A profile (`rows: ProfilePosition`): which, and of what.
+/// A profile (the `Profile` output): which, and of what.
 #[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfileOptions {
@@ -346,7 +369,7 @@ pub enum ProfileContent {
     Objects,
 }
 
-/// Which tracks a `rows: Track` table has, and the unit of their speed.
+/// Which tracks the `Tracks` output has, and the unit of their speed.
 #[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TrackOptions {
@@ -380,39 +403,6 @@ pub enum SpeedUnit {
     UmS,
 }
 
-/// The values laid out as the plate (or well) grid - an `xlsx` workbook, a
-/// sheet per class and value.
-#[derive(Serialize, Deserialize, Debug, JsonSchema, Clone, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct PlateLayoutExport {
-    /// Replaces the automatic file name (`plate`, `well`); `""`: the
-    /// automatic one.
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub grid: PlateGrid,
-    /// Class ids; `None`: all classes.
-    #[serde(default)]
-    pub classes: Option<Vec<u32>>,
-    /// Column keys; `None`: the count.
-    #[serde(default)]
-    pub columns: Option<Vec<String>>,
-    /// How each column is summed up per cell: a sheet per class, column
-    /// and aggregation.
-    #[serde(default = "default_aggregations")]
-    pub aggregations: Vec<ExportAggregation>,
-    #[serde(default)]
-    pub images: ImageScope,
-    /// `grid: Image`: the side of a square in pixels (`None`: 64).
-    #[serde(default)]
-    pub square_size: Option<u32>,
-    /// The heatmap's colours.
-    #[serde(default)]
-    pub colors: HeatmapColors,
-    #[serde(default)]
-    pub planes: Planes,
-}
-
 /// The colours of a plate layout's heatmap, low to high.
 #[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -441,20 +431,6 @@ pub struct Planes {
     pub z: Option<[u32; 2]>,
     #[serde(default)]
     pub t: Option<[u32; 2]>,
-}
-
-/// See [`PlateLayoutExport::grid`].
-#[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum PlateGrid {
-    /// A cell per well.
-    #[default]
-    Plate,
-    /// A cell per image position inside the wells.
-    Well,
-    /// A workbook per image: its area as a grid of squares
-    /// (`square_size` pixels), the objects' values summed up per square.
-    Image,
 }
 
 /// A PNG per image (and plane) with the objects drawn on it.
@@ -550,10 +526,12 @@ mod tests {
             "runAfterEveryRun": true,
             "tableFormat": 1,
             "entries": [
-                { "kind": "TABLE", "rows": "OBJECT", "format": "CSV", "split": "IMAGE" },
-                { "kind": "TABLE", "rows": "IMAGE", "name": "per_image",
+                { "kind": "DATA", "outputs": ["OBJECTS", "IMAGES", "PLATE"],
+                  "format": "CSV", "split": "IMAGE",
                   "classes": [3, 5], "columns": ["count", "area_nm2"],
-                  "aggregations": ["AVG", "MEDIAN"] },
+                  "aggregations": ["AVG", "MEDIAN"],
+                  "heatmap": { "colors": "VIRIDIS" } },
+                { "kind": "DATA", "name": "tracks", "outputs": ["TRACKS"] },
                 { "kind": "DRAWN_IMAGES", "classes": [3], "style": "OUTLINE" },
                 { "kind": "SCRIPT", "language": "R", "file": "scripts/uptake_stats.R", "output": "stats" }
             ]
@@ -561,13 +539,28 @@ mod tests {
         .expect("the documented example");
 
         assert_eq!(export.entries.len(), 4);
-        let ExportEntry::Table(objects) = &export.entries[0] else {
-            panic!("a table");
+        let ExportEntry::Data(data) = &export.entries[0] else {
+            panic!("a data export");
         };
-        assert_eq!(objects.rows, TableRows::Object);
-        assert_eq!(objects.split, TableSplit::Image);
-        assert_eq!(objects.aggregations, vec![ExportAggregation::Avg]);
-        assert_eq!(objects.images, ImageScope::Included);
+        assert_eq!(
+            data.outputs,
+            vec![DataOutput::Objects, DataOutput::Images, DataOutput::Plate]
+        );
+        assert_eq!(data.split, TableSplit::Image);
+        assert_eq!(
+            data.aggregations,
+            vec![ExportAggregation::Avg, ExportAggregation::Median]
+        );
+        assert_eq!(data.images, ImageScope::Included);
+        assert_eq!(data.heatmap.colors, HeatmapColors::Viridis);
+        let ExportEntry::Data(tracks) = &export.entries[1] else {
+            panic!("a data export");
+        };
+        assert_eq!(
+            tracks.aggregations,
+            vec![ExportAggregation::Avg],
+            "the default"
+        );
         let ExportEntry::DrawnImages(drawn) = &export.entries[2] else {
             panic!("drawn images");
         };
@@ -607,22 +600,20 @@ mod tests {
             run_after_every_run: true,
             table_format: 1,
             entries: vec![
-                ExportEntry::Table(TableExport {
-                    name: String::new(),
-                    rows: TableRows::Track,
+                ExportEntry::Data(DataExport {
+                    name: "ctrl".into(),
+                    outputs: vec![DataOutput::Tracks, DataOutput::WellGrid],
                     format: TableFileFormat::Xlsx,
-                    classes: None,
+                    classes: Some(vec![2]),
                     columns: Some(vec!["count".into()]),
                     aggregations: vec![ExportAggregation::Median],
                     images: ImageScope::All,
+                    planes: Planes::default(),
                     empty_classes: true,
                     transposed: false,
-                    children: vec![],
-                    child_aggregations: vec![],
-                    parents: vec![],
-                    time_course: None,
-                    profile: None,
-                    planes: Planes::default(),
+                    children: vec![(1, 2)],
+                    child_aggregations: vec![ExportAggregation::Max],
+                    parents: vec![1],
                     split: TableSplit::Class,
                     split_into: SplitInto::Sheets,
                     tracks: Some(TrackOptions {
@@ -631,17 +622,12 @@ mod tests {
                         no_edge: true,
                         speed_unit: SpeedUnit::UmS,
                     }),
-                }),
-                ExportEntry::PlateLayout(PlateLayoutExport {
-                    name: String::new(),
-                    grid: PlateGrid::Well,
-                    classes: Some(vec![2]),
-                    columns: None,
-                    aggregations: vec![ExportAggregation::Max],
-                    images: ImageScope::LeftOut,
-                    square_size: None,
-                    colors: HeatmapColors::Excel,
-                    planes: Planes::default(),
+                    time_course: None,
+                    profile: None,
+                    heatmap: HeatmapOptions {
+                        colors: HeatmapColors::Thermal,
+                        square_size: Some(128),
+                    },
                 }),
                 ExportEntry::DrawnImages(DrawnImagesExport {
                     name: "pictures".into(),
@@ -663,8 +649,10 @@ mod tests {
             ],
         };
         let json = serde_json::to_value(&export).unwrap();
-        assert_eq!(json["entries"][0]["kind"], "TABLE");
-        assert_eq!(json["entries"][1]["kind"], "PLATE_LAYOUT");
+        assert_eq!(json["entries"][0]["kind"], "DATA");
+        assert_eq!(json["entries"][0]["outputs"][1], "WELL_GRID");
+        assert_eq!(json["entries"][0]["heatmap"]["squareSize"], 128);
+        assert_eq!(json["entries"][1]["kind"], "DRAWN_IMAGES");
         assert_eq!(json["output"]["location"], "FIXED_FOLDER");
         let back: ExportSettings = serde_json::from_value(json).unwrap();
         assert_eq!(back, export);

@@ -67,11 +67,11 @@ export component QuickExportDialog inherits InkDialog {
             }
         }
         Row {
-            label: "File";
+            label: "Name";
             InkTextField {
-                label: "File";
+                label: "A name in front of the file name";
                 mono: true;
-                placeholder: QuickExportState.file-placeholder;
+                placeholder: "(optional) - writes " + QuickExportState.file-placeholder;
                 text <=> QuickExportState.file;
             }
         }

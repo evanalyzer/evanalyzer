@@ -14,6 +14,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::Output;
+use crate::exports::jobs::{TableExport, TableRows};
 use crate::exports::naming;
 use crate::exports::types::EntryReport;
 use crate::results::view_settings::resolve_columns;
@@ -25,8 +26,8 @@ use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_cfg::settings::export_settings::TimeCourseTableLayout;
 use evanalyzer_cfg::settings::export_settings::{
-    ExportAggregation, ExportSettings, ImageScope, LengthUnit, SplitInto, TableExport,
-    TableFileFormat, TableRows, TableSplit,
+    ExportAggregation, ExportSettings, ImageScope, LengthUnit, SplitInto, TableFileFormat,
+    TableSplit,
 };
 use rust_xlsxwriter::{Workbook, Worksheet};
 use std::collections::BTreeMap;
@@ -68,13 +69,7 @@ pub(super) fn write(
         TableRows::TimePoint => {
             let rows =
                 super::series::TimeCourseRows::new(results, export, table, &mut report.notes)?;
-            let name = naming::with_prefix(
-                export,
-                &naming::entry_name(
-                    &evanalyzer_cfg::settings::export_settings::ExportEntry::Table(table.clone()),
-                )
-                .unwrap_or_default(),
-            );
+            let name = naming::with_prefix(export, &naming::table_name(table));
             let layout = rows.layout();
             if layout != TimeCourseTableLayout::Long {
                 rows.write_wide(results, &name, table.format, output, report, cancel)?;
@@ -86,13 +81,7 @@ pub(super) fn write(
         }
         _ => Box::new(Plan::new(results, export, table, &mut report.notes)?),
     };
-    let name = naming::with_prefix(
-        export,
-        &naming::entry_name(
-            &evanalyzer_cfg::settings::export_settings::ExportEntry::Table(table.clone()),
-        )
-        .unwrap_or_default(),
-    );
+    let name = naming::with_prefix(export, &naming::table_name(table));
     let parts = parts(results, table, rows.images(), rows.classes())?;
 
     match (table.format, table.split_into) {
@@ -280,6 +269,9 @@ struct Plan {
     /// The classes side by side (`TableExport::transposed`; object and
     /// image rows).
     transposed: bool,
+    /// Object rows with their track (`track_id` ticked): a `track_id`
+    /// column after `object_id`.
+    track_id: bool,
     /// Per class id its name part for the transposed column names.
     class_parts: BTreeMap<u32, String>,
 }
@@ -344,6 +336,7 @@ impl Plan {
                 &parents,
             );
         }
+        let track_id = !grouped && values.contains(&Column::TrackId);
         // The leading columns are always there, in their place.
         values.retain(|column| !is_leading(column));
         if !grouped {
@@ -376,7 +369,11 @@ impl Plan {
             several_t: results.get_nr_of_t_stacks() > 1,
             empty_classes: table.empty_classes,
             transposed: table.transposed
-                && matches!(table.rows, TableRows::Object | TableRows::Image),
+                && matches!(
+                    table.rows,
+                    TableRows::Object | TableRows::Image | TableRows::Well | TableRows::Folder
+                ),
+            track_id,
             class_parts: naming::unique_parts(
                 &db_classes
                     .iter()
@@ -388,8 +385,11 @@ impl Plan {
         })
     }
 
-    /// The classes a transposed query puts side by side, in id order - as
-    /// the results do it: those asked for (and known), else every class.
+    /// The classes a transposed table puts side by side, in id order: those
+    /// asked for (and known), else every class but Background (which no
+    /// object ever gets). The query is asked for exactly these, so its
+    /// blocks are these - every file of the export has the same columns,
+    /// a class without objects included.
     fn blocks(&self, classes: Option<&[ObjectClass]>) -> Vec<u32> {
         let known = |id: &u32| self.db_classes.iter().any(|class| class.id == *id);
         let mut ids: Vec<u32> = match classes {
@@ -401,7 +401,12 @@ impl Plan {
                 })
                 .filter(known)
                 .collect(),
-            None => self.db_classes.iter().map(|class| class.id).collect(),
+            None => self
+                .db_classes
+                .iter()
+                .map(|class| class.id)
+                .filter(|id| ObjectClass::Global(*id) != ObjectClass::BACKGROUND)
+                .collect(),
         };
         ids.sort_unstable();
         ids.dedup();
@@ -425,6 +430,15 @@ impl Plan {
                         return ValueColumn {
                             name: "object_id".into(),
                             label: "Object".into(),
+                            unit: String::new(),
+                            factor: 1.0,
+                            keep: true,
+                        };
+                    }
+                    if *column == Column::TrackId {
+                        return ValueColumn {
+                            name: "track_id".into(),
+                            label: "Track".into(),
                             unit: String::new(),
                             factor: 1.0,
                             keep: true,
@@ -473,9 +487,17 @@ impl Plan {
         (per_block, placed)
     }
 
-    /// The leading columns of a transposed table: the image, the plane.
+    /// The leading columns of a transposed table: the image (well,
+    /// folder), the plane.
     fn transposed_leading_header(&self) -> Vec<String> {
-        let mut header = vec!["image".to_string()];
+        let mut header = vec![
+            match self.rows {
+                TableRows::Well => "well",
+                TableRows::Folder => "folder",
+                _ => "image",
+            }
+            .to_string(),
+        ];
         if self.several_t {
             header.push("t".into());
         }
@@ -505,6 +527,8 @@ impl Plan {
         if part.images.is_empty() || blocks.is_empty() {
             return Ok(());
         }
+        let classes: Option<Vec<ObjectClass>> =
+            Some(blocks.iter().map(|id| ObjectClass::Global(*id)).collect());
         let mut line = Vec::new();
         for plane in &self.planes {
             let mut cursor: Option<String> = None;
@@ -517,7 +541,7 @@ impl Plan {
                     results.get_grouped_by_image(&GroupedByImageFilter {
                         plane: *plane,
                         images: Some(part.images.clone()),
-                        object_classes: part.classes.clone(),
+                        object_classes: classes.clone(),
                         columns: self.values.clone(),
                         aggregation: self.aggregations.clone(),
                         page: Pagination {
@@ -525,15 +549,15 @@ impl Plan {
                             after,
                         },
                         transpond_table: true,
-                        grouping: None,
-                        empty_classes: self.empty_classes,
+                        grouping: self.grouping(),
+                        empty_classes: true,
                         sort: None,
                     })?
                 } else {
                     results.get_object_list(&ListFilter {
                         plane: *plane,
                         images: Some(part.images.clone()),
-                        object_classes: part.classes.clone(),
+                        object_classes: classes.clone(),
                         columns: self.list_columns(),
                         with_coloc_details: false,
                         related_to: None,
@@ -556,11 +580,14 @@ impl Plan {
                 }
                 for (i, row) in page.rows.iter().enumerate() {
                     line.clear();
-                    line.push(
-                        page.row_locations
+                    // Wells and folders: the row's name (several images).
+                    line.push(match self.grouping() {
+                        Some(_) => row.first().map_or(Out::Empty, |cell| value(cell, 1.0)),
+                        None => page
+                            .row_locations
                             .get(i)
                             .map_or(Out::Empty, |(path, _)| Out::Text(path.replace('\\', "/"))),
-                    );
+                    });
                     if self.several_t {
                         line.push(Out::Number(f64::from(plane.t_stack)));
                     }
@@ -587,6 +614,15 @@ impl Plan {
         Ok(())
     }
 
+    /// How well and folder rows are grouped (none for the others).
+    fn grouping(&self) -> Option<Grouping> {
+        match self.rows {
+            TableRows::Well => Some(Grouping::Auto),
+            TableRows::Folder => Some(Grouping::Folder),
+            _ => None,
+        }
+    }
+
     fn grouped(&self) -> bool {
         matches!(
             self.rows,
@@ -600,6 +636,12 @@ impl Plan {
             TableRows::Image => vec!["image".into(), "class".into()],
             TableRows::Well => vec!["well".into(), "class".into()],
             TableRows::Folder => vec!["folder".into(), "class".into()],
+            _ if self.track_id => vec![
+                "image".into(),
+                "class".into(),
+                "object_id".into(),
+                "track_id".into(),
+            ],
             _ => vec!["image".into(), "class".into(), "object_id".into()],
         };
         if self.several_t {
@@ -696,11 +738,7 @@ impl Plan {
                             after,
                         },
                         transpond_table: false,
-                        grouping: match self.rows {
-                            TableRows::Well => Some(Grouping::Auto),
-                            TableRows::Folder => Some(Grouping::Folder),
-                            _ => None,
-                        },
+                        grouping: self.grouping(),
                         empty_classes: self.empty_classes,
                         sort: None,
                     })?
@@ -758,6 +796,7 @@ impl Plan {
             return Layout {
                 class: 1,
                 id: None,
+                track: None,
                 values: (2..2 + count).collect(),
                 extras_from: 2 + count,
             };
@@ -768,6 +807,7 @@ impl Plan {
         Layout {
             class: at(&Column::ObjectClass),
             id: Some(at(&Column::ObjectId)),
+            track: self.track_id.then(|| at(&Column::TrackId)),
             values: self.values.iter().map(at).collect(),
             extras_from: sorted.len(),
         }
@@ -779,6 +819,9 @@ impl Plan {
     /// fixed place (see `leading_cells`).
     fn list_columns(&self) -> Vec<Column> {
         let mut columns = vec![Column::ObjectClass, Column::ObjectId];
+        if self.track_id {
+            columns.push(Column::TrackId);
+        }
         columns.extend(self.values.iter().cloned());
         columns
     }
@@ -813,6 +856,9 @@ impl Plan {
             );
             line.push(cell(layout.class));
             line.push(layout.id.map_or(Out::Empty, cell));
+            if let Some(track) = layout.track {
+                line.push(cell(track));
+            }
         }
         if self.several_t {
             line.push(Out::Number(f64::from(plane.t_stack)));
@@ -839,6 +885,7 @@ impl Plan {
                 "image" => "Image (relative path)",
                 "class" => "Class",
                 "object_id" => "Object",
+                "track_id" => "Track",
                 "well" => "Well",
                 "folder" => "Folder",
                 "t" => "Time point (from 0)",
@@ -875,6 +922,8 @@ struct ValueColumn {
 struct Layout {
     class: usize,
     id: Option<usize>,
+    /// The track's cell (`Plan::track_id`).
+    track: Option<usize>,
     /// Per value column (and aggregation), its cell.
     values: Vec<usize>,
     /// The first cell after the asked-for columns (coloc details).

@@ -21,6 +21,7 @@
 
 pub mod check;
 mod from_view;
+pub mod jobs;
 pub(crate) mod local;
 pub mod naming;
 mod types;
@@ -155,10 +156,8 @@ pub fn results_database(
 
 /// The value columns a table of `rows` has without `columns` - none for
 /// tracks and measurements (they have their own: all of theirs).
-pub fn default_columns(
-    rows: evanalyzer_cfg::settings::export_settings::TableRows,
-) -> Vec<crate::results::Column> {
-    use evanalyzer_cfg::settings::export_settings::TableRows;
+pub fn default_columns(rows: crate::exports::jobs::TableRows) -> Vec<crate::results::Column> {
+    use crate::exports::jobs::TableRows;
     match rows {
         TableRows::Object | TableRows::ColocPair => local::table::DEFAULT_OBJECT_COLUMNS.to_vec(),
         TableRows::Image | TableRows::Well | TableRows::Folder => {
@@ -174,10 +173,15 @@ pub fn default_columns(
     }
 }
 
-/// Columns every table has first, in their place - never a value column
-/// to pick.
-pub fn is_leading_column(column: &crate::results::Column) -> bool {
-    local::table::is_leading(column)
+/// Columns every table writes first, picked or not (image, class, object
+/// id - table format 1): shown ticked and greyed in the picker. The track
+/// id is a leading column too, but only when picked.
+pub fn is_fixed_column(column: &crate::results::Column) -> bool {
+    use crate::results::Column;
+    matches!(
+        column,
+        Column::ImageName | Column::ObjectClass | Column::ObjectId
+    )
 }
 
 /// Opens the results `database` (where they are: here or on the server)

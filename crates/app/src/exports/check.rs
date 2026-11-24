@@ -12,12 +12,13 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::naming;
+use crate::exports::jobs::{TableExport, TableRows};
 use crate::modules::Severity;
 use crate::results::Column;
 use evanalyzer_cfg::core_types::{is_contained_rel_path, is_file_name_part};
 use evanalyzer_cfg::settings::export_settings::{
-    CURRENT_TABLE_FORMAT, ExportEntry, ExportSettings, OutputLocation, SplitInto, TableExport,
-    TableFileFormat, TableRows, TableSplit, TimeCourseLineKind, TimeCourseTableLayout,
+    CURRENT_TABLE_FORMAT, ExportEntry, ExportSettings, OutputLocation, SplitInto, TableFileFormat,
+    TableSplit, TimeCourseLineKind, TimeCourseTableLayout,
 };
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 use std::collections::{BTreeMap, BTreeSet};
@@ -167,25 +168,40 @@ fn check_entry(
     at: &mut impl FnMut(Severity, String),
 ) {
     let own_name = match entry {
-        ExportEntry::Table(table) => {
-            check_table(table, at);
-            check_classes(project, table.classes.as_deref(), at);
-            let linked: Vec<u32> = table
+        ExportEntry::Data(data) => {
+            if data.outputs.is_empty() {
+                at(Severity::Error, "tick at least one output".into());
+            }
+            // Each output as the runner writes it - a problem several
+            // outputs share is said once, naming them.
+            let mut said: Vec<(Severity, String, Vec<String>)> = Vec::new();
+            for (_, job) in crate::exports::jobs::jobs_of(data) {
+                if let crate::exports::jobs::Job::Table(table) = &job {
+                    let name = naming::job_name(&job);
+                    check_table(table, &mut |severity, message| match said
+                        .iter_mut()
+                        .find(|(s, m, _)| *s == severity && *m == message)
+                    {
+                        Some((.., names)) => names.push(name.clone()),
+                        None => said.push((severity, message, vec![name.clone()])),
+                    });
+                }
+            }
+            for (severity, message, names) in said {
+                at(severity, format!("{}: {message}", names.join(", ")));
+            }
+            check_classes(project, data.classes.as_deref(), at);
+            let linked: Vec<u32> = data
                 .children
                 .iter()
                 .flat_map(|(p, c)| [*p, *c])
-                .chain(table.parents.iter().copied())
+                .chain(data.parents.iter().copied())
                 .collect();
             if !linked.is_empty() {
                 check_classes(project, Some(&linked), at);
             }
-            check_columns(project, table.columns.as_deref(), at);
-            Some(&table.name)
-        }
-        ExportEntry::PlateLayout(plate) => {
-            check_classes(project, plate.classes.as_deref(), at);
-            check_columns(project, plate.columns.as_deref(), at);
-            Some(&plate.name)
+            check_columns(project, data.columns.as_deref(), at);
+            Some(&data.name)
         }
         ExportEntry::DrawnImages(drawn) => {
             check_classes(project, drawn.classes.as_deref(), at);
@@ -254,10 +270,16 @@ fn check_table(table: &TableExport, at: &mut impl FnMut(Severity, String)) {
             "sheets need XLSX - a CSV file has none".into(),
         );
     }
-    if table.transposed && !matches!(table.rows, TableRows::Object | TableRows::Image) {
+    if table.transposed
+        && !matches!(
+            table.rows,
+            TableRows::Object | TableRows::Image | TableRows::Well | TableRows::Folder
+        )
+    {
         at(
             Severity::Error,
-            "transposed (classes side by side) is for object or image rows only".into(),
+            "transposed (classes side by side) is for object, image, well or folder rows only"
+                .into(),
         );
     }
     if table.transposed && table.split == TableSplit::Class {
@@ -430,19 +452,27 @@ fn check_names_within(
 ) {
     let mut seen: BTreeMap<String, usize> = BTreeMap::new();
     for (i, entry) in export.entries.iter().enumerate() {
-        let name = match entry {
-            ExportEntry::Script(script) => naming::script_output(script),
-            other => naming::entry_name(other).unwrap_or_default(),
+        let names = match entry {
+            ExportEntry::Script(script) => vec![naming::script_output(script)],
+            other => naming::entry_names(other),
         };
-        if let Some(first) = seen.insert(name.clone(), i) {
-            at(
-                Severity::Error,
-                Some(i),
-                format!(
-                    "writes “{name}” like entry {} - give one of them its own name",
-                    first + 1
+        for name in names {
+            match seen.insert(name.clone(), i) {
+                Some(first) if first == i => at(
+                    Severity::Error,
+                    Some(i),
+                    format!("writes “{name}” twice - tick each output once"),
                 ),
-            );
+                Some(first) => at(
+                    Severity::Error,
+                    Some(i),
+                    format!(
+                        "writes “{name}” like entry {} - give one of them a name",
+                        first + 1
+                    ),
+                ),
+                None => {}
+            }
         }
     }
 }
@@ -462,11 +492,11 @@ fn check_names_across(exports: &[ExportSettings], problems: &mut Vec<ExportProbl
         );
         let folder = format!("{}:{}", folder.0, folder.1);
         let mut own = BTreeSet::new();
-        for entry in &export.entries {
-            let name = match entry {
-                ExportEntry::Script(script) => naming::script_output(script),
-                other => naming::entry_name(other).unwrap_or_default(),
-            };
+        let names = export.entries.iter().flat_map(|entry| match entry {
+            ExportEntry::Script(script) => vec![naming::script_output(script)],
+            other => naming::entry_names(other),
+        });
+        for name in names {
             let name = naming::with_prefix(export, &name);
             if !own.insert(name.clone()) {
                 continue;
@@ -520,8 +550,8 @@ mod tests {
         let project = project(json!([{
             "id": 1, "name": "Per image", "prefix": "exp1",
             "entries": [
-                { "kind": "TABLE", "rows": "OBJECT", "split": "IMAGE" },
-                { "kind": "TABLE", "rows": "IMAGE", "name": "per_image" },
+                { "kind": "DATA", "outputs": ["OBJECTS"], "split": "IMAGE" },
+                { "kind": "DATA", "outputs": ["IMAGES"], "name": "per_image" },
                 { "kind": "DRAWN_IMAGES" },
                 { "kind": "SCRIPT", "language": "R", "file": "scripts/a.R" }
             ]
@@ -564,29 +594,28 @@ mod tests {
     #[test]
     fn a_prefix_or_name_with_a_separator_is_refused() {
         let project = project(json!([{ "id": 1, "name": "a", "prefix": "a/b",
-            "entries": [{ "kind": "TABLE", "rows": "OBJECT", "name": "x/y" }] }]));
+            "entries": [{ "kind": "DATA", "outputs": ["OBJECTS"], "name": "x/y" }] }]));
         assert_eq!(errors(&project).len(), 2);
     }
 
     #[test]
     fn tables_are_checked_for_what_fits_together() {
         let project = project(json!([{ "id": 1, "name": "a", "entries": [
-            { "kind": "TABLE", "rows": "IMAGE", "aggregations": [], "name": "a" },
-            { "kind": "TABLE", "rows": "OBJECT", "splitInto": "SHEETS", "name": "b" },
-            { "kind": "TABLE", "rows": "OBJECT", "tracks": {}, "name": "c" },
-            { "kind": "TABLE", "rows": "WELL", "split": "IMAGE", "name": "d" },
-            { "kind": "TABLE", "rows": "MEASUREMENT", "split": "CLASS", "name": "e" }
+            { "kind": "DATA", "outputs": ["IMAGES"], "aggregations": [], "name": "a" },
+            { "kind": "DATA", "outputs": ["OBJECTS"], "splitInto": "SHEETS", "name": "b" },
+            { "kind": "DATA", "outputs": ["WELLS"], "split": "IMAGE", "name": "d" },
+            { "kind": "DATA", "outputs": ["MEASUREMENTS"], "split": "CLASS", "name": "e" }
         ]}]));
         let problems = check_exports(&project);
         let entries: Vec<Option<usize>> = problems.iter().map(|p| p.entry).collect();
-        assert_eq!(entries, [Some(0), Some(1), Some(2), Some(3), Some(4)]);
+        assert_eq!(entries, [Some(0), Some(1), Some(2), Some(3)]);
     }
 
     /// Object rows ignore the (defaulted) aggregations - no error.
     #[test]
     fn object_rows_keep_their_default_aggregation_without_error() {
         let project = project(json!([{ "id": 1, "name": "a",
-            "entries": [{ "kind": "TABLE", "rows": "OBJECT" }] }]));
+            "entries": [{ "kind": "DATA", "outputs": ["OBJECTS"] }] }]));
         assert_eq!(messages(&project), vec![]);
     }
 
@@ -603,26 +632,26 @@ mod tests {
     #[test]
     fn two_entries_writing_the_same_name_are_refused() {
         let project = project(json!([{ "id": 1, "name": "a", "entries": [
-            { "kind": "TABLE", "rows": "OBJECT" },
-            { "kind": "TABLE", "rows": "OBJECT", "classes": [2] }
+            { "kind": "DATA", "outputs": ["OBJECTS"] },
+            { "kind": "DATA", "outputs": ["OBJECTS"], "classes": [2] }
         ]}]));
         assert_eq!(
             errors(&project),
-            ["writes “objects” like entry 1 - give one of them its own name"]
+            ["writes “objects” like entry 1 - give one of them a name"]
         );
     }
 
     #[test]
     fn two_exports_writing_the_same_name_into_one_folder_are_refused() {
         let clash = project(json!([
-            { "id": 1, "name": "a", "entries": [{ "kind": "TABLE", "rows": "OBJECT" }] },
-            { "id": 2, "name": "b", "entries": [{ "kind": "TABLE", "rows": "OBJECT" }] }
+            { "id": 1, "name": "a", "entries": [{ "kind": "DATA", "outputs": ["OBJECTS"] }] },
+            { "id": 2, "name": "b", "entries": [{ "kind": "DATA", "outputs": ["OBJECTS"] }] }
         ]));
         assert_eq!(errors(&clash).len(), 1);
 
         let prefixed = project(json!([
-            { "id": 1, "name": "a", "entries": [{ "kind": "TABLE", "rows": "OBJECT" }] },
-            { "id": 2, "name": "b", "prefix": "b", "entries": [{ "kind": "TABLE", "rows": "OBJECT" }] }
+            { "id": 1, "name": "a", "entries": [{ "kind": "DATA", "outputs": ["OBJECTS"] }] },
+            { "id": 2, "name": "b", "prefix": "b", "entries": [{ "kind": "DATA", "outputs": ["OBJECTS"] }] }
         ]));
         assert_eq!(errors(&prefixed), Vec::<String>::new());
     }
@@ -630,7 +659,7 @@ mod tests {
     #[test]
     fn unknown_classes_and_columns_are_warnings() {
         let project = project(json!([{ "id": 1, "name": "a", "entries": [
-            { "kind": "TABLE", "rows": "OBJECT", "classes": [42],
+            { "kind": "DATA", "outputs": ["OBJECTS"], "classes": [42],
               "columns": ["count", "area_nm2", "measurement:threshold_x", "no_such_column"] }
         ]}]));
         let messages = messages(&project);

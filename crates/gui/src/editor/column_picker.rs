@@ -149,6 +149,16 @@ impl PickerSource<'_> {
         }
     }
 
+    /// The starting sets over `available` with `selected` picked (see
+    /// [`Self::parts`]).
+    pub(crate) fn presets(
+        &self,
+        available: &[ColumnEntry],
+        selected: &[Column],
+    ) -> Vec<ColumnPreset> {
+        preset_cards(&presets(available, self.raw), selected)
+    }
+
     /// The columns of the section `group` (a coloc block's kind:
     /// `"<group>\u{1}<block>"`) the search shows - for its All / None.
     pub(crate) fn section_columns(&self, available: &[ColumnEntry], group: &str) -> Vec<Column> {

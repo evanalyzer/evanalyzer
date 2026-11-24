@@ -84,12 +84,14 @@ export component PartHead inherits HorizontalLayout {
 component Mark inherits Rectangle {
     in property <bool> on;
     in property <bool> single;
+    // Greyed: always on, not to change.
+    in property <bool> dim;
     width: 13px;
     height: 13px;
     border-radius: root.single ? 6.5px : Ink.radius-xs;
     border-width: root.on && !root.single ? 0px : root.on ? 4px : 1px;
-    border-color: root.on ? Ink.primary : Ink.text-faint;
-    background: root.on && !root.single ? Ink.primary : Ink.field;
+    border-color: root.dim ? Ink.text-faint : root.on ? Ink.primary : Ink.text-faint;
+    background: root.on && !root.single ? (root.dim ? Ink.text-faint : Ink.primary) : Ink.field;
     if root.on && !root.single: Image {
         source: InkIcons.check;
         width: 9px;
@@ -104,18 +106,24 @@ component PickRow inherits Rectangle {
     in property <bool> on;
     in property <bool> single;
     in property <color> swatch: transparent;
+    // Always on and greyed: not to untick.
+    in property <bool> locked;
     callback clicked;
     height: 24px;
-    background: ta.has-hover ? Ink.hover : transparent;
+    background: ta.has-hover && !root.locked ? Ink.hover : transparent;
     border-radius: Ink.radius-xs;
     accessible-role: checkbox;
     accessible-label: root.text;
-    accessible-checked: root.on;
+    accessible-checked: root.on || root.locked;
+    accessible-enabled: !root.locked;
     accessible-action-default => {
-        root.clicked();
+        if !root.locked {
+            root.clicked();
+        }
     }
     ta := TouchArea {
-        mouse-cursor: pointer;
+        enabled: !root.locked;
+        mouse-cursor: root.locked ? default : pointer;
         clicked => {
             root.clicked();
         }
@@ -132,8 +140,9 @@ component PickRow inherits Rectangle {
         VerticalLayout {
             alignment: center;
             Mark {
-                on: root.on;
+                on: root.on || root.locked;
                 single: root.single;
+                dim: root.locked;
             }
         }
         if root.swatch != transparent: VerticalLayout {
@@ -150,9 +159,15 @@ component PickRow inherits Rectangle {
             min-width: 0px;
             text: root.text;
             font-size: Ink.fs-secondary;
-            color: Ink.text;
+            color: root.locked ? Ink.text-dim : Ink.text;
             vertical-alignment: center;
             overflow: elide;
+        }
+        if root.locked: Text {
+            text: "always written";
+            font-size: Ink.fs-caption;
+            color: Ink.text-mute;
+            vertical-alignment: center;
         }
         if root.note != "": Text {
             text: root.note;
@@ -377,10 +392,11 @@ component SectionList inherits VerticalLayout {
         border-color: Ink.border-soft;
         VerticalLayout {
             padding: 2px;
-            for item in root.section.items: PickRow {
+            for item[i] in root.section.items: PickRow {
                 text: item.value;
                 on: item.selected;
                 single: root.single;
+                locked: root.section.locked[i];
                 clicked => {
                     root.picked(item.key, root.single || !item.selected);
                 }

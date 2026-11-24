@@ -4324,11 +4324,15 @@ impl ResultsStateController {
         );
         // Down to an object's children: one row per child, as they are.
         let with_coloc_details = list_filter.with_coloc_details && drill.is_none();
-        let transpond_table = list_filter.transpond && drill.is_none();
         let group_by = match drill {
             Some(_) => ListGroupBy::Objects,
             None => list_filter.group_by,
         };
+        // Classes as columns: per object and image only here (the menu item
+        // is greyed for wells and folders, its tick kept).
+        let transpond_table = list_filter.transpond
+            && drill.is_none()
+            && matches!(group_by, ListGroupBy::Objects | ListGroupBy::Images);
         // A row per object: Count would be 1 in every row - it means
         // something per image or well only.
         let mut columns = columns;

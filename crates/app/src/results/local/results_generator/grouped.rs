@@ -126,6 +126,18 @@ impl ResultsGenerator {
         }
         let measured = self.measured_on_plane_sql("images", &filter.plane)?;
         if let Some(grouping) = &filter.grouping {
+            if filter.transpond_table {
+                return self.get_grouped_by_group_transposed(
+                    filter,
+                    grouping,
+                    &stats,
+                    &pre,
+                    &post,
+                    &image_conditions,
+                    &row_classes,
+                    &classes,
+                );
+            }
             return self.get_grouped_by_group(
                 filter,
                 grouping,
@@ -865,6 +877,134 @@ impl ResultsGenerator {
             .collect();
         let mut rows = rows;
         self.flag_disabled_image_rows(&mut rows, &row_locations)?;
+        Ok(DatabaseResult {
+            column_names,
+            row_names,
+            rows,
+            min,
+            max,
+            source_object_count,
+            row_locations,
+        })
+    }
+
+    /// `get_grouped_by_group` with `transpond_table`: one row per well (or
+    /// folder), and per class of `row_classes` one column per statistic -
+    /// the (group, class) rows of the normal view placed side by side.
+    ///
+    /// Runs the normal query for up to `limit` groups' worth of rows (a
+    /// group has at most a row per class) and places them here; on a full
+    /// page the last group may lack classes still to come, so it is left
+    /// for the next page (unless it's the only one). Pages over groups
+    /// (`row_names` holds each group's last (group, class) cursor); a full
+    /// page reports `limit` as `source_object_count`, so a caller asks on.
+    #[allow(clippy::too_many_arguments)]
+    fn get_grouped_by_group_transposed(
+        &self,
+        filter: &GroupedByImageFilter,
+        grouping: &Grouping,
+        stats: &[(&Column, &Aggregation)],
+        pre: &[String],
+        post: &[String],
+        image_conditions: &[String],
+        row_classes: &[u32],
+        classes: &[Class],
+    ) -> Result<DatabaseResult, InternalErrors> {
+        let blocks = row_classes;
+        let group_name = match grouping {
+            Grouping::Folder => "folder",
+            _ => "well",
+        };
+        let mut column_names = vec![group_name.to_string()];
+        for class_id in blocks {
+            let class_label = class_display_label(ObjectClass::Global(*class_id), classes);
+            for (column, aggregation) in stats {
+                let name = if matches!(column, Column::Count) {
+                    format!("Count per image ({})", aggregation_sql_fn(aggregation))
+                } else {
+                    let (agg_fn, _) = aggregate_sql(column, aggregation)?;
+                    format!("{} ({agg_fn})", column.display_label(classes))
+                };
+                column_names.push(format!("{name} ({class_label})"));
+            }
+        }
+        if blocks.is_empty() || stats.is_empty() {
+            return Ok(empty_database_result(column_names));
+        }
+        let limit = filter.page.limit.max(0);
+        let rows_limit = (limit as i64)
+            .saturating_mul(blocks.len() as i64)
+            .min(i64::from(i32::MAX)) as i32;
+        let by_class = GroupedByImageFilter {
+            page: Pagination {
+                limit: rows_limit,
+                after: filter.page.after.clone(),
+            },
+            transpond_table: false,
+            sort: None,
+            ..filter.clone()
+        };
+        let page = self.get_grouped_by_group(
+            &by_class,
+            grouping,
+            stats,
+            pre,
+            post,
+            image_conditions,
+            row_classes,
+            classes,
+        )?;
+        let full = page.rows.len() as i64 >= i64::from(rows_limit);
+        let n = stats.len();
+        // Per group: its key, name cell, last cursor, values per block.
+        let mut groups: Vec<(String, Cell, String, Vec<Cell>)> = Vec::new();
+        for (row, cursor) in page.rows.into_iter().zip(page.row_names) {
+            let mut parts = cursor.split('\u{1}');
+            let key = parts.next().unwrap_or("").to_string();
+            let class_id: Option<u32> = parts.next().and_then(|p| p.parse().ok());
+            let mut cells = row.into_iter();
+            let name = cells.next().unwrap_or_else(plain_cell);
+            let _class = cells.next();
+            if groups.last().is_none_or(|g| g.0 != key) {
+                let (any_disabled, failed) = (name.any_disabled, name.failed);
+                let empty = (0..blocks.len() * n)
+                    .map(|_| Cell {
+                        value: CellValue::Empty,
+                        any_disabled,
+                        failed,
+                        ..plain_cell()
+                    })
+                    .collect();
+                groups.push((key, name, String::new(), empty));
+            }
+            let group = groups.last_mut().expect("pushed above");
+            group.2 = cursor;
+            let Some(block) = class_id.and_then(|id| blocks.iter().position(|b| *b == id)) else {
+                continue;
+            };
+            for (i, cell) in cells.take(n).enumerate() {
+                group.3[block * n + i] = cell;
+            }
+        }
+        if full && groups.len() > 1 {
+            groups.pop();
+        }
+        let source_object_count = if full { limit as usize } else { groups.len() };
+        let row_names = groups.iter().map(|g| g.2.clone()).collect();
+        let row_locations = groups.iter().map(|_| (String::new(), None)).collect();
+        let rows: Vec<Vec<Cell>> = groups
+            .into_iter()
+            .map(|(_, name, _, values)| std::iter::once(name).chain(values).collect())
+            .collect();
+        let values: Vec<Option<f64>> = rows
+            .iter()
+            .flat_map(|row| row.iter().skip(1))
+            .map(|cell| match cell.value {
+                CellValue::Float(v) => Some(f64::from(v)),
+                _ => None,
+            })
+            .collect();
+        let (min, max) = value_range(values.iter());
         Ok(DatabaseResult {
             column_names,
             row_names,

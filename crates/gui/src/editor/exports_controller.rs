@@ -22,9 +22,10 @@ use crate::{
     AppWindow, ExportEntryRow, ExportRow, ExportsState, MultiSelectItem, QuickExportState,
     ScriptTrustState,
 };
+use evanalyzer_app::exports::jobs::{Job, TableExport, TableRows, jobs_of};
 use evanalyzer_app::exports::{
     EntryStatus, ExportReport, ScriptPermission, check::check_export, default_columns,
-    is_leading_column, naming, prepare_run, results_database,
+    is_fixed_column, naming, prepare_run, results_database,
 };
 use evanalyzer_app::modules::Severity;
 use evanalyzer_app::results::view_settings::ViewSettings;
@@ -33,9 +34,9 @@ use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_cfg::settings::export_settings::TimeCourseOptions;
 use evanalyzer_cfg::settings::export_settings::{
-    DrawnBrightness, DrawnStyle, ExportAggregation, ExportEntry, ExportSettings, HeatmapColors,
-    IfExists, ImageScope, LengthUnit, OutputLocation, Planes, PlateGrid, ProfileContent,
-    ProfileLineKind, ScriptLanguage, SplitInto, TableExport, TableFileFormat, TableRows,
+    DataExport, DataOutput, DrawnBrightness, DrawnStyle, ExportAggregation, ExportEntry,
+    ExportSettings, HeatmapColors, IfExists, ImageScope, LengthUnit, OutputLocation, Planes,
+    ProfileContent, ProfileLineKind, ScriptLanguage, SpeedUnit, SplitInto, TableFileFormat,
     TableSplit, TimeCourseLineKind, TimeCourseTableLayout,
 };
 use evanalyzer_cfg::settings::project_settings::ResultsView;
@@ -46,18 +47,80 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// The models' orders - the indexes the view's segments and selects use.
-const ROWS: [TableRows; 9] = [
-    TableRows::Object,
-    TableRows::Image,
-    TableRows::Well,
-    TableRows::Folder,
-    TableRows::ColocPair,
-    TableRows::Track,
-    TableRows::Measurement,
-    TableRows::TimePoint,
-    TableRows::ProfilePosition,
+/// A data export's outputs as the tab lists them: (output, key, text,
+/// group) - the old export dialog's ticks.
+/// What a table output writes, as the Results List's "A row per" says it.
+fn output_tip(output: DataOutput) -> &'static str {
+    match output {
+        DataOutput::Objects => "A row per object",
+        DataOutput::Images => "A row per image and class",
+        DataOutput::Wells => {
+            "A row per well and class - the wells from the image names (the project's plate grouping)"
+        }
+        DataOutput::Folders => "A row per folder of images and class",
+        DataOutput::ColocPairs => "A row per pair of overlapping objects",
+        DataOutput::Measurements => "A row per value of the measurements table, with its unit",
+        DataOutput::Tracks => "A row per track",
+        _ => "",
+    }
+}
+
+const OUTPUTS: [(DataOutput, &str, &str, &str); 13] = [
+    (DataOutput::Objects, "OBJECTS", "Objects", "A ROW PER"),
+    (DataOutput::Images, "IMAGES", "Images", "A ROW PER"),
+    (DataOutput::Wells, "WELLS", "Wells", "A ROW PER"),
+    (DataOutput::Folders, "FOLDERS", "Folders", "A ROW PER"),
+    (
+        DataOutput::ColocPairs,
+        "COLOC_PAIRS",
+        "Coloc pairs",
+        "A ROW PER",
+    ),
+    (
+        DataOutput::Measurements,
+        "MEASUREMENTS",
+        "Measurements",
+        "A ROW PER",
+    ),
+    (DataOutput::Tracks, "TRACKS", "Tracks", "A ROW PER"),
+    (
+        DataOutput::TimeCourse,
+        "TIME_COURSE",
+        "Time course - per time point",
+        "OVER TIME AND RADIUS",
+    ),
+    (
+        DataOutput::Profile,
+        "PROFILE",
+        "Profile - per radius (e.g. Sholl)",
+        "OVER TIME AND RADIUS",
+    ),
+    (
+        DataOutput::Plate,
+        "PLATE",
+        "Plate heatmap",
+        "PLATE AND WELLS (XLSX)",
+    ),
+    (
+        DataOutput::WellGrid,
+        "WELL_GRID",
+        "Wells as heatmap",
+        "PLATE AND WELLS (XLSX)",
+    ),
+    (
+        DataOutput::WellList,
+        "WELL_LIST",
+        "Wells as list (a row per image position)",
+        "PLATE AND WELLS (XLSX)",
+    ),
+    (
+        DataOutput::ImageHeatmap,
+        "IMAGE_HEATMAP",
+        "Image heatmap",
+        "PLATE AND WELLS (XLSX)",
+    ),
 ];
-const GRIDS: [PlateGrid; 3] = [PlateGrid::Plate, PlateGrid::Well, PlateGrid::Image];
+const SPEEDS: [SpeedUnit; 3] = [SpeedUnit::PxFrame, SpeedUnit::UmMin, SpeedUnit::UmS];
 const SQUARES: [u32; 4] = [32, 64, 128, 256];
 const COLORS: [HeatmapColors; 11] = [
     HeatmapColors::Excel,
@@ -250,28 +313,90 @@ impl PickedFrom {
     }
 }
 
-/// A plate layout's columns as the picker shows a table's: grouped rows,
-/// its columns (the count without), its values.
-fn plate_table(
-    plate: &evanalyzer_cfg::settings::export_settings::PlateLayoutExport,
-) -> TableExport {
-    let mut table: TableExport =
-        serde_json::from_value(serde_json::json!({ "rows": "WELL" })).expect("a table");
-    table.columns = Some(
-        plate
-            .columns
-            .clone()
-            .unwrap_or_else(|| vec!["count".to_string()]),
-    );
-    table.aggregations = plate.aggregations.clone();
-    table.classes = plate.classes.clone();
+/// A data export as one table, for the settings the tab shares with a
+/// table and for the column picker: its first table output's rows (the
+/// plate's grouped rows without one - its default column the count), the
+/// data export's shared settings.
+fn stand_in(data: &DataExport) -> TableExport {
+    let first = jobs_of(data).into_iter().find_map(|(_, job)| match job {
+        Job::Table(table) => Some(table),
+        Job::PlateLayout(_) => None,
+    });
+    let mut table = first.unwrap_or_else(|| {
+        let mut table: TableExport =
+            serde_json::from_value(serde_json::json!({ "rows": "WELL" })).expect("a table");
+        table.columns = Some(
+            data.columns
+                .clone()
+                .unwrap_or_else(|| vec!["count".to_string()]),
+        );
+        table
+    });
+    table.name = String::new();
+    table.classes = data.classes.clone();
+    table.aggregations = data.aggregations.clone();
+    table.empty_classes = data.empty_classes;
+    table.transposed = data.transposed;
+    table.tracks = data.tracks.clone();
+    table.time_course = data.time_course.clone();
+    table.profile = data.profile.clone();
+    table.planes = data.planes;
     table
+}
+
+/// What an edit of `stand_in(data)` changed, into `data`.
+fn write_back(data: &mut DataExport, before: &TableExport, after: TableExport) {
+    macro_rules! changed {
+        ($($field:ident),*) => {
+            $(if after.$field != before.$field {
+                data.$field = after.$field;
+            })*
+        };
+    }
+    changed!(
+        format,
+        classes,
+        columns,
+        aggregations,
+        images,
+        empty_classes,
+        transposed,
+        children,
+        child_aggregations,
+        parents,
+        split,
+        split_into,
+        tracks,
+        time_course,
+        profile,
+        planes
+    );
+}
+
+/// The outputs that sum values up (the Values tab), and those with a row per
+/// image, well or folder (classes without objects).
+fn grouping(data: &DataExport) -> (bool, bool) {
+    let values = data.outputs.iter().any(|o| {
+        !matches!(
+            o,
+            DataOutput::Objects
+                | DataOutput::ColocPairs
+                | DataOutput::Measurements
+                | DataOutput::Profile
+        )
+    });
+    let empty = data.outputs.iter().any(|o| {
+        matches!(
+            o,
+            DataOutput::Images | DataOutput::Wells | DataOutput::Folders
+        )
+    });
+    (values, empty)
 }
 
 /// The columns offered for a table of `rows`: never the leading ones; a
 /// table of measurements has measurements only.
 fn offered_for(rows: TableRows, mut offered: Vec<ColumnEntry>) -> Vec<ColumnEntry> {
-    offered.retain(|entry| !is_leading_column(&entry.key));
     if rows == TableRows::Measurement {
         offered.retain(|entry| matches!(entry.key, Column::Measurement(_)));
     }
@@ -600,7 +725,7 @@ impl ExportsController {
             let id = exports.iter().map(|e| e.id).max().map_or(1, |max| max + 1);
             let name = free_export_name(exports, "Export");
             let mut export = new_export(id, name);
-            export.entries.push(new_entry("TABLE"));
+            export.entries.push(new_entry("DATA"));
             exports.push(export);
             id
         });
@@ -1026,7 +1151,9 @@ impl ExportsController {
         let state = ui.global::<QuickExportState>();
         state.set_view_name(view.name.as_str().into());
         state.set_what(entry_row(&export, &entry).subtitle);
-        state.set_table(matches!(entry, ExportEntry::Table(_)));
+        state.set_table(matches!(&entry, ExportEntry::Data(data)
+            if data.outputs.iter().any(|o| !matches!(o,
+                DataOutput::Plate | DataOutput::WellGrid | DataOutput::WellList | DataOutput::ImageHeatmap))));
         state.set_format(0);
         // Beside the analysis, unless chosen before.
         if state.get_folder().is_empty() {
@@ -1038,10 +1165,13 @@ impl ExportsController {
             state.set_folder(folder.into());
         }
         state.set_file("".into());
+        // A name in front of the automatic one(s).
         state.set_file_placeholder(
-            naming::entry_name(&entry)
-                .map(|name| naming::with_prefix(&export, &name))
-                .unwrap_or_default()
+            naming::entry_names(&entry)
+                .iter()
+                .map(|name| naming::with_prefix(&export, name))
+                .collect::<Vec<_>>()
+                .join(", ")
                 .into(),
         );
         let exports = &self.app_state.get_project().settings.exports;
@@ -1106,8 +1236,8 @@ impl ExportsController {
                 let mut entry = evanalyzer_app::exports::entry_from_view(&view)
                     .ok_or("this view can't be exported")?;
                 // A profile chart without one chosen shows the first profile.
-                if let ExportEntry::Table(table) = &mut entry
-                    && let Some(profile) = &mut table.profile
+                if let ExportEntry::Data(data) = &mut entry
+                    && let Some(profile) = &mut data.profile
                     && profile.key.is_empty()
                 {
                     profile.key = this
@@ -1120,15 +1250,11 @@ impl ExportsController {
                         .map(|column| column.key)
                         .unwrap_or_default();
                 }
-                match &mut entry {
-                    ExportEntry::Table(table) => {
-                        table.name = file.clone();
-                        if xlsx {
-                            table.format = TableFileFormat::Xlsx;
-                        }
+                if let ExportEntry::Data(data) = &mut entry {
+                    data.name = file.clone();
+                    if xlsx {
+                        data.format = TableFileFormat::Xlsx;
                     }
-                    ExportEntry::PlateLayout(plate) => plate.name = file.clone(),
-                    _ => {}
                 }
                 let mut export = new_export(0, view.name.clone());
                 // A file of that name already there stays: the new one
@@ -1616,8 +1742,51 @@ impl ExportsController {
         };
         state.set_entry_kind(kind_name(entry).into());
         match entry {
-            ExportEntry::Table(table) => {
-                state.set_rows(index_of(&ROWS, &table.rows));
+            ExportEntry::Data(data) => {
+                let table = &stand_in(data);
+                state.set_outputs(model(
+                    OUTPUTS
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (output, key, text, group))| crate::DataOutputRow {
+                            key: (*key).into(),
+                            text: (*text).into(),
+                            tip: output_tip(*output).into(),
+                            // The group's caption above its first output.
+                            group: if i == 0 || OUTPUTS[i - 1].3 != *group {
+                                (*group).into()
+                            } else {
+                                "".into()
+                            },
+                            on: data.outputs.contains(output),
+                        })
+                        .collect(),
+                ));
+                state.set_can_transpose(data.outputs.iter().any(|o| {
+                    matches!(
+                        o,
+                        DataOutput::Objects
+                            | DataOutput::Images
+                            | DataOutput::Wells
+                            | DataOutput::Folders
+                    )
+                }));
+                state.set_any_heatmap(data.outputs.iter().any(|o| {
+                    matches!(
+                        o,
+                        DataOutput::Plate | DataOutput::WellGrid | DataOutput::ImageHeatmap
+                    )
+                }));
+                let (values, empty) = grouping(data);
+                state.set_grouped(values);
+                state.set_show_empty(empty);
+                state.set_square(index_of(&SQUARES, &data.heatmap.square_size.unwrap_or(64)));
+                state.set_colors(index_of(&COLORS, &data.heatmap.colors));
+                let tracks = data.tracks.clone().unwrap_or_default();
+                state.set_tracks_min_points(tracks.min_points.to_string().into());
+                state.set_tracks_from_start(tracks.from_start);
+                state.set_tracks_no_edge(tracks.no_edge);
+                state.set_tracks_speed(index_of(&SPEEDS, &tracks.speed_unit));
                 state.set_format(match table.format {
                     TableFileFormat::Csv => 0,
                     TableFileFormat::Xlsx => 1,
@@ -1659,6 +1828,7 @@ impl ExportsController {
                         .into(),
                 );
                 push_picker(&state, table, &shown);
+                state.set_columns_default(data.columns.is_none());
                 state.set_aggregations(model(
                     AGGREGATIONS
                         .iter()
@@ -1678,28 +1848,6 @@ impl ExportsController {
                         .iter()
                         .filter(|view| view_columns(view).is_some())
                         .map(|view| SharedString::from(view.name.as_str()))
-                        .collect(),
-                ));
-            }
-            ExportEntry::PlateLayout(plate) => {
-                state.set_grid(index_of(&GRIDS, &plate.grid));
-                state.set_square(index_of(&SQUARES, &plate.square_size.unwrap_or(64)));
-                state.set_colors(index_of(&COLORS, &plate.colors));
-                state.set_images(index_of(&SCOPES, &plate.images));
-                push_planes(&state, &plate.planes);
-                set_classes(&plate.classes);
-                push_picker(&state, &plate_table(plate), &shown);
-                state.set_columns_default(plate.columns.is_none());
-                state.set_aggregations(model(
-                    AGGREGATIONS
-                        .iter()
-                        .map(|(aggregation, key, text)| MultiSelectItem {
-                            key: (*key).into(),
-                            value: (*text).into(),
-                            color: Default::default(),
-                            group: "".into(),
-                            selected: plate.aggregations.contains(aggregation),
-                        })
                         .collect(),
                 ));
             }
@@ -1830,8 +1978,7 @@ impl ExportsController {
             .and_then(|e| e.entries.get(index))
             .cloned();
         let table = match entry {
-            Some(ExportEntry::Table(table)) => table,
-            Some(ExportEntry::PlateLayout(plate)) => plate_table(&plate),
+            Some(ExportEntry::Data(data)) => stand_in(&data),
             _ => return,
         };
         let keys = {
@@ -1903,7 +2050,7 @@ impl ExportsController {
                 Some(
                     selected
                         .iter()
-                        .filter(|column| !is_leading_column(column))
+                        .filter(|column| !is_fixed_column(column))
                         .map(|column| column.as_key(&from.classes))
                         .chain(missing)
                         .collect::<Vec<String>>(),
@@ -1916,8 +2063,7 @@ impl ExportsController {
             return;
         };
         self.edit(id, |export| match export.entries.get_mut(index) {
-            Some(ExportEntry::Table(table)) => table.columns = Some(keys),
-            Some(ExportEntry::PlateLayout(plate)) => plate.columns = Some(keys),
+            Some(ExportEntry::Data(data)) => data.columns = Some(keys),
             _ => {}
         });
     }
@@ -1979,6 +2125,25 @@ fn set_planes(planes: &mut Planes, key: &str, value: &str) {
     }
 }
 
+/// `section` with the columns every table writes anyway
+/// ([`is_fixed_column`]) ticked and greyed: not to untick.
+fn lock_fixed(mut section: SectionUi, offered: &[ColumnEntry], classes: &[Class]) -> SectionUi {
+    let keys: Vec<String> = offered
+        .iter()
+        .filter(|entry| is_fixed_column(&entry.key))
+        .map(|entry| entry.key.as_key(classes))
+        .collect();
+    section.locked = section
+        .items
+        .iter()
+        .map(|item| keys.iter().any(|key| item.key.as_str() == key))
+        .collect();
+    if !section.locked.iter().any(|locked| *locked) {
+        section.locked.clear();
+    }
+    section
+}
+
 /// The column picker of `table` (see `ColumnPicker`): over the newest
 /// analysis' columns, its columns picked.
 fn push_picker(state: &ExportsState, table: &TableExport, shown: &Shown) {
@@ -2004,7 +2169,23 @@ fn push_picker(state: &ExportsState, table: &TableExport, shown: &Shown) {
     let filter = shown.column_filter.to_lowercase();
     let source = from.source(&shown.coloc, &shown.sections_open, &filter);
     let offered = offered_for(table.rows, source.offered(&selected));
-    let parts = source.parts(&offered, &selected);
+    // The fixed columns count as picked in the sections' titles; the
+    // starting sets compare without them (they're never stored).
+    let mut shown_selected = selected.clone();
+    shown_selected.extend(
+        offered
+            .iter()
+            .map(|entry| &entry.key)
+            .filter(|column| is_fixed_column(column) && !selected.contains(column))
+            .cloned(),
+    );
+    let mut parts = source.parts(&offered, &shown_selected);
+    let unfixed: Vec<ColumnEntry> = offered
+        .iter()
+        .filter(|entry| !is_fixed_column(&entry.key))
+        .cloned()
+        .collect();
+    parts.presets = source.presets(&unfixed, &selected);
     state.set_columns_note(
         if missing.is_empty() {
             String::new()
@@ -2018,6 +2199,7 @@ fn push_picker(state: &ExportsState, table: &TableExport, shown: &Shown) {
         parts
             .sections
             .into_iter()
+            .map(|section| lock_fixed(section, &offered, &from.classes))
             .map(SectionUi::into_slint)
             .collect(),
     ));
@@ -2142,10 +2324,9 @@ fn new_export(id: u32, name: String) -> ExportSettings {
 /// A new entry of `kind` with its defaults.
 fn new_entry(kind: &str) -> ExportEntry {
     let value = match kind {
-        "PLATE_LAYOUT" => serde_json::json!({ "kind": "PLATE_LAYOUT" }),
         "DRAWN_IMAGES" => serde_json::json!({ "kind": "DRAWN_IMAGES" }),
         "SCRIPT" => serde_json::json!({ "kind": "SCRIPT", "language": "R", "file": "" }),
-        _ => serde_json::json!({ "kind": "TABLE", "rows": "IMAGE" }),
+        _ => serde_json::json!({ "kind": "DATA", "outputs": ["IMAGES"] }),
     };
     serde_json::from_value(value).expect("an entry with defaults")
 }
@@ -2228,8 +2409,7 @@ fn view_columns(
 fn set_entry_field(entry: &mut ExportEntry, key: &str, value: &str, pickable: &Pickable) {
     let on = value == "1";
     let classes = match entry {
-        ExportEntry::Table(t) => Some(&mut t.classes),
-        ExportEntry::PlateLayout(p) => Some(&mut p.classes),
+        ExportEntry::Data(d) => Some(&mut d.classes),
         ExportEntry::DrawnImages(d) => Some(&mut d.classes),
         ExportEntry::Script(_) => None,
     };
@@ -2252,8 +2432,7 @@ fn set_entry_field(entry: &mut ExportEntry, key: &str, value: &str, pickable: &P
     }
     if key == "z-planes" || key == "t-planes" {
         match entry {
-            ExportEntry::Table(t) => set_planes(&mut t.planes, key, value),
-            ExportEntry::PlateLayout(p) => set_planes(&mut p.planes, key, value),
+            ExportEntry::Data(d) => set_planes(&mut d.planes, key, value),
             ExportEntry::DrawnImages(d) => set_planes(&mut d.planes, key, value),
             ExportEntry::Script(_) => {}
         }
@@ -2262,64 +2441,14 @@ fn set_entry_field(entry: &mut ExportEntry, key: &str, value: &str, pickable: &P
     if key == "name" {
         let name = value.trim().to_string();
         match entry {
-            ExportEntry::Table(t) => t.name = name,
-            ExportEntry::PlateLayout(p) => p.name = name,
+            ExportEntry::Data(d) => d.name = name,
             ExportEntry::DrawnImages(d) => d.name = name,
             ExportEntry::Script(_) => {}
         }
         return;
     }
     match entry {
-        ExportEntry::Table(table) => set_table_field(table, key, value, pickable),
-        ExportEntry::PlateLayout(plate) => match key {
-            "grid" => {
-                if let Some(grid) = pick(&GRIDS, value) {
-                    plate.grid = grid;
-                }
-            }
-            "square" => {
-                if let Some(side) = pick(&SQUARES, value) {
-                    plate.square_size = Some(side);
-                }
-            }
-            "colors" => {
-                if let Some(colors) = pick(&COLORS, value) {
-                    plate.colors = colors;
-                }
-            }
-            "clear-columns" => plate.columns = None,
-            "all-aggregations" => {
-                plate.aggregations = AGGREGATIONS.iter().map(|(a, ..)| *a).collect();
-            }
-            "no-aggregations" => plate.aggregations.clear(),
-            _ if key.starts_with("aggregation:") => {
-                let name = &key["aggregation:".len()..];
-                if let Some((aggregation, ..)) = AGGREGATIONS.iter().find(|(_, k, _)| *k == name) {
-                    plate.aggregations.retain(|a| a != aggregation);
-                    if value == "1" {
-                        plate.aggregations.push(*aggregation);
-                        plate.aggregations.sort_by_key(|a| {
-                            AGGREGATIONS
-                                .iter()
-                                .position(|(b, ..)| b == a)
-                                .unwrap_or(usize::MAX)
-                        });
-                    }
-                }
-            }
-            _ if key.starts_with("columns-from-view:") => {
-                let name = &key["columns-from-view:".len()..];
-                if let Some(view) = pickable.views.views.iter().find(|v| v.name == name) {
-                    plate.columns = view_columns(view);
-                }
-            }
-            "images" => {
-                if let Some(scope) = pick(&SCOPES, value) {
-                    plate.images = scope;
-                }
-            }
-            _ => {}
-        },
+        ExportEntry::Data(data) => set_data_field(data, key, value, pickable),
         ExportEntry::DrawnImages(drawn) => match key {
             "style" => {
                 if let Some(style) = pick(&STYLES, value) {
@@ -2364,6 +2493,73 @@ fn set_entry_field(entry: &mut ExportEntry, key: &str, value: &str, pickable: &P
             _ => {}
         },
     }
+}
+
+/// A setting of a data export: its outputs, heatmaps and tracks here - the
+/// rest as a table's, on its shared settings.
+fn set_data_field(data: &mut DataExport, key: &str, value: &str, pickable: &Pickable) {
+    if let Some(name) = key.strip_prefix("output:") {
+        let Some((output, ..)) = OUTPUTS.iter().find(|(_, k, ..)| *k == name) else {
+            return;
+        };
+        data.outputs.retain(|o| o != output);
+        if value == "1" {
+            data.outputs.push(*output);
+            // In the list's order, not the clicks'.
+            data.outputs
+                .sort_by_key(|o| OUTPUTS.iter().position(|(p, ..)| p == o));
+        }
+        return;
+    }
+    let tracks =
+        |data: &mut DataExport| -> evanalyzer_cfg::settings::export_settings::TrackOptions {
+            data.tracks.clone().unwrap_or_default()
+        };
+    match key {
+        "square" => {
+            if let Some(side) = pick(&SQUARES, value) {
+                data.heatmap.square_size = Some(side);
+            }
+            return;
+        }
+        "colors" => {
+            if let Some(colors) = pick(&COLORS, value) {
+                data.heatmap.colors = colors;
+            }
+            return;
+        }
+        "tracks-min-points" => {
+            if let Ok(n) = value.trim().parse::<u32>() {
+                let mut t = tracks(data);
+                t.min_points = n.max(1);
+                data.tracks = Some(t);
+            }
+            return;
+        }
+        "tracks-from-start" | "tracks-no-edge" => {
+            let mut t = tracks(data);
+            if key == "tracks-from-start" {
+                t.from_start = value == "1";
+            } else {
+                t.no_edge = value == "1";
+            }
+            data.tracks = Some(t);
+            return;
+        }
+        "tracks-speed" => {
+            if let Some(unit) = pick(&SPEEDS, value) {
+                let mut t = tracks(data);
+                t.speed_unit = unit;
+                data.tracks = Some(t);
+            }
+            return;
+        }
+        _ => {}
+    }
+    let before = stand_in(data);
+    let mut after = before.clone();
+    set_table_field(&mut after, key, value, pickable);
+    write_back(data, &before, after);
 }
 
 fn set_table_field(table: &mut TableExport, key: &str, value: &str, pickable: &Pickable) {
@@ -2530,20 +2726,6 @@ fn set_table_field(table: &mut TableExport, key: &str, value: &str, pickable: &P
     }
     match key {
         "clear-columns" => table.columns = None,
-        "rows" => {
-            if let Some(rows) = pick(&ROWS, value) {
-                table.rows = rows;
-                // Side by side is for objects and images only.
-                if !matches!(rows, TableRows::Object | TableRows::Image) {
-                    table.transposed = false;
-                }
-                // Each kind's options with it.
-                table.time_course = (rows == TableRows::TimePoint)
-                    .then(|| table.time_course.clone().unwrap_or_default());
-                table.profile = (rows == TableRows::ProfilePosition)
-                    .then(|| table.profile.clone().unwrap_or_default());
-            }
-        }
         "format" => {
             if let Some(format) = pick(&[TableFileFormat::Csv, TableFileFormat::Xlsx], value) {
                 table.format = format;
@@ -2570,8 +2752,7 @@ fn set_table_field(table: &mut TableExport, key: &str, value: &str, pickable: &P
 
 fn kind_name(entry: &ExportEntry) -> &'static str {
     match entry {
-        ExportEntry::Table(_) => "TABLE",
-        ExportEntry::PlateLayout(_) => "PLATE_LAYOUT",
+        ExportEntry::Data(_) => "DATA",
         ExportEntry::DrawnImages(_) => "DRAWN_IMAGES",
         ExportEntry::Script(_) => "SCRIPT",
     }
@@ -2592,8 +2773,7 @@ pub(crate) fn summary(export: &ExportSettings) -> String {
         n => Some(format!("{n} {many}")),
     };
     let parts: Vec<String> = [
-        part(count("TABLE"), "a table", "tables"),
-        part(count("PLATE_LAYOUT"), "plate layout", "plate layouts"),
+        part(count("DATA"), "a data export", "data exports"),
         part(count("DRAWN_IMAGES"), "drawn images", "drawn images"),
         part(count("SCRIPT"), "script", "scripts"),
     ]
@@ -2607,41 +2787,47 @@ pub(crate) fn summary(export: &ExportSettings) -> String {
     }
 }
 
-fn rows_text(rows: TableRows) -> &'static str {
-    match rows {
-        TableRows::Object => "object",
-        TableRows::Image => "image",
-        TableRows::Well => "well",
-        TableRows::Folder => "folder",
-        TableRows::ColocPair => "coloc pair",
-        TableRows::Track => "track",
-        TableRows::Measurement => "measurement",
-        TableRows::TimePoint => "time point",
-        TableRows::ProfilePosition => "profile position",
-    }
-}
-
 fn entry_row(export: &ExportSettings, entry: &ExportEntry) -> ExportEntryRow {
-    let file = naming::entry_name(entry)
-        .map(|name| naming::with_prefix(export, &name))
-        .unwrap_or_default();
+    let files: Vec<String> = naming::entry_names(entry)
+        .iter()
+        .map(|name| naming::with_prefix(export, name))
+        .collect();
+    let file = files.first().cloned().unwrap_or_default();
     let (title, subtitle, format) = match entry {
-        ExportEntry::Table(table) => {
-            let ext = match table.format {
+        ExportEntry::Data(data) => {
+            let ext = match data.format {
                 TableFileFormat::Csv => "csv",
                 TableFileFormat::Xlsx => "xlsx",
             };
-            let mut subtitle = vec![format!("A row per {}", rows_text(table.rows))];
-            subtitle.push(match &table.columns {
+            let named: Vec<String> = jobs_of(data)
+                .iter()
+                .map(|(_, job)| match job {
+                    Job::Table(_) => format!(
+                        "{}.{ext}",
+                        naming::with_prefix(export, &naming::job_name(job))
+                    ),
+                    Job::PlateLayout(_) => format!(
+                        "{}.xlsx",
+                        naming::with_prefix(export, &naming::job_name(job))
+                    ),
+                })
+                .collect();
+            let title = match named.len() {
+                0 => "Data · no output ticked".to_string(),
+                1 => format!("Data · {}", named[0]),
+                n => format!("Data · {n} outputs"),
+            };
+            let mut subtitle = Vec::new();
+            if named.len() > 1 {
+                subtitle.push(named.join(" · "));
+            }
+            subtitle.push(match &data.columns {
                 None => "default columns".into(),
                 Some(c) if c.len() == 1 => "1 column".into(),
                 Some(c) => format!("{} columns", c.len()),
             });
-            if matches!(
-                table.rows,
-                TableRows::Image | TableRows::Well | TableRows::Folder | TableRows::TimePoint
-            ) {
-                let aggregations: Vec<&str> = table
+            if grouping(data).0 {
+                let aggregations: Vec<&str> = data
                     .aggregations
                     .iter()
                     .filter_map(|a| AGGREGATIONS.iter().find(|(b, ..)| b == a))
@@ -2649,49 +2835,27 @@ fn entry_row(export: &ExportSettings, entry: &ExportEntry) -> ExportEntryRow {
                     .collect();
                 subtitle.push(aggregations.join(", "));
             }
-            if table.transposed {
+            if data.classes.is_none() {
+                subtitle.push("all classes".into());
+            }
+            if data.transposed
+                && data.outputs.iter().any(|o| {
+                    matches!(
+                        o,
+                        DataOutput::Objects
+                            | DataOutput::Images
+                            | DataOutput::Wells
+                            | DataOutput::Folders
+                    )
+                })
+            {
                 subtitle.push("classes side by side".into());
             }
-            if table.split != TableSplit::None {
-                subtitle.push(format!(
-                    "per {}",
-                    match table.split {
-                        TableSplit::Image => "image",
-                        TableSplit::Well => "well",
-                        TableSplit::Folder => "folder",
-                        _ => "class",
-                    }
-                ));
+            if let Some([from, to]) = data.planes.t {
+                subtitle.push(format!("time points {from}-{to}"));
             }
-            (
-                format!("Table · {file}.{ext}"),
-                subtitle.join(" · "),
-                ext.to_uppercase(),
-            )
+            (title, subtitle.join(" · "), ext.to_uppercase())
         }
-        ExportEntry::PlateLayout(plate) => (
-            format!("Plate layout · {file}.xlsx"),
-            {
-                let grid = match plate.grid {
-                    PlateGrid::Plate => "The plate's grid",
-                    PlateGrid::Well => "The well's grid",
-                    PlateGrid::Image => "A grid of squares per image",
-                };
-                let columns = match &plate.columns {
-                    None => "the count".to_string(),
-                    Some(c) if c.len() == 1 => "1 column".to_string(),
-                    Some(c) => format!("{} columns", c.len()),
-                };
-                let values: Vec<&str> = plate
-                    .aggregations
-                    .iter()
-                    .filter_map(|a| AGGREGATIONS.iter().find(|(b, ..)| b == a))
-                    .map(|(_, key, _)| *key)
-                    .collect();
-                format!("{grid} · {columns} · {}", values.join(", "))
-            },
-            "XLSX".to_string(),
-        ),
         ExportEntry::DrawnImages(drawn) => (
             format!("Drawn images · {file}_<image>.png"),
             format!(
