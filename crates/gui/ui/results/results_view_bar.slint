@@ -171,6 +171,8 @@ export component ViewPanel inherits Rectangle {
     in property <string> title;
     in property <[string]> parts;
     in property <string> part;
+    // ‹ folds it away (off: a panel that stays, e.g. the Exports tab's).
+    in property <bool> foldable: true;
     callback part-picked(string);
     callback fold;
     property <int> index: root.parts[0] == root.part ? 0 : root.parts[1] == root.part ? 1
@@ -213,7 +215,7 @@ export component ViewPanel inherits Rectangle {
                 vertical-alignment: center;
                 overflow: elide;
             }
-            InkIconButton {
+            if root.foldable: InkIconButton {
                 size: 26px;
                 icon: InkIcons.caret-left;
                 label: "Fold the panel away";

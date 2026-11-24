@@ -147,6 +147,65 @@ pub fn results_database(
     )))
 }
 
+/// The value columns a table of `rows` has without `columns` - none for
+/// tracks and measurements (they have their own: all of theirs).
+pub fn default_columns(
+    rows: evanalyzer_cfg::settings::export_settings::TableRows,
+) -> Vec<crate::results::Column> {
+    use evanalyzer_cfg::settings::export_settings::TableRows;
+    match rows {
+        TableRows::Object | TableRows::ColocPair => local::table::DEFAULT_OBJECT_COLUMNS.to_vec(),
+        TableRows::Image | TableRows::Well | TableRows::Folder => {
+            local::table::DEFAULT_GROUPED_COLUMNS.to_vec()
+        }
+        TableRows::Track | TableRows::Measurement => Vec::new(),
+    }
+}
+
+/// Columns every table has first, in their place - never a value column
+/// to pick.
+pub fn is_leading_column(column: &crate::results::Column) -> bool {
+    local::table::is_leading(column)
+}
+
+/// Opens the results `database` (where they are: here or on the server)
+/// and puts together how `export` runs on them - for the CLI and the
+/// editor alike: the user's interpreters, how the project draws its images.
+pub fn prepare_run(
+    backend: &dyn crate::backend::Backend,
+    project: &crate::project::ProjectWithRuntime,
+    project_dir: &std::path::Path,
+    export: ExportSettings,
+    database: &std::path::Path,
+    output: Option<std::path::PathBuf>,
+    scripts: ScriptPermission,
+) -> Result<
+    (std::sync::Arc<dyn crate::results::ResultsSource>, ExportRun),
+    evanalyzer_cfg::core_types::InternalErrors,
+> {
+    // The user's settings on the machine the export runs on.
+    let settings = backend.load_app_settings().unwrap_or_default();
+    let results = backend.open_results(database)?;
+    let results_images: Vec<String> = results
+        .get_images()?
+        .into_iter()
+        .map(|image| image.rel_path.to_string_lossy().replace('\\', "/"))
+        .collect();
+    let run = ExportRun {
+        export,
+        project_dir: project_dir.to_path_buf(),
+        results_dir: database
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_default(),
+        output,
+        scripts,
+        interpreters: settings.script_interpreters.clone(),
+        drawing: Some(drawing(project, backend.files(), database, &results_images)),
+    };
+    Ok((results, run))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

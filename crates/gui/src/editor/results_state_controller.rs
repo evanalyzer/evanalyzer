@@ -15,8 +15,8 @@ use evanalyzer_app::project::PlateSettingsExt;
 
 mod chart_draw;
 mod chart_export;
-mod coloc;
-mod column_panel;
+pub(crate) mod coloc;
+pub(crate) mod column_panel;
 mod paths;
 pub(crate) mod split;
 mod tracks;
@@ -7345,6 +7345,10 @@ fn flatten_grid_cells(result: &DatabaseResult) -> Vec<MatrixCell> {
 // Unpacks a `0xRRGGBB` cell background color (see `value_to_color` in
 // evanalyzer_app, and `Class.color`/color_generators.rs for the same
 // encoding elsewhere in this codebase) into a Slint `color`.
+pub(crate) fn class_color_to_slint(bg_color: u32) -> Color {
+    bg_color_to_slint(bg_color)
+}
+
 fn bg_color_to_slint(bg_color: u32) -> Color {
     Color::from_rgb_u8(
         ((bg_color >> 16) & 0xFF) as u8,

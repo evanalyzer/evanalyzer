@@ -37,6 +37,7 @@ const ACTIONS: &[(&str, &str, &str)] = &[
     ("mode-images", "Show images", "Ctrl 1"),
     ("mode-pipelines", "Show pipelines", "Ctrl 2"),
     ("mode-results", "Show results", "Ctrl 3"),
+    ("mode-exports", "Show exports", "Ctrl 4"),
     ("annotate", "Annotate mode on / off", ""),
     ("debug", "Debug mode on / off", ""),
     ("ai", "AI training…", ""),
@@ -234,6 +235,7 @@ fn run(ui: &AppWindow, id: &str) {
             "mode-images" => layout.set_mode(WorkspaceMode::Images),
             "mode-pipelines" => layout.set_mode(WorkspaceMode::Pipelines),
             "mode-results" => layout.set_mode(WorkspaceMode::Results),
+            "mode-exports" => layout.set_mode(WorkspaceMode::Exports),
             "annotate" => layout.set_annotate(!layout.get_annotate()),
             "debug" => panel.invoke_debug_mode_toggled(!panel.get_debug_mode()),
             "ai" => ui.global::<AiLearningState>().invoke_open_requested(),
@@ -500,6 +502,9 @@ mod tests {
         state.invoke_run("action:mode-results".into());
         assert!(!state.get_open());
         assert_eq!(layout.get_mode(), WorkspaceMode::Results);
+
+        state.invoke_run("action:mode-exports".into());
+        assert_eq!(layout.get_mode(), WorkspaceMode::Exports);
 
         state.invoke_run("action:annotate".into());
         assert!(layout.get_annotate());

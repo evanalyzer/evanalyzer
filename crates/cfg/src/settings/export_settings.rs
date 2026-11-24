@@ -148,6 +148,10 @@ pub struct TableExport {
     /// Grouped rows: a row also for classes without objects.
     #[serde(default)]
     pub empty_classes: bool,
+    /// The classes side by side: a column per value and class instead of a
+    /// row per class - `Object` and `Image` rows only.
+    #[serde(default)]
+    pub transposed: bool,
     /// One file (or sheet) per image, well, folder or class.
     #[serde(default)]
     pub split: TableSplit,
@@ -468,6 +472,7 @@ mod tests {
                     aggregations: vec![ExportAggregation::Median],
                     images: ImageScope::All,
                     empty_classes: true,
+                    transposed: false,
                     split: TableSplit::Class,
                     split_into: SplitInto::Sheets,
                     tracks: Some(TrackOptions {

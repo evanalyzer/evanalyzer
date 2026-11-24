@@ -7448,6 +7448,11 @@
             }
           ],
           "default": null
+        },
+        "transposed": {
+          "description": "The classes side by side: a column per value and class instead of a\nrow per class - `Object` and `Image` rows only.",
+          "type": "boolean",
+          "default": false
         }
       },
       "required": [

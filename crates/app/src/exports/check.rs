@@ -241,6 +241,18 @@ fn check_table(table: &TableExport, at: &mut impl FnMut(Severity, String)) {
             "sheets need XLSX - a CSV file has none".into(),
         );
     }
+    if table.transposed && !matches!(table.rows, TableRows::Object | TableRows::Image) {
+        at(
+            Severity::Error,
+            "transposed (classes side by side) is for object or image rows only".into(),
+        );
+    }
+    if table.transposed && table.split == TableSplit::Class {
+        at(
+            Severity::Warning,
+            "transposed and one file per class: each file has a single class".into(),
+        );
+    }
     if table.tracks.is_some() && table.rows != TableRows::Track {
         at(
             Severity::Error,
@@ -273,6 +285,13 @@ fn check_classes(
     classes: Option<&[u32]>,
     at: &mut impl FnMut(Severity, String),
 ) {
+    if classes.is_some_and(<[u32]>::is_empty) {
+        at(
+            Severity::Error,
+            "no class picked - it would write nothing (leave classes out for all)".into(),
+        );
+        return;
+    }
     let (Some(classes), Some(project)) = (classes, project) else {
         return;
     };

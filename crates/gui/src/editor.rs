@@ -29,8 +29,10 @@ pub mod ai_learning_controller;
 pub(crate) mod ai_learning_features;
 pub mod annotations_controller;
 pub mod classification_controller;
+pub(crate) mod column_picker;
 pub mod command_palette_controller;
 pub mod connection_controller;
+pub mod exports_controller;
 pub mod focus_controller;
 pub mod histogram_controller;
 pub mod image_meta_controller;
@@ -92,6 +94,7 @@ pub struct Editor {
     script_editor_controller: script_editor_controller::ScriptEditorController,
     command_palette_controller: command_palette_controller::CommandPaletteController,
     start_page_controller: Arc<start_page_controller::StartPageController>,
+    exports_controller: Arc<exports_controller::ExportsController>,
 }
 
 impl Editor {
@@ -265,8 +268,14 @@ impl Editor {
             project_controller.clone(),
         ));
 
+        let exports_controller = Arc::new(exports_controller::ExportsController::new(
+            ui.clone(),
+            app_state.clone(),
+        ));
+
         Self {
             start_page_controller,
+            exports_controller,
             connection_controller,
             script_editor_controller,
             command_palette_controller,
@@ -296,6 +305,7 @@ impl Editor {
         self.image_list_controller.attach_callbacks();
         self.project_controller.attach_callbacks();
         self.start_page_controller.attach_callbacks();
+        self.exports_controller.attach_callbacks();
         self.histogram_controller.attach_callbacks();
         self.viewport_image_controller.attach_callbacks();
         self.image_meta_controller.attach_callbacks();

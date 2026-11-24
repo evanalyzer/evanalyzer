@@ -37,9 +37,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 const PAGE_SIZE: i32 = 20_000;
 
 /// The value columns a table has without `columns`.
-const DEFAULT_OBJECT_COLUMNS: [Column; 3] =
+pub(crate) const DEFAULT_OBJECT_COLUMNS: [Column; 3] =
     [Column::AreaSizePx, Column::AreaSizeNm, Column::Circularity];
-const DEFAULT_GROUPED_COLUMNS: [Column; 3] =
+pub(crate) const DEFAULT_GROUPED_COLUMNS: [Column; 3] =
     [Column::Count, Column::AreaSizeNm, Column::Circularity];
 
 /// Writes `table`, its files into `report`.
@@ -256,6 +256,18 @@ struct Plan {
     several_z: bool,
     several_t: bool,
     empty_classes: bool,
+    /// The classes side by side (`TableExport::transposed`; object and
+    /// image rows).
+    transposed: bool,
+    /// Per class id its name part for the transposed column names.
+    class_parts: BTreeMap<u32, String>,
+}
+
+/// A written column of a transposed table: what it is, where its cell is
+/// in a query's row.
+struct Placed {
+    column: ValueColumn,
+    at: usize,
 }
 
 impl Plan {
@@ -310,13 +322,221 @@ impl Plan {
                 .classes
                 .as_ref()
                 .map(|ids| ids.iter().map(|id| ObjectClass::Global(*id)).collect()),
-            db_classes,
             images,
             planes,
             several_z: results.get_nr_of_z_stacks() > 1,
             several_t: results.get_nr_of_t_stacks() > 1,
             empty_classes: table.empty_classes,
+            transposed: table.transposed
+                && matches!(table.rows, TableRows::Object | TableRows::Image),
+            class_parts: naming::unique_parts(
+                &db_classes
+                    .iter()
+                    // Column names are lower case (§3.3).
+                    .map(|class| (class.id, class.name.to_lowercase()))
+                    .collect::<Vec<_>>(),
+            ),
+            db_classes,
         })
+    }
+
+    /// The classes a transposed query puts side by side, in id order - as
+    /// the results do it: those asked for (and known), else every class.
+    fn blocks(&self, classes: Option<&[ObjectClass]>) -> Vec<u32> {
+        let known = |id: &u32| self.db_classes.iter().any(|class| class.id == *id);
+        let mut ids: Vec<u32> = match classes {
+            Some(classes) => classes
+                .iter()
+                .filter_map(|class| match class {
+                    ObjectClass::Global(id) => Some(*id),
+                    _ => None,
+                })
+                .filter(known)
+                .collect(),
+            None => self.db_classes.iter().map(|class| class.id).collect(),
+        };
+        ids.sort_unstable();
+        ids.dedup();
+        ids
+    }
+
+    /// A transposed query's cells per class: for image rows a cell per
+    /// value and aggregation, for object rows the id and the values (in
+    /// `Column`'s order) - and the written columns among them.
+    fn transposed_columns(&self, blocks: &[u32]) -> (usize, Vec<Placed>) {
+        let block: Vec<ValueColumn> = if self.grouped() {
+            self.value_columns()
+        } else {
+            let mut columns = self.list_columns();
+            columns.retain(|column| *column != Column::ObjectClass);
+            columns.sort();
+            columns
+                .iter()
+                .map(|column| {
+                    if *column == Column::ObjectId {
+                        return ValueColumn {
+                            name: "object_id".into(),
+                            label: "Object".into(),
+                            unit: String::new(),
+                            factor: 1.0,
+                            keep: true,
+                        };
+                    }
+                    let (name, factor) = column_name(column, self.unit, &self.db_classes);
+                    ValueColumn {
+                        name,
+                        label: column.display_label(&self.db_classes),
+                        unit: unit_label(column, self.unit),
+                        factor,
+                        keep: true,
+                    }
+                })
+                .collect()
+        };
+        let per_block = block.len();
+        let mut placed = Vec::new();
+        for (b, id) in blocks.iter().enumerate() {
+            let part = self
+                .class_parts
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| id.to_string());
+            let class = self
+                .db_classes
+                .iter()
+                .find(|class| class.id == *id)
+                .map_or_else(|| id.to_string(), |class| class.name.clone());
+            for (j, column) in block.iter().enumerate() {
+                if !column.keep {
+                    continue;
+                }
+                placed.push(Placed {
+                    column: ValueColumn {
+                        name: format!("{}_{part}", column.name),
+                        label: format!("{} · {class}", column.label),
+                        unit: column.unit.clone(),
+                        factor: column.factor,
+                        keep: true,
+                    },
+                    at: 1 + b * per_block + j,
+                });
+            }
+        }
+        (per_block, placed)
+    }
+
+    /// The leading columns of a transposed table: the image, the plane.
+    fn transposed_leading_header(&self) -> Vec<String> {
+        let mut header = vec!["image".to_string()];
+        if self.several_t {
+            header.push("t".into());
+        }
+        if self.several_z {
+            header.push("z".into());
+        }
+        header
+    }
+
+    /// [`Plan::write_part`] with the classes side by side.
+    fn write_part_transposed(
+        &self,
+        results: &dyn ResultsSource,
+        part: &Part,
+        sink: &mut dyn Sink,
+        cancel: &AtomicBool,
+    ) -> Result<(), InternalErrors> {
+        let blocks = self.blocks(part.classes.as_deref());
+        let (per_block, placed) = self.transposed_columns(&blocks);
+        let header: Vec<Out> = self
+            .transposed_leading_header()
+            .into_iter()
+            .chain(placed.iter().map(|p| p.column.name.clone()))
+            .map(Out::Text)
+            .collect();
+        sink.row(&header)?;
+        if part.images.is_empty() || blocks.is_empty() {
+            return Ok(());
+        }
+        let mut line = Vec::new();
+        for plane in &self.planes {
+            let mut cursor: Option<String> = None;
+            loop {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(InternalErrors::Cancelled);
+                }
+                let after = cursor.take();
+                let page = if self.grouped() {
+                    results.get_grouped_by_image(&GroupedByImageFilter {
+                        plane: *plane,
+                        images: Some(part.images.clone()),
+                        object_classes: part.classes.clone(),
+                        columns: self.values.clone(),
+                        aggregation: self.aggregations.clone(),
+                        page: Pagination {
+                            limit: PAGE_SIZE,
+                            after,
+                        },
+                        transpond_table: true,
+                        grouping: None,
+                        empty_classes: self.empty_classes,
+                        sort: None,
+                    })?
+                } else {
+                    results.get_object_list(&ListFilter {
+                        plane: *plane,
+                        images: Some(part.images.clone()),
+                        object_classes: part.classes.clone(),
+                        columns: self.list_columns(),
+                        with_coloc_details: false,
+                        related_to: None,
+                        page: Pagination {
+                            limit: PAGE_SIZE,
+                            after,
+                        },
+                        transpond_table: true,
+                        sort: None,
+                    })?
+                };
+                // The classes side by side as worked out here - else the
+                // values would land under another class's names.
+                if page.column_names.len() != 1 + blocks.len() * per_block {
+                    return Err(InternalErrors::Internal(format!(
+                        "the transposed table has {} columns, {} expected",
+                        page.column_names.len(),
+                        1 + blocks.len() * per_block
+                    )));
+                }
+                for (i, row) in page.rows.iter().enumerate() {
+                    line.clear();
+                    line.push(
+                        page.row_locations
+                            .get(i)
+                            .map_or(Out::Empty, |(path, _)| Out::Text(path.replace('\\', "/"))),
+                    );
+                    if self.several_t {
+                        line.push(Out::Number(f64::from(plane.t_stack)));
+                    }
+                    if self.several_z {
+                        line.push(Out::Number(f64::from(plane.z_stack)));
+                    }
+                    for p in &placed {
+                        line.push(
+                            row.get(p.at)
+                                .map_or(Out::Empty, |cell| value(cell, p.column.factor)),
+                        );
+                    }
+                    sink.row(&line)?;
+                }
+                if page.source_object_count < PAGE_SIZE as usize {
+                    break;
+                }
+                cursor = page.row_names.last().cloned();
+                if cursor.is_none() {
+                    break;
+                }
+            }
+        }
+        Ok(())
     }
 
     fn grouped(&self) -> bool {
@@ -393,6 +613,9 @@ impl Plan {
         sink: &mut dyn Sink,
         cancel: &AtomicBool,
     ) -> Result<(), InternalErrors> {
+        if self.transposed {
+            return self.write_part_transposed(results, part, sink, cancel);
+        }
         let values = self.value_columns();
         let header: Vec<Out> = self
             .leading_header()
@@ -558,7 +781,12 @@ impl Plan {
             "label".to_string(),
             "unit".to_string(),
         ]];
-        for name in self.leading_header() {
+        let leading = if self.transposed {
+            self.transposed_leading_header()
+        } else {
+            self.leading_header()
+        };
+        for name in leading {
             let label = match name.as_str() {
                 "image" => "Image (relative path)",
                 "class" => "Class",
@@ -570,6 +798,14 @@ impl Plan {
                 _ => "",
             };
             rows.push([name, label.to_string(), String::new()]);
+        }
+        if self.transposed {
+            let blocks = self.blocks(self.classes.as_deref());
+            for placed in self.transposed_columns(&blocks).1 {
+                let column = placed.column;
+                rows.push([column.name, column.label, column.unit]);
+            }
+            return rows;
         }
         for column in self.value_columns().into_iter().filter(|v| v.keep) {
             rows.push([column.name, column.label, column.unit]);
@@ -598,7 +834,7 @@ struct Layout {
 }
 
 /// Columns that are always there, first - never a value column.
-fn is_leading(column: &Column) -> bool {
+pub(crate) fn is_leading(column: &Column) -> bool {
     matches!(
         column,
         Column::ImageName | Column::ObjectClass | Column::ObjectId | Column::TrackId

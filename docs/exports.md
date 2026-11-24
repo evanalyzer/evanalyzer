@@ -85,6 +85,7 @@ same kind would write the same name.
 | `aggregations` | list of `"AVG"`, `"MEDIAN"`, `"STDDEV"`, `"SUM"`, `"MIN"`, `"MAX"`, `"SKEWNESS"` | `["AVG"]` | Grouped rows only (`image`, `well`, `folder`, `track`). |
 | `images` | `"ALL"` \| `"INCLUDED"` \| `"LEFT_OUT"` | `"INCLUDED"` | Which images of the run. |
 | `emptyClasses` | bool | `false` | Grouped rows: a row also for classes without objects. |
+| `transposed` | bool | `false` | The classes side by side: a column per value and class instead of a row per class (§3.2). `object` and `image` rows only. |
 | `split` | `"NONE"` \| `"IMAGE"` \| `"WELL"` \| `"FOLDER"` \| `"CLASS"` | `"NONE"` | One file (or sheet) per image, well, folder or class. |
 | `splitInto` | `"FILES"` \| `"SHEETS"` | `"FILES"` | `sheets`: one workbook, a sheet each. `xlsx` only. |
 | `tracks` | object | see below | `rows: "TRACK"` only. |
@@ -174,6 +175,8 @@ Errors:
   than `"TRACK"`; a `split` finer than the rows (`"IMAGE"` for well or
   folder rows, `"WELL"` for folder rows and back, `"CLASS"` for
   measurement rows).
+- `classes` given but empty (it would write nothing; left out it means
+  all classes).
 - Two entries of one export, or two exports writing into the same folder,
   that would write the same file name.
 - A script outside `scripts/`, or missing.
@@ -181,6 +184,7 @@ Errors:
 Warnings:
 
 - An absolute `folder` (not portable).
+- `transposed` with `split: "CLASS"` (each file has a single class).
 - Class ids or column keys the project doesn't have (a class may be absent
   from some runs; the table then has no such column or rows).
 
@@ -284,6 +288,12 @@ separators.
 3. The value columns, in the format's fixed order of column types (not the
    order they were ticked in).
 
+`transposed`: no `class` column - the classes are side by side, in the
+order of their ids, each with all value columns. An `image` row holds an
+image's values of every class; an `object` row the n-th object of each
+class of an image (`object_id` per class; a class with fewer objects is
+empty in the rows past its last).
+
 ### 3.3 Column names
 
 Made for scripts: lower case, only `a-z`, `0-9` and `_`.
@@ -296,6 +306,9 @@ Made for scripts: lower case, only `a-z`, `0-9` and `_`.
   `_gray`.
 - Grouped rows add the aggregation: `area_um2_avg`, `area_um2_median`.
   The count of objects is `count`.
+- `transposed` adds the class at the end, its name made a name part
+  (with its id where two classes would give the same): `count_nucleus`,
+  `area_um2_avg_nucleus`, `object_id_cell`.
 - Measurement columns have no unit in their name (it isn't stored per
   column); a `rows: "MEASUREMENT"` table has the unit as a column.
 

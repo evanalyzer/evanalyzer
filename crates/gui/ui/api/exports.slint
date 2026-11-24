@@ -1,0 +1,153 @@
+// Copyright 2026 Joachim Danmayr.
+// Licensed under the PolyForm Noncommercial License 1.0.0.
+
+// api/exports.slint — the Exports tab's state: the project's exports
+// (`docs/exports.md`), the one being edited, its entries and the one picked.
+// Edits go to Rust as (key, value) pairs; Rust pushes the state back.
+
+import { MultiSelectItem } from "../ink/multi_select.slint";
+import { ColumnSection, ColumnPreset, IntensityCell, ColocGroup } from "results.slint";
+
+// One export in the list.
+export struct ExportRow {
+    id: int,
+    name: string,
+    // "2 tables · drawn images · script".
+    summary: string,
+    // Runs after every run.
+    after: bool,
+    // The last run here: "", "✓ 09:14", "⚠ script failed".
+    status: string,
+    // 0 neutral, 1 ok, 2 warning.
+    status-tone: int,
+}
+
+// One entry of the export being edited.
+export struct ExportEntryRow {
+    // "TABLE", "PLATE_LAYOUT", "DRAWN_IMAGES", "SCRIPT".
+    kind: string,
+    // "Table · objects.csv".
+    title: string,
+    // "A row per image · 3 columns · avg".
+    subtitle: string,
+    // "CSV", "XLSX", "PNG", "R".
+    format: string,
+}
+
+export global ExportsState {
+    // -- The list --
+    in property <[ExportRow]> exports: [];
+    in property <int> selected-id: -1;
+
+    // -- The export being edited (selected-id) --
+    in property <string> name;
+    in property <string> prefix;
+    // 0 the results folder, 1 a fixed folder.
+    in property <int> location;
+    in property <string> folder;
+    // 0 overwrite, 1 rename.
+    in property <int> if-exists;
+    // 0 µm, 1 nm.
+    in property <int> length-unit;
+    in property <bool> after;
+    // What is wrong with it ("" none) - it can't run then.
+    in property <string> problems;
+    in property <[ExportEntryRow]> entries: [];
+    in property <int> entry: -1;
+    // The part of a table's settings shown (kept by the view).
+    in-out property <string> panel-part: "Table";
+
+    // -- The entry picked (entry), by its kind --
+    in property <string> entry-kind;
+    // Table: rows, format, split, split into, images (indexes into the models below).
+    in property <int> rows;
+    in property <int> format;
+    in property <int> split;
+    in property <int> split-into;
+    in property <int> images;
+    // The classes (as the Results List ticks them: all ticked - every
+    // class, also ones new in a run).
+    in-out property <[MultiSelectItem]> classes: [];
+    in property <string> classes-summary;
+    // The column picker (the Results List's, `ColumnPicker`) over the
+    // newest analysis' columns.
+    in property <string> picker-filter;
+    in property <bool> picker-grouped;
+    in property <[ColumnPreset]> picker-presets;
+    in property <[ColumnSection]> picker-sections;
+    in property <string> picker-intensity-title;
+    in property <bool> picker-intensity-open;
+    in property <[string]> picker-intensity-channels;
+    in property <[string]> picker-intensity-stats;
+    in property <[IntensityCell]> picker-intensity-cells;
+    in property <bool> picker-has-coloc;
+    in property <[ColocGroup]> picker-coloc-groups;
+    in property <string> coloc-title;
+    in property <bool> coloc-open;
+    in property <[MultiSelectItem]> coloc-partner-items;
+    in property <string> coloc-partner-summary;
+    in property <string> coloc-partner-order;
+    in property <int> coloc-count;
+    in property <bool> coloc-only-occurring;
+    // The classes side by side (object and image rows).
+    in property <bool> transposed;
+    // Grouped rows: a row also for classes without objects.
+    in property <bool> empty-classes;
+    // No columns set: the default ones (ticked as such).
+    in property <bool> columns-default: true;
+    // Why there are none to pick, or keys the newest analysis lacks ("").
+    in property <string> columns-note;
+    in-out property <[MultiSelectItem]> aggregations: [];
+    // The results views columns can be taken from.
+    in property <[string]> views: [];
+    // Plate layout.
+    in property <int> grid;
+    // Drawn images.
+    in property <int> style;
+    in property <int> brightness;
+    in property <int> max-side;
+    // Script.
+    in property <string> script-file;
+    in property <int> language;
+    in property <string> script-output;
+    in property <[string]> script-files: [];
+
+    // -- Running --
+    in property <bool> running;
+    in property <string> progress;
+    // The last run's report, line by line.
+    in property <[string]> report: [];
+    // A script's output of the last run.
+    in property <string> log;
+
+    // The tab was shown, or the project changed: everything anew.
+    callback refresh();
+    callback select(int);
+    callback new-export();
+    callback duplicate(int);
+    callback delete(int);
+    callback set-after(int, bool);
+    // A setting of the export being edited: "name", "prefix", "location",
+    // "folder", "if-exists", "length-unit", "after".
+    callback set-export-field(string, string);
+    callback add-entry(string);
+    callback remove-entry(int);
+    callback move-entry(int, int);
+    callback select-entry(int);
+    // A setting of the entry picked: "rows", "format", "split",
+    // "split-into", "images", "class:<id>", "aggregation:<key>",
+    // "all-classes", "no-classes", "all-aggregations", "no-aggregations",
+    // "clear-columns", "transposed", "empty-classes",
+    // "columns-from-view:<name>",
+    // "grid", "aggregation", "style", "brightness", "max-side",
+    // "script-file", "language", "script-output", "name".
+    callback set-entry-field(string, string);
+    // The column picker: (what, key, on) - "filter", "picked", "section",
+    // "section-select", "intensity-channel", "intensity-value", "preset",
+    // "coloc-box", "coloc-partner", "coloc-partners-all", "coloc-count",
+    // "coloc-only-occurring".
+    callback picker(string, string, bool);
+    // Runs the export on the project's newest analysis.
+    callback run();
+    callback cancel();
+}

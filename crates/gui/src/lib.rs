@@ -100,6 +100,7 @@ pub struct UiState {
     /// `image_states`.
     image_states_listener: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
     results_views_listener: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+    exports_listener: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
     /// Called once another image (or series) is shown - see `image_opened`.
     image_opened_listeners: Mutex<Vec<Box<dyn Fn() + Send + Sync>>>,
     /// Called once a trained model is saved - see `model_saved`.
@@ -148,6 +149,7 @@ impl UiState {
             local_backend,
             image_states_listener: Mutex::new(None),
             results_views_listener: Mutex::new(None),
+            exports_listener: Mutex::new(None),
             image_opened_listeners: Mutex::new(Vec::new()),
             model_saved_listeners: Mutex::new(Vec::new()),
             pipeline_added_listeners: Mutex::new(Vec::new()),
@@ -212,6 +214,17 @@ impl UiState {
     /// Calls `f` when an undo or redo changed the project's results views.
     pub fn on_results_views_restored(&self, f: impl Fn() + Send + Sync + 'static) {
         *self.results_views_listener.lock().expect("Poisoned") = Some(Box::new(f));
+    }
+
+    /// Calls `f` when an undo or redo changed the project's exports.
+    pub fn on_exports_restored(&self, f: impl Fn() + Send + Sync + 'static) {
+        *self.exports_listener.lock().expect("Poisoned") = Some(Box::new(f));
+    }
+
+    fn exports_restored(&self) {
+        if let Some(listener) = self.exports_listener.lock().expect("Poisoned").as_ref() {
+            listener();
+        }
     }
 
     fn results_views_restored(&self) {
@@ -565,9 +578,11 @@ impl UiState {
             .push(current, self.undo_budget());
 
         let views_changed;
+        let exports_changed;
         {
             let mut project = self.app.get_project_write();
             views_changed = project.settings.results_views != prev.results_views;
+            exports_changed = project.settings.exports != prev.exports;
             // Folding the images list and the class eyes are no edits:
             // they stay as they are.
             let folded = std::mem::take(&mut project.settings.images.collapsed_folders);
@@ -589,6 +604,9 @@ impl UiState {
         if views_changed {
             self.results_views_restored();
         }
+        if exports_changed {
+            self.exports_restored();
+        }
         true
     }
 
@@ -606,9 +624,11 @@ impl UiState {
             .push(current, self.undo_budget());
 
         let views_changed;
+        let exports_changed;
         {
             let mut project = self.app.get_project_write();
             views_changed = project.settings.results_views != next.results_views;
+            exports_changed = project.settings.exports != next.exports;
             // Folding the images list and the class eyes are no edits:
             // they stay as they are.
             let folded = std::mem::take(&mut project.settings.images.collapsed_folders);
@@ -625,6 +645,9 @@ impl UiState {
         self.mark_dirty();
         if views_changed {
             self.results_views_restored();
+        }
+        if exports_changed {
+            self.exports_restored();
         }
         true
     }

@@ -25,6 +25,7 @@ import { MeasurementsPanel } from "../editor/measurements_panel.slint";
 import { MeasurementsState } from "../api/measurements.slint";
 import { AnnotateBar } from "annotate_bar.slint";
 import { ResultsView } from "../results/results_view.slint";
+import { ExportsView } from "../exports/exports_view.slint";
 import { SplitDivider, SplitFilmstrip, SplitHint, SplitImageHead, SplitMissing, SplitSelection, SplitTracksBar } from "../results/results_split.slint";
 import { ResultsPeek } from "results_peek.slint";
 import { SeriesChooser } from "series_chooser.slint";
@@ -53,7 +54,7 @@ export component Workspace inherits Rectangle {
     in property <image> ghost_image;
     in property <image> object_image;
 
-    property <bool> on-image: LayoutState.mode != WorkspaceMode.results;
+    property <bool> on-image: LayoutState.mode == WorkspaceMode.images || LayoutState.mode == WorkspaceMode.pipelines;
     // The panels over the image: the left one (Steps, Images), the right
     // column - away with Tab (`panels-hidden`).
     property <bool> left-shown: root.on-image && LayoutState.steps-open && !LayoutState.panels-hidden;
@@ -185,6 +186,12 @@ export component Workspace inherits Rectangle {
     if LayoutState.mode == WorkspaceMode.results: ResultsView {
         x: 0px;
         width: root.split ? root.split-left + 4px : root.width;
+    }
+
+    // The project's exports.
+    if LayoutState.mode == WorkspaceMode.exports: ExportsView {
+        width: root.width;
+        height: root.height;
     }
 
     // -- Split with the image: around the viewer --

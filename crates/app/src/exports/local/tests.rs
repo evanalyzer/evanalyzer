@@ -103,6 +103,96 @@ fn image_rows_aggregate_and_count_once() {
     assert_eq!(lines.len(), 3, "only the asked-for class: {lines:?}");
 }
 
+/// Transposed image rows: a row per image, the classes side by side - the
+/// count once per class, empty where an image has none of a class.
+#[test]
+fn transposed_image_rows_have_a_column_per_value_and_class() {
+    let dir = tempfile::tempdir().unwrap();
+    let results = results(dir.path());
+    let run_ = run_of(
+        dir.path(),
+        json!({ "id": 1, "name": "Images", "entries": [
+            { "kind": "TABLE", "rows": "IMAGE", "columns": ["count", "area_px"],
+              "aggregations": ["AVG", "MAX"], "classes": [1, 2], "transposed": true,
+              "format": "XLSX" },
+            { "kind": "TABLE", "rows": "IMAGE", "columns": ["count", "area_px"],
+              "aggregations": ["AVG", "MAX"], "classes": [1, 2], "transposed": true,
+              "name": "wide" }
+        ]}),
+    );
+    let report = run(&results, &run_);
+    assert!(report.all_written(), "{report:?}");
+    let lines = lines(&dir.path().join("wide.csv"));
+    assert_eq!(
+        lines[0],
+        "image,count_nucleus,area_px_avg_nucleus,area_px_max_nucleus,\
+         count_spot,area_px_avg_spot,area_px_max_spot"
+    );
+    assert_eq!(lines.len(), 4, "a row per image: {lines:?}");
+    assert!(
+        lines.contains(&"A1/img.tif,2,200,300,1,5,5".to_string()),
+        "{lines:?}"
+    );
+    assert!(
+        lines.contains(&"B1/img.tif,1,200,200,0,,".to_string()),
+        "{lines:?}"
+    );
+    assert!(
+        lines.contains(&"other.tif,0,,,1,7,7".to_string()),
+        "{lines:?}"
+    );
+}
+
+/// Transposed object rows: per image the n-th object of each class side by
+/// side.
+#[test]
+fn transposed_object_rows_put_the_classes_side_by_side() {
+    let dir = tempfile::tempdir().unwrap();
+    let results = results(dir.path());
+    let run_ = run_of(
+        dir.path(),
+        json!({ "id": 1, "name": "Objects", "entries": [
+            { "kind": "TABLE", "rows": "OBJECT", "columns": ["area_px"],
+              "classes": [1, 2], "transposed": true }
+        ]}),
+    );
+    let report = run(&results, &run_);
+    assert!(report.all_written(), "{report:?}");
+    let lines = lines(&dir.path().join("objects.csv"));
+    assert_eq!(
+        lines[0],
+        "image,object_id_nucleus,area_px_nucleus,object_id_spot,area_px_spot"
+    );
+    // A1: two nuclei and a spot - two rows; B1 and other one each.
+    assert_eq!(lines.len(), 5, "{lines:?}");
+    let a1: Vec<Vec<&str>> = lines
+        .iter()
+        .filter(|l| l.starts_with("A1/"))
+        .map(|l| l.split(',').collect())
+        .collect();
+    assert_eq!(a1.len(), 2);
+    assert_eq!(a1[0][4], "5");
+    assert_eq!(a1[1][3], "", "no second spot");
+}
+
+/// Transposed well rows can't be: refused by the checks.
+#[test]
+fn transposed_well_rows_are_refused() {
+    let problems = crate::exports::check::check_export(
+        &serde_json::from_value(json!({ "id": 1, "name": "W", "entries": [
+            { "kind": "TABLE", "rows": "WELL", "transposed": true }
+        ]}))
+        .unwrap(),
+    );
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.severity == crate::modules::Severity::Error
+                && p.message.contains("transposed")),
+        "{problems:?}"
+    );
+}
+
 #[test]
 fn a_file_per_image_has_the_shortest_unique_names_and_the_prefix() {
     let dir = tempfile::tempdir().unwrap();

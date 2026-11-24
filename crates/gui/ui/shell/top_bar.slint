@@ -767,8 +767,8 @@ export component TopBar inherits Rectangle {
     // H, L, M) - no image, preview or Run.
     property <bool> results: !StartState.active && LayoutState.mode == WorkspaceMode.results;
     // Images and Pipelines: the image, preview and Run (not on the start
-    // page - nothing is open there).
-    property <bool> editing: !StartState.active && !root.results;
+    // page - nothing is open there). Exports: neither.
+    property <bool> editing: !StartState.active && (LayoutState.mode == WorkspaceMode.images || LayoutState.mode == WorkspaceMode.pipelines);
     // An analysis in work (not yet finished).
     property <bool> running: PipelineRunningState.active && !PipelineRunningState.done;
 

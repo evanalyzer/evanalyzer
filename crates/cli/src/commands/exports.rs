@@ -113,38 +113,28 @@ pub(crate) fn run_export_on(
     output: Option<std::path::PathBuf>,
     scripts: Scripts,
 ) -> Result<usize, InternalErrors> {
-    use evanalyzer_app::exports::{EntryStatus, ExportRun, ScriptPermission};
-    // The user's settings on the machine the export runs on.
-    let settings = backend.load_app_settings().unwrap_or_default();
+    use evanalyzer_app::exports::{EntryStatus, ScriptPermission};
     println!("Export:  {} “{}”", export.id, export.name);
     println!("Results: {}", database.display());
-    let results = backend.open_results(database)?;
-    let results_images: Vec<String> = results
-        .get_images()?
-        .into_iter()
-        .map(|image| image.rel_path.to_string_lossy().replace('\\', "/"))
-        .collect();
-    let run = ExportRun {
-        export,
-        project_dir: project_dir.to_path_buf(),
-        results_dir: database
-            .parent()
-            .map(std::path::Path::to_path_buf)
-            .unwrap_or_default(),
-        output,
-        scripts: match scripts {
-            Scripts::All => ScriptPermission::All,
-            Scripts::None => ScriptPermission::Skip,
-            Scripts::Allowed => ScriptPermission::Trusted(settings.trusted_scripts.clone()),
-        },
-        interpreters: settings.script_interpreters.clone(),
-        drawing: Some(evanalyzer_app::exports::drawing(
-            project,
-            backend.files(),
-            database,
-            &results_images,
-        )),
+    let scripts = match scripts {
+        Scripts::All => ScriptPermission::All,
+        Scripts::None => ScriptPermission::Skip,
+        Scripts::Allowed => ScriptPermission::Trusted(
+            backend
+                .load_app_settings()
+                .unwrap_or_default()
+                .trusted_scripts,
+        ),
     };
+    let (results, run) = evanalyzer_app::exports::prepare_run(
+        backend,
+        project,
+        project_dir,
+        export,
+        database,
+        output,
+        scripts,
+    )?;
     let cancel = std::sync::atomic::AtomicBool::new(false);
     let report = results.run_export(&run, &cancel, &mut |message, current, total| {
         if current < total {
@@ -364,13 +354,19 @@ fn entry_details(entry: &ExportEntry) -> String {
         Some(keys) => keys.join(", "),
     };
     let lines: Vec<String> = match entry {
-        ExportEntry::Table(table) => vec![
-            format!("rows: {:?}", table.rows),
-            format!("classes: {}", classes(&table.classes)),
-            format!("columns: {}", columns(&table.columns, "the default ones")),
-            format!("aggregations: {:?}", table.aggregations),
-            format!("images: {:?}", table.images),
-        ],
+        ExportEntry::Table(table) => {
+            let mut lines = vec![
+                format!("rows: {:?}", table.rows),
+                format!("classes: {}", classes(&table.classes)),
+                format!("columns: {}", columns(&table.columns, "the default ones")),
+                format!("aggregations: {:?}", table.aggregations),
+                format!("images: {:?}", table.images),
+            ];
+            if table.transposed {
+                lines.push("transposed: the classes side by side".into());
+            }
+            lines
+        }
         ExportEntry::PlateLayout(plate) => vec![
             format!("grid: {:?}", plate.grid),
             format!("classes: {}", classes(&plate.classes)),

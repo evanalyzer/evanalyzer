@@ -15,7 +15,7 @@
 mod measurements;
 mod reused;
 mod script;
-mod table;
+pub(crate) mod table;
 mod tracks;
 
 use super::check::check_export;
