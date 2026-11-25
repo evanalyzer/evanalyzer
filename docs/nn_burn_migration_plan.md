@@ -520,6 +520,19 @@ core (P7), mmap instead of reading the file.
 
 ### P5 - StarDist (3-4 days)
 
+State 2026-11-25: done in `crates/nn` (`model::stardist`: StarDist's `_build` + CSBDeep's
+`unet_block`, Keras layer names, every shape from the config and checked; `infer` = the
+libtorch engine's path: end padding (mirrored) to `grid * 2^depth`, crop to the image's
+`side / grid` cells, pieces with a probed receptive field). Converter
+`docs/convert_stardist.py` (official model folders via the `stardist` package; refuses
+multi-class, batch norm, other activations). Parity (ignored release test) vs StarDist's
+own `predict` (TensorFlow) on `2D_versatile_fluo`: probability <= 8.3e-7, distances
+<= 1.5e-5, no flips (256², 101x77, 512x384, 1100x600 whole and in 512² pieces). One
+difference kept from the app: a side that isn't a multiple of the grid gives
+`floor(side / grid)` cells, StarDist keeps a last partial one (101 px: 50 vs 51). Speed:
+1100x600 in 0.69 s (22 threads). Before, the step needed a TorchScript of StarDist the
+user had to make (no converter existed); now the official models convert.
+
 1. StarDist 2D network (BSD-3: U-Net backbone from `config.json`: `n_rays`, `grid`,
    `unet_n_depth`, `unet_n_filter_base`, `net_conv_after_unet` …).
 2. `docs/convert_stardist.py`: Keras `.h5` / bioimage.io TF model → our safetensors.

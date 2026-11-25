@@ -349,6 +349,35 @@ pub fn plan(
     Ok(needs_pieces(width, height, piece).then_some((halo, piece)))
 }
 
+/// `plane` (`width x height`) padded by `(left, right, top, bottom)`,
+/// appended to `out`: mirrored without repeating the edge (PyTorch's
+/// `reflect`); a side too small to mirror repeats its edge pixel instead
+/// (`replicate`).
+pub fn pad_plane(
+    plane: &[f32],
+    width: usize,
+    height: usize,
+    (left, right, top, bottom): (usize, usize, usize, usize),
+    out: &mut Vec<f32>,
+) {
+    let reflect = left < width && right < width && top < height && bottom < height;
+    let source = |i: isize, len: usize| -> usize {
+        let n = len as isize;
+        if reflect {
+            let i = if i < 0 { -i } else { i };
+            (if i >= n { 2 * (n - 1) - i } else { i }) as usize
+        } else {
+            i.clamp(0, n - 1) as usize
+        }
+    };
+    for y in -(top as isize)..(height + bottom) as isize {
+        let row = source(y, height) * width;
+        for x in -(left as isize)..(width + right) as isize {
+            out.push(plane[row + source(x, width)]);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
