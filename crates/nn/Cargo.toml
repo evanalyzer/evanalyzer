@@ -17,4 +17,8 @@ serde = { workspace = true, features = ["derive"] }
 postcard = { workspace = true }
 log = { workspace = true }
 tempfile = { workspace = true, optional = true }
-burn = { workspace = true }
+burn = { version = "0.22.1", default-features = false, features = ["flex",  "wgpu"] }
+burn-flex = "0.22.1"
+burn-dispatch = { version = "0.22.1", default-features = false, features = ["rayon", "simd"] }
+thiserror = { workspace = true }
+smartcore = { workspace = true, features = ["serde"] }

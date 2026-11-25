@@ -1,6 +1,6 @@
 # Plan: libtorch → Burn, crate `evanalyzer_nn`
 
-Status: proposal (2026-11-25), branch `remove-libtorch`. Nothing built yet except the
+Status: planned (2026-11-25; D1-D5 decided), branch `remove-libtorch`. Nothing built yet except the
 empty `crates/nn` skeleton (80974378).
 
 ## Why now
@@ -19,27 +19,63 @@ empty `crates/nn` skeleton (80974378).
 
 ```
 gui ─┐
-cli ─┼─ app ── core ── nn ── burn (the only crate depending on burn)
-srv ─┘          │
-                └─ smartcore (KNN, random forest - not neural networks, stay in core)
+cli ─┼─ app ── core ── nn ─┬─ burn       (the only crate depending on burn)
+srv ─┘                     └─ smartcore  (the only crate depending on smartcore)
 ```
 
-**`evanalyzer_nn` (neural networks)** owns everything that touches burn:
+**`evanalyzer_nn` (neural networks and the other trained models)** owns every
+machine-learning algorithm - all of them train and infer, behind one interface:
 
 | Module | Content | Comes from |
 |---|---|---|
-| `api` | `Request`, `Task`, `Response`, `Image`, `Detection`, `EngineConfig`, `DeviceSelection`, `Pieces`, `PIECE_SIDES`, `piece_side_for`, `largest_model_input`, `box_iou` | `crates/ai/src/api.rs` minus `ffi`, `API_VERSION`, the `floats` byte serde |
-| `runtime` | backend + device choice (once per process, lazily on the first model run), `EngineInfo`, thread budget | `crates/ai/src/lib.rs` `infer`/`start`/`release_models` |
-| `scheduler` | model cache per device + path (+ mtime), slots per GPU, blocking when busy, `release_models` | `crates/ai/src/torch/scheduler.rs` (framework-free parts port 1:1) |
-| `pieces` | receptive-field probe, halo, InstanceNorm detection, piece loop | `crates/ai/src/torch/pieces.rs` |
-| `models::{unet, stardist, cellpose_sam, …}` | architectures (burn `Module`s), pre/post-processing that ran on tensors | `crates/ai/src/torch/*.rs` + new architecture code |
-| `weights` | model file format, importers (PyTorch state dict, bioimage.io) | new |
-| `mlp` | pixel/object classifier MLP + its training loop | `crates/core/src/ai_learning/model/mlp.rs` |
+| `model` | the `Model` trait (below), `Image`, `NnError` | new (replaces `api.rs`'s `Request`/`Task`/`Response` enums) |
+| `model::{unet, stardist, cellpose_sam}` | architectures (burn `Module`s), their `Settings` + `Output` types, pre/post-processing that ran on tensors | `crates/ai/src/torch/*.rs` + new architecture code |
+| `model::{mlp, knn, rtree}` | trained classifiers: MLP (burn), KNN + random forest (smartcore), their training | `crates/core/src/ai_learning/model/*.rs`, the `Classifier` enum of `ai_learning/model.rs`, the smartcore matrix conversion of `ai_learning/utils.rs` |
+| `runtime` | backend + device choice (once per process, lazily on the first model run), `EngineConfig`, `DeviceSelection`, `EngineInfo`, thread budget | `crates/ai/src/lib.rs` `infer`/`start`, `api.rs` |
+| `cache` | loaded models per (file, device) (+ mtime), slots per GPU, blocking when busy, `release_models` | `crates/ai/src/torch/scheduler.rs` (framework-free parts port 1:1) |
+| `pieces` | receptive-field probe, halo, InstanceNorm detection, `run_in_pieces` helper, `Pieces`, `PIECE_SIDES`, `piece_side_for`, `largest_model_input` | `crates/ai/src/torch/pieces.rs`, `api.rs` |
+| `weights` | safetensors + metadata format, importers (PyTorch state dict, bioimage.io) | new |
 | `train` | later: StarDist/Cellpose training (TODO "StarDist … Cellpose … ~2-3 weeks each") | new, not in this migration |
 
-Public surface stays plain data (slices in, `Vec<f32>`/`Detection`s out, no burn types),
-so core's call sites (`algos/ai_segmentation/*`, `job_executor`, `ai_devices`, `memory`,
-`tests/tile_ram`) change from `evanalyzer_ai::` to `evanalyzer_nn::` and little else.
+### API: a trait per model instead of one big enum (decided 2026-11-25)
+
+The `Request`/`Task`/`Response` enums only existed for the libtorch plugin: they crossed
+a C interface as postcard bytes, and a Rust trait object can't. Without the plugin each
+model is its own type:
+
+```rust
+pub trait Model: Sized + Send + Sync + 'static {
+    /// What a step chooses per run (channels, softmax, pieces, ...).
+    type Settings;
+    /// What the model gives back - plain data, no burn types.
+    type Output;
+    /// Builds the architecture from the file's metadata, loads the weights.
+    fn load(file: &Path, device: &Device) -> Result<Self, NnError>;
+    fn infer(&self, image: Image<'_>, settings: &Self::Settings) -> Result<Self::Output, NnError>;
+}
+
+pub fn infer<M: Model>(file: &Path, image: Image<'_>, settings: &M::Settings)
+    -> Result<M::Output, NnError>;
+```
+
+- Architecture config (depth, filters, rays …) is stored in the model - it belongs to
+  the weights. Run settings are passed per call: the loaded model is cached per file +
+  device and shared by every step using that file (Cellpose-SAM: 1.2 GB), so two steps
+  with other settings must not need two copies.
+- Static dispatch: each core step knows its model type (`nn::infer::<UNet>(…)` →
+  `UNetOutput`). The only `dyn` is the cache (`Arc<dyn Any + Send + Sync>`, downcast).
+- The engine stays global (`OnceLock`), set up lazily: the model steps sit deep in core
+  without a handle to pass.
+- `run_in_pieces` is a helper U-Net and StarDist call in their own `infer`.
+- Classifiers get the same shape with `train` added (trait or inherent fn, decided when
+  moving them); core hands rows as plain `&[f32]` + feature count, never a smartcore
+  `DenseMatrix` or burn tensor.
+- No `serde` on inputs/outputs any more (the `floats` byte encoding, `API_VERSION` go).
+
+Public surface stays plain data, so core's call sites (`algos/ai_segmentation/*`,
+`job_executor`, `ai_devices`, `memory`, `tests/tile_ram`, `ai_learning/*`) change from
+`evanalyzer_ai::` / smartcore / burn to `evanalyzer_nn::`. After P2 core depends on
+neither burn nor smartcore.
 
 **Removed**: `crates/ai` (plugin, `ffi`, `runtime/plugin.rs`, `runtime/cuda_probe.rs`,
 `torch/*`, `test_support`, examples), `tch`, `libloading` (if nothing else uses it),
@@ -48,59 +84,80 @@ features `libtorch` / `libtorch-in-process` / `torch` / `torch-plugin`, alias
 libtorch + NVIDIA parts of `libs/download.sh`, `ai/cpu` + `ai/cuda` packaging,
 `docs/convert_cellpose.py` (replaced, see D2).
 
-## Decisions needed before starting
+## Decisions
 
-**D1 - Licence of YOLOv5 (blocker).** YOLOv5 has no paper; its only description is
-Ultralytics' code, which is **AGPL-3.0**. Today we only decode the output of a
-user-supplied TorchScript graph; in burn we must write the architecture ourselves,
-and doing that from AGPL code breaks the clean-room rules. Options:
-- a) drop YOLOv5 (recommended unless users depend on it);
-- b) replace it by a detector with a permissive reference (e.g. YOLOX, Apache-2.0, has
-  a paper), with a schema migration that turns YOLOv5 steps into the new step;
-- c) keep YOLOv5 on a generic ONNX runtime (see D3) - no architecture code from us.
-
+**D1 - YOLOv5: dropped (decided 2026-11-25).** Its only description is Ultralytics'
+AGPL-3.0 code, so writing the architecture ourselves would break the clean-room rules.
+The YOLOv5 step, its settings (cfg), `algos/ai_segmentation/yolov5.rs` and the
+`Task::Yolo` / `Detection` / `box_iou` API parts are removed. No backwards
+compatibility: a pipeline with the step fails to load like any unknown command.
 Cellpose (BSD-3), SAM (Apache-2.0), StarDist (BSD-3) and torch-em U-Net (MIT) are fine
 to port.
 
-**D2 - Model file format.** Recommended: one file `*.safetensors` per model, with
-`__metadata__` = `{ "evanalyzer_arch": "unet2d", "arch_version": "1", "config": {…} }`
-(channels, depth, filters, norm, n_rays, grid …). Self-describing, no pickle, mmap-able
-(no copy of 1.2 GB Cellpose-SAM weights). Importers in nn turn foreign files into it:
+**D2 - Model file format: safetensors (decided 2026-11-25).** Each architecture is Rust code in nn; the
+weights come from a file. The file must also say *which variant* of the architecture
+it is for (a U-Net's depth, filters, channels, norm; StarDist's rays and grid), so the
+right module is built before the weights go in. Recommended: one `*.safetensors` file
+per model (named f32 tensors + a string map `__metadata__` with
+`{ "evanalyzer_arch": "unet2d", "arch_version": "1", "config": {…} }`). Data only (no
+pickle), mmap-able (no copy of 1.2 GB Cellpose-SAM weights), independent of burn's own
+formats (see D4). Foreign files are converted once when the user picks them:
 - PyTorch `state_dict` `.pth`/`.pt` (burn-store `PytorchStore`, reads the pickle without
-  executing it) - covers user-trained Cellpose models directly;
-- bioimage.io packages (`rdf.yaml` + `pytorch_state_dict` weights + known architecture);
-- StarDist Keras `.h5`: no pure-Rust HDF5 reader we trust → a small Python converter
-  script (as `convert_cellpose.py` today) that writes the safetensors file.
+  executing it) - covers user-trained Cellpose models; the variant is read from the
+  tensor shapes / the Cellpose defaults;
+- bioimage.io packages (`rdf.yaml` gives the variant, `pytorch_state_dict` the weights);
+- StarDist Keras `.h5`: a small Python converter script writes the safetensors file.
+The step then points to the `.safetensors` file.
 
-Import happens when the user picks a foreign file (model path setting): converted once
-next to it or into the project, the step then points to the `.safetensors`.
+**D3 - Supported models only (decided 2026-11-25).** TorchScript is dropped; only the
+architectures we implement run: torch-em `UNet2d` (bioimage.io's U-Nets, e.g.
+`joyful-pig`), StarDist 2D, Cellpose-SAM. Anything else is refused with a clear message
+naming the supported ones. No generic ONNX runtime.
 
-**D3 - Arbitrary architectures.** Today any TorchScript U-Net runs (we measure its
-receptive field). With burn only architectures we wrote run. Options:
-- a) a fixed set: torch-em `UNet2d` (bioimage.io's U-Nets, e.g. `joyful-pig`), the
-  StarDist U-Net, Cellpose-SAM; anything else is refused with a clear message
-  (recommended to start);
-- b) additionally `tract` (MIT/Apache, pure Rust, CPU only) as a generic ONNX fallback -
-  a second engine, more code, more binary. Only if users ask.
+**D4 - Weights never in burn's own format (decided 2026-11-25).** The MLP stores burn
+0.21 `BinBytesRecorder` bytes - burn's serialization of its module records, which 0.22
+replaced (burnpack). burn is 0.x, so this can happen on any upgrade. Rule: every file we
+write (MLP classifiers, later trained StarDist/Cellpose models) stores weights in the D2
+format - safetensors with our own tensor names - and nn maps those names onto the burn
+modules itself. A burn upgrade can then only break nn's loading code, never files; a
+test loads checked-in fixture files of every format so such a break shows in CI.
+The MLP switches to safetensors too: `Classifier::Mlp.weights` holds safetensors bytes
+(tensor names `layer{i}.weight` / `layer{i}.bias`, written and read with the
+`safetensors` crate in nn, not burn's recorders). Existing MLP `.evamodel` files break
+now (no backwards compatibility needed): bump `CURRENT_SAVED_CLASSIFIER_VERSION`, old
+files are refused with "retrain the classifier".
 
-**D4 - Existing MLP classifier files.** `.evamodel` MLP weights are burn 0.21
-`BinBytesRecorder` bytes; burn 0.22 can't read them (migration in 0.22 = "load with old
-burn, export via burn-store"). Alpha tags 1.0.0-alpha.5…8 shipped, so files exist.
-Recommended: store MLP weights as plain named f32 tensors (our own, framework-free:
-`Vec<f32>` + shape per layer in the existing file), bump
-`CURRENT_SAVED_CLASSIFIER_VERSION`, and a migration step that decodes the old
-`BinBytesRecorder` layout itself (four `Linear`s max, a simple layout) - verified against
-fixture files written *now* with burn 0.21. Alternative: say old MLP files must be
-retrained (alpha).
+**D5 - Backends (decided 2026-11-25).**
+- GPU: wgpu (Vulkan / Metal / DX12, every vendor, no extra download). Check that burn's
+  wgpu version equals Slint 1.19's (FemtoVG-wgpu renderer) - two wgpu versions = compiled
+  twice + bigger binary.
+- CPU: burn-flex (pure Rust, replaces ndarray). Not CubeCL CPU (burn feature `cpu`): it
+  compiles kernels at runtime through LLVM (`cubecl-llvm` → `llvm-sys` 231 = the C++
+  LLVM 23 library linked in and shipped) - against "almost pure Rust" (checked
+  2026-11-25; dropped from nn's features).
+- Fallback, in our code (burn doesn't switch backends by itself): on set-up nn asks wgpu
+  for adapters; none, or only a software adapter (`DeviceType::Cpu`: llvmpipe/lavapipe,
+  Windows WARP - very slow), or set-up fails → the CPU backend. A device lost / out of
+  memory during a run → that inference again on the CPU, logged once. Same idea as the
+  renderer's CPU-adapter detection (slow drawing notice).
+- No CUDA backend for now (needs NVRTC at runtime = a download again); only if measured
+  clearly faster on NVIDIA. The old-GPU rule (`MIN_COMPUTE_CAPABILITY 7.5`) goes away.
 
-**D5 - Backends.**
-- CPU: burn-flex (pure Rust, replaces ndarray) or CubeCL CPU - picked by the spike (P0).
-- GPU: wgpu first (Vulkan / Metal / DX12, every vendor, no extra download). CUDA backend
-  (`cubecl-cuda`, needs NVRTC at runtime → a download again) only if measured
-  clearly faster on NVIDIA. Check that burn's wgpu version equals Slint 1.19's
-  (FemtoVG-wgpu renderer) - two wgpu versions = compiled twice + bigger binary.
-- Old-GPU rule (`MIN_COMPUTE_CAPABILITY 7.5`) goes away; wgpu adapters that fail
-  set-up fall back to the CPU.
+What wgpu changes against CUDA:
+- Same: the model runs on the NVIDIA card; results equal up to float rounding (as CPU vs
+  GPU today); no usable driver → CPU.
+- Another API layer: wgpu reaches the card through Vulkan (Linux, Windows), DirectX 12
+  (Windows) or Metal (macOS) instead of CUDA. The user needs only the normal graphics
+  driver (NVIDIA's includes Vulkan) - no CUDA toolkit, no cuDNN, no 2 GB download.
+- More hardware: AMD, Intel and Apple Silicon GPUs too; older NVIDIA cards (GTX 9xx/10xx)
+  work again if their driver has Vulkan.
+- The one real difference is speed: CUDA + cuDNN have kernels NVIDIA tuned for its own
+  cards (convolutions, tensor cores); burn's kernels are generic (written once in CubeCL,
+  translated to Vulkan / DX12 / Metal) and may be slower on NVIDIA - most likely for
+  Cellpose-SAM's ViT-L. Measured in P0 (if a GPU is there) and P6.
+- If wgpu is too slow on NVIDIA: burn's CUDA backend (CubeCL CUDA) as an extra option
+  next to wgpu - needs the NVIDIA driver + NVRTC (~100 MB runtime library), far less
+  than libtorch's CUDA package. Only if the measurements justify it.
 
 ## Rules that apply throughout
 
@@ -123,15 +180,32 @@ retrained (alpha).
 
 ### P0 - Spike: is burn fast enough on the CPU? (2-3 days, go/no-go)
 
-On a scratch branch, nothing deleted:
-1. burn 0.22 in a throw-away crate (outside the workspace, so `tch` doesn't collide).
+In `crates/nn`, nothing deleted:
+1. burn 0.22 in nn next to `tch` - resolves only without burn's `std`, `store`
+   (`safetensors`/`pytorch`) and `optim` (checked 2026-11-25: they pull `burn-tch` via
+   `burn-dispatch`, which collides with `tch`'s `links`):
+   `burn = { version = "0.22.1", default-features = false, features = ["flex", "wgpu"] }`,
+   `burn-flex = "0.22.1"` (its defaults std/simd/rayon: multi-threaded CPU),
+   `burn-dispatch = { version = "0.22.1", default-features = false, features = ["rayon", "simd"] }`.
+   Not the workspace burn (0.21, core's MLP) - two versions only during P0. Unverified:
+   wgpu compiling and running at full speed without `std`; if not, exclude nn from the
+   workspace for the spike or do P0 right after removing `tch`.
+   Needs `cargo update -p combine --precise 4.6.9` first: `pliron` 0.19 (via
+   `cubecl-core`) derives `Hash` on `combine`'s `SourcePosition`, which has it only from
+   4.6.9; the lockfile had 4.6.7 → nn never type-checked and rust-analyzer showed no
+   errors for it.
 2. The stand-in layouts from `crates/ai/src/torch/test_support.rs` (StarDist
    `2D_versatile_fluo`-like, U-Net 32/64 filters depth 4) rebuilt in burn, random
    weights.
 3. Same sizes as BENCHMARK.md "AI models: RAM per inference" (512², 1024², 2048²,
-   4096² in pieces), CPU, 4 and 22 threads, wall + CPU time + peak RAM; burn-flex vs
-   CubeCL CPU; wgpu on the GPU here if there is one.
+   4096² in pieces), CPU, 4 and 22 threads, wall + CPU time + peak RAM; burn-flex on
+   the CPU, wgpu on the GPU here if there is one.
 4. A ViT-L block (Cellpose-SAM's encoder) at 256² - its matmul speed decides P6.
+5. On an NVIDIA GPU (if one is available): wgpu against libtorch CUDA, same cases -
+   decides whether the CUDA backend (D5) is ever needed.
+6. libtorch side measured in the same build with `crates/ai`'s `bench_ai_ram`, burn with a
+   matching nn example (`cargo build-linux -p evanalyzer_nn --example <name>`),
+   alternated.
 
 **Gate:** burn CPU ≥ libtorch speed on 512²-2048² (or within noise) and ≤ RAM. If it
 fails: stop, or the hybrid fallback (tract for CPU inference, burn only for GPU +
@@ -141,21 +215,23 @@ training) - a new decision, not part of this plan.
 
 Before anything is deleted (afterwards libtorch can't be built next to burn 0.22):
 1. Golden outputs: per model (real files where we have them: `cpsam_v2.pt`,
-   `joyful-pig`, a StarDist `2D_versatile_fluo` export, a YOLO export if D1 keeps it;
+   `joyful-pig`, a StarDist `2D_versatile_fluo` export;
    plus the stand-ins) a few fixed inputs (synthetic + 1-2 real tiles) → raw outputs
    (`[C,H,W]` f32) and the final objects (counts, areas) of the core step. Stored under
    `tests/nn_reference/` (large ones outside git, as `cpsam_v2.pt`).
-2. MLP fixtures for D4: `.evamodel` files written by today's code + their predictions.
-3. Baselines: `bench_ai_ram` per model, `bench_cellpose` (1024²), startup + idle RAM
+2. Baselines: `bench_ai_ram` per model, `bench_cellpose` (1024²), startup + idle RAM
    (BENCHMARK.md "The real app"), package sizes per platform, clean + incremental build
    time of the workspace. Old build kept in `/workspaces/target-baseline`.
 
 ### P2 - Swap the crate, upgrade burn (3-4 days)
 
-1. `crates/nn`: `api` moved from `crates/ai` (minus `ffi`), `infer` / `release_models`
-   / `set_plugin_path` removed or replaced; core depends on `evanalyzer_nn`.
-2. MLP moved from core into `nn::mlp`, D4 format change + migration on burn **0.21**
-   first (fixtures from P1 pass), then
+1. `crates/nn`: the `Model` trait + `Image`, `runtime` / `pieces` types moved from
+   `crates/ai`'s `api.rs` (no `ffi`, no enums, no serde); `set_plugin_path` removed;
+   core depends on `evanalyzer_nn`.
+2. MLP, KNN, random forest moved from core into `nn::model::{mlp, knn, rtree}` with
+   the `Classifier` enum and the smartcore matrix conversion; burn + smartcore removed
+   from core's `Cargo.toml`; MLP weights in the D2/D4 format, old files refused;
+   YOLOv5 step removed (D1); then
 3. delete `crates/ai`, `tch`, features, alias, env, `--ai-plugin`; upgrade burn to
    0.22 (backend generic gone: `Module`s without `<B: Backend>`, records → burnpack /
    our own format, `burn-dispatch` for runtime backend choice).
@@ -210,12 +286,7 @@ Before anything is deleted (afterwards libtorch can't be built next to burn 0.22
 4. Parity vs `cpsam_v2.pt` golden outputs; benchmark vs the 65-67 s / 1.9 GB per 1024²
    of the libtorch plugin (`bench_cellpose`).
 
-### P7 - YOLO (per D1: 0 days or ~1 week)
-
-Only if D1 b) or c). b): new step + schema migration (protocol bump), parity against the
-reference implementation's own exported outputs instead of libtorch.
-
-### P8 - Packaging, CI, docs (2-3 days)
+### P7 - Packaging, CI, docs (2-3 days)
 
 1. `release.yml`, `ci.yml`, `docker.yml`, `check-glibc.sh` (2.28 floor reason gone),
    `release-notes.sh`, `libs/download.sh` (libtorch + NVIDIA wheels removed, DuckDB
@@ -230,7 +301,7 @@ reference implementation's own exported outputs instead of libtorch.
    "Another engine (e.g. Burn)" note; memories `burn-migration-deferred`,
    `cuda13-switch`, `release-tests-libtorch` updated.
 
-### P9 - Final measurement and merge (1-2 days)
+### P8 - Final measurement and merge (1-2 days)
 
 Whole run of P1's baselines against the new build: every model, small images + a whole
 slide (wall, CPU, peak RAM), startup + idle RAM, package sizes, build time - into
@@ -248,10 +319,9 @@ BENCHMARK.md (incl. the RAM overview for the minimum-RAM estimate). Then
 | P4 U-Net | 3-5 |
 | P5 StarDist | 3-4 |
 | P6 Cellpose-SAM | 5-10 |
-| P7 YOLO | 0-5 |
-| P8 packaging | 2-3 |
-| P9 measure + merge | 1-2 |
-| **Total** | **~5-8 weeks** |
+| P7 packaging | 2-3 |
+| P8 measure + merge | 1-2 |
+| **Total** | **~5-7 weeks** |
 
 ## Risks
 
@@ -259,8 +329,8 @@ BENCHMARK.md (incl. the RAM overview for the minimum-RAM estimate). Then
 |---|---|---|
 | burn CPU slower than libtorch/oneDNN | violates "at least as fast" | P0 gate before anything is deleted |
 | ViT-L attention slow / RAM-heavy in burn | Cellpose-SAM regresses | P0 item 4; f16 on GPU; flash-attention kernels in CubeCL if available |
-| Users' arbitrary TorchScript models stop working | broken pipelines | clear error naming the supported architectures + importers; D3 b) if needed |
+| Users' arbitrary TorchScript models stop working | broken pipelines | accepted (D3); clear error naming the supported architectures + importers |
 | wgpu version clash with Slint | double compile, bigger binary | check in P0; align versions or pin |
 | burn 0.x API churn (0.22 just removed backend generics) | rework per upgrade | keep burn types inside nn; plain-data API |
-| Bigger binary / build time (cubecl, wgpu, naga) | slower CI, larger download | measured in P0 + P9; still far below libtorch |
+| Bigger binary / build time (cubecl, wgpu, naga) | slower CI, larger download | measured in P0 + P8; still far below libtorch |
 | GPU drivers without Vulkan/DX12 compute | GPU unused | CPU fallback, logged |
