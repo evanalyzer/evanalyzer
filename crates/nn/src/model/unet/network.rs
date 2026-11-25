@@ -25,12 +25,13 @@
 
 use super::{FinalActivation, Norm, UNetConfig};
 use crate::errors::NnError;
+use crate::weights::NamedTensor;
 use burn::module::{Module, Param};
 use burn::nn::conv::{Conv2d, Conv2dConfig};
 use burn::nn::pool::{MaxPool2d, MaxPool2dConfig};
 use burn::nn::{
-    BatchNorm, BatchNormConfig, GroupNorm, GroupNormConfig, InstanceNorm, InstanceNormConfig,
-    PaddingConfig2d,
+    BatchNorm, BatchNormConfig, GroupNorm, GroupNormConfig, Initializer, InstanceNorm,
+    InstanceNormConfig, PaddingConfig2d,
 };
 use burn::tensor::activation::{relu, sigmoid, softmax};
 use burn::tensor::module::{conv2d, interpolate};
@@ -141,11 +142,20 @@ pub(crate) struct ConvBlock {
 }
 
 impl ConvBlock {
-    fn new(in_channels: usize, out_channels: usize, norm: Norm, device: &Device) -> Self {
+    fn new(
+        in_channels: usize,
+        out_channels: usize,
+        norm: Norm,
+        init: &Option<Initializer>,
+        device: &Device,
+    ) -> Self {
         let conv = |from: usize, to: usize| {
-            Conv2dConfig::new([from, to], [3, 3])
-                .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 1))
-                .init(device)
+            with_init(
+                Conv2dConfig::new([from, to], [3, 3])
+                    .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 1)),
+                init,
+            )
+            .init(device)
         };
         Self {
             norm1: NormLayer::new(norm, in_channels, device),
@@ -185,10 +195,18 @@ pub(crate) struct UNet2d {
     pub(crate) half: bool,
 }
 
+/// `config` with `init` (`None`: burn's default, random).
+fn with_init(config: Conv2dConfig, init: &Option<Initializer>) -> Conv2dConfig {
+    match init {
+        Some(init) => config.with_initializer(init.clone()),
+        None => config,
+    }
+}
+
 impl UNet2d {
-    /// A network of `config` with fresh (random) weights - the loader
-    /// replaces them with the file's.
-    pub(crate) fn new(config: &UNetConfig, device: &Device) -> Self {
+    /// A network of `config`; its weights from `init` (`None`: random,
+    /// `Some(Zeros)`: cheap placeholders the loader replaces).
+    pub(crate) fn new(config: &UNetConfig, init: Option<Initializer>, device: &Device) -> Self {
         let level = |i: usize| config.initial_features * config.gain.pow(i as u32);
         // Encoder: in_channels → f, f → f·g, ...; base: f·g^(d-1) → f·g^d.
         let encoder = (0..config.depth)
@@ -198,32 +216,39 @@ impl UNet2d {
                 } else {
                     level(i - 1)
                 };
-                ConvBlock::new(from, level(i), config.norm, device)
+                ConvBlock::new(from, level(i), config.norm, &init, device)
             })
             .collect();
         let base = ConvBlock::new(
             level(config.depth - 1),
             level(config.depth),
             config.norm,
+            &init,
             device,
         );
         // Decoder, deepest first: f·g^(i+1) → f·g^i.
         let levels: Vec<usize> = (0..config.depth).rev().collect();
         let samplers = levels
             .iter()
-            .map(|&i| Conv2dConfig::new([level(i + 1), level(i)], [1, 1]).init(device))
+            .map(|&i| {
+                with_init(Conv2dConfig::new([level(i + 1), level(i)], [1, 1]), &init).init(device)
+            })
             .collect();
         // After the concat: its own f·g^i plus the encoder's f·g^i.
         let decoder = levels
             .iter()
-            .map(|&i| ConvBlock::new(2 * level(i), level(i), config.norm, device))
+            .map(|&i| ConvBlock::new(2 * level(i), level(i), config.norm, &init, device))
             .collect();
         Self {
             encoder,
             base,
             samplers,
             decoder,
-            out_conv: Conv2dConfig::new([level(0), config.out_channels], [1, 1]).init(device),
+            out_conv: with_init(
+                Conv2dConfig::new([level(0), config.out_channels], [1, 1]),
+                &init,
+            )
+            .init(device),
             pool: MaxPool2dConfig::new([2, 2]).with_strides([2, 2]).init(),
             final_activation: config.final_activation,
             half: false,
@@ -307,7 +332,12 @@ fn load_conv(
     device: &Device,
 ) -> Result<(), NnError> {
     let dims = conv.weight.dims();
-    conv.weight = Param::from_tensor(tensor_from(file, &format!("{prefix}.weight"), dims, device)?);
+    conv.weight = Param::from_tensor(tensor_from(
+        file,
+        &format!("{prefix}.weight"),
+        dims,
+        device,
+    )?);
     if let Some(bias) = &mut conv.bias {
         let dims = bias.dims();
         *bias = Param::from_tensor(tensor_from(file, &format!("{prefix}.bias"), dims, device)?);
@@ -362,6 +392,50 @@ impl UNet2d {
     }
 }
 
+/// `conv`'s weight and bias as `<prefix>.weight` / `<prefix>.bias`.
+fn export_conv(conv: &Conv2d, prefix: &str, out: &mut Vec<NamedTensor>) {
+    let mut push = |name: String, t: Tensor<4>| {
+        let shape = t.dims().to_vec();
+        let values = t.into_data().try_to_vec::<f32>().expect("f32 weights");
+        out.push(NamedTensor {
+            name,
+            shape,
+            values,
+        });
+    };
+    push(format!("{prefix}.weight"), conv.weight.val());
+    if let Some(bias) = &conv.bias {
+        let c = bias.dims()[0];
+        push(format!("{prefix}.bias"), bias.val().reshape([1, 1, 1, c]));
+        let last = out.last_mut().expect("just pushed");
+        last.shape = vec![c];
+    }
+}
+
+impl UNet2d {
+    /// The weights with torch-em's names - what [`Self::load_torch_em`]
+    /// reads (InstanceNorm / no norm: the norms have no parameters).
+    pub(crate) fn torch_em_tensors(&self) -> Vec<NamedTensor> {
+        let mut out = Vec::new();
+        let block = |b: &ConvBlock, prefix: &str, out: &mut Vec<NamedTensor>| {
+            export_conv(&b.conv1, &format!("{prefix}.block.1"), out);
+            export_conv(&b.conv2, &format!("{prefix}.block.4"), out);
+        };
+        for (i, b) in self.encoder.iter().enumerate() {
+            block(b, &format!("encoder.blocks.{i}"), &mut out);
+        }
+        block(&self.base, "base", &mut out);
+        for (i, b) in self.decoder.iter().enumerate() {
+            block(b, &format!("decoder.blocks.{i}"), &mut out);
+        }
+        for (i, s) in self.samplers.iter().enumerate() {
+            export_conv(s, &format!("decoder.samplers.{i}.conv"), &mut out);
+        }
+        export_conv(&self.out_conv, "out_conv", &mut out);
+        out
+    }
+}
+
 /// `x` cropped around its centre to the height and width of `like`
 /// (torch-em's `_crop`; a no-op on sides that are multiples of `2^depth`).
 fn centre_crop(x: Tensor<4>, like: &Tensor<4>) -> Tensor<4> {
@@ -399,6 +473,7 @@ mod tests {
                 initial_features: 64,
                 ..config(Norm::Instance)
             },
+            Some(Initializer::Zeros),
             &device,
         );
         let dims = |conv: &Conv2d| conv.weight.dims();
@@ -414,6 +489,57 @@ mod tests {
         assert_eq!(net.num_params(), 28_941_698);
     }
 
+    /// Exported with torch-em's names and loaded again: the same network.
+    #[test]
+    fn the_weights_load_as_they_were_exported() {
+        let device = Device::flex();
+        let net = UNet2d::new(&config(Norm::Instance), None, &device);
+        let tensors = net.torch_em_tensors();
+        // Depth 4: encoder 4 x 2 convs, base 2, decoder 4 x 2, samplers 4,
+        // out 1 - each a weight and a bias.
+        assert_eq!(tensors.len(), 2 * (4 * 2 + 2 + 4 * 2 + 4 + 1));
+        let bytes: Vec<Vec<u8>> = tensors
+            .iter()
+            .map(|t| t.values.iter().flat_map(|v| v.to_le_bytes()).collect())
+            .collect();
+        let views: Vec<_> = tensors
+            .iter()
+            .zip(&bytes)
+            .map(|(t, b)| {
+                let view = safetensors::tensor::TensorView::new(
+                    safetensors::Dtype::F32,
+                    t.shape.clone(),
+                    b,
+                )
+                .unwrap();
+                (t.name.clone(), view)
+            })
+            .collect();
+        let file = safetensors::serialize(views, &None).unwrap();
+        let file = SafeTensors::deserialize(&file).unwrap();
+        let mut loaded = UNet2d::new(&config(Norm::Instance), Some(Initializer::Zeros), &device);
+        loaded.load_torch_em(&file, &device).unwrap();
+        let x = Tensor::<4>::random([1, 1, 32, 48], burn::tensor::Distribution::Default, &device);
+        let (a, b) = (net.forward(x.clone()), loaded.forward(x));
+        assert_eq!(
+            a.into_data().try_to_vec::<f32>().unwrap(),
+            b.into_data().try_to_vec::<f32>().unwrap()
+        );
+        // A tensor of the wrong shape is refused.
+        let mut wrong = UNet2d::new(
+            &UNetConfig {
+                initial_features: 4,
+                ..config(Norm::Instance)
+            },
+            Some(Initializer::Zeros),
+            &device,
+        );
+        assert!(matches!(
+            wrong.load_torch_em(&file, &device),
+            Err(NnError::InvalidModelFile(_))
+        ));
+    }
+
     #[test]
     fn the_output_has_the_input_size_and_the_out_channels() {
         let device = Device::flex();
@@ -423,7 +549,7 @@ mod tests {
             Norm::Batch,
             Norm::Group { groups: 4 },
         ] {
-            let net = UNet2d::new(&config(norm), &device);
+            let net = UNet2d::new(&config(norm), None, &device);
             let x = Tensor::<4>::ones([1, 1, 48, 64], &device);
             let y = net.forward(x);
             assert_eq!(y.dims(), [1, 2, 48, 64], "{norm:?}");

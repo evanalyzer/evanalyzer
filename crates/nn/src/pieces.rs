@@ -13,9 +13,14 @@
 //! so the result equals the whole tile's up to float rounding - except for a
 //! model that normalizes by the whole image (InstanceNorm).
 //!
-//! P3: the receptive-field probe, InstanceNorm detection and
-//! `run_in_pieces` from `crates/ai/src/torch/pieces.rs`. The sizes below come
-//! from `crates/ai/src/api.rs` as they are.
+//! Ported from `crates/ai/src/torch/pieces.rs` (framework-free) with its
+//! tests; the sizes come from `crates/ai/src/api.rs` as they are. Piece
+//! starts are multiples of [`ALIGN`], so the model's poolings fall on the
+//! whole tile's grid. A model seeing the whole image runs in pieces anyway,
+//! with [`WHOLE_IMAGE_HALO`] (`joyful-pig` on 1024² pieces: 0.06 % of its
+//! foreground pixels flipped).
+
+use crate::errors::NnError;
 
 /// The piece sides "Auto" chooses from for a model that sees a limited
 /// neighbourhood - largest first: there a piece's result equals the whole
@@ -91,9 +96,424 @@ impl Pieces {
     }
 }
 
+/// The smallest piece side (a request's is raised to it): pieces of a few
+/// hundred pixels would be mostly halo.
+const MIN_PIECE: usize = 256;
+
+/// Piece starts (and halos) are multiples of this: a U-Net halves the image
+/// up to 4 times, StarDist's grid is 1-8 - a multiple of 16 keeps every
+/// pooling of a piece on the whole tile's grid.
+pub const ALIGN: usize = 16;
+
+/// The halo of a model that sees the whole image (see the module docs):
+/// of the halos tried on `joyful-pig` (16, 64, 128 px) the one changing the
+/// fewest pixels.
+pub const WHOLE_IMAGE_HALO: usize = PLANNED_HALO;
+
+/// Side of the image the receptive field is measured on: a halo beyond
+/// half of it (the model sees further, e.g. a global normalization) runs
+/// the tile whole.
+const PROBE: usize = 512;
+
+/// A model's output on an image region: `planes` planes of `width * height`
+/// values, row-major - at the region's size divided by the model's grid (1
+/// for a U-Net, StarDist's grid). The first plane (U-Net: foreground,
+/// StarDist: probability) and the others (boundary, ray distances) apart,
+/// as the answer has them - no copy to split them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Planes {
+    pub planes: usize,
+    pub width: usize,
+    pub height: usize,
+    pub first: Vec<f32>,
+    pub rest: Vec<f32>,
+}
+
+impl Planes {
+    /// Plane `index`.
+    pub fn plane(&self, index: usize) -> &[f32] {
+        let len = self.width * self.height;
+        match index {
+            0 => &self.first[..len],
+            i => &self.rest[(i - 1) * len..i * len],
+        }
+    }
+
+    /// Plane `index`, to write.
+    fn plane_mut(&mut self, index: usize) -> &mut [f32] {
+        let len = self.width * self.height;
+        match index {
+            0 => &mut self.first[..len],
+            i => &mut self.rest[(i - 1) * len..i * len],
+        }
+    }
+}
+
+/// The kept part `[start, end)` of each piece of at most `piece` along one
+/// side of `len` pixels, and the region `[from, to)` run for it (with `halo`
+/// on both sides, within the image). Starts are multiples of [`ALIGN`].
+fn spans(len: usize, halo: usize, piece: usize) -> Vec<((usize, usize), (usize, usize))> {
+    let count = len.div_ceil(piece).max(1);
+    let step = len.div_ceil(count).div_ceil(ALIGN) * ALIGN;
+    (0..count)
+        .map(|i| (i * step, ((i + 1) * step).min(len)))
+        .filter(|(start, end)| start < end)
+        .map(|(start, end)| {
+            let from = start.saturating_sub(halo);
+            let to = (end + halo).min(len);
+            ((start, end), (from, to))
+        })
+        .collect()
+}
+
+/// The piece side to run with for a request's `piece_side`: at least
+/// [`MIN_PIECE`], a multiple of [`ALIGN`].
+pub fn piece_side(requested: usize) -> usize {
+    requested.max(MIN_PIECE).next_multiple_of(ALIGN)
+}
+
+/// Whether a `width x height` tile runs in more than one piece of `piece`.
+pub fn needs_pieces(width: usize, height: usize, piece: usize) -> bool {
+    width > piece || height > piece
+}
+
+/// Runs `predict` (the model on a `w x h` image of `channels` planes) over
+/// the `width x height` `pixels` (`channels` planes, one after the other) in
+/// pieces of `piece` with `halo` pixels of context (see the
+/// module docs) and puts the pieces' middles together. Each piece's output
+/// must be its size divided by one grid for all pieces.
+pub fn run(
+    pixels: &[f32],
+    channels: usize,
+    width: usize,
+    height: usize,
+    halo: usize,
+    piece: usize,
+    mut predict: impl FnMut(&[f32], usize, usize) -> Result<Planes, NnError>,
+) -> Result<Planes, NnError> {
+    let mut result: Option<(usize, Planes)> = None;
+    let mut buffer = Vec::new();
+    for ((keep_y0, keep_y1), (y0, y1)) in spans(height, halo, piece) {
+        for ((keep_x0, keep_x1), (x0, x1)) in spans(width, halo, piece) {
+            let (w, h) = (x1 - x0, y1 - y0);
+            buffer.clear();
+            for plane in pixels.chunks_exact(width * height).take(channels) {
+                for y in y0..y1 {
+                    buffer.extend_from_slice(&plane[y * width + x0..y * width + x1]);
+                }
+            }
+            let piece = predict(&buffer, w, h)?;
+            let grid = (w / piece.width.max(1)).max(1);
+            if piece.width != w / grid || piece.height != h / grid {
+                return Err(NnError::Internal(format!(
+                    "AI model: a {w}x{h} piece gave a {}x{} output, not its size divided by \
+                     one grid",
+                    piece.width, piece.height
+                )));
+            }
+            let (_, out) = result.get_or_insert_with(|| {
+                (
+                    grid,
+                    Planes {
+                        planes: piece.planes,
+                        width: width / grid,
+                        height: height / grid,
+                        first: vec![0.0; (width / grid) * (height / grid)],
+                        rest: vec![0.0; (piece.planes - 1) * (width / grid) * (height / grid)],
+                    },
+                )
+            });
+            if piece.planes != out.planes || out.width != width / grid {
+                return Err(NnError::Internal(
+                    "AI model: its pieces gave different outputs".into(),
+                ));
+            }
+            // The middle, in output pixels (the last piece up to the end).
+            let (mx0, my0) = (keep_x0 / grid, keep_y0 / grid);
+            let mx1 = if keep_x1 == width {
+                out.width
+            } else {
+                keep_x1 / grid
+            };
+            let my1 = if keep_y1 == height {
+                out.height
+            } else {
+                keep_y1 / grid
+            };
+            let (px, py) = (x0 / grid, y0 / grid);
+            let out_width = out.width;
+            for plane in 0..out.planes {
+                let source = piece.plane(plane);
+                let target = out.plane_mut(plane);
+                for y in my0..my1 {
+                    let from = (y - py) * piece.width + (mx0 - px);
+                    target[y * out_width + mx0..y * out_width + mx1]
+                        .copy_from_slice(&source[from..from + (mx1 - mx0)]);
+                }
+            }
+        }
+    }
+    result
+        .map(|(_, planes)| planes)
+        .ok_or_else(|| NnError::InvalidInput("AI model: an empty tile".into()))
+}
+
+/// The halo `predict`'s model needs: how far a change of one pixel reaches
+/// in its output (StarDist's `_compute_receptive_field`), measured on a
+/// [`PROBE`]² image - empty and with one bright pixel in the middle (of each
+/// channel) -
+/// rounded up to [`ALIGN`] with one `ALIGN` of margin. `None`: it reaches
+/// (almost) everywhere - the model sees the whole image (see
+/// [`halo_of`]).
+pub fn receptive_halo(
+    channels: usize,
+    mut predict: impl FnMut(&[f32], usize, usize) -> Result<Planes, NnError>,
+) -> Result<Option<usize>, NnError> {
+    let center = PROBE / 2;
+    let empty = vec![0.0; channels * PROBE * PROBE];
+    let mut bright = empty.clone();
+    for plane in bright.chunks_exact_mut(PROBE * PROBE) {
+        plane[center * PROBE + center] = 1.0;
+    }
+    let (a, b) = (
+        predict(&empty, PROBE, PROBE)?,
+        predict(&bright, PROBE, PROBE)?,
+    );
+    if a.width != b.width
+        || a.height != b.height
+        || a.planes != b.planes
+        || a.width == 0
+        || a.planes == 0
+    {
+        return Err(NnError::Internal(
+            "AI model: its outputs differ in size on the same input size".into(),
+        ));
+    }
+    let grid = (PROBE / a.width).max(1);
+    let mut reach = 0usize;
+    for plane in 0..a.planes {
+        let (pa, pb) = (a.plane(plane), b.plane(plane));
+        for y in 0..a.height {
+            for x in 0..a.width {
+                let (va, vb) = (pa[y * a.width + x], pb[y * a.width + x]);
+                // Any change, however small (as StarDist): the
+                // same numbers in a pixel's window give the same result.
+                if va.to_bits() != vb.to_bits() {
+                    // The farthest input pixel this output pixel stands for.
+                    let far = |o: usize| {
+                        (o * grid)
+                            .abs_diff(center)
+                            .max((o * grid + grid - 1).abs_diff(center))
+                    };
+                    reach = reach.max(far(x)).max(far(y));
+                }
+            }
+        }
+    }
+    let halo = (reach + ALIGN).div_ceil(ALIGN) * ALIGN;
+    Ok((halo < center - ALIGN).then_some(halo))
+}
+
+/// How a `width x height` tile runs with the request's `pieces`: `None`
+/// whole, else `(halo, piece side)`. `measured` gives the model's
+/// [`receptive_halo`] (asked only when a tile may need pieces): a model
+/// seeing a limited neighbourhood runs in `pieces.local_side` with its
+/// halo, one seeing the whole image in `pieces.whole_image_side` with
+/// [`WHOLE_IMAGE_HALO`] (logged - its pieces differ a little from the whole
+/// tile).
+pub fn plan(
+    width: usize,
+    height: usize,
+    pieces: Pieces,
+    measured: impl FnOnce() -> Result<Option<usize>, NnError>,
+    model: &str,
+) -> Result<Option<(usize, usize)>, NnError> {
+    let (local, whole_image) = (
+        piece_side(pieces.local_side),
+        piece_side(pieces.whole_image_side),
+    );
+    if !needs_pieces(width, height, local.min(whole_image)) {
+        return Ok(None);
+    }
+    let (halo, piece) = match measured()? {
+        Some(halo) => (halo, local),
+        None => {
+            log::info!(
+                "AI model {} normalizes by the whole image: big tiles run in {whole_image}² \
+                 pieces with {WHOLE_IMAGE_HALO} px of context - a few pixels differ from one piece",
+                model
+            );
+            (WHOLE_IMAGE_HALO, whole_image)
+        }
+    };
+    Ok(needs_pieces(width, height, piece).then_some((halo, piece)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A "model" averaging each pixel's `radius` neighbourhood (zeros
+    /// outside), on a grid of `grid`: what a convolution network does to
+    /// its pieces' borders.
+    fn box_filter(
+        radius: usize,
+        grid: usize,
+    ) -> impl FnMut(&[f32], usize, usize) -> Result<Planes, NnError> {
+        move |pixels, w, h| {
+            let (ow, oh) = (w / grid, h / grid);
+            let mut data = Vec::with_capacity(2 * ow * oh);
+            for plane in 0..2usize {
+                for oy in 0..oh {
+                    for ox in 0..ow {
+                        let (cx, cy) = ((ox * grid) as i64, (oy * grid) as i64);
+                        let r = radius as i64;
+                        let mut sum = 0.0;
+                        for y in cy - r..=cy + r {
+                            for x in cx - r..=cx + r {
+                                if (0..w as i64).contains(&x) && (0..h as i64).contains(&y) {
+                                    sum += pixels[y as usize * w + x as usize];
+                                }
+                            }
+                        }
+                        data.push(sum * (plane + 1) as f32);
+                    }
+                }
+            }
+            let rest = data.split_off(ow * oh);
+            Ok(Planes {
+                planes: 2,
+                width: ow,
+                height: oh,
+                first: data,
+                rest,
+            })
+        }
+    }
+
+    fn image(width: usize, height: usize) -> Vec<f32> {
+        (0..width * height)
+            .map(|i| ((i * 7919) % 101) as f32 / 101.0)
+            .collect()
+    }
+
+    /// A tile up to the smaller side runs whole without measuring the model;
+    /// beyond, a model seeing a limited neighbourhood gets the local side
+    /// with its halo, one seeing the whole image its side with
+    /// [`WHOLE_IMAGE_HALO`].
+    #[test]
+    fn the_plan_gives_each_kind_of_model_its_pieces() {
+        let auto = Pieces {
+            local_side: 2048,
+            whole_image_side: 1024,
+        };
+        let model = "m";
+        let never =
+            || -> Result<Option<usize>, NnError> { panic!("measured a tile that runs whole") };
+        assert_eq!(plan(1024, 1024, auto, never, model).unwrap(), None);
+        let local = || Ok(Some(96));
+        assert_eq!(
+            plan(4096, 4096, auto, local, model).unwrap(),
+            Some((96, 2048))
+        );
+        assert_eq!(
+            plan(2048, 2048, auto, local, model).unwrap(),
+            None,
+            "fits the local side"
+        );
+        let whole = || Ok(None);
+        assert_eq!(
+            plan(4096, 4096, auto, whole, model).unwrap(),
+            Some((WHOLE_IMAGE_HALO, 1024))
+        );
+        assert_eq!(
+            plan(2048, 2048, auto, whole, model).unwrap(),
+            Some((WHOLE_IMAGE_HALO, 1024))
+        );
+        let fixed = Pieces::fixed(512);
+        assert_eq!(
+            plan(1024, 1024, fixed, local, model).unwrap(),
+            Some((96, 512))
+        );
+        assert_eq!(
+            plan(1024, 1024, fixed, whole, model).unwrap(),
+            Some((WHOLE_IMAGE_HALO, 512))
+        );
+    }
+
+    #[test]
+    fn a_tile_up_to_the_piece_side_runs_whole() {
+        assert!(!needs_pieces(2048, 2048, 2048));
+        assert!(!needs_pieces(2048, 1, 2048));
+        assert!(needs_pieces(2049, 2048, 2048));
+        assert!(needs_pieces(2048, 2048, 1024));
+        assert_eq!(spans(4096, 112, 2048).len(), 2);
+        assert_eq!(spans(4096, 112, 1024).len(), 4);
+        assert_eq!(piece_side(100), MIN_PIECE);
+        assert_eq!(piece_side(1000), 1008);
+        assert_eq!(piece_side(2048), 2048);
+    }
+
+    #[test]
+    fn spans_cover_the_side_once_with_aligned_starts_and_the_halo_within_it() {
+        for (len, piece) in [1, 15, 1024, 1025, 2048, 2500, 4096, 4097]
+            .into_iter()
+            .flat_map(|len| [(len, 2048), (len, 1024), (len, 512)])
+        {
+            for halo in [0, 32, 96] {
+                let spans = spans(len, halo, piece);
+                assert_eq!(spans.first().unwrap().0.0, 0);
+                assert_eq!(spans.last().unwrap().0.1, len);
+                for pair in spans.windows(2) {
+                    assert_eq!(pair[0].0.1, pair[1].0.0, "len {len}");
+                }
+                for ((start, end), (from, to)) in spans {
+                    assert_eq!(start % ALIGN, 0);
+                    assert_eq!(from % ALIGN, 0, "len {len} halo {halo}");
+                    assert!(end - start <= piece, "len {len}");
+                    assert_eq!(from, start.saturating_sub(halo));
+                    assert_eq!(to, (end + halo).min(len));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pieces_with_a_wide_enough_halo_give_the_whole_tile_exactly() {
+        for grid in [1, 2, 4] {
+            let (width, height) = (2100, 1040);
+            let pixels = image(width, height);
+            let whole = box_filter(5, grid)(&pixels, width, height).unwrap();
+            let halo = receptive_halo(1, box_filter(5, grid)).unwrap().unwrap();
+            assert!(halo >= 5 + grid, "grid {grid}: halo {halo}");
+            let pieces = run(&pixels, 1, width, height, halo, 1024, box_filter(5, grid)).unwrap();
+            assert_eq!(pieces, whole, "grid {grid}");
+        }
+    }
+
+    #[test]
+    fn a_halo_narrower_than_the_model_sees_changes_the_borders() {
+        let (width, height) = (1100, 64);
+        let pixels = image(width, height);
+        let whole = box_filter(24, 1)(&pixels, width, height).unwrap();
+        let pieces = run(&pixels, 1, width, height, 16, 1024, box_filter(24, 1)).unwrap();
+        assert_ne!(pieces, whole);
+    }
+
+    #[test]
+    fn a_model_seeing_everything_is_seen_as_such() {
+        let global = |pixels: &[f32], w: usize, h: usize| {
+            let mean = pixels.iter().sum::<f32>() / pixels.len() as f32;
+            Ok(Planes {
+                planes: 1,
+                width: w,
+                height: h,
+                first: vec![mean; w * h],
+                rest: Vec::new(),
+            })
+        };
+        assert_eq!(receptive_halo(1, global).unwrap(), None);
+    }
 
     const GB: u64 = 1 << 30;
 

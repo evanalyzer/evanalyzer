@@ -67,8 +67,16 @@ fn main() {
     };
     let runs = [
         ("burn-flex f32", Device::flex(), false),
-        ("burn-gpu f32", Device::wgpu(DeviceKind::DiscreteGpu(0)), false),
-        ("burn-gpu f16", Device::wgpu(DeviceKind::DiscreteGpu(0)), true),
+        (
+            "burn-gpu f32",
+            Device::wgpu(DeviceKind::DiscreteGpu(0)),
+            false,
+        ),
+        (
+            "burn-gpu f16",
+            Device::wgpu(DeviceKind::DiscreteGpu(0)),
+            true,
+        ),
     ];
     for (input, side) in [("test256", 256), ("cells1024", 1024)] {
         let x = read_f32(&dir.join(format!("{input}.input.f32"))).unwrap();
@@ -88,8 +96,7 @@ fn main() {
             println!("  {a:<14} vs {c:<14} {}", compare(x, z, side * side));
         }
         for (name, device, half) in &runs {
-            let mut model =
-                UNet::with_torch_em_weights(config.clone(), &weights, device).unwrap();
+            let mut model = UNet::with_torch_em_weights(config.clone(), &weights, device).unwrap();
             model.set_half_convs(*half);
             let y = model.forward_raw(&x, side, side, device);
             for (r, v) in &references {

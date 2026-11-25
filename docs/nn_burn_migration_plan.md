@@ -235,6 +235,20 @@ formats (see D4). Foreign files are converted once when the user picks them:
 - StarDist Keras `.h5`: a small Python converter script writes the safetensors file.
 The step then points to the `.safetensors` file.
 
+**D2 refined (decided 2026-11-25, later the same day):** the app reads **only our own
+safetensors files** - no `rdf.yaml`, pickle, TorchScript or `.h5` reader in the app.
+Each supported model is converted once by hand with a dev converter (`crates/nn`
+examples, e.g. `convert_unet`), tested against its package's expected output and
+distributed as such a file. Imported models keep their PyTorch tensor names and the
+original architecture's arguments as `config` (torch-em `UNet2d`'s kwargs), so the file
+stays usable outside EVA (`UNet2d(**config).load_state_dict(load_file(...))`); metadata
+also carries `preprocessing` (applied by the model, e.g. `zero_mean_unit_variance`) and
+`source` / `license` / `citation`. bioimage.io has no safetensors weight format (spec 0.5
+allows keras_hdf5, keras_v3, onnx, pytorch_state_dict, tensorflow_js,
+tensorflow_saved_model_bundle, torchscript - checked 2026-11-25), so hosting is GitHub or
+Hugging Face (`config.json` + `README.md` generated from the metadata) - decided later.
+Which models: `docs/nn_model_candidates.md`.
+
 **D3 - Supported models only (decided 2026-11-25).** TorchScript is dropped; only the
 architectures we implement run: torch-em `UNet2d` (bioimage.io's U-Nets, e.g.
 `joyful-pig`), StarDist 2D, Cellpose-SAM. Anything else is refused with a clear message
@@ -475,6 +489,16 @@ Before anything is deleted (afterwards libtorch can't be built next to burn 0.22
 5. GPU fallback: a device that fails set-up or runs out of memory → CPU, logged once.
 
 ### P4 - U-Net (3-5 days)
+
+State 2026-11-25: 1, 3 and 4 done in `crates/nn` (`UNet::load` / `infer`: model file +
+size checks, preprocessing, mirror padding to `2^depth` + 16 px, pieces ported from
+`crates/ai` with a cached receptive-field probe, InstanceNorm/GroupNorm = whole-image
+pieces, softmax / foreground / boundary channel). 2 replaced by D2 refined: the dev
+converter `convert_unet`. Parity (ignored test `real_romantic_shark_gives_pytorchs_results`):
+network vs the package's expected output max < 1e-4; `infer` vs the libtorch engine
+256² 6.6e-6 / 0 flips, 1024² 2e-3 / 3 of 1,048,576 flips (float rounding). Open:
+BatchNorm/GroupNorm loading (only InstanceNorm / no norm load), f16 decision, wiring into
+core (P7), mmap instead of reading the file.
 
 1. torch-em `UNet2d` (MIT; depth, initial filters, gain, norm: None/BatchNorm/
    InstanceNorm/GroupNorm, final activation) in burn.

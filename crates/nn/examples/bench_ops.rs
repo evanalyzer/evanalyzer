@@ -25,8 +25,8 @@ use burn::nn::pool::MaxPool2dConfig;
 use burn::nn::{InstanceNormConfig, PaddingConfig2d};
 use burn::tensor::activation::relu;
 use burn::tensor::module::interpolate;
-use burn::tensor::ops::{InterpolateMode, InterpolateOptions};
 use burn::tensor::ops::PadMode;
+use burn::tensor::ops::{InterpolateMode, InterpolateOptions};
 use burn::tensor::{DType, Device, DeviceKind, Distribution, Tensor};
 use std::time::Instant;
 
@@ -150,9 +150,11 @@ fn main() {
             same.forward(x.clone())
         });
         let weight = same.weight.val();
-        time("conv 3x3 64->64 shifted matmul", conv_flops(c, c, pixels), || {
-            conv3x3_shifted(x.clone(), &weight)
-        });
+        time(
+            "conv 3x3 64->64 shifted matmul",
+            conv_flops(c, c, pixels),
+            || conv3x3_shifted(x.clone(), &weight),
+        );
         let (x16, w16) = (x.clone().cast(DType::F16), weight.clone().cast(DType::F16));
         let options = burn::tensor::ops::ConvOptions::new([1, 1], [1, 1], [1, 1], 1);
         time("conv 3x3 64->64 f16", conv_flops(c, c, pixels), || {
@@ -173,11 +175,7 @@ fn main() {
             || level1.forward(xh.clone()),
         );
         let eighth = side / 16;
-        let xb = Tensor::<4>::random(
-            [1, 16 * c, eighth, eighth],
-            Distribution::Default,
-            &device,
-        );
+        let xb = Tensor::<4>::random([1, 16 * c, eighth, eighth], Distribution::Default, &device);
         let base = conv(16 * c, 16 * c);
         time(
             "conv 3x3 1024->1024 (side/16)",
@@ -201,9 +199,11 @@ fn main() {
         );
         let one = Conv2dConfig::new([2 * c, c], [1, 1]).init(&device);
         let xu = Tensor::<4>::random([1, 2 * c, side, side], Distribution::Default, &device);
-        time("conv 1x1 128->64", 2.0 * (2 * c * c) as f64 * pixels, || {
-            one.forward(xu.clone())
-        });
+        time(
+            "conv 1x1 128->64",
+            2.0 * (2 * c * c) as f64 * pixels,
+            || one.forward(xu.clone()),
+        );
         let norm = InstanceNormConfig::new(c).with_affine(false).init(&device);
         time("instance norm 64", 0.0, || norm.forward(x.clone()));
         // The norm on what a block gives it: a conv's (f16, then f32 + ReLU)
@@ -212,11 +212,20 @@ fn main() {
             burn::tensor::module::conv2d(x16.clone(), w16.clone(), None, options.clone())
                 .cast(DType::F32),
         );
-        let _ = conv_out.clone().sum().into_data().as_slice::<f32>().unwrap()[0];
-        time("instance norm 64 on f16 conv out", 0.0, || norm.forward(conv_out.clone()));
+        let _ = conv_out
+            .clone()
+            .sum()
+            .into_data()
+            .as_slice::<f32>()
+            .unwrap()[0];
+        time("instance norm 64 on f16 conv out", 0.0, || {
+            norm.forward(conv_out.clone())
+        });
         let conv32 = relu(same.forward(x.clone()));
         let _ = conv32.clone().sum().into_data().as_slice::<f32>().unwrap()[0];
-        time("instance norm 64 on f32 conv out", 0.0, || norm.forward(conv32.clone()));
+        time("instance norm 64 on f32 conv out", 0.0, || {
+            norm.forward(conv32.clone())
+        });
         time("channels-last norm on conv out", 0.0, || {
             instance_norm_channels_last(conv_out.clone())
         });
@@ -227,7 +236,10 @@ fn main() {
             let a = norm.forward(conv_out.clone());
             let b = instance_norm_channels_last(conv_out.clone());
             let d = (a - b).abs().max().into_data();
-            println!("  max |burn norm - channels-last norm| = {:e}", d.as_slice::<f32>().unwrap()[0]);
+            println!(
+                "  max |burn norm - channels-last norm| = {:e}",
+                d.as_slice::<f32>().unwrap()[0]
+            );
         }
         time("relu on f16 conv out", 0.0, || relu(conv_out.clone()));
         for chunks in [64, 256, 1024] {
@@ -247,7 +259,9 @@ fn main() {
                     .with_output_size([side, side]),
             )
         });
-        time("cat 64+64", 0.0, || Tensor::cat(vec![x.clone(), x.clone()], 1));
+        time("cat 64+64", 0.0, || {
+            Tensor::cat(vec![x.clone(), x.clone()], 1)
+        });
         let _ = first.num_params();
     });
 }

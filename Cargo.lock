@@ -4285,7 +4285,9 @@ dependencies = [
  "rayon",
  "safetensors",
  "serde",
+ "serde_json",
  "smartcore",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 

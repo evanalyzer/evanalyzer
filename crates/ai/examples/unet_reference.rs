@@ -17,13 +17,17 @@
 //!   (1024²), on the CPU and, when there is one, the GPU (CUDA, libtorch's
 //!   default: TF32 in convolutions) -
 //! - raw little-endian f32 files: `<out>/<input>.input.f32` (normalized),
-//!   `<out>/<input>.libtorch-<cpu|gpu>.f32` (`[channels, H, W]`).
+//!   `<out>/<input>.libtorch-<cpu|gpu>.f32` (`[channels, H, W]`),
+//! - and the engine as the app ran it (`evanalyzer_ai::infer`, CPU: mirror
+//!   padding, pieces of 2048, foreground channel 0, boundary channel 1):
+//!   `<out>/<input>.engine.f32` (foreground plane, then boundary plane).
 //!
 //!   cargo build-linux -p evanalyzer_ai --features test-support --example unet_reference
 //!   LD_LIBRARY_PATH=$PWD/libs/libtorch/lib:$PWD/libs/nvidia-cu13/lib \
 //!     LD_PRELOAD=$PWD/libs/libtorch/lib/libtorch_cuda.so \
 //!     target/x86_64-unknown-linux-gnu/release/examples/unet_reference <torchscript> <package dir> <out dir>
 
+use evanalyzer_ai::{DeviceSelection, EngineConfig, Image, Pieces, Request, Response, Task};
 use std::path::Path;
 use tch::{CModule, Device, Kind, Tensor};
 
@@ -47,7 +51,11 @@ fn normalize(x: &Tensor) -> Tensor {
 }
 
 fn write_f32(path: &Path, t: &Tensor) {
-    let t = t.to_device(Device::Cpu).to_kind(Kind::Float).contiguous().flatten(0, -1);
+    let t = t
+        .to_device(Device::Cpu)
+        .to_kind(Kind::Float)
+        .contiguous()
+        .flatten(0, -1);
     let values: Vec<f32> = Vec::<f32>::try_from(&t).unwrap();
     let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
     std::fs::write(path, bytes).unwrap();
@@ -70,7 +78,10 @@ fn main() {
     let test = Tensor::read_npy(package.join("test_input_0.npy")).unwrap();
     let side = 1024;
     let bench = Tensor::from_slice(&cells(side)).reshape([1, 1, side as i64, side as i64]);
-    let inputs = [("test256", normalize(&test)), ("cells1024", normalize(&bench))];
+    let inputs = [
+        ("test256", normalize(&test)),
+        ("cells1024", normalize(&bench)),
+    ];
 
     let mut devices = vec![("cpu", Device::Cpu)];
     if tch::Cuda::is_available() {
@@ -86,6 +97,44 @@ fn main() {
             println!("{name} libtorch-{dev_name}: {:?}", y.size());
             write_f32(&out.join(format!("{name}.libtorch-{dev_name}.f32")), &y);
         }
+    }
+    for (name, x) in &inputs {
+        let size = x.size();
+        let (h, w) = (size[2] as usize, size[3] as usize);
+        let flat = x.contiguous().flatten(0, -1);
+        let data: Vec<f32> = Vec::<f32>::try_from(&flat).unwrap();
+        let request = Request {
+            model: script.to_path_buf(),
+            task: Task::UNet {
+                foreground_channel: 0,
+                softmax: false,
+                boundary_channel: 1,
+                pieces: Pieces::fixed(2048),
+            },
+        };
+        let image = Image {
+            width: w,
+            height: h,
+            channels: 1,
+            data: &data,
+        };
+        let config = || EngineConfig {
+            devices: DeviceSelection::Cpu,
+            gpu_slots: 1,
+            cores: 4,
+        };
+        let Response::UNet {
+            probabilities,
+            boundary,
+        } = evanalyzer_ai::infer(&request, image, config).unwrap()
+        else {
+            panic!("not a U-Net answer");
+        };
+        let mut planes = probabilities;
+        planes.extend(boundary.expect("a boundary plane"));
+        let bytes: Vec<u8> = planes.iter().flat_map(|v| v.to_le_bytes()).collect();
+        std::fs::write(out.join(format!("{name}.engine.f32")), bytes).unwrap();
+        println!("{name} engine: {w}x{h}");
     }
     // The package's own expected output, for the 256² input.
     let expected = Tensor::read_npy(package.join("test_output_0.npy")).unwrap();

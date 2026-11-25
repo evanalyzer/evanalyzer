@@ -14,6 +14,7 @@ doctest = false
 
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }
 smartcore = { workspace = true, features = ["serde"] }
@@ -32,6 +33,7 @@ burn-dispatch = { version = "0.22.1", default-features = false, features = ["ray
 
 [dev-dependencies]
 libc = { workspace = true }
+tempfile = { workspace = true }
 rayon = { workspace = true }
 
 [[example]]
