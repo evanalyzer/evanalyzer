@@ -347,7 +347,9 @@ Flat, in the output folder: `{name}_{part}.{ext}`, e.g.
   are in the run, not on their order. Every per-image file also has the
   `image` column with the full relative path.
 - **Well** - the well, e.g. `A01`.
-- **Folder** - the image folder, sanitized; `_` for the top folder.
+- **Folder** - the image folder, sanitized; `_root_` for the images directly
+  in the image root (the folder `(root)` in the tables - see the README's
+  "How results are grouped and summed up").
 - **Class** - the class name, sanitized; the class id is added only where
   two classes would get the same name.
 - **Planes** - where the results have several z-planes or time points,

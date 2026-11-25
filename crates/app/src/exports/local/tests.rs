@@ -321,7 +321,7 @@ fn transposed_wells_and_folders_have_a_row_per_group() {
         [
             "folder,count_per_image_avg_nucleus,area_px_avg_nucleus,\
              count_per_image_avg_spot,area_px_avg_spot",
-            "Top folder,0,,1,7",
+            "(root),0,,1,7",
             "A1,2,200,1,5",
             "B1,1,200,0,",
         ]

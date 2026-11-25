@@ -241,10 +241,7 @@ impl<'a> TimeCourseQuery<'a> {
         let line_of_image = match filter.lines {
             TimeCourseLines::Class | TimeCourseLines::Track => "''".to_string(),
             TimeCourseLines::Image => "i.image_rel_path".to_string(),
-            TimeCourseLines::Well | TimeCourseLines::Group => format!(
-                "regexp_extract(i.{}, '{}', 1)",
-                grouping.column, grouping.regex
-            ),
+            TimeCourseLines::Well | TimeCourseLines::Group => grouping.group("i."),
         };
         let mut image_conditions = vec!["NOT i.disabled".to_string(), "i.successful".to_string()];
         let mut object_conditions = vec!["(t_stack, z_stack) IN (SELECT t, z FROM p)".to_string()];
@@ -951,6 +948,40 @@ mod tests {
                 (0, "A1".to_string(), 2, 2, vec![Some(20.0)]),
                 (0, "B2".to_string(), 1, 1, vec![Some(100.0)]),
             ]
+        );
+    }
+
+    /// Folder lines: an image directly in the image root is in the root
+    /// folder - not left out (wells leave out images without one).
+    #[test]
+    fn folder_lines_keep_the_images_in_the_image_root() {
+        let db = open(
+            &[
+                ObjectSpec::new("x/a.tif", "ClassA", 1, 10),
+                ObjectSpec::new("x/b.tif", "ClassA", 1, 30),
+                ObjectSpec::new("c.tif", "ClassA", 1, 100),
+            ],
+            1,
+            None,
+        );
+        let course = |grouping, lines| {
+            let filter = TimeCourseFilter {
+                grouping,
+                ..filter(lines, &[TimeCourseStat::Mean])
+            };
+            summary(&time_course(&db, &filter).unwrap())
+        };
+        assert_eq!(
+            course(Grouping::Folder, TimeCourseLines::Group),
+            [
+                (0, "(root)".to_string(), 1, 1, vec![Some(100.0)]),
+                (0, "x".to_string(), 2, 2, vec![Some(20.0)]),
+            ]
+        );
+        // `^(x)/`: c.tif has no group.
+        assert_eq!(
+            course(Grouping::Regex("^(x)/".into()), TimeCourseLines::Well),
+            [(0, "x".to_string(), 2, 2, vec![Some(20.0)])]
         );
     }
 

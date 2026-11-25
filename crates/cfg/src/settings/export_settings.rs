@@ -735,7 +735,10 @@ mod tests {
 
         let saved = serde_json::to_value(&export).unwrap();
         for i in [0, 1, 2, 4] {
-            assert_eq!(saved["entries"][i], file["entries"][i], "entry {i} unchanged");
+            assert_eq!(
+                saved["entries"][i], file["entries"][i],
+                "entry {i} unchanged"
+            );
         }
     }
 

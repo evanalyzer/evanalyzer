@@ -21,6 +21,10 @@ use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::classification_settings::Class;
 pub use evanalyzer_cfg::settings::export_settings::LengthUnit;
 
+/// The folder of an image directly in the image root (no folder of its
+/// own) - its folder row, time course line and split part.
+pub const ROOT_FOLDER: &str = "(root)";
+
 /// A column as it is presented.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Presented {

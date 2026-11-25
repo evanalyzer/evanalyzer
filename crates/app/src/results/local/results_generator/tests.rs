@@ -4212,13 +4212,18 @@ fn grouped_by_folder_a_row_per_folder() {
         ObjectSpec::new("x/a.tif", "ClassA", 1, 10),
         ObjectSpec::new("x/b.tif", "ClassA", 1, 30),
         ObjectSpec::new("y/c.tif", "ClassA", 1, 20),
+        ObjectSpec::new("d.tif", "ClassA", 1, 40),
     ]);
     let rows = grouped_by(&generator, Grouping::Folder, Aggregation::Sum, false);
     let groups: Vec<(&str, Option<f64>)> = rows
         .iter()
         .map(|(group, _, values)| (group.as_str(), values[0]))
         .collect();
-    assert_eq!(groups, [("x", Some(2.0)), ("y", Some(1.0))]);
+    // An image directly in the image root: the root folder.
+    assert_eq!(
+        groups,
+        [("(root)", Some(1.0)), ("x", Some(2.0)), ("y", Some(1.0))]
+    );
 }
 
 /// A row per image without the empty classes: only the classes with

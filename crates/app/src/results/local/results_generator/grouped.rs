@@ -373,8 +373,8 @@ impl ResultsGenerator {
     /// objects - as the plate view counts: "mean" is the objects per image,
     /// "sum" all of them). Left-out and failed images add nothing, their
     /// group is marked. Images the pattern doesn't fit form the group "No
-    /// group" (for folders: "Top folder", the images right in the image
-    /// folder).
+    /// group"; for folders the images right in the image root are in
+    /// [`ROOT_FOLDER`](crate::results::present::ROOT_FOLDER).
     #[allow(clippy::too_many_arguments)]
     pub(super) fn get_grouped_by_group(
         &self,
@@ -390,6 +390,7 @@ impl ResultsGenerator {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         let group_sql = self.grouping_sql(grouping)?;
         let (group_col, regex) = (group_sql.column, group_sql.regex.as_str());
+        let group = group_sql.group("");
         let group_name = match grouping {
             Grouping::Folder => "folder",
             _ => "well",
@@ -537,7 +538,7 @@ impl ResultsGenerator {
         let sql = format!(
             "WITH img AS (\n\
                  SELECT image_rel_path,\n\
-                     COALESCE(regexp_extract({group_col}, '{regex}', 1), '') AS grp,\n\
+                     COALESCE({group}, '') AS grp,\n\
                      COALESCE(regexp_extract({group_col}, '{regex}', 2), '') AS sort_row,\n\
                      COALESCE(TRY_CAST(regexp_extract({group_col}, '{regex}', 3) AS BIGINT), -1)\n\
                          AS sort_col,\n\
@@ -632,12 +633,11 @@ impl ResultsGenerator {
                     .find(|class| class.global() == object_class)
                     .map(|class| class.color)
                     .unwrap_or(0);
-                // Images the pattern doesn't fit; for folders: those right in
-                // the image folder.
-                let name = match (group.is_empty(), grouping) {
-                    (false, _) => group,
-                    (true, Grouping::Folder) => "Top folder".to_string(),
-                    (true, _) => "No group".to_string(),
+                // Images the pattern doesn't fit (folders have the root
+                // folder instead - see `GroupingSql::group`).
+                let name = match group.is_empty() {
+                    false => group,
+                    true => "No group".to_string(),
                 };
                 let mut cells = vec![
                     Cell {

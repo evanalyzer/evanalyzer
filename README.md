@@ -110,6 +110,25 @@ server reads them from the path you give it, so you can keep them anywhere
 
 See [docs/server.md](docs/server.md) for all settings.
 
+## How results are grouped and summed up
+
+- **Wells** come from the image name: the plate's grouping pattern (or an
+  export's group regex), its first capture group. An image the pattern
+  doesn't fit has no well: it is left out of well lines (time course,
+  profile, charts) and is in the row "No group" of the rows per well.
+- **Folders** come from the image's path below the image root. An image
+  directly in the image root is in the folder `(root)`: its own row, time
+  course line and split file part (`_root_`).
+- **Statistics** (mean, SD, median, quartiles, min, max, sum, skewness)
+  are taken over the objects that have the value. A value that can't be
+  computed is stored empty, never as NaN or infinity. Results files
+  analysed before 2026-11-25 can hold NaN in `minor_axis` and `min_feret`
+  (and eccentricity 0 instead of 1) for objects that are a line of pixels:
+  statistics over those columns fail there until the images are analysed
+  again.
+
+See [docs/exports.md](docs/exports.md) for the export file format.
+
 ## Documentation and help
 
 - **User guide:** [evanalyzer.org](https://evanalyzer.org) - getting started,

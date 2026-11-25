@@ -190,7 +190,7 @@ fn parts(
                 .into_iter()
                 .map(|(folder, images)| {
                     let suffix = if folder.is_empty() {
-                        "_".to_string()
+                        naming::sanitize(crate::results::present::ROOT_FOLDER)
                     } else {
                         naming::sanitize(&folder)
                     };

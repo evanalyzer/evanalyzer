@@ -36,8 +36,8 @@ use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_cfg::settings::export_settings::TimeCourseOptions;
 use evanalyzer_cfg::settings::export_settings::{
     ChildLink, DataExport, DataOutput, DrawnBrightness, DrawnStyle, ExportAggregation, ExportEntry,
-    ExportSettings, HeatmapColors, IfExists, ImageScope, LengthUnit, OutputLocation, PlaneRange, Planes,
-    ProfileContent, ProfileLineKind, ScriptLanguage, SpeedUnit, SplitInto, TableFileFormat,
+    ExportSettings, HeatmapColors, IfExists, ImageScope, LengthUnit, OutputLocation, PlaneRange,
+    Planes, ProfileContent, ProfileLineKind, ScriptLanguage, SpeedUnit, SplitInto, TableFileFormat,
     TableSplit, TimeCourseLineKind, TimeCourseTableLayout,
 };
 use evanalyzer_cfg::settings::project_settings::ResultsView;
@@ -3453,10 +3453,7 @@ fn entry_row(export: &ExportSettings, entry: &ExportEntry) -> ExportEntryRow {
                 "" => "Unknown entry".to_string(),
                 kind => format!("Unknown entry · {kind}"),
             },
-            format!(
-                "{} - kept as it is",
-                evanalyzer_app::exports::NEEDS_NEWER
-            ),
+            format!("{} - kept as it is", evanalyzer_app::exports::NEEDS_NEWER),
             String::new(),
         ),
         ExportEntry::Data(data) => {

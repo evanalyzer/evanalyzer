@@ -1119,7 +1119,10 @@ fn children_and_linked_objects_are_picked_like_the_list() {
     };
     assert_eq!(
         table.children,
-        vec![evanalyzer_cfg::settings::export_settings::ChildLink { parent: 1, child: 2 }]
+        vec![evanalyzer_cfg::settings::export_settings::ChildLink {
+            parent: 1,
+            child: 2
+        }]
     );
     assert_eq!(table.child_aggregations, vec![ExportAggregation::Max]);
     assert_eq!(table.parents, vec![1]);
@@ -1511,7 +1514,11 @@ fn an_entry_of_a_newer_version_is_shown_and_kept() {
     state.invoke_select(1);
     let rows = entries(&ui);
     assert_eq!(rows[1].title, "Unknown entry · CHART");
-    assert!(rows[1].subtitle.contains("newer version"), "{}", rows[1].subtitle);
+    assert!(
+        rows[1].subtitle.contains("newer version"),
+        "{}",
+        rows[1].subtitle
+    );
     assert!(
         state.get_problems().contains("newer version"),
         "it can't run: {}",
