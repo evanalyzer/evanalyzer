@@ -192,7 +192,7 @@ fn moving_and_removing_entries_keeps_the_pick() {
         .collect();
     assert_eq!(kinds, ["SCRIPT", "DRAWN_IMAGES"]);
     // A script without a file can't run: said, and Run is off.
-    assert!(state.get_problems().len() > 0);
+    assert!(!state.get_problems().is_empty());
 }
 
 /// A script picked by name: its language follows.

@@ -77,7 +77,6 @@ mod settings {
             "/src/settings/object_settings.rs"
         ));
     }
-    #[allow(dead_code)]
     // Only the types are needed for the schema, not their helpers.
     #[allow(dead_code)]
     pub mod export_settings {

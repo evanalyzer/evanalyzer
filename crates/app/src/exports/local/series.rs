@@ -55,6 +55,9 @@ struct ValueColumn {
     factor: f64,
 }
 
+/// A row of a wide time course: (its time in s, per line the values).
+type WideRow = (Option<f64>, BTreeMap<usize, Vec<Option<f64>>>);
+
 pub(super) struct TimeCourseRows {
     images: Vec<String>,
     classes: Option<Vec<ObjectClass>>,
@@ -258,8 +261,7 @@ impl TimeCourseRows {
         };
         // The lines in the order they come, each named once.
         let mut lines: Vec<(String, String)> = Vec::new();
-        let mut rows: BTreeMap<(u32, u32), (Option<f64>, BTreeMap<usize, Vec<Option<f64>>>)> =
-            BTreeMap::new();
+        let mut rows: BTreeMap<(u32, u32), WideRow> = BTreeMap::new();
         let mut n = 0usize;
         results.time_course_each(&self.filter(&part), &mut |point| {
             n += 1;

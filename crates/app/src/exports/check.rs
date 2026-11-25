@@ -560,9 +560,10 @@ mod tests {
     use serde_json::json;
 
     fn project(exports: serde_json::Value) -> ProjectSettings {
-        let mut project = ProjectSettings::default();
-        project.exports = serde_json::from_value(exports).unwrap();
-        project
+        ProjectSettings {
+            exports: serde_json::from_value(exports).unwrap(),
+            ..Default::default()
+        }
     }
 
     fn messages(project: &ProjectSettings) -> Vec<(Severity, String)> {

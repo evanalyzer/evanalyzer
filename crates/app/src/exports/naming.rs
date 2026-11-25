@@ -142,12 +142,11 @@ pub fn unique_image_parts(images: &[String]) -> BTreeMap<String, String> {
                 .filter(|part| !part.is_empty())
                 .map(String::from)
                 .collect();
-            if let Some(file) = parts.last_mut() {
-                if let Some((stem, _)) = file.rsplit_once('.')
-                    && !stem.is_empty()
-                {
-                    *file = stem.to_string();
-                }
+            if let Some(file) = parts.last_mut()
+                && let Some((stem, _)) = file.rsplit_once('.')
+                && !stem.is_empty()
+            {
+                *file = stem.to_string();
             }
             let parts = parts.iter().map(|part| sanitize(part)).collect();
             Image {

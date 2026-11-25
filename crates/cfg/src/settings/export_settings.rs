@@ -120,6 +120,9 @@ pub enum IfExists {
 /// One thing an export writes (`"kind"` says which).
 #[derive(Serialize, Deserialize, Debug, JsonSchema, Clone, PartialEq)]
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
+// A project has a handful of entries: their size doesn't matter, boxing
+// `Data` would only make every match on them longer.
+#[allow(clippy::large_enum_variant)]
 pub enum ExportEntry {
     Data(DataExport),
     DrawnImages(DrawnImagesExport),

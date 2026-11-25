@@ -420,12 +420,14 @@ mod tests {
     /// A broken export fails the check; a sound one passes.
     #[test]
     fn validate_checks_the_exports() {
-        let mut settings = ProjectSettings::default();
-        settings.exports = serde_json::from_value(serde_json::json!([
-            { "id": 1, "name": "Tables", "entries": [{ "kind": "DATA", "outputs": ["OBJECTS"] }] },
-            { "id": 2, "name": "tables" }
-        ]))
-        .unwrap();
+        let mut settings = ProjectSettings {
+            exports: serde_json::from_value(serde_json::json!([
+                { "id": 1, "name": "Tables", "entries": [{ "kind": "DATA", "outputs": ["OBJECTS"] }] },
+                { "id": 2, "name": "tables" }
+            ]))
+            .unwrap(),
+            ..Default::default()
+        };
         let file = TempProjectFile::new(&settings);
         let validate = |file: &TempProjectFile| {
             run_validate(ValidateArgs {

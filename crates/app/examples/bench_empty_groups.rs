@@ -308,7 +308,7 @@ fn main() {
     ] {
         for transposed in [false, true] {
             let by_group = |after: Option<String>, limit: i32| GroupedByImageFilter {
-                plane: plane.clone(),
+                plane,
                 images: evanalyzer_app::results::ImageSet::All,
                 object_classes: None,
                 columns: vec![Column::Count, Column::AreaSizePx],

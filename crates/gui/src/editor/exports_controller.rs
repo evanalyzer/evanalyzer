@@ -483,6 +483,10 @@ pub struct ExportsController {
     shown: Mutex<Shown>,
 }
 
+/// How an export run on one analysis ended: the export as it ran and what
+/// it wrote, or why it failed.
+type RunOutcome = Result<(ExportSettings, ExportReport), String>;
+
 impl ExportsController {
     pub fn new(ui: slint::Weak<AppWindow>, app_state: Arc<UiState>) -> Self {
         Self {
@@ -2002,11 +2006,7 @@ impl ExportsController {
     }
 
     /// [`Self::finish`] of a run on several analyses.
-    fn finish_many(
-        &self,
-        id: u32,
-        results: Vec<(Target, Result<(ExportSettings, ExportReport), String>)>,
-    ) {
+    fn finish_many(&self, id: u32, results: Vec<(Target, RunOutcome)>) {
         let (cancelled, name) = {
             let mut shown = self.shown.lock().expect("Poisoned");
             let cancelled = shown
@@ -2093,11 +2093,7 @@ impl ExportsController {
 
     /// The last run of the export `id`: a part per analysis (board 4 L1) -
     /// a part that went well folded, one with a problem open.
-    fn record_many(
-        &self,
-        id: u32,
-        results: Vec<(Target, Result<(ExportSettings, ExportReport), String>)>,
-    ) {
+    fn record_many(&self, id: u32, results: Vec<(Target, RunOutcome)>) {
         let local = !self.app_state.backend().is_remote();
         {
             let mut shown = self.shown.lock().expect("Poisoned");
@@ -2682,9 +2678,10 @@ impl ExportsController {
         let Some(keys) = keys else {
             return;
         };
-        self.edit(id, |export| match export.entries.get_mut(index) {
-            Some(ExportEntry::Data(data)) => data.columns = Some(keys),
-            _ => {}
+        self.edit(id, |export| {
+            if let Some(ExportEntry::Data(data)) = export.entries.get_mut(index) {
+                data.columns = Some(keys);
+            }
         });
     }
 
@@ -2941,7 +2938,7 @@ fn analysis_made(database: &Path) -> Option<String> {
 
 /// An analysis' name as the Results list shows it, from its results file.
 fn analysis_name(database: &Path) -> String {
-    crate::editor::results_list_controller::extract_name_from_path(&database.to_path_buf())
+    crate::editor::results_list_controller::extract_name_from_path(database)
         .unwrap_or_default()
         .to_string()
 }

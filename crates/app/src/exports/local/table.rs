@@ -171,7 +171,7 @@ fn parts(
     Ok(match table.split {
         TableSplit::None => vec![all(images.to_vec(), None)],
         TableSplit::Image => {
-            let names = naming::unique_image_parts(&images);
+            let names = naming::unique_image_parts(images);
             images
                 .iter()
                 .map(|image| all(vec![image.clone()], Some(names[image].clone())))

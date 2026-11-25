@@ -456,14 +456,16 @@ mod tests {
     /// are there; an unknown export names the ones there are.
     #[test]
     fn run_writes_the_export_into_the_output_folder() {
-        let mut settings = ProjectSettings::default();
-        settings.exports = serde_json::from_value(json!([
-            { "id": 1, "name": "Tables", "entries": [
-                { "kind": "DATA", "outputs": ["OBJECTS"] },
-                { "kind": "DATA", "outputs": ["IMAGES"] }
-            ] }
-        ]))
-        .unwrap();
+        let settings = ProjectSettings {
+            exports: serde_json::from_value(json!([
+                { "id": 1, "name": "Tables", "entries": [
+                    { "kind": "DATA", "outputs": ["OBJECTS"] },
+                    { "kind": "DATA", "outputs": ["IMAGES"] }
+                ] }
+            ]))
+            .unwrap(),
+            ..Default::default()
+        };
         let file = TempProjectFile::new(&settings);
         let db = crate::commands::test_support::TempResultsDb::seeded();
         let out = tempfile::tempdir().unwrap();
@@ -490,8 +492,10 @@ mod tests {
 
     #[test]
     fn view_finds_an_export_by_id_or_name_and_names_the_others_if_not() {
-        let mut settings = ProjectSettings::default();
-        settings.exports = exports();
+        let settings = ProjectSettings {
+            exports: exports(),
+            ..Default::default()
+        };
         let file = TempProjectFile::new(&settings);
         let backend = LocalBackend::default();
         let view = |export: &str| {

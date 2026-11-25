@@ -511,7 +511,7 @@ fn format_modified_time(time: std::time::SystemTime) -> String {
     }
 }
 
-pub(crate) fn extract_name_from_path(path: &PathBuf) -> Option<&str> {
+pub(crate) fn extract_name_from_path(path: &Path) -> Option<&str> {
     // Get just the file name element without the directories
     // (e.g., "/path/to/file.csv" -> "file.csv")
     let file_name = path.file_name()?.to_str()?;
