@@ -278,7 +278,7 @@ fn main() {
         }
         let filter = GroupedByImageFilter {
             plane: plane.clone(),
-            images: None,
+            images: evanalyzer_app::results::ImageSet::All,
             object_classes: None,
             columns: vec![Column::Count, Column::AreaSizePx],
             aggregation: vec![Aggregation::Avg],
@@ -309,7 +309,7 @@ fn main() {
         for transposed in [false, true] {
             let by_group = |after: Option<String>, limit: i32| GroupedByImageFilter {
                 plane: plane.clone(),
-                images: None,
+                images: evanalyzer_app::results::ImageSet::All,
                 object_classes: None,
                 columns: vec![Column::Count, Column::AreaSizePx],
                 aggregation: vec![Aggregation::Avg, Aggregation::Sum],
@@ -360,7 +360,7 @@ fn main() {
     for transposed in [false, true] {
         let by_image = |after: Option<String>, limit: i32| GroupedByImageFilter {
             plane: plane.clone(),
-            images: None,
+            images: evanalyzer_app::results::ImageSet::All,
             object_classes: None,
             columns: vec![Column::Count, Column::AreaSizePx],
             aggregation: vec![Aggregation::Avg, Aggregation::Sum],
@@ -478,7 +478,7 @@ fn main() {
                 source
                     .get_object_list(&ListFilter {
                         plane: plane.clone(),
-                        images: None,
+                        images: evanalyzer_app::results::ImageSet::All,
                         object_classes: None,
                         columns: vec![Column::AreaSizePx],
                         with_coloc_details: false,
@@ -550,7 +550,7 @@ fn main() {
         .collect();
     let list_page = |columns: Vec<Column>, with_coloc_details| ListFilter {
         plane: plane.clone(),
-        images: None,
+        images: evanalyzer_app::results::ImageSet::All,
         object_classes: None,
         columns,
         with_coloc_details,

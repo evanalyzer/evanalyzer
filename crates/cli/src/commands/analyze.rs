@@ -582,7 +582,7 @@ mod tests {
                             z_stack: z,
                             t_stack: t,
                         },
-                        images: None,
+                        images: evanalyzer_app::results::ImageSet::All,
                         object_classes: None,
                         columns: expected_columns.clone(),
                         with_coloc_details: false,

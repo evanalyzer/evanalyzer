@@ -26,7 +26,7 @@ use crate::backend::ExportProgressFn;
 use crate::modules::Severity;
 use crate::results::ResultsSource;
 use evanalyzer_cfg::core_types::InternalErrors;
-use evanalyzer_cfg::settings::export_settings::{ExportEntry, IfExists, OutputLocation};
+use evanalyzer_cfg::settings::export_settings::{ExportEntry, IfExists, OutputLocation, PlaneRange};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -82,6 +82,11 @@ pub(crate) fn run_export(
             log: String::new(),
         };
         let result = match entry {
+            // Refused by the check before a run gets here.
+            ExportEntry::Unknown(_) => {
+                report.status = EntryStatus::Skipped(crate::exports::NEEDS_NEWER.into());
+                Ok(())
+            }
             ExportEntry::Data(data) => {
                 data_export(results, export, data, &output, &mut report, cancel)
             }
@@ -225,17 +230,17 @@ pub(crate) fn in_planes(
     z: u32,
     t: u32,
 ) -> bool {
-    let within = |range: Option<[u32; 2]>, value: u32| {
-        range.is_none_or(|[from, to]| from <= value && value <= to)
+    let within = |range: Option<PlaneRange>, value: u32| {
+        range.is_none_or(|range| range.from <= value && value <= range.to)
     };
     within(planes.z, z) && within(planes.t, t)
 }
 
 /// `planes`' range of `axis` as the results' export takes it (end
 /// excluded).
-pub(crate) fn plane_range(range: Option<[u32; 2]>) -> Option<std::range::Range<u32>> {
-    range.map(|[from, to]| std::range::Range {
-        start: from,
-        end: to.saturating_add(1),
+pub(crate) fn plane_range(range: Option<PlaneRange>) -> Option<std::range::Range<u32>> {
+    range.map(|range| std::range::Range {
+        start: range.from,
+        end: range.to.saturating_add(1),
     })
 }

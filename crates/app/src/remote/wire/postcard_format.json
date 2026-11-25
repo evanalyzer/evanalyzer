@@ -1,5 +1,5 @@
 {
-  "protocol_version": 58,
+  "protocol_version": 59,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -717,9 +717,7 @@
         },
         {
           "images": {
-            "OPTION": {
-              "SEQ": "STR"
-            }
+            "TYPENAME": "ImageSet"
           }
         },
         {
@@ -1015,6 +1013,35 @@
         }
       }
     },
+    "ImageSet": {
+      "ENUM": {
+        "0": {
+          "All": "UNIT"
+        },
+        "1": {
+          "Enabled": "UNIT"
+        },
+        "2": {
+          "Listed": {
+            "NEWTYPE": {
+              "SEQ": "STR"
+            }
+          }
+        },
+        "3": {
+          "EnabledRange": {
+            "STRUCT": [
+              {
+                "first": "STR"
+              },
+              {
+                "last": "STR"
+              }
+            ]
+          }
+        }
+      }
+    },
     "ImageTracks": {
       "STRUCT": [
         {
@@ -1072,9 +1099,7 @@
         },
         {
           "images": {
-            "OPTION": {
-              "SEQ": "STR"
-            }
+            "TYPENAME": "ImageSet"
           }
         },
         {

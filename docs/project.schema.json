@@ -387,6 +387,26 @@
         "name"
       ]
     },
+    "ChildLink": {
+      "description": "A link from a parent class to a child class (class ids).",
+      "type": "object",
+      "properties": {
+        "child": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "parent": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "parent",
+        "child"
+      ]
+    },
     "Class": {
       "type": "object",
       "properties": {
@@ -775,25 +795,11 @@
           }
         },
         "children": {
-          "description": "The children linked to each object (Relate Objects), as the Results\nList shows them: (parent class id, child class id).",
+          "description": "The children linked to each object (Relate Objects), as the Results\nList shows them.",
           "type": "array",
           "default": [],
           "items": {
-            "type": "array",
-            "maxItems": 2,
-            "minItems": 2,
-            "prefixItems": [
-              {
-                "type": "integer",
-                "format": "uint32",
-                "minimum": 0
-              },
-              {
-                "type": "integer",
-                "format": "uint32",
-                "minimum": 0
-              }
-            ]
+            "$ref": "#/$defs/ChildLink"
           }
         },
         "classes": {
@@ -1288,7 +1294,7 @@
     },
     "ExportEntry": {
       "description": "One thing an export writes (`\"kind\"` says which).",
-      "oneOf": [
+      "anyOf": [
         {
           "type": "object",
           "properties": {
@@ -6384,37 +6390,51 @@
         "RELATIVE"
       ]
     },
+    "PlaneRange": {
+      "description": "Planes `from` to `to`, both included, counted from 0.",
+      "type": "object",
+      "properties": {
+        "from": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "to": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ]
+    },
     "Planes": {
-      "description": "Which z-planes and time points an entry writes: each a range `[from,\nto]` (both included, counted from 0); `None`: all of them.",
+      "description": "Which z-planes and time points an entry writes: each a range;\n`None`: all of them.",
       "type": "object",
       "properties": {
         "t": {
-          "type": [
-            "array",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlaneRange"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "default": null,
-          "items": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "maxItems": 2,
-          "minItems": 2
+          "default": null
         },
         "z": {
-          "type": [
-            "array",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlaneRange"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "default": null,
-          "items": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "maxItems": 2,
-          "minItems": 2
+          "default": null
         }
       }
     },

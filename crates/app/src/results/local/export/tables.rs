@@ -440,7 +440,7 @@ pub(super) fn stream_list_pages(
             let filter = ListFilter {
                 plane,
                 // `images` below instead: no copy of every path per page.
-                images: None,
+                images: crate::results::ImageSet::All,
                 object_classes: object_classes.clone(),
                 columns: export.columns.clone(),
                 with_coloc_details,

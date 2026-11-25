@@ -801,6 +801,11 @@ component EntrySettings inherits VerticalLayout {
         Classes { }
     }
 
+    // An entry a newer version wrote: kept as it is, nothing to set.
+    if ExportsState.entry-kind == "UNKNOWN": InkHint {
+        text: "This entry was made with a newer version of EVAnalyzer. It is kept as it is and saved with the project - update EVAnalyzer to change or run it.";
+        wrap: word-wrap;
+    }
     if ExportsState.entry-kind == "SCRIPT": VerticalLayout {
         spacing: 14px;
         Setting {
@@ -971,23 +976,24 @@ export component ExportsView inherits Rectangle {
                         spacing: 2px;
                         alignment: start;
                         // Like every list (InkListRow): place, name, what it
-                        // writes, the last run, ⋯, the eye - here "runs
-                        // after analysis" (design canvas "Quick export,
-                        // open folder, run on", board 5).
+                        // writes, the last run, ⋯ - and an "After analysis"
+                        // chip in the eye's place: the eye means show / hide
+                        // in the other lists (design canvas "Quick export,
+                        // open folder, run on", boards 5 and 9).
                         for row[i] in ExportsState.exports: InkListRow {
                             lead: i + 1;
                             title: row.name;
                             subtitle: row.summary;
-                            trailing: row.status != "" ? row.status : row.after ? "" : "by hand";
+                            trailing: row.status;
                             selected: row.id == ExportsState.selected-id;
                             has-more: true;
-                            has-eye: true;
-                            shown: row.after;
-                            eye-tip: row.after ? "Runs after analysis" : "Only by hand";
+                            chip: "After analysis";
+                            chip-on: row.after;
+                            chip-tip: row.after ? "Runs as the last step of every analysis - click: only by hand" : "Click: run it as the last step of every analysis";
                             clicked => {
                                 ExportsState.select(row.id);
                             }
-                            eye-toggled => {
+                            chip-toggled => {
                                 ExportsState.set-after(row.id, !row.after);
                             }
                             context-menu(x, y) => {
@@ -1094,11 +1100,70 @@ export component ExportsView inherits Rectangle {
                                 text: "No analysis in the Results list";
                                 enabled: false;
                             }
-                            for row[i] in ExportsState.run-on: InkMenuItem {
-                                text: row.name + (row.when == "" ? "" : "  ·  " + row.when);
-                                checked: row.on;
-                                clicked => {
+                            // Two lines per analysis: its name, when it was
+                            // made (board 9) - its images at the right.
+                            for row[i] in ExportsState.run-on: Rectangle {
+                                height: 40px;
+                                border-radius: Ink.radius-sm;
+                                background: row-ta.has-hover ? Ink.hover : transparent;
+                                accessible-role: checkbox;
+                                accessible-label: row.name + ", " + row.when;
+                                accessible-checked: row.on;
+                                accessible-action-default => {
                                     ExportsState.run-on-pick(i, !row.on);
+                                }
+                                row-ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        ExportsState.run-on-pick(i, !row.on);
+                                    }
+                                }
+                                HorizontalLayout {
+                                    padding-left: 8px;
+                                    padding-right: 8px;
+                                    spacing: 9px;
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Rectangle {
+                                            width: 14px;
+                                            height: 14px;
+                                            border-radius: Ink.radius-xs;
+                                            border-width: row.on ? 0px : 1px;
+                                            border-color: Ink.text-faint;
+                                            background: row.on ? Ink.primary : Ink.field;
+                                            Image {
+                                                visible: row.on;
+                                                source: InkIcons.check;
+                                                width: 10px;
+                                                height: 10px;
+                                                colorize: Ink.on-primary;
+                                            }
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        horizontal-stretch: 1;
+                                        Text {
+                                            text: row.name;
+                                            font-size: Ink.fs-body;
+                                            font-weight: 500;
+                                            color: Ink.text;
+                                            overflow: elide;
+                                        }
+                                        Text {
+                                            text: row.when + (i == 0 ? " · newest" : "");
+                                            font-size: Ink.fs-secondary;
+                                            color: Ink.text-mute;
+                                            overflow: elide;
+                                        }
+                                    }
+                                    Text {
+                                        text: row.images;
+                                        font-size: Ink.fs-secondary;
+                                        font-family: Ink.font-mono;
+                                        color: Ink.text-mute;
+                                        vertical-alignment: center;
+                                    }
                                 }
                             }
                             InkMenuSeparator { }

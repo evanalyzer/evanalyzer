@@ -432,7 +432,7 @@ mod tests {
         // connection (this analysis found no objects - none listed).
         let list = ListFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![Column::AreaSizePx],
             with_coloc_details: false,
@@ -884,7 +884,7 @@ mod tests {
         failed_with(
             db.get_object_list(&ListFilter {
                 plane: plane(),
-                images: None,
+                images: crate::results::ImageSet::All,
                 object_classes: None,
                 columns: vec![Column::AreaSizePx],
                 with_coloc_details: false,
@@ -902,7 +902,7 @@ mod tests {
             db.object_list_page_starts(
                 &ListFilter {
                     plane: plane(),
-                    images: None,
+                    images: crate::results::ImageSet::All,
                     object_classes: None,
                     columns: vec![Column::AreaSizePx],
                     with_coloc_details: false,
@@ -921,7 +921,7 @@ mod tests {
         failed_with(
             db.get_grouped_by_image(&GroupedByImageFilter {
                 plane: plane(),
-                images: None,
+                images: crate::results::ImageSet::All,
                 object_classes: None,
                 columns: vec![Column::Count],
                 aggregation: vec![Aggregation::Avg],
@@ -1215,7 +1215,7 @@ mod tests {
         let image = "a.tif";
         let list = ListFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![Column::AreaSizePx],
             with_coloc_details: false,

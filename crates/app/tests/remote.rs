@@ -678,7 +678,7 @@ fn remote_results_queries_match_local_ones() {
             z_stack: 0,
             t_stack: 0,
         },
-        images: None,
+        images: evanalyzer_app::results::ImageSet::All,
         object_classes: None,
         columns: vec![evanalyzer_app::results::Column::AreaSizePx],
         with_coloc_details: false,
@@ -849,7 +849,7 @@ fn remote_grouped_matrix_and_chart_queries_match_local_ones() {
 
     let grouped = GroupedByImageFilter {
         plane: plane.clone(),
-        images: None,
+        images: evanalyzer_app::results::ImageSet::All,
         object_classes: None,
         columns: vec![Column::Count, Column::AreaSizePx],
         aggregation: vec![Aggregation::Avg],

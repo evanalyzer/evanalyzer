@@ -20,7 +20,8 @@ use crate::exports::jobs::{PlateGrid, PlateLayoutExport, TableExport, TableRows}
 use crate::results::view_settings::ViewSettings;
 use crate::results::{Aggregation, ProfileLines, TimeCourseLines, TrackHistory};
 use evanalyzer_cfg::settings::export_settings::{
-    DataExport, DataOutput, ExportAggregation, ExportEntry, HeatmapColors, HeatmapOptions,
+    ChildLink, DataExport, DataOutput, ExportAggregation, ExportEntry, HeatmapColors,
+    HeatmapOptions,
     ImageScope, ProfileLineKind, ProfileOptions, TimeCourseLineKind, TimeCourseOptions,
 };
 use evanalyzer_cfg::settings::project_settings::{ResultsView, ResultsViewKind};
@@ -189,7 +190,14 @@ fn data_of_table(table: TableExport) -> DataExport {
         planes: table.planes,
         empty_classes: table.empty_classes,
         transposed: table.transposed,
-        children: table.children,
+        children: table
+            .children
+            .iter()
+            .map(|(parent, child)| ChildLink {
+                parent: *parent,
+                child: *child,
+            })
+            .collect(),
         child_aggregations: table.child_aggregations,
         parents: table.parents,
         split: table.split,

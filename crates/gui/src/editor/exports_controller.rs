@@ -35,8 +35,8 @@ use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_cfg::settings::export_settings::TimeCourseOptions;
 use evanalyzer_cfg::settings::export_settings::{
-    DataExport, DataOutput, DrawnBrightness, DrawnStyle, ExportAggregation, ExportEntry,
-    ExportSettings, HeatmapColors, IfExists, ImageScope, LengthUnit, OutputLocation, Planes,
+    ChildLink, DataExport, DataOutput, DrawnBrightness, DrawnStyle, ExportAggregation, ExportEntry,
+    ExportSettings, HeatmapColors, IfExists, ImageScope, LengthUnit, OutputLocation, PlaneRange, Planes,
     ProfileContent, ProfileLineKind, ScriptLanguage, SpeedUnit, SplitInto, TableFileFormat,
     TableSplit, TimeCourseLineKind, TimeCourseTableLayout,
 };
@@ -186,6 +186,9 @@ struct Shown {
     last_runs: BTreeMap<u32, LastRun>,
     /// The analyses the Run ▾ lists: (results file, name, when, ticked).
     run_on: Vec<(PathBuf, String, String, bool)>,
+    /// Their image counts ("" not read yet), read in the background when
+    /// the list opens - by results file.
+    run_on_images: HashMap<PathBuf, String>,
     /// The exports running after an analysis (the note over the window).
     after: AfterRun,
     /// Scripts asked about before a run (the trust prompt).
@@ -402,6 +405,16 @@ fn write_back(data: &mut DataExport, before: &TableExport, after: TableExport) {
             })*
         };
     }
+    if after.children != before.children {
+        data.children = after
+            .children
+            .iter()
+            .map(|(parent, child)| ChildLink {
+                parent: *parent,
+                child: *child,
+            })
+            .collect();
+    }
     changed!(
         format,
         classes,
@@ -410,7 +423,6 @@ fn write_back(data: &mut DataExport, before: &TableExport, after: TableExport) {
         images,
         empty_classes,
         transposed,
-        children,
         child_aggregations,
         parents,
         split,
@@ -941,7 +953,7 @@ impl ExportsController {
 
     /// The Run ▾ opened: the analyses of the Results list (newest first),
     /// the newest ticked - nothing remembered from before.
-    fn run_on_open(&self) {
+    fn run_on_open(self: &Arc<Self>) {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
@@ -949,16 +961,51 @@ impl ExportsController {
         let rows: Vec<(PathBuf, String, String, bool)> = slint::Model::iter(&list)
             .enumerate()
             .map(|(i, row)| {
-                (
-                    PathBuf::from(row.path.as_str()),
-                    row.name.to_string(),
-                    row.modified.to_string(),
-                    i == 0,
-                )
+                let path = PathBuf::from(row.path.as_str());
+                // When it was made (its folder's name) - else its file's age.
+                let when = analysis_made(&path).unwrap_or_else(|| row.modified.to_string());
+                (path, row.name.to_string(), when, i == 0)
             })
             .collect();
-        self.shown.lock().expect("Poisoned").run_on = rows;
+        // Their image counts: each read once, in the background.
+        let unread: Vec<PathBuf> = {
+            let mut shown = self.shown.lock().expect("Poisoned");
+            let unread = rows
+                .iter()
+                .map(|row| row.0.clone())
+                .filter(|path| !shown.run_on_images.contains_key(path))
+                .collect();
+            shown.run_on = rows;
+            unread
+        };
         self.push();
+        if unread.is_empty() {
+            return;
+        }
+        let this = self.clone();
+        ui_thread::spawn(move || {
+            let backend = this.app_state.backend();
+            for path in unread {
+                let count = backend
+                    .open_results(&path)
+                    .and_then(|results| results.get_images())
+                    .map(|images| match images.len() {
+                        1 => "1 image".to_string(),
+                        n => format!("{n} images"),
+                    })
+                    .unwrap_or_default();
+                let this = this.clone();
+                ui_thread::invoke_from_event_loop(move || {
+                    this.shown
+                        .lock()
+                        .expect("Poisoned")
+                        .run_on_images
+                        .insert(path, count);
+                    this.push();
+                })
+                .ok();
+            }
+        });
     }
 
     /// A tick in the Run ▾ (`index`), or All / Newest only (`index` < 0:
@@ -1090,6 +1137,9 @@ impl ExportsController {
                         .and_then(|database| {
                             if target.name.is_empty() {
                                 target.name = analysis_name(&database);
+                            }
+                            if target.when.is_empty() {
+                                target.when = analysis_made(&database).unwrap_or_default();
                             }
                             this.run_one(
                                 &project_dir,
@@ -1425,14 +1475,12 @@ impl ExportsController {
         }
         state.set_file("".into());
         // A name in front of the automatic one(s).
-        state.set_file_placeholder(
-            naming::entry_names(&entry)
-                .iter()
-                .map(|name| naming::with_prefix(&export, name))
-                .collect::<Vec<_>>()
-                .join(", ")
-                .into(),
-        );
+        let names: Vec<String> = naming::entry_names(&entry)
+            .iter()
+            .map(|name| naming::with_prefix(&export, name))
+            .collect();
+        state.set_file_placeholder(names.first().cloned().unwrap_or_default().into());
+        state.set_file_names(model(names.iter().map(SharedString::from).collect()));
         state.set_done(false);
         state.set_can_open_folder(!self.app_state.backend().is_remote());
         state.set_busy(false);
@@ -2235,6 +2283,11 @@ impl ExportsController {
                     path: path.to_string_lossy().as_ref().into(),
                     name: name.as_str().into(),
                     when: when.as_str().into(),
+                    images: shown
+                        .run_on_images
+                        .get(path)
+                        .map_or("…", String::as_str)
+                        .into(),
                     on: *on,
                 })
                 .collect(),
@@ -2440,6 +2493,7 @@ impl ExportsController {
                 );
                 set_classes(&drawn.classes);
             }
+            ExportEntry::Unknown(_) => {}
             ExportEntry::Script(script) => {
                 state.set_script_file(script.file.as_str().into());
                 state.set_language(match script.language {
@@ -2665,9 +2719,9 @@ impl ExportsController {
 
 /// An entry's z-planes and time points: "" all, else "from" and "to".
 fn push_planes(state: &ExportsState, planes: &Planes) {
-    let text = |range: Option<[u32; 2]>, i: usize| {
+    let text = |range: Option<PlaneRange>, i: usize| {
         range
-            .map_or(String::new(), |range| range[i].to_string())
+            .map_or(String::new(), |range| [range.from, range.to][i].to_string())
             .into()
     };
     state.set_z_range(planes.z.is_some());
@@ -2689,7 +2743,10 @@ fn set_planes(planes: &mut Planes, key: &str, value: &str) {
         let (Ok(from), Ok(to)) = (from.trim().parse::<u32>(), to.trim().parse::<u32>()) else {
             return;
         };
-        Some([from.min(to), from.max(to)])
+        Some(PlaneRange {
+            from: from.min(to),
+            to: from.max(to),
+        })
     };
     match key {
         "z-planes" => planes.z = range,
@@ -2870,6 +2927,21 @@ fn open_in_system(path: &Path) {
         .spawn();
 }
 
+/// When an analysis was made, from its folder's name
+/// (`20261124T063054Z__name`): "24 Nov 2026 07:30" in local time. `None`:
+/// the folder isn't named so.
+fn analysis_made(database: &Path) -> Option<String> {
+    let folder = database.parent()?.file_name()?.to_str()?;
+    let stamp = folder.split("__").next()?;
+    let made = chrono::NaiveDateTime::parse_from_str(stamp, "%Y%m%dT%H%M%SZ").ok()?;
+    Some(
+        made.and_utc()
+            .with_timezone(&chrono::Local)
+            .format("%-d %b %Y %H:%M")
+            .to_string(),
+    )
+}
+
 /// An analysis' name as the Results list shows it, from its results file.
 fn analysis_name(database: &Path) -> String {
     crate::editor::results_list_controller::extract_name_from_path(&database.to_path_buf())
@@ -2991,7 +3063,7 @@ fn set_entry_field(entry: &mut ExportEntry, key: &str, value: &str, pickable: &P
     let classes = match entry {
         ExportEntry::Data(d) => Some(&mut d.classes),
         ExportEntry::DrawnImages(d) => Some(&mut d.classes),
-        ExportEntry::Script(_) => None,
+        ExportEntry::Script(_) | ExportEntry::Unknown(_) => None,
     };
     if let Some(classes) = classes {
         if let Some(id) = key.strip_prefix("class:") {
@@ -3014,7 +3086,7 @@ fn set_entry_field(entry: &mut ExportEntry, key: &str, value: &str, pickable: &P
         match entry {
             ExportEntry::Data(d) => set_planes(&mut d.planes, key, value),
             ExportEntry::DrawnImages(d) => set_planes(&mut d.planes, key, value),
-            ExportEntry::Script(_) => {}
+            ExportEntry::Script(_) | ExportEntry::Unknown(_) => {}
         }
         return;
     }
@@ -3023,11 +3095,13 @@ fn set_entry_field(entry: &mut ExportEntry, key: &str, value: &str, pickable: &P
         match entry {
             ExportEntry::Data(d) => d.name = name,
             ExportEntry::DrawnImages(d) => d.name = name,
-            ExportEntry::Script(_) => {}
+            ExportEntry::Script(_) | ExportEntry::Unknown(_) => {}
         }
         return;
     }
     match entry {
+        // A newer version's entry: nothing of it to set here.
+        ExportEntry::Unknown(_) => {}
         ExportEntry::Data(data) => set_data_field(data, key, value, pickable),
         ExportEntry::DrawnImages(drawn) => match key {
             "style" => {
@@ -3335,6 +3409,7 @@ fn kind_name(entry: &ExportEntry) -> &'static str {
         ExportEntry::Data(_) => "DATA",
         ExportEntry::DrawnImages(_) => "DRAWN_IMAGES",
         ExportEntry::Script(_) => "SCRIPT",
+        ExportEntry::Unknown(_) => "UNKNOWN",
     }
 }
 
@@ -3374,6 +3449,19 @@ fn entry_row(export: &ExportSettings, entry: &ExportEntry) -> ExportEntryRow {
         .collect();
     let file = files.first().cloned().unwrap_or_default();
     let (title, subtitle, format) = match entry {
+        // A newer version's entry: kept, said so - its settings can't be
+        // shown here.
+        ExportEntry::Unknown(_) => (
+            match evanalyzer_app::exports::unknown_kind(entry).unwrap_or_default() {
+                "" => "Unknown entry".to_string(),
+                kind => format!("Unknown entry · {kind}"),
+            },
+            format!(
+                "{} - kept as it is",
+                evanalyzer_app::exports::NEEDS_NEWER
+            ),
+            String::new(),
+        ),
         ExportEntry::Data(data) => {
             let ext = match data.format {
                 TableFileFormat::Csv => "csv",
@@ -3431,8 +3519,8 @@ fn entry_row(export: &ExportSettings, entry: &ExportEntry) -> ExportEntryRow {
             {
                 subtitle.push("classes side by side".into());
             }
-            if let Some([from, to]) = data.planes.t {
-                subtitle.push(format!("time points {from}-{to}"));
+            if let Some(range) = data.planes.t {
+                subtitle.push(format!("time points {}-{}", range.from, range.to));
             }
             (title, subtitle.join(" · "), ext.to_uppercase())
         }

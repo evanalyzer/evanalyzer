@@ -68,12 +68,28 @@ export component QuickExportDialog inherits InkDialog {
             }
         }
         Row {
-            label: "Name";
+            label: "Prefix";
             InkTextField {
-                label: "A name in front of the file name";
+                label: "A prefix in front of the file name";
                 mono: true;
-                placeholder: "(optional) - writes " + QuickExportState.file-placeholder;
+                placeholder: "(optional) e.g. ctrl → ctrl_" + QuickExportState.file-placeholder;
                 text <=> QuickExportState.file;
+            }
+        }
+        // What it writes, with the prefix as typed.
+        Row {
+            label: "Writes";
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                for name in QuickExportState.file-names: Text {
+                    text: (QuickExportState.file == "" ? "" : QuickExportState.file + "_") + name;
+                    font-size: Ink.fs-secondary;
+                    font-family: Ink.font-mono;
+                    color: Ink.text-dim;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
             }
         }
 

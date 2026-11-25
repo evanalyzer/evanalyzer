@@ -17,7 +17,10 @@ export global QuickExportState {
     in-out property <string> folder;
     // A name in front of the automatic file name ("" the automatic one).
     in-out property <string> file;
+    // The first automatic name (the placeholder's example), and all of
+    // them: what it writes, the prefix in front of each.
     in property <string> file-placeholder;
+    in property <[string]> file-names;
 
     // -- Written: the done step --
     in property <bool> done;

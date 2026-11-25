@@ -73,7 +73,10 @@ use std::sync::Arc;
 // 58: the trusted scripts (`LoadScriptTrust` / `SaveScriptTrust`, a
 // `ScriptTrust` in `ScriptPermission::Trusted`) - no longer hashes in the
 // app settings.
-pub const PROTOCOL_VERSION: u32 = 58;
+// 59: `ListFilter::images` / `GroupedByImageFilter::images` are an
+// `ImageSet` (all, enabled, listed, a block of enabled images) - an export
+// of all images sends no list of paths per page.
+pub const PROTOCOL_VERSION: u32 = 59;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -792,6 +795,9 @@ mod tests {
             .unwrap();
         tracer
             .trace_simple_type::<crate::results::ImageReviewChange>()
+            .unwrap();
+        tracer
+            .trace_simple_type::<crate::results::ImageSet>()
             .unwrap();
         tracer.trace_type::<ResultsQuery>(&samples).unwrap();
         tracer.trace_type::<ResultsAnswer>(&samples).unwrap();

@@ -258,6 +258,11 @@ fn entry_text(export: &ExportSettings, entry: &ExportEntry) -> String {
         .map(|name| naming::with_prefix(export, name))
         .collect();
     match entry {
+        ExportEntry::Unknown(_) => format!(
+            "unknown entry {}: {}",
+            evanalyzer_app::exports::unknown_kind(entry).unwrap_or_default(),
+            evanalyzer_app::exports::NEEDS_NEWER
+        ),
         ExportEntry::Data(data) => {
             let split = match data.split {
                 evanalyzer_cfg::settings::export_settings::TableSplit::None => String::new(),
@@ -352,6 +357,10 @@ fn entry_details(entry: &ExportEntry) -> String {
         Some(keys) => keys.join(", "),
     };
     let lines: Vec<String> = match entry {
+        ExportEntry::Unknown(raw) => vec![
+            evanalyzer_app::exports::NEEDS_NEWER.to_string(),
+            raw.to_string(),
+        ],
         ExportEntry::Data(data) => {
             let mut lines = vec![
                 format!("outputs: {:?}", data.outputs),

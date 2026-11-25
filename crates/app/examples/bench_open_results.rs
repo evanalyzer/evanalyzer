@@ -98,7 +98,7 @@ fn open_sequence(backend: &LocalBackend, path: &PathBuf) -> (Arc<dyn ResultsSour
     s.time("get_object_list (page 1)", || {
         db.get_object_list(&ListFilter {
             plane: plane(),
-            images: None,
+            images: evanalyzer_app::results::ImageSet::All,
             object_classes: Some(classes.iter().map(|c| c.global()).collect()),
             columns: vec![
                 Column::ObjectId,

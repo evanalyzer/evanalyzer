@@ -91,10 +91,10 @@ for different outputs: a second `data` entry.
 | `columns` | list of column keys | each output's default columns | The value columns, by the column keys the results views use (`count`, `area_nm2`, `intensity_mean_gray_ch1`, `measurement:<key>`, `coloc:…`). The keys name the value; the unit in the written file follows `lengthUnit`. Measurements take only measurement columns, the time course only values (not the count). |
 | `aggregations` | list of `"AVG"`, `"MEDIAN"`, `"STDDEV"`, `"SUM"`, `"MIN"`, `"MAX"`, `"SKEWNESS"` | `["AVG"]` | Where rows group objects: per image, well, folder, track, time point, heatmap cell (a sheet each). The time course has no skewness. |
 | `images` | `"ALL"` \| `"INCLUDED"` \| `"LEFT_OUT"` | `"INCLUDED"` | Which images of the run. |
-| `planes` | `{ "z": [from, to], "t": [from, to] }` | all | Which z-planes and time points (both ends included, from 0). Not for tracks and profiles (they span them). |
+| `planes` | `{ "z": { "from": 0, "to": 4 }, "t": { "from": 0, "to": 10 } }` | all | Which z-planes and time points (both ends included, from 0). Not for tracks and profiles (they span them). |
 | `emptyClasses` | bool | `false` | Per image, well, folder: a row also for classes without objects. |
 | `transposed` | bool | `false` | Objects, images, wells and folders: the classes side by side (§3.2). |
-| `children` | list of `[parent class id, child class id]` | none | The children linked to each object (Relate Objects), as the Results List shows them: per link their count and each `childAggregations` value of each column. Objects, per image, well, folder, coloc pairs. |
+| `children` | list of `{ "parent": <class id>, "child": <class id> }` | none | The children linked to each object (Relate Objects), as the Results List shows them: per link their count and each `childAggregations` value of each column. Objects, per image, well, folder, coloc pairs. |
 | `childAggregations` | list of aggregations | none | How the children's values are summed up, besides their count. |
 | `parents` | list of class ids | none | The linked objects (parents): their id and each column. |
 | `split` | `"NONE"` \| `"IMAGE"` \| `"WELL"` \| `"FOLDER"` \| `"CLASS"` | `"NONE"` | One file (or sheet) per image, well, folder or class - for the tables. |
@@ -296,9 +296,18 @@ Exports come with project schema 5. The step from 4 to 5 changes nothing
 in the file; it exists so that an app that doesn't know exports refuses the
 file instead of saving it back without them.
 
-Later additions (new outputs, new entry kinds, new optional keys) are added with defaults, so older files keep
-their meaning. Renaming or removing a key or value needs a schema version
-and a migration step.
+What a later version may add without a new schema version, and what an
+older version (from schema 5 on) does with it:
+
+| Added later | In an older version |
+|---|---|
+| A new optional key (with a default) | Ignored; dropped when that version saves the project. |
+| A new entry `kind` | The entry is kept exactly as it is in the file and saved back unchanged. The tab shows it as "Unknown entry"; its export can't run there ("needs a newer version of EVAnalyzer") - never half an export. The project and its other exports work as ever. |
+| A new value inside an entry (an output, an aggregation, a colour scale, a unit ...) | The same: that entry is kept as an unknown one. |
+| A new value of an export's own settings (`lengthUnit`, `output.location`, `output.ifExists`) | Not tolerated - this takes a schema version. |
+
+Renaming or removing a key or value needs a schema version and a migration
+step.
 
 ---
 

@@ -59,11 +59,14 @@ export struct RunPart {
     open: bool,
 }
 
-/// An analysis the Run ▾ lists: its results file, name, when, ticked.
+/// An analysis the Run ▾ lists: its results file, name, when it was made
+/// ("24 Nov 2026 07:30"), its images ("96 images"; "…" not read yet),
+/// ticked.
 export struct AnalysisRow {
     path: string,
     name: string,
     when: string,
+    images: string,
     on: bool,
 }
 

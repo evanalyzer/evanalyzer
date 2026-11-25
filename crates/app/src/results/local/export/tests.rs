@@ -2321,7 +2321,7 @@ fn a_grouped_export_in_blocks_of_one_image_has_the_rows_of_one_block() {
             z_stack: 0,
             t_stack: 0,
         },
-        images: None,
+        images: crate::results::ImageSet::All,
         object_classes: None,
         columns: vec![Column::Count, Column::AreaSizePx],
         aggregation: vec![Aggregation::Avg],

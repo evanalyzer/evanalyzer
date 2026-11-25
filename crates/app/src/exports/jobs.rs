@@ -78,7 +78,11 @@ fn job_of(data: &DataExport, output: DataOutput) -> Job {
                     rows,
                     TableRows::Object | TableRows::Image | TableRows::Well | TableRows::Folder
                 ),
-            children: data.children.clone(),
+            children: data
+                .children
+                .iter()
+                .map(|link| (link.parent, link.child))
+                .collect(),
             child_aggregations: data.child_aggregations.clone(),
             parents: data.parents.clone(),
             split: data.split,

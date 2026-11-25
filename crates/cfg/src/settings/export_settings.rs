@@ -5,9 +5,16 @@
 // whether after analysis. The reference for every key, its values, its
 // default and the files written is `docs/exports.md` - keep both in step.
 //
-// These are part of the project file and must keep reading: a new key or
-// value comes with a default; renaming or removing one needs a schema
-// version and a migration step.
+// These are part of the project file and must keep reading:
+// - a new key comes with a default (an older app ignores it);
+// - a new entry kind, or a new value of anything inside an entry (an
+//   output, an aggregation, a colour scale ...), reads in an older app as
+//   `ExportEntry::Unknown`: kept as it is, saved back unchanged, and that
+//   export says it needs a newer version when it is checked or run - the
+//   project still opens;
+// - a new value of an export's own settings (`lengthUnit`, `output`),
+//   renaming or removing anything needs a schema version and a migration
+//   step.
 //
 // **Author:** Joachim Danmayr
 // **Date:** 2026-11-24
@@ -117,6 +124,12 @@ pub enum ExportEntry {
     Data(DataExport),
     DrawnImages(DrawnImagesExport),
     Script(ScriptExport),
+    /// An entry this version can't read - a kind or a value a newer
+    /// version added: kept exactly as it is in the file (and written back
+    /// so), never run.
+    #[serde(untagged)]
+    #[schemars(skip)]
+    Unknown(serde_json::Value),
 }
 
 /// Data of the results - tables and heatmaps - with one filter: each
@@ -162,9 +175,9 @@ pub struct DataExport {
     #[serde(default)]
     pub transposed: bool,
     /// The children linked to each object (Relate Objects), as the Results
-    /// List shows them: (parent class id, child class id).
+    /// List shows them.
     #[serde(default)]
-    pub children: Vec<(u32, u32)>,
+    pub children: Vec<ChildLink>,
     /// How the children's values are summed up (besides their count).
     #[serde(default)]
     pub child_aggregations: Vec<ExportAggregation>,
@@ -189,6 +202,14 @@ pub struct DataExport {
     /// The heatmaps' colours and the image heatmap's squares.
     #[serde(default)]
     pub heatmap: HeatmapOptions,
+}
+
+/// A link from a parent class to a child class (class ids).
+#[derive(Serialize, Deserialize, Debug, JsonSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ChildLink {
+    pub parent: u32,
+    pub child: u32,
 }
 
 /// What a data export writes - the old export dialog's ticks.
@@ -423,15 +444,23 @@ pub enum HeatmapColors {
     Thermal,
 }
 
-/// Which z-planes and time points an entry writes: each a range `[from,
-/// to]` (both included, counted from 0); `None`: all of them.
+/// Which z-planes and time points an entry writes: each a range;
+/// `None`: all of them.
 #[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Planes {
     #[serde(default)]
-    pub z: Option<[u32; 2]>,
+    pub z: Option<PlaneRange>,
     #[serde(default)]
-    pub t: Option<[u32; 2]>,
+    pub t: Option<PlaneRange>,
+}
+
+/// Planes `from` to `to`, both included, counted from 0.
+#[derive(Serialize, Deserialize, Debug, JsonSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaneRange {
+    pub from: u32,
+    pub to: u32,
 }
 
 /// A PNG per image (and plane) with the objects drawn on it.
@@ -612,7 +641,10 @@ mod tests {
                     planes: Planes::default(),
                     empty_classes: true,
                     transposed: false,
-                    children: vec![(1, 2)],
+                    children: vec![ChildLink {
+                        parent: 1,
+                        child: 2,
+                    }],
                     child_aggregations: vec![ExportAggregation::Max],
                     parents: vec![1],
                     split: TableSplit::Class,
@@ -638,7 +670,7 @@ mod tests {
                     max_side: 1024,
                     images: ImageScope::Included,
                     planes: Planes {
-                        z: Some([0, 2]),
+                        z: Some(PlaneRange { from: 0, to: 2 }),
                         t: None,
                     },
                 }),
@@ -653,19 +685,49 @@ mod tests {
         assert_eq!(json["entries"][0]["kind"], "DATA");
         assert_eq!(json["entries"][0]["outputs"][1], "WELL_GRID");
         assert_eq!(json["entries"][0]["heatmap"]["squareSize"], 128);
+        assert_eq!(json["entries"][0]["children"][0]["parent"], 1);
         assert_eq!(json["entries"][1]["kind"], "DRAWN_IMAGES");
+        assert_eq!(json["entries"][1]["planes"]["z"]["to"], 2);
         assert_eq!(json["output"]["location"], "FIXED_FOLDER");
         let back: ExportSettings = serde_json::from_value(json).unwrap();
         assert_eq!(back, export);
     }
 
-    /// An unknown kind is an error, not silently skipped: a newer app's
-    /// export must never be dropped by an older one (the schema version
-    /// keeps such files from being opened at all).
+    /// What a newer version adds reads in this one: a kind it doesn't
+    /// know, or a value inside an entry (an output, an aggregation), is
+    /// kept as an unknown entry - the others read as ever, and saving
+    /// writes it back exactly as it was. A new key is ignored.
     #[test]
-    fn an_unknown_entry_kind_is_an_error() {
+    fn entries_of_a_newer_version_are_kept_as_they_are() {
+        let file = json!({
+            "id": 1, "name": "x", "entries": [
+                { "kind": "CHART", "file": "plot.svg", "size": [800, 600] },
+                { "kind": "DATA", "outputs": ["IMAGES", "VOLUMES"] },
+                { "kind": "DATA", "outputs": ["IMAGES"], "aggregations": ["AVG", "MODE"] },
+                { "kind": "DATA", "outputs": ["IMAGES"], "newKey": 1 },
+                { "kind": "SCRIPT", "language": "JULIA", "file": "scripts/a.jl" }
+            ]
+        });
+        let export: ExportSettings = serde_json::from_value(file.clone()).unwrap();
+        let unknown: Vec<bool> = export
+            .entries
+            .iter()
+            .map(|entry| matches!(entry, ExportEntry::Unknown(_)))
+            .collect();
+        assert_eq!(unknown, [true, true, true, false, true]);
+
+        let saved = serde_json::to_value(&export).unwrap();
+        for i in [0, 1, 2, 4] {
+            assert_eq!(saved["entries"][i], file["entries"][i], "entry {i} unchanged");
+        }
+    }
+
+    /// A new value of an export's own settings is not tolerated: that
+    /// takes a schema version (see the head of this file).
+    #[test]
+    fn an_unknown_value_of_the_export_itself_is_an_error() {
         let read = serde_json::from_value::<ExportSettings>(json!({
-            "id": 1, "name": "x", "entries": [{ "kind": "CHART" }]
+            "id": 1, "name": "x", "lengthUnit": "PX", "entries": []
         }));
         assert!(read.is_err());
     }

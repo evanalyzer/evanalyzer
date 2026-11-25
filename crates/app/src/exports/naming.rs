@@ -42,7 +42,7 @@ pub fn entry_names(entry: &ExportEntry) -> Vec<String> {
             .map(|(_, job)| job_name(job))
             .collect(),
         ExportEntry::DrawnImages(drawn) => vec![own_or(&drawn.name, "drawn_images")],
-        ExportEntry::Script(_) => Vec::new(),
+        ExportEntry::Script(_) | ExportEntry::Unknown(_) => Vec::new(),
     }
 }
 

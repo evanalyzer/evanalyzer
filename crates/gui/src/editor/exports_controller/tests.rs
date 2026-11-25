@@ -965,6 +965,11 @@ fn an_export_runs_on_the_analyses_picked() {
     let rows: Vec<_> = state.get_run_on().iter().collect();
     assert_eq!(rows.len(), 2);
     assert!(rows[0].on && !rows[1].on);
+    assert!(rows[1].when.contains("Nov 2026"), "{}", rows[1].when);
+    // Their images: read in the background, there once the queue is drained.
+    drain_ui_queue();
+    let rows: Vec<_> = state.get_run_on().iter().collect();
+    assert!(rows[0].images.ends_with("images"), "{}", rows[0].images);
     assert_eq!(state.get_run_on_ticked(), 1);
     state.invoke_run_on_pick(-1, true);
     assert_eq!(state.get_run_on_ticked(), 2, "All");
@@ -993,7 +998,8 @@ fn an_export_runs_on_the_analyses_picked() {
     let parts: Vec<_> = state.get_run_parts().iter().collect();
     assert_eq!(parts.len(), 2);
     assert_eq!(parts[0].name, "run");
-    assert_eq!(parts[0].when, "24 Nov 09:00");
+    // When it was made: from its folder's name, in local time.
+    assert!(parts[0].when.contains("Nov 2026"), "{}", parts[0].when);
     assert_eq!(parts[0].summary, "1 file");
     assert!(parts[0].ok && !parts[0].open, "folded");
     assert_eq!(std::path::PathBuf::from(parts[1].folder.as_str()), older);
@@ -1111,7 +1117,10 @@ fn children_and_linked_objects_are_picked_like_the_list() {
     let ExportEntry::Data(table) = &exports(&ui_state)[0].entries[0] else {
         panic!("a table");
     };
-    assert_eq!(table.children, vec![(1, 2)]);
+    assert_eq!(
+        table.children,
+        vec![evanalyzer_cfg::settings::export_settings::ChildLink { parent: 1, child: 2 }]
+    );
     assert_eq!(table.child_aggregations, vec![ExportAggregation::Max]);
     assert_eq!(table.parents, vec![1]);
     assert!(state.get_related_children().row_data(0).unwrap().selected);
@@ -1179,7 +1188,11 @@ fn plane_ranges() {
         ExportEntry::Data(table) => table.planes,
         _ => panic!("a table"),
     };
-    assert_eq!(planes(&ui_state).t, Some([2, 4]), "from the smaller");
+    assert_eq!(
+        planes(&ui_state).t,
+        Some(evanalyzer_cfg::settings::export_settings::PlaneRange { from: 2, to: 4 }),
+        "from the smaller"
+    );
     assert!(state.get_t_range());
     assert_eq!(state.get_t_from(), "2");
     state.invoke_set_entry_field("t-planes".into(), "all".into());
@@ -1362,10 +1375,11 @@ fn classes_side_by_side_from_the_tab() {
     );
 }
 
-/// The list like every list: the eye runs it after analysis (the head
-/// counts them), ⋯ › Move up / down reorders - at an end it stays.
+/// The list like every list: the "After analysis" chip runs it after
+/// analysis (the head counts them), ⋯ › Move up / down reorders - at an
+/// end it stays.
 #[test]
-fn the_list_eye_and_order() {
+fn the_list_chip_and_order() {
     let (ui, ui_state, _controller) = setup(ProjectWithRuntime::default());
     let state = ui.global::<ExportsState>();
     state.invoke_new_export();
@@ -1480,4 +1494,35 @@ fn the_run_pills_show_on_every_tab() {
             "the analysis' pill in {mode:?}"
         );
     }
+}
+
+/// An entry a newer version wrote: shown as an unknown entry, its export
+/// can't run (said why), and it stays exactly as it is through edits.
+#[test]
+fn an_entry_of_a_newer_version_is_shown_and_kept() {
+    let (ui, ui_state, _controller) = setup(ProjectWithRuntime::default());
+    let raw = serde_json::json!({ "kind": "CHART", "file": "plot.svg", "size": [800, 600] });
+    ui_state.get_project_write().settings.exports = serde_json::from_value(serde_json::json!([
+        { "id": 1, "name": "New", "entries": [{ "kind": "DATA", "outputs": ["IMAGES"] }, raw] }
+    ]))
+    .unwrap();
+    let state = ui.global::<ExportsState>();
+    state.invoke_refresh();
+    state.invoke_select(1);
+    let rows = entries(&ui);
+    assert_eq!(rows[1].title, "Unknown entry · CHART");
+    assert!(rows[1].subtitle.contains("newer version"), "{}", rows[1].subtitle);
+    assert!(
+        state.get_problems().contains("newer version"),
+        "it can't run: {}",
+        state.get_problems()
+    );
+    state.invoke_select_entry(1);
+    assert_eq!(state.get_entry_kind(), "UNKNOWN");
+    // Edits around it, and of it (nothing to set): it stays as it was.
+    state.invoke_set_entry_field("name".into(), "x".into());
+    state.invoke_set_export_field("name".into(), "Renamed".into());
+    let export = &exports(&ui_state)[0];
+    assert_eq!(export.name, "Renamed");
+    assert_eq!(export.entries[1], ExportEntry::Unknown(raw));
 }

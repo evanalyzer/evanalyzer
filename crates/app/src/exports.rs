@@ -198,6 +198,20 @@ pub fn default_columns(rows: crate::exports::jobs::TableRows) -> Vec<crate::resu
     }
 }
 
+/// What an entry a newer version wrote says wherever it is shown.
+pub const NEEDS_NEWER: &str = "needs a newer version of EVAnalyzer";
+
+/// The `kind` of an entry this version can't read - one a newer version
+/// wrote (`None`: it reads). `""`: it has none.
+pub fn unknown_kind(entry: &evanalyzer_cfg::settings::export_settings::ExportEntry) -> Option<&str> {
+    match entry {
+        evanalyzer_cfg::settings::export_settings::ExportEntry::Unknown(raw) => {
+            Some(raw.get("kind").and_then(|kind| kind.as_str()).unwrap_or(""))
+        }
+        _ => None,
+    }
+}
+
 /// Columns every table writes first, picked or not (image, class, object
 /// id - table format 1): shown ticked and greyed in the picker. The track
 /// id is a leading column too, but only when picked.

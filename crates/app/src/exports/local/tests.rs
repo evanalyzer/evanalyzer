@@ -886,7 +886,7 @@ fn children_and_linked_objects_add_their_columns() {
         dir.path(),
         json!({ "id": 1, "name": "Linked", "entries": [
             { "kind": "DATA", "outputs": ["OBJECTS"], "columns": ["area_px"], "images": "ALL",
-              "children": [[1, 2]], "childAggregations": ["MAX"], "parents": [1] }
+              "children": [{ "parent": 1, "child": 2 }], "childAggregations": ["MAX"], "parents": [1] }
         ]}),
     );
     let report = run(&results, &run_);
@@ -1099,9 +1099,9 @@ fn a_time_point_range_writes_only_those() {
         dir.path(),
         json!({ "id": 1, "name": "Range", "entries": [
             { "kind": "DATA", "outputs": ["OBJECTS"], "columns": ["area_px"], "images": "ALL",
-              "planes": { "t": [1, 1] } },
+              "planes": { "t": { "from": 1, "to": 1 } } },
             { "kind": "DATA", "outputs": ["TIME_COURSE"], "columns": ["area_px"], "images": "ALL",
-              "planes": { "t": [0, 1] } }
+              "planes": { "t": { "from": 0, "to": 1 } } }
         ]}),
     );
     let report = run(&results, &run_);

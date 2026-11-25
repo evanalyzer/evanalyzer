@@ -2594,6 +2594,48 @@ aggregations Avg + Sum, every class.
 - Not covered: the GUI's List and the export writer around the query
   (the query is their work); a weak computer.
 
+## Project exports (`export run`) of 100,000 images: images by a condition, per-image rows in blocks (2026-11-25)
+
+The new exporter (`exports/local/table.rs`) sent every image's path with
+each 20,000-row page and paged the per-image rows by a cursor - what the
+old exporter stopped doing on 2026-11-18. Now `ListFilter::images` /
+`GroupedByImageFilter::images` are an `ImageSet` (all, enabled, listed, a
+block of enabled images; protocol 59): all images of a scope go by a
+condition, a row per image is read block of images by block. Data: core
+`bench_export --images 100000 --objects-per-image 40 --object-size 12`
+(4M objects, 1.9 GB) and the real `20260831_Uptake1` file (1776 images,
+5.5M objects, 1.7 GB); release CLI `export run`, CSV, one export per
+process, wall time and the process's peak RSS (22 cores; before = the
+build of 34bb18e1, one run each).
+
+| Export, 100,000 images | Before | After |
+|---|---|---|
+| Per image, all images (2.2M rows, Avg + Median) | 121 s / 1.55 GB | **10.3 s / 652 MB** |
+| Per image, included images, with empty classes | 146 s / 1.49 GB | **4.9 s / 402 MB** |
+| Objects, all images (4M rows) | 141 s / 720 MB | **11.8 s / 500 MB** |
+| Objects, included images, 2 classes | 14.3 s / 536 MB | 1.8 s / 362 MB |
+| Per well + per folder | 2.4 s / 859 MB | 0.9 s / 642 MB |
+| Objects + per image + per well, classes side by side | 56.7 s / 790 MB | 7.9 s / 585 MB |
+
+| Export, real file (1776 images) | Before | After |
+|---|---|---|
+| Objects, all images (5.5M rows) | 23.7 s | 18.8-20.0 s |
+| Per image (37,000 rows) | 0.30 s | 0.29-0.30 s |
+| Per image, included, empty classes | 0.27 s | 0.19-0.23 s |
+| Objects + per image, one file per well (222 files) | 3.1 s | 2.8-3.3 s |
+| Coloc pairs, measurements, tracks | 5.4 s | 4.6-5.1 s |
+| Plate, well grid, well list | 1.3 s | 1.3-1.5 s |
+
+- The files are the same: every CSV byte for byte before and after (9 on
+  the 100,000 images, 234 on the real file), every XLSX sheet's content.
+- The same values as the old exporter (`ResultsSource::export`) on both
+  files, compared cell by cell with the throwaway app example
+  `compare_exporters`: objects 4M + 5.5M rows, per image 2.2M + 37,212
+  rows - all equal.
+- Small results stay as they were (the real file's per-image tables:
+  0.2-0.3 s).
+- Not covered: a weak computer; XLSX at this size (over a sheet's rows).
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -2615,6 +2657,7 @@ graphics driver).
 | List export, all objects of 100,000 images (4M), CSV | 1.20-1.22 GB (query process) | 2026-11-18 | Exports of 100,000 images |
 | Grouped-by-image export, 100,000 images (2.2M rows), CSV / XLSX | 556-612 MB (query process; was 4.6 / 5.2 GB) | 2026-11-18 | Exports of 100,000 images |
 | Per well / folder / image, classes side by side (1776 images; 2 images × 1.5M objects) | 344-370 / 258-270 MB (query process) | 2026-11-24 | Classes side by side per well and per folder |
+| Project export (`export run`), 100,000 images: per image / objects, CSV | 402-652 MB / 362-500 MB (was 1.5 GB / 720 MB) | 2026-11-25 | Project exports of 100,000 images |
 | Tracks: one image's tracks (1500 tracks) | ~60 MB (query process), ~1 MB kept | 2026-10-21 | Results › Tracks |
 | Track export, a row per track (144,000 tracks) | ~410 MB (query process) | 2026-10-21 | Results › Tracks |
 | Tracks, Full: every track's row (144,000 tracks) | ~300 MB (query process) | 2026-10-21 | Results › Tracks |

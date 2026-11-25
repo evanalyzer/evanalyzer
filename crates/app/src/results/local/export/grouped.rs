@@ -48,7 +48,7 @@ impl ResultExport {
         let reviews = ImageReviews::of(database)?;
         let filter_of = |plane: PlaneFilter| GroupedByImageFilter {
             plane,
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: object_classes.clone(),
             columns: columns.clone(),
             aggregation: self.aggregations.clone(),

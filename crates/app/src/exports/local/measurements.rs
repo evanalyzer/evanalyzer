@@ -187,7 +187,7 @@ impl Rows for MeasurementTable {
                     &self.planes,
                     row.z
                         .and_then(|z| u32::try_from(z).ok())
-                        .unwrap_or(self.planes.z.map_or(0, |[from, _]| from)),
+                        .unwrap_or(self.planes.z.map_or(0, |range| range.from)),
                     u32::try_from(row.t).unwrap_or(0),
                 );
                 if in_planes && self.in_classes(part, &row) {

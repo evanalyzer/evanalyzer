@@ -19,7 +19,8 @@ use crate::exports::naming;
 use crate::exports::types::EntryReport;
 use crate::results::view_settings::resolve_columns;
 use crate::results::{
-    Aggregation, Cell, CellValue, ChildValue, Column, GroupedByImageFilter, Grouping, ListFilter,
+    Aggregation, Cell, CellValue, ChildValue, Column, GroupedByImageFilter, Grouping, ImageSet,
+    ListFilter,
     Pagination, ParentValue, PlaneFilter, ResultsSource,
 };
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
@@ -262,6 +263,9 @@ struct Plan {
     classes: Option<Vec<ObjectClass>>,
     db_classes: Vec<Class>,
     images: Vec<String>,
+    /// Which images `images` are: all of a scope are asked for by a
+    /// condition, never by a list of every path with each page.
+    scope: ImageScope,
     planes: Vec<PlaneFilter>,
     several_z: bool,
     several_t: bool,
@@ -364,6 +368,7 @@ impl Plan {
                 .as_ref()
                 .map(|ids| ids.iter().map(|id| ObjectClass::Global(*id)).collect()),
             images,
+            scope: table.images,
             planes,
             several_z: results.get_nr_of_z_stacks() > 1,
             several_t: results.get_nr_of_t_stacks() > 1,
@@ -507,6 +512,47 @@ impl Plan {
         header
     }
 
+    /// What `part` is read in: (the images, the rows per page), one after
+    /// the other.
+    ///
+    /// The whole part with pages of `PAGE_SIZE` - all images of a scope by
+    /// a condition (`ImageSet::All` / `Enabled`), not by a list of every
+    /// path parsed with each page. A row per image instead goes block of
+    /// images by block, each read whole: a cursor over the rows would
+    /// aggregate every object after it again with each page.
+    fn units(&self, part: &Part) -> Vec<(ImageSet, i32)> {
+        let whole = part.images.len() == self.images.len();
+        if self.rows != TableRows::Image {
+            let images = match (whole, self.scope) {
+                (true, ImageScope::All) => ImageSet::All,
+                (true, ImageScope::Included) => ImageSet::Enabled,
+                _ => ImageSet::Listed(part.images.clone()),
+            };
+            return vec![(images, PAGE_SIZE)];
+        }
+        // About `PAGE_SIZE` rows per block: a row per image and class.
+        let classes = part
+            .classes
+            .as_ref()
+            .map_or(self.db_classes.len(), Vec::len)
+            .max(1);
+        let mut sorted = part.images.clone();
+        sorted.sort_unstable();
+        sorted
+            .chunks((PAGE_SIZE as usize / classes).max(1))
+            .map(|block| {
+                let images = match (whole, self.scope) {
+                    (true, ImageScope::Included) => ImageSet::EnabledRange {
+                        first: block[0].clone(),
+                        last: block[block.len() - 1].clone(),
+                    },
+                    _ => ImageSet::Listed(block.to_vec()),
+                };
+                (images, i32::MAX)
+            })
+            .collect()
+    }
+
     /// [`Plan::write_part`] with the classes side by side.
     fn write_part_transposed(
         &self,
@@ -530,7 +576,13 @@ impl Plan {
         let classes: Option<Vec<ObjectClass>> =
             Some(blocks.iter().map(|id| ObjectClass::Global(*id)).collect());
         let mut line = Vec::new();
-        for plane in &self.planes {
+        let units = self.units(part);
+        for (plane, (images, limit)) in self
+            .planes
+            .iter()
+            .flat_map(|plane| units.iter().map(move |unit| (plane, unit)))
+        {
+            let limit = *limit;
             let mut cursor: Option<String> = None;
             loop {
                 if cancel.load(Ordering::Relaxed) {
@@ -540,12 +592,12 @@ impl Plan {
                 let page = if self.grouped() {
                     results.get_grouped_by_image(&GroupedByImageFilter {
                         plane: *plane,
-                        images: Some(part.images.clone()),
+                        images: images.clone(),
                         object_classes: classes.clone(),
                         columns: self.values.clone(),
                         aggregation: self.aggregations.clone(),
                         page: Pagination {
-                            limit: PAGE_SIZE,
+                            limit,
                             after,
                         },
                         transpond_table: true,
@@ -556,13 +608,13 @@ impl Plan {
                 } else {
                     results.get_object_list(&ListFilter {
                         plane: *plane,
-                        images: Some(part.images.clone()),
+                        images: images.clone(),
                         object_classes: classes.clone(),
                         columns: self.list_columns(),
                         with_coloc_details: false,
                         related_to: None,
                         page: Pagination {
-                            limit: PAGE_SIZE,
+                            limit,
                             after,
                         },
                         transpond_table: true,
@@ -602,7 +654,7 @@ impl Plan {
                     }
                     sink.row(&line)?;
                 }
-                if page.source_object_count < PAGE_SIZE as usize {
+                if page.source_object_count < limit as usize {
                     break;
                 }
                 cursor = page.row_names.last().cloned();
@@ -719,7 +771,13 @@ impl Plan {
         }
         let layout = self.layout();
         let mut line = Vec::new();
-        for plane in &self.planes {
+        let units = self.units(part);
+        for (plane, (images, limit)) in self
+            .planes
+            .iter()
+            .flat_map(|plane| units.iter().map(move |unit| (plane, unit)))
+        {
+            let limit = *limit;
             let mut cursor: Option<String> = None;
             loop {
                 if cancel.load(Ordering::Relaxed) {
@@ -729,12 +787,12 @@ impl Plan {
                 let page = if self.grouped() {
                     results.get_grouped_by_image(&GroupedByImageFilter {
                         plane: *plane,
-                        images: Some(part.images.clone()),
+                        images: images.clone(),
                         object_classes: part.classes.clone(),
                         columns: self.values.clone(),
                         aggregation: self.aggregations.clone(),
                         page: Pagination {
-                            limit: PAGE_SIZE,
+                            limit,
                             after,
                         },
                         transpond_table: false,
@@ -745,13 +803,13 @@ impl Plan {
                 } else {
                     results.get_object_list(&ListFilter {
                         plane: *plane,
-                        images: Some(part.images.clone()),
+                        images: images.clone(),
                         object_classes: part.classes.clone(),
                         columns: self.list_columns(),
                         with_coloc_details: self.rows == TableRows::ColocPair,
                         related_to: None,
                         page: Pagination {
-                            limit: PAGE_SIZE,
+                            limit,
                             after,
                         },
                         transpond_table: false,
@@ -775,7 +833,7 @@ impl Plan {
                     }
                     sink.row(&line)?;
                 }
-                if page.source_object_count < PAGE_SIZE as usize {
+                if page.source_object_count < limit as usize {
                     break;
                 }
                 cursor = page.row_names.last().cloned();
@@ -1049,7 +1107,13 @@ pub(super) fn unit_label(column: &Column, unit: LengthUnit) -> String {
 pub(super) enum Out {
     Empty,
     Text(String),
+    /// A number as it is: counts, planes, and values the results hold in
+    /// double precision (a time course's statistics, measurements,
+    /// tracks) - written in full.
     Number(f64),
+    /// A value the results hold in single precision (the tables' cells):
+    /// written at that precision, not with the tail a double shows of it.
+    Single(f64),
 }
 
 pub(super) fn value(cell: &Cell, factor: f64) -> Out {
@@ -1057,7 +1121,7 @@ pub(super) fn value(cell: &Cell, factor: f64) -> Out {
         CellValue::Empty => Out::Empty,
         CellValue::String(text) => Out::Text(text.clone()),
         CellValue::Class((name, _)) => Out::Text(name.clone()),
-        CellValue::Float(v) if v.is_finite() => Out::Number(f64::from(*v) * factor),
+        CellValue::Float(v) if v.is_finite() => Out::Single(f64::from(*v) * factor),
         CellValue::Float(_) => Out::Empty,
         CellValue::Integer(v) => Out::Number(f64::from(*v) * factor),
     }
@@ -1103,6 +1167,7 @@ impl Sink for CsvSink {
             match cell {
                 Out::Empty => {}
                 Out::Number(v) => self.line.extend_from_slice(number_text(*v).as_bytes()),
+                Out::Single(v) => self.line.extend_from_slice(single_text(*v).as_bytes()),
                 Out::Text(text) => {
                     if text.contains([',', '"', '\n', '\r']) {
                         self.line.push(b'"');
@@ -1128,8 +1193,16 @@ fn number_text(v: f64) -> String {
     if v.fract() == 0.0 && v.abs() < 1e15 {
         format!("{}", v as i64)
     } else {
-        // f32 is what the results hold: printed at its precision, not as
-        // a long f64 tail (0.1f32 is 0.10000000149011612 as f64).
+        format!("{v}")
+    }
+}
+
+/// [`number_text`] of a value held in single precision: printed at that
+/// precision, not as a long tail (0.1f32 is 0.10000000149011612 as f64).
+fn single_text(v: f64) -> String {
+    if v.fract() == 0.0 && v.abs() < 1e15 {
+        format!("{}", v as i64)
+    } else {
         format!("{}", v as f32)
     }
 }
@@ -1146,7 +1219,7 @@ impl Sink for SheetSink<'_> {
             let col = col as u16;
             match cell {
                 Out::Empty => {}
-                Out::Number(v) => {
+                Out::Number(v) | Out::Single(v) => {
                     self.sheet
                         .write_number(self.row, col, *v)
                         .map_err(xlsx_error)?;
@@ -1320,7 +1393,8 @@ mod tests {
     #[test]
     fn numbers_are_written_plainly() {
         assert_eq!(number_text(3.0), "3");
-        assert_eq!(number_text(0.1f32 as f64), "0.1");
+        assert_eq!(single_text(0.1f32 as f64), "0.1");
+        assert_eq!(number_text(70.71067811865476), "70.71067811865476");
         assert_eq!(number_text(-2.5), "-2.5");
         assert_eq!(number_text(1234567.0), "1234567");
     }

@@ -194,7 +194,7 @@ fn check_entry(
             let linked: Vec<u32> = data
                 .children
                 .iter()
-                .flat_map(|(p, c)| [*p, *c])
+                .flat_map(|link| [link.parent, link.child])
                 .chain(data.parents.iter().copied())
                 .collect();
             if !linked.is_empty() {
@@ -215,6 +215,19 @@ fn check_entry(
                 );
             }
             Some(&drawn.name)
+        }
+        // A newer version's entry: the export can't run here - never
+        // half of it, a script after it may need its files.
+        ExportEntry::Unknown(_) => {
+            let kind = crate::exports::unknown_kind(entry).unwrap_or_default();
+            at(
+                Severity::Error,
+                match kind {
+                    "" => format!("this entry {}", crate::exports::NEEDS_NEWER),
+                    kind => format!("this “{kind}” entry {}", crate::exports::NEEDS_NEWER),
+                },
+            );
+            None
         }
         ExportEntry::Script(script) => {
             let file = script.file.trim().replace('\\', "/");
@@ -311,10 +324,10 @@ fn check_table(table: &TableExport, at: &mut impl FnMut(Severity, String)) {
         );
     }
     for range in [table.planes.z, table.planes.t].into_iter().flatten() {
-        if range[0] > range[1] {
+        if range.from > range.to {
             at(
                 Severity::Error,
-                format!("a plane range from {} to {} is empty", range[0], range[1]),
+                format!("a plane range from {} to {} is empty", range.from, range.to),
             );
         }
     }
@@ -667,6 +680,27 @@ mod tests {
         assert!(messages.iter().all(|(s, _)| *s == Severity::Warning));
         assert!(messages[1].1.contains("no_such_column"));
         assert!(!messages[1].1.contains("count"));
+    }
+
+    /// An entry a newer version wrote: its export can't run here (an
+    /// error at that entry, naming its kind) - the other exports are fine.
+    #[test]
+    fn an_entry_of_a_newer_version_keeps_its_export_from_running() {
+        let exports: Vec<ExportSettings> = serde_json::from_value(serde_json::json!([
+            { "id": 1, "name": "New", "entries": [
+                { "kind": "DATA", "outputs": ["IMAGES"] },
+                { "kind": "CHART", "file": "plot.svg" }
+            ]},
+            { "id": 2, "name": "Old", "entries": [{ "kind": "DATA", "outputs": ["OBJECTS"] }] }
+        ]))
+        .unwrap();
+        let problems = check_export(&exports[0]);
+        assert!(
+            problems.iter().any(|p| p.severity == Severity::Error
+                && p.message.contains("“CHART” entry needs a newer version")),
+            "{problems:?}"
+        );
+        assert!(check_export(&exports[1]).is_empty());
     }
 
     #[test]

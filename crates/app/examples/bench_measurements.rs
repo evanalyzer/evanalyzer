@@ -193,7 +193,7 @@ fn main() {
         if wanted(&name) {
             let filter = GroupedByImageFilter {
                 plane: plane.clone(),
-                images: None,
+                images: evanalyzer_app::results::ImageSet::All,
                 object_classes: None,
                 columns: vec![column.clone()],
                 aggregation: vec![Aggregation::Avg],
@@ -217,7 +217,7 @@ fn main() {
         if wanted(&name) {
             let filter = ListFilter {
                 plane: plane.clone(),
-                images: None,
+                images: evanalyzer_app::results::ImageSet::All,
                 object_classes: None,
                 columns: vec![Column::AreaSizePx, column.clone()],
                 with_coloc_details: false,

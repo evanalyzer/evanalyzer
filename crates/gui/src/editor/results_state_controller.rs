@@ -231,7 +231,7 @@ impl ListQuery {
     fn object_filter(&self, after: Option<String>) -> Option<evanalyzer_app::results::ListFilter> {
         (self.group_by == ListGroupBy::Objects).then(|| evanalyzer_app::results::ListFilter {
             plane: self.plane,
-            images: self.images.clone(),
+            images: (self.images.clone()).into(),
             object_classes: self.object_classes.clone(),
             columns: self.columns.clone(),
             with_coloc_details: self.with_coloc_details,
@@ -4506,7 +4506,7 @@ impl ResultsStateController {
                 let columns = columns.into_iter().filter(Column::is_aggregable).collect();
                 db.get_grouped_by_image(&GroupedByImageFilter {
                     plane,
-                    images,
+                    images: images.into(),
                     object_classes,
                     columns,
                     aggregation: aggregations,
@@ -9444,7 +9444,7 @@ pub(crate) mod tests {
                         z_stack: 0,
                         t_stack: 0,
                     },
-                    images: None,
+                    images: evanalyzer_app::results::ImageSet::All,
                     object_classes: None,
                     columns: vec![Column::AreaSizePx],
                     with_coloc_details: false,

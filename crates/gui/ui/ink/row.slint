@@ -29,9 +29,13 @@ export component InkListRow inherits Rectangle {
     /// An eye at the right that shows/hides.
     in property <bool> has-eye: false;
     in property <bool> shown: true;
-    /// What the eye says ("" its usual Hide / Show) - an export's "Runs
-    /// after analysis" / "Only by hand".
-    in property <string> eye-tip;
+    /// A switch as a chip at the very right ("" none) - an export's
+    /// "After analysis": filled while `chip-on`, else only on hover
+    /// (dashed), a click switches it (`chip-toggled`).
+    in property <string> chip;
+    in property <bool> chip-on;
+    in property <string> chip-tip;
+    callback chip-toggled;
     /// A short word in a pill after the title ("not stored"); empty: none.
     in property <string> badge;
     /// A small mark (error, warning) after the title; transparent: none.
@@ -248,10 +252,45 @@ export component InkListRow inherits Rectangle {
                             size: 22px;
                             on-row: true;
                             icon: root.shown ? InkIcons.visible : InkIcons.hidden;
-                            label: root.eye-tip != "" ? root.eye-tip : root.shown ? "Hide" : "Show";
+                            label: root.shown ? "Hide" : "Show";
                             clicked => {
                                 root.eye-toggled();
                             }
+                        }
+                    }
+                }
+
+                // The chip: on, always; off, on hover - a click switches it.
+                if root.chip != "" && (root.chip-on || ta.has-hover): VerticalLayout {
+                    alignment: center;
+                    chip-box := Rectangle {
+                        height: 18px;
+                        width: chip-text.preferred-width + 16px;
+                        border-radius: 9px;
+                        border-width: 1px;
+                        border-color: root.chip-on ? Ink.focus.with-alpha(0.35) : Ink.text-faint;
+                        background: root.chip-on ? Ink.info-tint : transparent;
+                        accessible-role: checkbox;
+                        accessible-label: root.chip;
+                        accessible-checked: root.chip-on;
+                        accessible-action-default => {
+                            root.chip-toggled();
+                        }
+                        chip-text := Text {
+                            text: root.chip;
+                            font-size: Ink.fs-caption;
+                            font-weight: 600;
+                            color: root.chip-on ? Ink.focus : Ink.text-mute;
+                        }
+                        chip-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.chip-toggled();
+                            }
+                        }
+                        InkTipZone {
+                            wanted: chip-ta.has-hover;
+                            text: root.chip-tip;
                         }
                     }
                 }

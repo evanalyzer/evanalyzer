@@ -118,7 +118,7 @@ fn bench_transposed_list() {
             generator
                 .get_object_list(&ListFilter {
                     plane: plane(),
-                    images: None,
+                    images: crate::results::ImageSet::All,
                     object_classes: None,
                     columns: columns.clone(),
                     with_coloc_details: false,
@@ -135,7 +135,7 @@ fn bench_transposed_list() {
             generator
                 .get_grouped_by_image(&GroupedByImageFilter {
                     plane: plane(),
-                    images: None,
+                    images: crate::results::ImageSet::All,
                     object_classes: None,
                     columns: vec![Column::Count, Column::AreaSizePx, Column::Circularity],
                     aggregation: vec![Aggregation::Avg, Aggregation::Max],
@@ -466,7 +466,7 @@ fn list_of(
     generator
         .get_object_list(&ListFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: Some(vec![class]),
             columns,
             with_coloc_details: false,
@@ -578,7 +578,7 @@ fn spots_per_cell_are_aggregated_per_image() {
     let result = generator
         .get_grouped_by_image(&GroupedByImageFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: Some(vec![CELL]),
             columns: vec![children(ChildValue::Count)],
             aggregation: vec![Aggregation::Avg, Aggregation::Sum],
@@ -620,7 +620,7 @@ fn get_object_list_returns_one_row_per_object_with_requested_columns() {
     let result = generator
         .get_object_list(&ListFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![Column::ObjectClass, Column::AreaSizePx],
             with_coloc_details: false,
@@ -650,7 +650,7 @@ fn get_object_list_shows_each_objects_track_and_nothing_when_untracked() {
     let result = generator
         .get_object_list(&ListFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![Column::TrackId, Column::AreaSizePx],
             with_coloc_details: false,
@@ -700,7 +700,7 @@ fn get_object_list_flags_every_cell_of_a_disabled_images_row() {
     let result = generator
         .get_object_list(&ListFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![Column::ImageName, Column::ObjectClass, Column::AreaSizePx],
             with_coloc_details: false,
@@ -741,7 +741,7 @@ fn get_object_list_image_filter_restricts_to_the_selected_image() {
     let result = generator
         .get_object_list(&ListFilter {
             plane: plane(),
-            images: Some(vec!["img1.tif".to_string()]),
+            images: crate::results::ImageSet::Listed(vec!["img1.tif".to_string()]),
             object_classes: None,
             columns: vec![Column::ImageName],
             with_coloc_details: false,
@@ -775,7 +775,7 @@ fn get_object_list_image_filter_finds_images_in_subfolders() {
         generator
             .get_object_list(&ListFilter {
                 plane: plane(),
-                images: Some(images.into_iter().map(String::from).collect()),
+                images: crate::results::ImageSet::Listed(images.into_iter().map(String::from).collect()),
                 object_classes: None,
                 columns: vec![Column::ImageName],
                 with_coloc_details: false,
@@ -806,7 +806,7 @@ fn get_object_list_class_filter_restricts_to_the_selected_class() {
     let result = generator
         .get_object_list(&ListFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: Some(vec![ObjectClass::Global(2)]),
             columns: vec![Column::ObjectClass],
             with_coloc_details: false,
@@ -825,7 +825,7 @@ fn get_object_list_with_an_explicitly_empty_image_selection_is_empty() {
     let result = generator
         .get_object_list(&ListFilter {
             plane: plane(),
-            images: Some(vec![]),
+            images: crate::results::ImageSet::Listed(vec![]),
             object_classes: None,
             columns: vec![Column::ObjectClass],
             with_coloc_details: false,
@@ -851,7 +851,7 @@ fn get_object_list_plane_filter_excludes_objects_on_other_planes() {
                 z_stack: 1,
                 t_stack: 0,
             },
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![Column::AreaSizePx],
             with_coloc_details: false,
@@ -879,7 +879,7 @@ fn a_volumes_object_is_on_every_plane_it_covers() {
                     z_stack: z,
                     t_stack: 0,
                 },
-                images: None,
+                images: crate::results::ImageSet::All,
                 object_classes: None,
                 columns: vec![Column::AreaSizePx],
                 with_coloc_details: false,
@@ -911,7 +911,7 @@ fn the_list_shows_only_the_time_point_asked_for() {
         let result = generator
             .get_object_list(&ListFilter {
                 plane,
-                images: None,
+                images: crate::results::ImageSet::All,
                 object_classes: None,
                 columns: vec![Column::AreaSizePx],
                 with_coloc_details: false,
@@ -925,7 +925,7 @@ fn the_list_shows_only_the_time_point_asked_for() {
         let grouped = generator
             .get_grouped_by_image(&GroupedByImageFilter {
                 plane,
-                images: None,
+                images: crate::results::ImageSet::All,
                 object_classes: None,
                 columns: vec![Column::Count],
                 aggregation: vec![Aggregation::Sum],
@@ -995,7 +995,7 @@ fn an_objects_page_is_where_paging_through_the_list_finds_it() {
     let generator = open(&objects);
     let all = ListFilter {
         plane: plane(),
-        images: None,
+        images: crate::results::ImageSet::All,
         object_classes: None,
         columns: vec![Column::AreaSizePx],
         with_coloc_details: false,
@@ -1014,7 +1014,7 @@ fn an_objects_page_is_where_paging_through_the_list_finds_it() {
             ..all.clone()
         },
         ListFilter {
-            images: Some(vec!["b.tif".into(), "c.tif".into()]),
+            images: crate::results::ImageSet::Listed(vec!["b.tif".into(), "c.tif".into()]),
             ..all.clone()
         },
         ListFilter {
@@ -1100,7 +1100,7 @@ fn get_object_list_pagination_cursor_returns_the_next_page() {
     let first_page = generator
         .get_object_list(&ListFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![Column::AreaSizePx],
             with_coloc_details: false,
@@ -1119,7 +1119,7 @@ fn get_object_list_pagination_cursor_returns_the_next_page() {
     let second_page = generator
         .get_object_list(&ListFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![Column::AreaSizePx],
             with_coloc_details: false,
@@ -1152,7 +1152,7 @@ fn get_object_list_intensity_column_reads_the_seeded_channel_value() {
     let result = generator
         .get_object_list(&ListFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![Column::IntensityAvg(0)],
             with_coloc_details: false,
@@ -1181,7 +1181,7 @@ fn get_grouped_by_image_averages_the_selected_column_per_image_and_class() {
     let result = generator
         .get_grouped_by_image(&GroupedByImageFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![Column::AreaSizePx],
             aggregation: vec![Aggregation::Avg],
@@ -1212,7 +1212,7 @@ fn get_grouped_by_image_flags_a_disabled_images_rows() {
         let result = generator
             .get_grouped_by_image(&GroupedByImageFilter {
                 plane: plane(),
-                images: None,
+                images: crate::results::ImageSet::All,
                 object_classes: None,
                 columns: vec![Column::AreaSizePx],
                 aggregation: vec![Aggregation::Avg],
@@ -1254,7 +1254,7 @@ fn get_grouped_by_image_aggregates_intensity_columns() {
     let result = generator
         .get_grouped_by_image(&GroupedByImageFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![
                 Column::IntensityAvg(0),
@@ -1331,7 +1331,7 @@ fn grouped_transposed(
     generator
         .get_grouped_by_image(&GroupedByImageFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes,
             columns: vec![Column::Count, Column::AreaSizePx],
             aggregation: vec![Aggregation::Avg],
@@ -1395,7 +1395,7 @@ fn transposed_grouped_matches_the_normal_view_value_for_value() {
     let normal = generator
         .get_grouped_by_image(&GroupedByImageFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![Column::Count, Column::AreaSizePx],
             aggregation: vec![Aggregation::Avg],
@@ -1472,7 +1472,7 @@ fn list_transposed(
     generator
         .get_object_list(&ListFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes,
             columns: vec![Column::ImageName, Column::ObjectClass, Column::AreaSizePx],
             with_coloc_details: false,
@@ -1581,7 +1581,7 @@ fn get_grouped_by_image_with_no_columns_selected_is_empty() {
     let result = generator
         .get_grouped_by_image(&GroupedByImageFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![],
             aggregation: vec![Aggregation::Avg],
@@ -1601,7 +1601,7 @@ fn get_grouped_by_image_with_an_explicitly_empty_image_selection_is_empty() {
     let result = generator
         .get_grouped_by_image(&GroupedByImageFilter {
             plane: plane(),
-            images: Some(vec![]),
+            images: crate::results::ImageSet::Listed(vec![]),
             object_classes: None,
             columns: vec![Column::AreaSizePx],
             aggregation: vec![Aggregation::Avg],
@@ -2294,7 +2294,7 @@ fn coloc_combinations_per_object() {
         let result = generator
             .get_object_list(&ListFilter {
                 plane: plane(),
-                images: None,
+                images: crate::results::ImageSet::All,
                 object_classes: Some(vec![ObjectClass::Global(1)]),
                 columns: vec![Column::AreaSizePx, column.clone()],
                 with_coloc_details: false,
@@ -2326,7 +2326,7 @@ fn coloc_combinations_summed_per_image() {
         let result = generator
             .get_grouped_by_image(&GroupedByImageFilter {
                 plane: plane(),
-                images: None,
+                images: crate::results::ImageSet::All,
                 object_classes: Some(vec![ObjectClass::Global(1)]),
                 columns: vec![column.clone()],
                 aggregation: vec![Aggregation::Sum],
@@ -2381,7 +2381,7 @@ fn a_coloc_with_the_objects_own_class_has_no_value() {
     let result = generator
         .get_object_list(&ListFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![Column::ColocCount(ObjectClass::Global(2))],
             with_coloc_details: false,
@@ -2413,7 +2413,7 @@ fn get_object_list_with_coloc_details_resolves_the_partners_own_metric() {
     let result = generator
         .get_object_list(&ListFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![
                 Column::ColocCount(ObjectClass::Global(2)),
@@ -3317,7 +3317,7 @@ fn get_object_list_with_an_explicitly_empty_class_selection_is_empty() {
     let result = generator
         .get_object_list(&ListFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: Some(vec![]),
             columns: vec![Column::ObjectClass],
             with_coloc_details: false,
@@ -3340,7 +3340,7 @@ fn get_object_list_on_a_plane_with_no_objects_at_all_is_empty() {
                 z_stack: 99,
                 t_stack: 99,
             },
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![Column::AreaSizePx],
             with_coloc_details: false,
@@ -3363,7 +3363,7 @@ fn get_grouped_by_image_object_classes_filter_restricts_to_the_selected_class() 
     let result = generator
         .get_grouped_by_image(&GroupedByImageFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: Some(vec![ObjectClass::Global(1)]),
             columns: vec![Column::AreaSizePx],
             aggregation: vec![Aggregation::Avg],
@@ -3387,7 +3387,7 @@ fn get_grouped_by_image_with_an_explicitly_empty_class_selection_is_empty() {
     let result = generator
         .get_grouped_by_image(&GroupedByImageFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: Some(vec![]),
             columns: vec![Column::AreaSizePx],
             aggregation: vec![Aggregation::Avg],
@@ -3410,7 +3410,7 @@ fn get_grouped_by_image_on_a_plane_with_no_objects_reports_a_zeroed_range() {
                 z_stack: 99,
                 t_stack: 99,
             },
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![Column::AreaSizePx],
             aggregation: vec![Aggregation::Avg],
@@ -3435,7 +3435,7 @@ fn get_grouped_by_image_pagination_cursor_returns_the_next_page() {
     ]);
     let base = GroupedByImageFilter {
         plane: plane(),
-        images: None,
+        images: crate::results::ImageSet::All,
         object_classes: None,
         columns: vec![Column::AreaSizePx],
         aggregation: vec![Aggregation::Avg],
@@ -3479,7 +3479,7 @@ fn get_object_list_with_coloc_details_and_no_colocalizing_partners_still_fills_e
     let result = generator
         .get_object_list(&ListFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![
                 Column::ColocCount(ObjectClass::Global(2)),
@@ -3516,7 +3516,7 @@ fn get_object_list_with_coloc_details_dashes_the_inactive_coloc_class_column() {
     let result = generator
         .get_object_list(&ListFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![
                 Column::AreaSizePx,
@@ -3873,7 +3873,7 @@ fn grouped(generator: &ResultsGenerator, aggregation: Aggregation) -> DatabaseRe
     generator
         .get_grouped_by_image(&GroupedByImageFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![Column::Count, Column::AreaSizePx],
             aggregation: vec![aggregation],
@@ -3916,7 +3916,7 @@ fn grouped_by(
         &generator
             .get_grouped_by_image(&GroupedByImageFilter {
                 plane: plane(),
-                images: None,
+                images: crate::results::ImageSet::All,
                 object_classes: None,
                 columns: vec![Column::Count, Column::AreaSizePx],
                 aggregation: vec![aggregation],
@@ -3991,7 +3991,7 @@ fn transposed_wells_put_each_class_of_a_well_in_one_row_across_pages() {
         generator
             .get_grouped_by_image(&GroupedByImageFilter {
                 plane: plane(),
-                images: None,
+                images: crate::results::ImageSet::All,
                 object_classes: Some(vec![ObjectClass::Global(1), ObjectClass::Global(2)]),
                 columns: vec![Column::Count, Column::AreaSizePx],
                 aggregation: vec![Aggregation::Sum],
@@ -4063,7 +4063,7 @@ fn grouped_by_well_is_in_plate_order_across_pages() {
         generator
             .get_grouped_by_image(&GroupedByImageFilter {
                 plane: plane(),
-                images: None,
+                images: crate::results::ImageSet::All,
                 object_classes: None,
                 columns: vec![Column::Count],
                 aggregation: vec![Aggregation::Sum],
@@ -4102,7 +4102,7 @@ fn the_object_list_sorts_by_a_column_across_pages() {
         let result = generator
             .get_object_list(&ListFilter {
                 plane: plane(),
-                images: None,
+                images: crate::results::ImageSet::All,
                 object_classes: None,
                 columns: vec![Column::AreaSizePx],
                 with_coloc_details: false,
@@ -4142,7 +4142,7 @@ fn the_object_list_sorts_by_a_column_across_pages() {
             .object_list_page_starts(
                 &ListFilter {
                     plane: plane(),
-                    images: None,
+                    images: crate::results::ImageSet::All,
                     object_classes: None,
                     columns: vec![Column::AreaSizePx],
                     with_coloc_details: false,
@@ -4180,7 +4180,7 @@ fn grouped_rows_sort_by_a_statistic() {
         let result = generator
             .get_grouped_by_image(&GroupedByImageFilter {
                 plane: plane(),
-                images: None,
+                images: crate::results::ImageSet::All,
                 object_classes: None,
                 columns: vec![Column::Count, Column::AreaSizePx],
                 aggregation: vec![Aggregation::Avg],
@@ -4230,7 +4230,7 @@ fn grouped_by_image_can_leave_out_classes_without_objects() {
     let result = generator
         .get_grouped_by_image(&GroupedByImageFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![Column::Count],
             aggregation: vec![Aggregation::Sum],
@@ -4307,7 +4307,7 @@ fn grouped_by_image_pages_through_images_without_objects_without_gaps() {
         generator
             .get_grouped_by_image(&GroupedByImageFilter {
                 plane: plane(),
-                images: None,
+                images: crate::results::ImageSet::All,
                 object_classes: None,
                 columns: vec![Column::Count],
                 aggregation: vec![Aggregation::Avg],
@@ -4351,7 +4351,7 @@ fn grouped_by_image_has_no_rows_on_a_plane_the_run_did_not_analyse() {
                 z_stack: 1,
                 t_stack: 0,
             },
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![Column::Count],
             aggregation: vec![Aggregation::Avg],
@@ -4383,7 +4383,7 @@ fn grouped_by_image_leaves_out_background_unless_it_is_selected() {
         &generator
             .get_grouped_by_image(&GroupedByImageFilter {
                 plane: plane(),
-                images: None,
+                images: crate::results::ImageSet::All,
                 object_classes: Some(vec![ObjectClass::BACKGROUND]),
                 columns: vec![Column::Count],
                 aggregation: vec![Aggregation::Avg],
@@ -4724,7 +4724,7 @@ fn object_list_shows_intensities_in_gray_values_and_zero_for_an_unmeasured_chann
     let result = generator
         .get_object_list(&ListFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![
                 Column::IntensityAvg(1),
@@ -4865,7 +4865,7 @@ fn the_object_list_shows_the_images_and_the_objects_own_value() {
     let result = generator
         .get_object_list(&ListFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![Column::AreaSizePx, p, q],
             with_coloc_details: false,
@@ -4909,7 +4909,7 @@ fn per_image_an_image_measurement_is_the_images_value() {
     let result = generator
         .get_grouped_by_image(&GroupedByImageFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![p, q],
             aggregation: vec![Aggregation::Avg],
@@ -5079,7 +5079,7 @@ fn a_spread_column_is_read_in_every_view() {
     let list = generator
         .get_object_list(&ListFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![Column::AreaSizePx, median.clone()],
             with_coloc_details: false,
@@ -5105,7 +5105,7 @@ fn a_spread_column_is_read_in_every_view() {
     let per_image = generator
         .get_grouped_by_image(&GroupedByImageFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![median.clone()],
             aggregation: vec![Aggregation::Avg],
@@ -5166,7 +5166,7 @@ fn shape_columns_are_read_and_computed() {
     let list = generator
         .get_object_list(&ListFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![Column::AreaSizePx, feret.clone(), extent.clone()],
             with_coloc_details: false,
@@ -5201,7 +5201,7 @@ fn shape_columns_are_read_and_computed() {
     let per_image = generator
         .get_grouped_by_image(&GroupedByImageFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![extent],
             aggregation: vec![Aggregation::Avg],
@@ -5274,7 +5274,7 @@ fn the_object_a_value_names_is_a_column_and_can_be_listed() {
         generator
             .get_object_list(&ListFilter {
                 plane: plane(),
-                images: None,
+                images: crate::results::ImageSet::All,
                 object_classes: None,
                 columns,
                 with_coloc_details: false,
@@ -5367,7 +5367,7 @@ fn a_page_without_objects_with_relation_and_measurement_columns_is_empty() {
     let result = generator
         .get_object_list(&ListFilter {
             plane: plane(),
-            images: Some(vec!["missing.tif".into()]),
+            images: crate::results::ImageSet::Listed(vec!["missing.tif".into()]),
             object_classes: None,
             columns: vec![Column::AreaSizePx, children(ChildValue::Count), p, q, named],
             with_coloc_details: false,
@@ -5388,7 +5388,7 @@ fn grouped_by_image_of_a_selection_without_a_class_id_is_empty() {
     let result = generator
         .get_grouped_by_image(&GroupedByImageFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: Some(vec![ObjectClass::Unset]),
             columns: vec![Column::AreaSizePx],
             aggregation: vec![Aggregation::Avg],
@@ -5412,7 +5412,7 @@ fn transposed_grouped_shows_an_image_measurement_beside_the_objects_values() {
     let result = generator
         .get_grouped_by_image(&GroupedByImageFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![p, q],
             aggregation: vec![Aggregation::Avg],

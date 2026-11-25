@@ -389,10 +389,39 @@ pub struct ImageHeatmapFilter {
     pub square_size: Option<usize>,
 }
 
+/// Which images a list or a per-image table is of. Part of the filter, so
+/// every caller - the Results views, an export, on this computer or a
+/// server - picks them the same way; an export of all images never sends
+/// a list of every path with each page.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub enum ImageSet {
+    /// Every image.
+    #[default]
+    All,
+    /// Every image that isn't left out.
+    Enabled,
+    /// These images (relative paths); none matches nothing.
+    Listed(Vec<String>),
+    /// The images that aren't left out from `first` to `last` (relative
+    /// paths in the results' order - sorted as text -, both included): a
+    /// block of an export, so each block's objects are read once.
+    EnabledRange { first: String, last: String },
+}
+
+impl From<Option<Vec<String>>> for ImageSet {
+    /// A view's list of images: `None` is every image.
+    fn from(images: Option<Vec<String>>) -> Self {
+        match images {
+            Some(rel_paths) => Self::Listed(rel_paths),
+            None => Self::All,
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ListFilter {
     pub plane: PlaneFilter,
-    pub images: Option<Vec<String>>,
+    pub images: ImageSet,
     pub object_classes: Option<Vec<ObjectClass>>,
     pub columns: Vec<Column>,
     pub with_coloc_details: bool,
@@ -423,7 +452,7 @@ pub enum RelatedTo {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct GroupedByImageFilter {
     pub plane: PlaneFilter,
-    pub images: Option<Vec<String>>,
+    pub images: ImageSet,
     pub object_classes: Option<Vec<ObjectClass>>,
     pub columns: Vec<Column>,
     pub aggregation: Vec<Aggregation>,
