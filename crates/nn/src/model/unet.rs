@@ -17,6 +17,8 @@ use crate::pieces::Pieces;
 use burn::tensor::Device;
 use std::path::Path;
 
+mod network;
+
 /// Architecture, from the model file's metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UNetConfig {
@@ -26,6 +28,16 @@ pub struct UNetConfig {
     pub initial_features: usize,
     pub gain: usize,
     pub norm: Norm,
+    pub final_activation: FinalActivation,
+}
+
+/// The activation after the last convolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FinalActivation {
+    None,
+    Sigmoid,
+    /// Over the channels.
+    Softmax,
 }
 
 /// The normalization between a U-Net's convolutions.
@@ -66,12 +78,59 @@ pub struct UNetOutput {
 
 pub struct UNet {
     config: UNetConfig,
-    // P4: the burn module (`UNet2d`).
+    network: network::UNet2d,
 }
 
 impl UNet {
     pub fn config(&self) -> &UNetConfig {
         &self.config
+    }
+
+    /// Convolutions in f16 (GPU tensor cores) - an experiment of the
+    /// migration's GPU spike, not settled.
+    pub fn set_half_convs(&mut self, half: bool) {
+        self.network.half = half;
+    }
+
+    /// A U-Net of `config` with random weights - for benchmarks and tests
+    /// until the weights load from files.
+    pub fn with_random_weights(config: UNetConfig, device: &Device) -> Self {
+        let network = network::UNet2d::new(&config, device);
+        Self { config, network }
+    }
+
+    /// A U-Net of `config` with the weights of a torch-em `UNet2d` state
+    /// dict in safetensors (PyTorch's tensor names, f32) - every tensor's
+    /// shape checked against `config`.
+    pub fn with_torch_em_weights(
+        config: UNetConfig,
+        safetensors: &[u8],
+        device: &Device,
+    ) -> Result<Self, NnError> {
+        let file = safetensors::SafeTensors::deserialize(safetensors)
+            .map_err(|e| NnError::InvalidModelFile(format!("no safetensors file: {e}")))?;
+        let mut network = network::UNet2d::new(&config, device);
+        network.load_torch_em(&file, device)?;
+        Ok(Self { config, network })
+    }
+
+    /// The raw network output `[1, out_channels, height, width]` for a
+    /// `[1, in_channels, height, width]` input (row-major planes), sides
+    /// multiples of `2^depth` - no padding, no pieces.
+    pub fn forward_raw(
+        &self,
+        input: &[f32],
+        height: usize,
+        width: usize,
+        device: &Device,
+    ) -> Vec<f32> {
+        let shape = [1, self.config.in_channels, height, width];
+        let x = burn::tensor::Tensor::<4>::from_data(
+            burn::tensor::TensorData::new(input.to_vec(), shape),
+            device,
+        );
+        let y = self.network.forward(x).into_data();
+        y.as_slice::<f32>().expect("f32 output").to_vec()
     }
 }
 

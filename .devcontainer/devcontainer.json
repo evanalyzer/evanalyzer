@@ -5,12 +5,18 @@
         "--privileged",
         "--network=host",
         "--ipc=host", // Essential for X11 shared memory
-        "-e", "DISPLAY=:1" // Use your host's specific display number
+        "--runtime=nvidia", // GPUs from NVIDIA_VISIBLE_DEVICES below
+        "-e", "DISPLAY=:1"
     ],
     "containerEnv": {
         "SLINT_BACKEND": "software",
-        "QT_X11_NO_MITSHM": "1"
+        "QT_X11_NO_MITSHM": "1",
+        "NVIDIA_VISIBLE_DEVICES": "all",
+        "NVIDIA_DRIVER_CAPABILITIES": "all"
     },
+    "mounts": [
+        "source=evanalyzer-claude,target=/root/.claude,type=volume"
+    ],
     "postStartCommand": "mkdir -p ${containerWorkspaceFolder}/.claude/memory && mkdir -p ~/.claude/projects/-workspaces-evanalyzer && rm -rf ~/.claude/projects/-workspaces-evanalyzer/memory && ln -sfn ${containerWorkspaceFolder}/.claude/memory ~/.claude/projects/-workspaces-evanalyzer/memory",
     "customizations": {
         "settings": {

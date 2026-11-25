@@ -44,6 +44,10 @@ required-features = ["test-support"]
 name = "bench_ai_ram"
 required-features = ["test-support"]
 
+[[example]]
+name = "unet_reference"
+required-features = ["test-support"]
+
 [dev-dependencies]
 tempfile = { workspace = true }
 

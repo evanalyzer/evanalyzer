@@ -338,6 +338,98 @@ In `crates/nn`, nothing deleted:
 fails: stop, or the hybrid fallback (tract for CPU inference, burn only for GPU +
 training) - a new decision, not part of this plan.
 
+**First P0 run (2026-11-25)** - romantic-shark's layout (torch-em `UNet2d`, InstanceNorm,
+depth 4, 64 features, 28.9 M parameters). libtorch: `bench_ai_ram unet-file=` the real
+TorchScript (includes padding/crop around the network); burn: `bench_unet 64` (burn-flex,
+random weights, network only). 22-core host, CPU, 2 runs each alternated with pauses, means:
+
+| Case | libtorch wall / CPU / peak | burn-flex wall / CPU / peak | burn wall |
+|---|---|---|---|
+| 512², 4 threads | 1.76 s / 6.8 s / 463 MB | 2.36 s / 6.6 s / 434 MB | 1.34x |
+| 512², 22 threads | 1.84 s / 35.5 s / 456 MB | 1.86 s / 18.7 s / 768 MB | 1.01x |
+| 1024², 4 threads | 6.72 s / 24.7 s / 1,668 MB | 9.48 s / 26.7 s / 1,613 MB | 1.41x |
+| 1024², 22 threads | 4.87 s / 85.5 s / 1,656 MB | 7.53 s / 79.5 s / 2,120 MB | 1.55x |
+| 2048², 4 threads | 25.5 s / 90.4 s / 6,412 MB | 40.5 s / 112 s / 6,210 MB | 1.59x |
+| 2048², 22 threads | 16.5 s / 263 s / 6,407 MB | 31.5 s / 332 s / 6,885 MB | 1.91x |
+
+Gate not met as is: burn-flex 1.3-1.9x slower (only 512² on 22 threads equal), RAM equal on
+4 threads, +5-70 % on 22. burn leaves cores idle (4 threads, 2048²: 112 s CPU in 40.5 s
+= 2.8 cores busy) - serial parts. Next: profile (`perf`) which ops cost (3x3 convolutions,
+InstanceNorm in several passes, bilinear interpolation) before deciding. wgpu not measurable
+here (no NVIDIA driver in the container; the run hung > 5 min, likely on the Intel iGPU or
+lavapipe).
+
+**GPU run (2026-11-25)** - laptop RTX 3000 Ada (8 GB), driver 595, same models as above,
+`bench_unet 64 <side> 4 dgpu|vulkan f16` against `bench_ai_ram unet-file=… <side> 4 2048 gpu`
+(libtorch CUDA 13, `LD_PRELOAD=libs/libtorch/lib/libtorch_cuda.so` - the example doesn't
+link it), 2 runs alternated, round 2:
+
+| Side | burn wgpu f16 | burn Vulkan (SPIR-V) f16 | libtorch CUDA (f32, TF32 convs) |
+|---|---|---|---|
+| 512² | 0.07 s | 0.07 s | 0.07 s |
+| 1024² | 0.38 s | 0.38 s | 0.26 s |
+| 2048² | 1.80 s | 1.80 s | 1.06 s |
+
+Peak host RAM: burn +5-150 MB, libtorch +14-76 MB over its 905 MB idle (CUDA context).
+
+Findings on the way (burn 0.22.1):
+- Without `default-features` burn also loses `autotune` and `fusion` - turned on again
+  (`features = ["flex", "wgpu", "vulkan", "autotune", "fusion"]`, still without `std`).
+- CubeCL's fast convolutions (implicit GEMM on tensor cores) take only f16/bf16 here; f32
+  runs `conv_direct`: 4.1 s for 512², 60x libtorch. And **with a bias they decline as
+  well**, even in f16 (2.2 s): `conv_forward` in `model/unet/network.rs` runs the f16
+  convolution without bias and adds the bias after it.
+- f16 against f32 on one conv 64->64: max error 7.5e-4 on values up to 1.4 (mean 9e-5) -
+  in the range of libtorch's default TF32. Open decision: f16 on the GPU (it is more than
+  float rounding, see "results independent of hardware"); `UNet::set_half_convs`, off by
+  default.
+- burn-flex keeps its speed with the new features and the f16 switch (old and new build
+  alternated: 512² 2.52 / 2.54 s, 1024² 10.63 / 10.75 s; a separate bias add on the CPU
+  was 5 % slower - only the f16 path adds it separately).
+- Vulkan (SPIR-V) brings nothing over wgpu's default here.
+- `TensorData` from `into_data()` is lazy on wgpu: the bytes arrive on first access - time
+  after `as_slice`/`to_vec`, not after `into_data`.
+- The container needs `libvulkan1` + `libegl1` and NVIDIA's EGL vendor file
+  `/usr/share/glvnd/egl_vendor.d/10_nvidia.json` (not mounted by the toolkit here),
+  else the NVIDIA Vulkan driver fails (`vk_icdGetInstanceProcAddr`).
+
+**Results vs libtorch (2026-11-25)** - romantic-shark's real weights (`crates/ai` example
+`unet_reference` exports them to safetensors + libtorch's outputs; `crates/nn` example
+`compare_unet`, loader `UNet::with_torch_em_weights`). Inputs normalized
+zero-mean-unit-variance; flips = pixels whose foreground (> 0.5) changes:
+
+| Pair | 256² max diff | 1024² max diff | 1024² flips (of 1,048,576) |
+|---|---|---|---|
+| burn-flex f32 vs package's expected output | 3e-6 | - | - |
+| burn GPU f32 vs libtorch CPU | 2e-6 | 6e-5 | 0 |
+| burn-flex f32 vs libtorch CPU | 4e-6 | 4e-4 | 3 |
+| libtorch GPU (TF32 convs) vs libtorch CPU | 8e-4 | 9e-3 | 166 |
+| burn GPU f16 vs libtorch CPU | 1.2e-3 | 6e-3 | 143 |
+
+burn in f32 is as exact as libtorch; burn's f16 GPU path deviates as much as libtorch's
+own GPU path does today (libtorch runs f32, but cuDNN convolutions in TF32 by default).
+
+**GPU 2048² profile** (per-layer sync, f16): before, InstanceNorm took 55 % (1.38 s) and
+grew 5-9x per 4x pixels - burn's InstanceNorm (GroupNorm reshaped to `[B, C, H*W]`) on a
+CubeCL convolution's output (stored channels-last) is 4x slower than on a plain tensor
+(37 vs 9 ms, 64x1024²). `instance_norm_channels_last` (reduce over `[B, H*W, C]`, free
+views) on the GPU path: 11 ms. Now 512² 0.07 s, 1024² 0.34 s, 2048² 1.53 s (libtorch
+0.07 / 0.26 / 1.06), results as before. What remains at 2048²: 3x3 convs 693 ms (45 %),
+norm 487 ms (31 %), 1x1 convs 133 ms, skip `cat` 103 ms, bilinear 66 ms.
+First GPU run per new shape: autotune takes 1-4 minutes (1024²: 61 s, 2048²: 219 s) -
+must be cached (on disk) or limited before it can ship.
+
+**CPU 2048² profile** (burn-flex, 4 threads, 46 s, 128 s CPU = 2.8 of 4 cores busy):
+3x3 convs 71 % (33 s), InstanceNorm 12 % (5.5 s), bilinear 6 % (3.0 s), 1x1 convs 4 %,
+cat 4 %, pool 2.5 %. `perf`: 57 % in gemm's f32 microkernel (useful), 15 % in burn-flex's
+`conv3d_impl` tile closure (im2col + strided output scatter), 5 % gemm packing. The idle
+cores: `conv3d_impl` transposes the whole input NCHW → NHWC and reorders the weights
+single-threaded on every convolution before the parallel part.
+
+Open: GPU - autotune cache, norm and `cat` further (a conv over the skip and the
+upsampled half separately instead of `cat`); CPU - burn-flex's serial transpose (upstream
+fix or own conv), bilinear and norm; bf16 instead of f16 (range).
+
 ### P1 - Freeze references from libtorch (1-2 days, on the current code)
 
 Before anything is deleted (afterwards libtorch can't be built next to burn 0.22):

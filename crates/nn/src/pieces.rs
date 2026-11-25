@@ -98,8 +98,8 @@ mod tests {
     const GB: u64 = 1 << 30;
 
     /// "Auto" for a model seeing a limited neighbourhood: a U-Net (1.6 KB per
-    /// pixel) and StarDist (0.4 KB) on a 4096² slide tile and smaller images
-    /// - 2048² pieces where a third of the RAM holds one, smaller ones on a
+    /// pixel) and StarDist (0.4 KB) on a 4096² slide tile and smaller images:
+    /// 2048² pieces where a third of the RAM holds one, smaller ones on a
     /// small computer; an image up to the piece side whole.
     #[test]
     fn pieces_as_large_as_a_third_of_the_ram_holds() {

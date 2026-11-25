@@ -9,7 +9,7 @@
 //! `VmHWM` reset through `/proc/self/clear_refs`).
 //!
 //!   LD_LIBRARY_PATH=$PWD/libs/libtorch/lib cargo run --release -p evanalyzer_ai \
-//!     --features test-support --example bench_ai_ram -- <stardist|unet32|unet64|unet-file=PATH|cellpose-light> <side> [threads] [piece side]
+//!     --features test-support --example bench_ai_ram -- <stardist|unet32|unet64|unet-file=PATH|cellpose-light> <side> [threads] [piece side] [cpu|gpu]
 //!
 //! `unet-file=PATH`: a real U-Net's TorchScript file (e.g. bioimage.io's
 //! `joyful-pig`), foreground channel 0, boundary channel 1.
@@ -67,6 +67,11 @@ fn main() {
     );
     // The step's piece size.
     let piece_side: usize = args.get(4).map_or(2048, |p| p.parse().unwrap());
+    let devices = match args.get(5).map_or("cpu", String::as_str) {
+        "cpu" => DeviceSelection::Cpu,
+        "gpu" => DeviceSelection::Gpus(vec![0]),
+        other => panic!("unknown device {other} (cpu | gpu)"),
+    };
     let unet = Task::UNet {
         foreground_channel: 0,
         softmax: false,
@@ -103,7 +108,7 @@ fn main() {
     };
     let request = Request { model, task };
     let config = || EngineConfig {
-        devices: DeviceSelection::Cpu,
+        devices: devices.clone(),
         gpu_slots: 1,
         cores: threads,
     };

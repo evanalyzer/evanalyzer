@@ -17,12 +17,22 @@ serde = { workspace = true, features = ["derive"] }
 log = { workspace = true }
 thiserror = { workspace = true }
 smartcore = { workspace = true, features = ["serde"] }
+# Model files (D2). 0.3.3 = the version tch already pulls in; newer once tch
+# is gone.
+safetensors = "0.3.3"
 # Not the workspace burn (0.21, core's MLP) until P2: next to `tch` burn
 # 0.22 resolves only without its `std`, `store` and `optim` features (they
 # pull `burn-tch` through `burn-dispatch`). No `cpu` (CubeCL CPU links the
 # C++ LLVM library) - burn-flex is the CPU backend.
-burn = { version = "0.22.1", default-features = false, features = ["flex", "wgpu"] }
+burn = { version = "0.22.1", default-features = false, features = ["flex", "wgpu", "vulkan", "autotune", "fusion"] }
 # Its default features (std, simd, rayon): a multi-threaded CPU backend
 # without burn's own `std`.
 burn-flex = "0.22.1"
 burn-dispatch = { version = "0.22.1", default-features = false, features = ["rayon", "simd"] }
+
+[dev-dependencies]
+libc = { workspace = true }
+rayon = { workspace = true }
+
+[[example]]
+name = "bench_unet"
