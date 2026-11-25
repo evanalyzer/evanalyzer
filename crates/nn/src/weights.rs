@@ -21,7 +21,6 @@
 
 use crate::errors::NnError;
 use safetensors::SafeTensors;
-use safetensors::tensor::{Dtype, TensorView};
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
@@ -138,27 +137,63 @@ pub struct NamedTensor {
     pub values: Vec<f32>,
 }
 
-/// Writes `tensors` and `metadata` as a `.safetensors` file to `path`.
+/// `tensors` and `metadata` as the bytes of a `.safetensors` file (models
+/// stored inside another file, e.g. an MLP in a `.evamodel`).
+///
+/// Written here, not with the safetensors crate's `serialize`: that one
+/// writes the metadata from a `HashMap` in random order, so the same model
+/// gave different bytes. Here the header is sorted (metadata keys, then the
+/// tensors by name, their data in that order): the same model, the same
+/// bytes. The layout is the format's: an 8-byte little-endian header length,
+/// the JSON header padded with spaces to a multiple of 8, the data.
+pub fn to_bytes(tensors: &[NamedTensor], metadata: &ModelMetadata) -> Result<Vec<u8>, NnError> {
+    let mut sorted: Vec<&NamedTensor> = tensors.iter().collect();
+    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+    for t in &sorted {
+        if t.shape.iter().product::<usize>() != t.values.len() {
+            return Err(NnError::Internal(format!(
+                "tensor {}: {} values for the shape {:?}",
+                t.name,
+                t.values.len(),
+                t.shape
+            )));
+        }
+    }
+    let mut header = serde_json::Map::new();
+    let meta: BTreeMap<String, String> = metadata.to_map().into_iter().collect();
+    header.insert(
+        "__metadata__".into(),
+        serde_json::to_value(meta).expect("strings"),
+    );
+    let mut offset = 0usize;
+    for t in &sorted {
+        let end = offset + 4 * t.values.len();
+        header.insert(
+            t.name.clone(),
+            serde_json::json!({"dtype": "F32", "shape": t.shape, "data_offsets": [offset, end]}),
+        );
+        offset = end;
+    }
+    let mut json = serde_json::to_vec(&header).expect("a JSON header");
+    json.resize(json.len().next_multiple_of(8), b' ');
+    let mut bytes = Vec::with_capacity(8 + json.len() + offset);
+    bytes.extend_from_slice(&(json.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(&json);
+    for t in &sorted {
+        bytes.extend(t.values.iter().flat_map(|v| v.to_le_bytes()));
+    }
+    Ok(bytes)
+}
+
+/// Writes `tensors` and `metadata` as a `.safetensors` file to `path` (see
+/// [`to_bytes`]).
 pub fn write(
     path: &Path,
     tensors: &[NamedTensor],
     metadata: &ModelMetadata,
 ) -> Result<(), NnError> {
-    let bytes: Vec<Vec<u8>> = tensors
-        .iter()
-        .map(|t| t.values.iter().flat_map(|v| v.to_le_bytes()).collect())
-        .collect();
-    let views = tensors
-        .iter()
-        .zip(&bytes)
-        .map(|(t, b)| {
-            TensorView::new(Dtype::F32, t.shape.clone(), b)
-                .map(|v| (t.name.clone(), v))
-                .map_err(|e| NnError::Internal(format!("tensor {}: {e}", t.name)))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    safetensors::serialize_to_file(views, &Some(metadata.to_map()), path)
-        .map_err(|e| NnError::Internal(format!("writing {}: {e}", path.display())))
+    std::fs::write(path, to_bytes(tensors, metadata)?)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -198,11 +233,54 @@ mod tests {
         ));
     }
 
+    /// The same contents give the same bytes (sorted header), which the
+    /// safetensors crate reads.
+    #[test]
+    fn the_same_model_gives_the_same_bytes() {
+        let tensors = |order: [usize; 2]| {
+            let all = [
+                NamedTensor {
+                    name: "b".into(),
+                    shape: vec![1],
+                    values: vec![2.0],
+                },
+                NamedTensor {
+                    name: "a".into(),
+                    shape: vec![1, 2],
+                    values: vec![0.5, 1.5],
+                },
+            ];
+            order.map(|i| NamedTensor {
+                name: all[i].name.clone(),
+                shape: all[i].shape.clone(),
+                values: all[i].values.clone(),
+            })
+        };
+        let first = to_bytes(&tensors([0, 1]), &metadata()).unwrap();
+        for _ in 0..10 {
+            assert_eq!(to_bytes(&tensors([1, 0]), &metadata()).unwrap(), first);
+        }
+        assert_eq!(u64::from_le_bytes(first[..8].try_into().unwrap()) % 8, 0);
+        let file = ModelFile::parse(&first).unwrap();
+        assert_eq!(file.metadata, metadata());
+        assert_eq!(
+            file.tensors.tensor("a").unwrap().data(),
+            [0.5f32, 1.5].map(f32::to_le_bytes).concat()
+        );
+        let bad = NamedTensor {
+            name: "x".into(),
+            shape: vec![3],
+            values: vec![1.0],
+        };
+        assert!(to_bytes(&[bad], &metadata()).is_err());
+    }
+
     #[test]
     fn foreign_files_and_newer_layouts_are_refused() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("m.safetensors");
         // A plain safetensors file without our metadata.
+        use safetensors::tensor::{Dtype, TensorView};
         let data = 1.0f32.to_le_bytes();
         let view = TensorView::new(Dtype::F32, vec![1], &data).unwrap();
         safetensors::serialize_to_file([("x", view)], &None, &path).unwrap();

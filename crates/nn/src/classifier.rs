@@ -16,11 +16,14 @@
 
 use crate::errors::NnError;
 use crate::train::{TrainControl, TrainStats};
+use smartcore::linalg::basic::matrix::DenseMatrix;
 
+mod config;
 pub mod knn;
 pub mod mlp;
 pub mod rtree;
 
+pub use config::TrainedClassifier;
 pub use knn::{Knn, KnnParams};
 pub use mlp::{Mlp, MlpParams};
 pub use rtree::{RandomForest, RandomForestParams};
@@ -85,15 +88,31 @@ pub trait Classifier: Sized + Send + Sync {
 
     /// Class + certainty for each of the `rows.len() / n_features` rows.
     fn predict(&self, rows: &[f32], n_features: usize) -> Result<Predictions, NnError>;
+
+    /// The class of each row only - cheaper where the certainty costs extra
+    /// (KNN: a second neighbour search).
+    fn predict_classes(&self, rows: &[f32], n_features: usize) -> Result<Vec<u32>, NnError> {
+        Ok(self.predict(rows, n_features)?.classes)
+    }
 }
 
-/// A trained classifier as stored in a `.evamodel` file - which one comes
-/// from the file, so an enum. P2: serde with today's names and layout for the
-/// forest and KNN (their files keep loading); the MLP as safetensors bytes.
-pub enum TrainedClassifier {
-    RandomForest(RandomForest),
-    Knn(Knn),
-    Mlp(Mlp),
+/// The number of rows in `rows` of `n_features` values - an error when they
+/// don't divide.
+pub(crate) fn row_count(rows: &[f32], n_features: usize) -> Result<usize, NnError> {
+    if n_features == 0 || !rows.len().is_multiple_of(n_features) {
+        return Err(NnError::InvalidInput(format!(
+            "{} values are no rows of {n_features} features",
+            rows.len()
+        )));
+    }
+    Ok(rows.len() / n_features)
+}
+
+/// smartcore's matrix of the row-major `rows` (one copy, no row vectors).
+pub(crate) fn dense_matrix(rows: &[f32], n_features: usize) -> Result<DenseMatrix<f32>, NnError> {
+    let n = row_count(rows, n_features)?;
+    DenseMatrix::new(n, n_features, rows.to_vec(), false)
+        .map_err(|e| NnError::Internal(e.to_string()))
 }
 
 impl TrainedClassifier {
@@ -104,4 +123,15 @@ impl TrainedClassifier {
             Self::Mlp(model) => model.predict(rows, n_features),
         }
     }
+
+    pub fn predict_classes(&self, rows: &[f32], n_features: usize) -> Result<Vec<u32>, NnError> {
+        match self {
+            Self::RandomForest(model) => model.predict_classes(rows, n_features),
+            Self::Knn(model) => model.predict_classes(rows, n_features),
+            Self::Mlp(model) => model.predict_classes(rows, n_features),
+        }
+    }
 }
+
+#[cfg(test)]
+pub(crate) mod tests;

@@ -10,6 +10,8 @@
 pub mod knn;
 pub mod mlp;
 pub mod random_forest;
+#[cfg(test)]
+mod write_nn_fixtures;
 
 use crate::ai_learning::model::mlp::MlpArchitecture;
 use evanalyzer_cfg::core_types::InternalErrors;

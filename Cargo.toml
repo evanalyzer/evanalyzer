@@ -99,4 +99,7 @@ lto = "thin"
 codegen-units = 16
 debug = false
 
-
+# Temporary, see patches/README.md: burn-dispatch without its optional burn-tch
+# (collides with tch's `links`); goes with crates/ai.
+[patch.crates-io]
+burn-dispatch = { path = "patches/burn-dispatch" }
