@@ -25,7 +25,7 @@
 
 use super::{FinalActivation, Norm, UNetConfig};
 use crate::errors::NnError;
-use crate::weights::NamedTensor;
+use crate::weights::{NamedTensor, tensor_from};
 use burn::module::{Module, Param};
 use burn::nn::conv::{Conv2d, Conv2dConfig};
 use burn::nn::pool::{MaxPool2d, MaxPool2dConfig};
@@ -36,8 +36,8 @@ use burn::nn::{
 use burn::tensor::activation::{relu, sigmoid, softmax};
 use burn::tensor::module::{conv2d, interpolate};
 use burn::tensor::ops::{ConvOptions, InterpolateMode, InterpolateOptions};
-use burn::tensor::{DType, Device, Tensor, TensorData};
-use safetensors::{Dtype, SafeTensors};
+use burn::tensor::{DType, Device, Tensor};
+use safetensors::SafeTensors;
 
 /// `conv` on `x` (stride 1, `padding` on every side).
 ///
@@ -291,37 +291,6 @@ impl UNet2d {
             FinalActivation::Softmax => softmax(x, 1),
         }
     }
-}
-
-/// The f32 tensor `name` of `file` with the dims `dims` - else an error
-/// naming what is missing or misshaped (model files are untrusted).
-fn tensor_from<const D: usize>(
-    file: &SafeTensors<'_>,
-    name: &str,
-    dims: [usize; D],
-    device: &Device,
-) -> Result<Tensor<D>, NnError> {
-    let view = file
-        .tensor(name)
-        .map_err(|_| NnError::InvalidModelFile(format!("the tensor {name} is missing")))?;
-    if view.shape() != dims {
-        return Err(NnError::InvalidModelFile(format!(
-            "the tensor {name} has the shape {:?}, {dims:?} expected",
-            view.shape()
-        )));
-    }
-    if view.dtype() != Dtype::F32 {
-        return Err(NnError::InvalidModelFile(format!(
-            "the tensor {name} is {:?}, F32 expected",
-            view.dtype()
-        )));
-    }
-    let values: Vec<f32> = view
-        .data()
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-        .collect();
-    Ok(Tensor::from_data(TensorData::new(values, dims), device))
 }
 
 /// `conv`'s weight and bias from `<prefix>.weight` / `<prefix>.bias`.

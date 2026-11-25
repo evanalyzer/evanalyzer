@@ -130,6 +130,60 @@ impl<'a> ModelFile<'a> {
     }
 }
 
+/// The f32 values of the tensor `name` of `file`, which must have the shape
+/// `shape` - else an error naming what is missing or misshaped (model files
+/// are untrusted).
+pub(crate) fn f32_values(
+    file: &SafeTensors<'_>,
+    name: &str,
+    shape: &[usize],
+) -> Result<Vec<f32>, NnError> {
+    let view = file
+        .tensor(name)
+        .map_err(|_| NnError::InvalidModelFile(format!("the tensor {name} is missing")))?;
+    if view.shape() != shape {
+        return Err(NnError::InvalidModelFile(format!(
+            "the tensor {name} has the shape {:?}, {shape:?} expected",
+            view.shape()
+        )));
+    }
+    if view.dtype() != safetensors::Dtype::F32 {
+        return Err(NnError::InvalidModelFile(format!(
+            "the tensor {name} is {:?}, F32 expected",
+            view.dtype()
+        )));
+    }
+    Ok(view
+        .data()
+        .chunks_exact(4)
+        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .collect())
+}
+
+/// The shape of the tensor `name` of `file` (for tensors whose size is
+/// free, e.g. Cellpose-SAM's relative positions) - every size still to be
+/// checked by the caller.
+pub(crate) fn shape_of(file: &SafeTensors<'_>, name: &str) -> Result<Vec<usize>, NnError> {
+    file.tensor(name)
+        .map(|view| view.shape().to_vec())
+        .map_err(|_| NnError::InvalidModelFile(format!("the tensor {name} is missing")))
+}
+
+/// The tensor `name` of `file` with the dims `dims` on `device` (see
+/// [`f32_values`]).
+pub(crate) fn tensor_from<const D: usize>(
+    file: &SafeTensors<'_>,
+    name: &str,
+    dims: [usize; D],
+    device: &burn::tensor::Device,
+) -> Result<burn::tensor::Tensor<D>, NnError> {
+    let values = f32_values(file, name, &dims)?;
+    Ok(burn::tensor::Tensor::from_data(
+        burn::tensor::TensorData::new(values, dims),
+        device,
+    ))
+}
+
 /// An f32 tensor to write: name, shape, values.
 pub struct NamedTensor {
     pub name: String,

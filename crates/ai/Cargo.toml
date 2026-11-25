@@ -48,6 +48,10 @@ required-features = ["test-support"]
 name = "unet_reference"
 required-features = ["test-support"]
 
+[[example]]
+name = "cellpose_reference"
+required-features = ["test-support"]
+
 [dev-dependencies]
 tempfile = { workspace = true }
 

@@ -13,8 +13,8 @@ use crate::classifier::tests::{samples, two_clusters, with_control};
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 
-/// `train` seeds the device's RNG, which burn keeps globally: two trainings
-/// in parallel tests would race on it. Every test that trains holds this.
+/// Trainings one at a time (they use all cores; the initialization has its
+/// own generator - `the_same_seed_gives_the_same_model`).
 static TRAIN_LOCK: Mutex<()> = Mutex::new(());
 
 fn params(epochs: usize) -> MlpParams {

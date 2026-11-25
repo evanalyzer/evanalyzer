@@ -38,6 +38,8 @@ tests/timeseries_96img_48t_tracked.evadb
 tests/joyful-pig/
 # bioimage.io's romantic-shark U-Net (~223 MB) for the burn migration's comparisons.
 tests/romantic-shark/
+# Cellpose-SAM weights (cpsam_v2, ~1.2 GB), converted file and references for the burn migration.
+tests/cellpose-sam/
 
 # Real Cellpose-SAM TorchScript export (~1.2GB) used by
 # crates/core/tests/cellpose_sam_real_model.rs - too large to commit.

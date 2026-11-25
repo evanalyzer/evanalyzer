@@ -529,6 +529,26 @@ core (P7), mmap instead of reading the file.
 
 ### P6 - Cellpose-SAM (1-2 weeks)
 
+State 2026-11-25: 1, 3 and 4 done in `crates/nn` (`model::cellpose_sam`: network ported from
+Cellpose's `CPSAM` + SAM's encoder, all 24 blocks global attention, relative positions
+resized on loading; `infer` = the libtorch engine's path: bilinear resize, channel fill,
+256² tiles with 10 % overlap and Cellpose's taper, sigmoid). 2 replaced by D2 refined:
+`docs/convert_cellpose_sam.py` (dev tool, Cellpose's PyTorch names, `W2` checked and
+dropped, file loads into Cellpose's own `CPSAM`). Parity (ignored release tests):
+
+- network vs Cellpose's own `CPSAM` (PyTorch f32): max 3.5e-5 on values up to 11, no flips;
+- `infer` vs the libtorch engine with an f32 TorchScript: flows <= 8e-5, probability
+  <= 2.4e-5, no flips (256², 300x200, a resize, 1024²);
+- `infer` vs the engine as shipped: flows <= 2.6e-2, probability <= 9.4e-3, <= 61 of
+  1,048,576 pixels flipped - the shipped TorchScript (`docs/convert_cellpose.py`) loads
+  through `CellposeModel`, which rounds the weights to bfloat16 (0.044 off the f32
+  network already in PyTorch). Ours runs the original f32 weights.
+
+Speed (CPU, 22 threads, not optimized yet): burn 5.9 / 12.4 / 37.2 / 146 s vs the libtorch
+engine linked in (f32) 9.9 / 10.0 / 31.9 / 134 s (256², 300x200, 450x300, 1024²); the
+plugin ran 1024² in 65-67 s (BENCHMARK.md). Open: speed (CPU + GPU f16), RAM, wiring into
+core (P7).
+
 1. Cellpose-SAM network (Cellpose BSD-3 + SAM ViT-L encoder Apache-2.0): patch embed
    (1-3 channels), 24 blocks with windowed + global attention, fixed 256² positional
    embedding, neck, flow head.

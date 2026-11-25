@@ -21,7 +21,7 @@ use crate::train::{TrainControl, TrainProgress, TrainStats};
 use crate::weights::{ModelFile, ModelMetadata, NamedTensor};
 use burn::module::{Module, Param};
 use burn::nn::loss::CrossEntropyLossConfig;
-use burn::nn::{Linear, LinearConfig};
+use burn::nn::Linear;
 use burn::optim::{AdamConfig, GradientsParams};
 use burn::tensor::activation::{relu, sigmoid, softmax, tanh};
 use burn::tensor::{Device, Int, Tensor, TensorData};
@@ -102,11 +102,42 @@ pub(super) struct Network {
 }
 
 impl Network {
-    fn new(architecture: &MlpArchitecture, device: &Device) -> Self {
+    /// Fresh layers, initialized as burn's `Linear` default (Kaiming uniform,
+    /// gain 1/sqrt(3): weights and biases uniform in ±1/sqrt(inputs)) - but
+    /// from a generator of its own seeded with `seed` (xorshift64), not
+    /// burn's global one: whatever else draws random numbers meanwhile, the
+    /// same seed gives the same model.
+    fn new(architecture: &MlpArchitecture, seed: u64, device: &Device) -> Self {
+        let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).max(1);
+        let mut uniform = |n: usize, bound: f32| -> Vec<f32> {
+            (0..n)
+                .map(|_| {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    let unit = (state >> 40) as f32 / (1u64 << 24) as f32;
+                    (2.0 * unit - 1.0) * bound
+                })
+                .collect()
+        };
         let layers = architecture
             .layer_sizes()
             .into_iter()
-            .map(|(i, o)| LinearConfig::new(i, o).init(device))
+            .map(|(n_in, n_out)| {
+                let bound = 1.0 / (n_in as f32).sqrt();
+                let weight = uniform(n_in * n_out, bound);
+                let bias = uniform(n_out, bound);
+                Linear {
+                    weight: Param::from_tensor(Tensor::from_data(
+                        TensorData::new(weight, [n_in, n_out]),
+                        device,
+                    )),
+                    bias: Some(Param::from_tensor(Tensor::from_data(
+                        TensorData::new(bias, [n_out]),
+                        device,
+                    ))),
+                }
+            })
             .collect();
         Self { layers }
     }
@@ -283,8 +314,8 @@ impl Classifier for Mlp {
     /// - each epoch reshuffles the training rows (keyed by the seed and the
     ///   epoch) and steps once per `batch_size` rows; its `train_loss` is
     ///   the sample-weighted mean over its batches;
-    /// - the seed also seeds the weight initialization: the same seed and
-    ///   data give the same model;
+    /// - the seed also seeds the weight initialization (`Network::new`, its
+    ///   own generator): the same seed and data give the same model;
     /// - progress roughly every `epochs / 200` epochs (always the last),
     ///   cancel checked every epoch.
     ///
@@ -319,9 +350,7 @@ impl Classifier for Mlp {
         };
         let val = (!val_idx.is_empty()).then(|| to_tensors(samples, &val_idx, &device));
 
-        // The device's RNG initializes the layers: seeded right before.
-        device.seed(seed);
-        let mut model = Network::new(&architecture, &device);
+        let mut model = Network::new(&architecture, seed, &device);
         let mut optim = AdamConfig::new().with_epsilon(params.epsilon as f32).init();
         let loss_fn = CrossEntropyLossConfig::new().init(&device);
         let batch_size = params.batch_size.max(1);
