@@ -4135,10 +4135,8 @@ dependencies = [
  "burn-dispatch 0.22.1",
  "burn-flex",
  "log",
- "postcard",
  "serde",
  "smartcore",
- "tempfile",
  "thiserror 2.0.21",
 ]
 

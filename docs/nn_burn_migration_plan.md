@@ -1,7 +1,6 @@
 # Plan: libtorch → Burn, crate `evanalyzer_nn`
 
-Status: planned (2026-11-25; D1-D5 decided), branch `remove-libtorch`. Nothing built yet except the
-empty `crates/nn` skeleton (80974378).
+Status: planned (2026-11-25; D1-D5 decided), branch `remove-libtorch`. The `crates/nn` skeleton (traits, types, `todo!()` bodies) is built (2026-11-25).
 
 ## Why now
 
@@ -30,12 +29,12 @@ machine-learning algorithm - all of them train and infer, behind one interface:
 |---|---|---|
 | `model` | the `Model` trait (below), `Image`, `NnError` | new (replaces `api.rs`'s `Request`/`Task`/`Response` enums) |
 | `model::{unet, stardist, cellpose_sam}` | architectures (burn `Module`s), their `Settings` + `Output` types, pre/post-processing that ran on tensors | `crates/ai/src/torch/*.rs` + new architecture code |
-| `model::{mlp, knn, rtree}` | trained classifiers: MLP (burn), KNN + random forest (smartcore), their training | `crates/core/src/ai_learning/model/*.rs`, the `Classifier` enum of `ai_learning/model.rs`, the smartcore matrix conversion of `ai_learning/utils.rs` |
+| `classifier::{mlp, knn, rtree}` | trained classifiers: MLP (burn), KNN + random forest (smartcore), their training (see "Training interface") | `crates/core/src/ai_learning/model/*.rs`, the `Classifier` enum of `ai_learning/model.rs`, the smartcore matrix conversion of `ai_learning/utils.rs` |
 | `runtime` | backend + device choice (once per process, lazily on the first model run), `EngineConfig`, `DeviceSelection`, `EngineInfo`, thread budget | `crates/ai/src/lib.rs` `infer`/`start`, `api.rs` |
 | `cache` | loaded models per (file, device) (+ mtime), slots per GPU, blocking when busy, `release_models` | `crates/ai/src/torch/scheduler.rs` (framework-free parts port 1:1) |
 | `pieces` | receptive-field probe, halo, InstanceNorm detection, `run_in_pieces` helper, `Pieces`, `PIECE_SIDES`, `piece_side_for`, `largest_model_input` | `crates/ai/src/torch/pieces.rs`, `api.rs` |
 | `weights` | safetensors + metadata format, importers (PyTorch state dict, bioimage.io) | new |
-| `train` | later: StarDist/Cellpose training (TODO "StarDist … Cellpose … ~2-3 weeks each") | new, not in this migration |
+| `train` | `TrainControl`, `TrainProgress`, `TrainStats` shared by classifier and deep-model training; deep-model training itself (`Trainable`, targets, augmentation) is a later track | new |
 
 ### API: a trait per model instead of one big enum (decided 2026-11-25)
 
@@ -71,6 +70,133 @@ pub fn infer<M: Model>(file: &Path, image: Image<'_>, settings: &M::Settings)
   moving them); core hands rows as plain `&[f32]` + feature count, never a smartcore
   `DenseMatrix` or burn tensor.
 - No `serde` on inputs/outputs any more (the `floats` byte encoding, `API_VERSION` go).
+
+### Module layout
+
+```
+crates/nn/src/
+├── lib.rs            re-exports, `infer::<M>()`, `release_models()`
+├── errors.rs         NnError
+├── train.rs          TrainControl, TrainProgress, TrainStats - shared by all training
+├── classifier.rs     Samples, Predictions, trait Classifier, enum TrainedClassifier
+├── classifier/
+│   ├── mlp.rs        burn
+│   ├── knn.rs        smartcore
+│   └── rtree.rs      smartcore (random forest)
+├── model.rs          Image, trait Model, trait Trainable, trait Dataset, InstanceLabels, ClassMask
+├── model/
+│   ├── unet.rs       UNet, UNetSettings, UNetOutput (+ later its training targets)
+│   ├── stardist.rs
+│   └── cellpose_sam.rs
+├── runtime.rs        EngineConfig, DeviceSelection, EngineInfo, backend/device choice
+├── cache.rs          loaded models per (file, device), slots, release
+├── pieces.rs         Pieces, PIECE_SIDES, piece_side_for, run_in_pieces, receptive-field probe
+└── weights.rs        safetensors + metadata, importers (PyTorch state dict, bioimage.io)
+```
+
+`mlp`, `knn`, `rtree` are under `classifier/`, not `model/`: they implement `Classifier`
+(feature rows in), not `Model` (an image in, a cached model per device). nn does not
+depend on `evanalyzer_cfg`: core maps cfg settings and `TrainingProgressEvent` to nn's
+types, so nn stays at the bottom of the graph.
+
+### Training interface (decided 2026-11-25)
+
+**Classifiers** (`classifier.rs`). Object and pixel classifiers are the same to nn: feature
+rows + labels. Where the rows come from (object measurements, filter responses at
+annotated pixels) needs images, objects and filters - that stays in core.
+
+```rust
+pub struct Samples<'a> {
+    pub rows: &'a [f32],      // n_samples * n_features, row-major (no Vec<Vec<f32>>)
+    pub n_features: usize,
+    pub labels: &'a [u32],    // dense class indices 0..n_classes
+    pub n_classes: usize,
+}
+
+pub trait Classifier: Sized + Send + Sync {
+    /// Hyperparameters: trees / k / hidden layers, epochs, ...
+    type Params;
+    fn train(samples: &Samples<'_>, params: &Self::Params, ctl: &TrainControl)
+        -> Result<(Self, TrainStats), NnError>;
+    /// Class + certainty per row.
+    fn predict(&self, rows: &[f32], n_features: usize) -> Result<Predictions, NnError>;
+}
+
+/// Stored in the .evamodel - the type comes from the file, so here an enum is right.
+pub enum TrainedClassifier { RandomForest(Forest), Knn(KnnModel), Mlp(Mlp) }
+```
+
+The `.evamodel` container with `AiLearningSettings` (cfg) stays in core; nn gives the
+`TrainedClassifier` (serde for forest/KNN with today's names and layout, so their files
+keep loading; safetensors bytes for the MLP). Classifiers run on the CPU, outside the
+model cache (core's `ClassifierCacheScope` as today).
+
+**Deep models: training and fine-tuning** (`model.rs`, later track). Images + label masks;
+the targets are model-specific and live in the model's module (Cellpose: flows by
+diffusion from the centre; StarDist: probability + ray distances; U-Net: class/boundary
+maps).
+
+```rust
+/// Core loads the samples lazily - never all images in RAM at once.
+pub trait Dataset<T>: Sync {
+    fn len(&self) -> usize;
+    fn get(&self, i: usize) -> Result<(OwnedImage, T), NnError>;
+}
+pub struct InstanceLabels { pub width: usize, pub height: usize, pub ids: Vec<u32> }   // Cellpose, StarDist
+pub struct ClassMask      { pub width: usize, pub height: usize, pub classes: Vec<u8> } // U-Net
+
+pub trait Trainable: Model {
+    type Target;        // InstanceLabels / ClassMask
+    type TrainParams;   // epochs, lr, batch, crop size, freeze encoder, augmentations
+    /// `start`: None = new weights, Some(file) = fine-tune those.
+    fn train(start: Option<&Path>, data: &dyn Dataset<Self::Target>,
+             params: &Self::TrainParams, ctl: &TrainControl) -> Result<(Self, TrainStats), NnError>;
+    /// Safetensors + metadata (architecture, base model, training params, seed).
+    fn save(&self, file: &Path) -> Result<(), NnError>;
+}
+```
+
+Augmentation (random crops, flips, rotations) and the validation split are nn's. The
+metadata (base model, params, seed) keeps a training reproducible. Each trainable model
+tells its RAM per batch sample, so core plans the batch size from the RAM budget (like
+the tile RAM plan).
+
+**Shared** (`train.rs`):
+
+```rust
+pub struct TrainControl<'a> {
+    pub progress: &'a (dyn Fn(TrainProgress) + Sync), // core maps to cfg's TrainingProgressEvent
+    pub cancel: &'a AtomicBool,
+    pub seed: u64,
+    pub device: DeviceChoice,   // CPU or GPU for training
+    pub cores: usize,
+}
+```
+
+Replaces `fit_mlp`'s `Sender<TrainingProgressEvent>` + `Arc<AtomicBool>` (cfg types).
+Training needs burn's `std` + `optim` - possible only after `tch` is gone (P2).
+
+### Review of the skeleton (2026-11-25)
+
+To fix in `crates/nn` before building on it:
+1. `Model::infer` without `&self` can't reach the weights → `fn infer(&self, image, settings: &Self::Settings)`.
+2. Run settings are struct fields (`UNet { foreground_channel, softmax, … }`) and the
+   struct has no weights → the struct holds the network + architecture config; run
+   settings are `type Settings`, passed per call (the cache shares one model).
+3. `load(file, &EngineConfig)` gets the process-wide config → `load(file, &Device)`; the
+   cache picks the device.
+4. Cellpose: `input_channels` is architecture (file metadata); `net_width`/`net_height`
+   and `replicate_gray_channel` are run settings.
+5. `i32` with `-1` = none → `Option<usize>` / `usize`.
+6. Output fields private → `pub`; names `…Output` (not `…Response`), `StarDist`.
+7. `NnError`: drop `Xml`/`JsonParsingError`; add `UnsupportedArchitecture`,
+   `InvalidModelFile`, `Cancelled`, `Device` (lost / out of memory). Messages are shown
+   to the user.
+8. License header missing in `lib.rs`, `model.rs`, the model files; `errors.rs` dated
+   2026-06-05.
+9. `Cargo.toml`: `postcard` not needed; no `evanalyzer_cfg` dependency.
+10. `mlp`/`knn`/`rtree` from `model/` to `classifier/`; `Pieces` to `pieces.rs`; unused
+    import in `cellpose_sam.rs`.
 
 Public surface stays plain data, so core's call sites (`algos/ai_segmentation/*`,
 `job_executor`, `ai_devices`, `memory`, `tests/tile_ram`, `ai_learning/*`) change from
@@ -187,8 +313,9 @@ In `crates/nn`, nothing deleted:
    `burn = { version = "0.22.1", default-features = false, features = ["flex", "wgpu"] }`,
    `burn-flex = "0.22.1"` (its defaults std/simd/rayon: multi-threaded CPU),
    `burn-dispatch = { version = "0.22.1", default-features = false, features = ["rayon", "simd"] }`.
-   Not the workspace burn (0.21, core's MLP) - two versions only during P0. Unverified:
-   wgpu compiling and running at full speed without `std`; if not, exclude nn from the
+   Not the workspace burn (0.21, core's MLP) - two versions only during P0. nn compiles
+   with these (checked 2026-11-25, skeleton); unverified: running at full speed without
+   `std`; if not, exclude nn from the
    workspace for the spike or do P0 right after removing `tch`.
    Needs `cargo update -p combine --precise 4.6.9` first: `pliron` 0.19 (via
    `cubecl-core`) derives `Hash` on `combine`'s `SourcePosition`, which has it only from
@@ -228,8 +355,10 @@ Before anything is deleted (afterwards libtorch can't be built next to burn 0.22
 1. `crates/nn`: the `Model` trait + `Image`, `runtime` / `pieces` types moved from
    `crates/ai`'s `api.rs` (no `ffi`, no enums, no serde); `set_plugin_path` removed;
    core depends on `evanalyzer_nn`.
-2. MLP, KNN, random forest moved from core into `nn::model::{mlp, knn, rtree}` with
-   the `Classifier` enum and the smartcore matrix conversion; burn + smartcore removed
+2. MLP, KNN, random forest moved from core into `nn::classifier::{mlp, knn, rtree}`
+   behind the `Classifier` trait + `TrainedClassifier` enum + `TrainControl`, with the
+   smartcore matrix conversion; core hands `Samples` (flat rows) instead of
+   `Vec<Vec<f32>>`; burn + smartcore removed
    from core's `Cargo.toml`; MLP weights in the D2/D4 format, old files refused;
    YOLOv5 step removed (D1); then
 3. delete `crates/ai`, `tch`, features, alias, env, `--ai-plugin`; upgrade burn to

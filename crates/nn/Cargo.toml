@@ -1,6 +1,6 @@
 [package]
 name = "evanalyzer_nn"
-description = "Neural network crate, containing models architecture, weight importer, backend and device choice (GPU, CPU), GPU scheduler, training loops"
+description = "Machine learning: neural network architectures, trained classifiers, weight import, backend and device choice (GPU, CPU), model cache, training"
 version = { workspace = true }
 edition = { workspace = true }
 authors = { workspace = true }
@@ -14,11 +14,15 @@ doctest = false
 
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
-postcard = { workspace = true }
 log = { workspace = true }
-tempfile = { workspace = true, optional = true }
-burn = { version = "0.22.1", default-features = false, features = ["flex",  "wgpu"] }
-burn-flex = "0.22.1"
-burn-dispatch = { version = "0.22.1", default-features = false, features = ["rayon", "simd"] }
 thiserror = { workspace = true }
 smartcore = { workspace = true, features = ["serde"] }
+# Not the workspace burn (0.21, core's MLP) until P2: next to `tch` burn
+# 0.22 resolves only without its `std`, `store` and `optim` features (they
+# pull `burn-tch` through `burn-dispatch`). No `cpu` (CubeCL CPU links the
+# C++ LLVM library) - burn-flex is the CPU backend.
+burn = { version = "0.22.1", default-features = false, features = ["flex", "wgpu"] }
+# Its default features (std, simd, rayon): a multi-threaded CPU backend
+# without burn's own `std`.
+burn-flex = "0.22.1"
+burn-dispatch = { version = "0.22.1", default-features = false, features = ["rayon", "simd"] }
