@@ -28,8 +28,7 @@ indexmap = { workspace = true, features = ["serde", "rayon"] }
 bitvec = { workspace = true, features = ["serde", "alloc", "atomic", "std"] }
 csv = { workspace = true }
 duckdb = { workspace = true, features = ["appender-arrow"] }
-smartcore = { workspace = true, features = ["serde"] }
-burn = { workspace = true }
+evanalyzer_nn = { workspace = true }
 evanalyzer_ai = { workspace = true }
 serde_json = { workspace = true }
 petname =  { workspace = true }

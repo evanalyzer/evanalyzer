@@ -1146,11 +1146,10 @@ mod tests {
             PixelClassifierSettings, SegmentationMappingSettings,
         };
         use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
-        use evanalyzer_core::ai_learning::model::{
-            CURRENT_SAVED_CLASSIFIER_VERSION, random_forest::fit_random_forest,
-        };
-        let rows: Vec<Vec<f32>> = (0..40).map(|i| vec![i as f32 / 40.0]).collect();
-        let labels: Vec<usize> = (0..40).map(|i| usize::from(i >= 4)).collect();
+        use evanalyzer_core::ai_learning::model::CURRENT_SAVED_CLASSIFIER_VERSION;
+        use evanalyzer_core::ai_learning::training_job::fit_classifier;
+        let rows: Vec<f32> = (0..40).map(|i| i as f32 / 40.0).collect();
+        let labels: Vec<u32> = (0..40).map(|i| u32::from(i >= 4)).collect();
         let forest = RandomForestSettings {
             n_trees: 10,
             seed: 1,
@@ -1158,7 +1157,17 @@ mod tests {
         };
         let saved = evanalyzer_core::SavedClassifier {
             version: CURRENT_SAVED_CLASSIFIER_VERSION,
-            classifier: fit_random_forest(&rows, &labels, &forest).unwrap(),
+            classifier: fit_classifier(
+                &AiLearningBackendSettings::RandomForest(forest.clone()),
+                &rows,
+                1,
+                &labels,
+                2,
+                &std::sync::mpsc::channel().0,
+                &std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            )
+            .unwrap()
+            .0,
             settings: AiLearningSettings {
                 schema_version: evanalyzer_cfg::CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION,
                 meta: Default::default(),

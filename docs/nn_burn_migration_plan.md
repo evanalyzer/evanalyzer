@@ -458,6 +458,14 @@ Before anything is deleted (afterwards libtorch can't be built next to burn 0.22
 
 ### P2 - Swap the crate, upgrade burn (3-4 days)
 
+State 2026-11-25: 2 done - forest, KNN (smartcore) and MLP (burn 0.22, same training
+algorithm) in `nn::classifier`, one `config.rs` per saved format; core uses them with flat
+rows (`Samples`), burn 0.21 + smartcore out of core, `.evamodel` version 2 (older files
+refused - no backwards compatibility, decided 2026-11-25). Compared with the old
+implementation: `nn/tests/fixtures/classifiers.json` (recorded from it) - forest and KNN
+equal exactly, MLP accuracy 0.910 vs 0.914. burn 0.22's `std` + `optim` next to `tch`
+need `patches/burn-dispatch` (goes with crates/ai, step 3).
+
 1. `crates/nn`: the `Model` trait + `Image`, `runtime` / `pieces` types moved from
    `crates/ai`'s `api.rs` (no `ffi`, no enums, no serde); `set_plugin_path` removed;
    core depends on `evanalyzer_nn`.

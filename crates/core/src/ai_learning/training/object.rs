@@ -136,8 +136,10 @@ impl ObjectTrainingJob {
         let total = self.object_count();
         let _ = progress.send(TrainingProgressEvent::Started { total });
 
-        let mut rows: Vec<Vec<f32>> = Vec::with_capacity(total);
-        let mut labels: Vec<usize> = Vec::with_capacity(total);
+        // The samples, row-major (`n_features` values each).
+        let mut rows: Vec<f32> = Vec::new();
+        let mut labels: Vec<u32> = Vec::with_capacity(total);
+        let mut n_features = 0;
         let mut index = 0;
 
         for image in &self.images {
@@ -190,8 +192,10 @@ impl ObjectTrainingJob {
                         } else {
                             &no_ring
                         };
-                        rows.push(compute_object_features(&object, ring, feature_spec));
-                        labels.push(label);
+                        let features = compute_object_features(&object, ring, feature_spec);
+                        n_features = features.len();
+                        rows.extend(features);
+                        labels.push(label as u32);
                     }
                 }
                 let _ = progress.send(TrainingProgressEvent::ItemCompleted { index, total });
@@ -204,6 +208,7 @@ impl ObjectTrainingJob {
         let (classifier, stats) = training_job::fit_classifier(
             &self.settings.backend,
             &rows,
+            n_features,
             &labels,
             n_classes,
             &progress,
@@ -649,13 +654,13 @@ mod tests {
         }
         let mut objects = [Object::from_object_settings(annotation)];
         Object::measure_intensities_of(&mut objects, &cache);
-        let in_step = features_of(&[&objects[0]], &spec, &size, &cache);
+        let (in_step, _) = features_of(&[&objects[0]], &spec, &size, &cache);
 
         assert!(
             in_training[4] > 0.0,
             "the ring was measured: {in_training:?}"
         );
-        assert_eq!(in_training, in_step[0]);
+        assert_eq!(in_training, in_step);
     }
 
     /// The spread goes into an annotation and comes back out as the

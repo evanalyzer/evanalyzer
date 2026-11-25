@@ -24,7 +24,7 @@ use kornia_image::ImageSize;
 use macros::CommandsMeta;
 
 use crate::{
-    ai_learning::model::load_from_file,
+    ai_learning::model::{load_from_file, nn_error},
     ai_learning::training::object::compute_object_features,
     algos::{
         ExecutionScope, ImageAlgorithm, ai_segmentation::classifier_cache::load_cached_classifier,
@@ -173,7 +173,7 @@ impl ImageAlgorithm for AiObjectClassifier {
             .filter(|object| self.matches_input(object, ctx.scope))
             .collect();
         let ids: Vec<ObjectId> = chosen.iter().map(|object| object.id.clone()).collect();
-        let rows = features_of(
+        let (rows, n_features) = features_of(
             &chosen,
             feature_spec,
             &ctx.image_meta.full_image_width,
@@ -189,7 +189,11 @@ impl ImageAlgorithm for AiObjectClassifier {
         // probable it is.
         let wants_prediction = ctx.prediction == PredictionRequest::Asked;
         let predicted = if self.min_certainty > 0.0 || wants_prediction {
-            let (mut predicted, certainty) = saved.classifier.predict_with_certainty(&rows)?;
+            let prediction = saved
+                .classifier
+                .predict(&rows, n_features)
+                .map_err(nn_error)?;
+            let (mut predicted, certainty) = (prediction.classes, prediction.certainty);
             check_prediction_count_matches(ids.len(), predicted.len())?;
             if wants_prediction {
                 ctx.prediction =
@@ -198,17 +202,20 @@ impl ImageAlgorithm for AiObjectClassifier {
             // Below the minimum certainty: left as it is (skipped below).
             for (class, certainty) in predicted.iter_mut().zip(certainty) {
                 if certainty < self.min_certainty {
-                    *class = usize::MAX;
+                    *class = u32::MAX;
                 }
             }
             predicted
         } else {
-            saved.classifier.predict(&rows)?
+            saved
+                .classifier
+                .predict_classes(&rows, n_features)
+                .map_err(nn_error)?
         };
         check_prediction_count_matches(ids.len(), predicted.len())?;
 
         for (id, class_idx) in ids.into_iter().zip(predicted) {
-            let Some(model_class) = class_labels.get(class_idx).map(|label| label.class) else {
+            let Some(model_class) = class_labels.get(class_idx as usize).map(|label| label.class) else {
                 continue;
             };
             let Some(&output_class) = mapping.get(&model_class) else {
@@ -252,7 +259,7 @@ impl ImageAlgorithm for AiObjectClassifier {
 /// `None` for a model with more classes than a byte holds.
 fn object_prediction(
     ids: &[ObjectId],
-    predicted: &[usize],
+    predicted: &[u32],
     certainty: &[f32],
     class_labels: &[evanalyzer_cfg::settings::ai_learning_settings::ObjectClassLabel],
     mapping: &HashMap<ObjectClass, ObjectClass>,
@@ -293,13 +300,13 @@ fn object_prediction(
 /// The feature rows of `objects` (of an image of `size`), as in training:
 /// the objects' own intensities plus, for the ring features, the rings
 /// around them measured from the channel images in `cache` like the
-/// objects themselves.
+/// objects themselves - row-major, with the number of features per row.
 pub(crate) fn features_of(
     objects: &[&Object],
     spec: &AiLearningObjectFeatureSettings,
     size: &ImageSize,
     cache: &GlobalPipelineCache,
-) -> Vec<Vec<f32>> {
+) -> (Vec<f32>, usize) {
     let rings: Vec<IndexMap<i32, Intensity>> = if spec.metrics.iter().any(ObjectMetric::uses_ring) {
         let mut rings: Vec<Object> = objects
             .iter()
@@ -324,11 +331,13 @@ pub(crate) fn features_of(
         Vec::new()
     };
     let no_ring = IndexMap::new();
-    objects
-        .iter()
-        .enumerate()
-        .map(|(i, object)| compute_object_features(object, rings.get(i).unwrap_or(&no_ring), spec))
-        .collect()
+    let (mut rows, mut n_features) = (Vec::new(), 0);
+    for (i, object) in objects.iter().enumerate() {
+        let features = compute_object_features(object, rings.get(i).unwrap_or(&no_ring), spec);
+        n_features = features.len();
+        rows.extend(features);
+    }
+    (rows, n_features)
 }
 
 /// Guards against `zip`ing `ids` with a `predicted` vector of a different
@@ -369,7 +378,7 @@ impl AiObjectClassifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ai_learning::model::random_forest::fit_random_forest;
+    use crate::ai_learning::model::test_support::{self, fit_random_forest};
     use crate::ai_learning::model::{
         CURRENT_SAVED_CLASSIFIER_VERSION, SavedClassifier, save_to_file,
     };
@@ -681,14 +690,8 @@ mod tests {
                     .is_of(&ObjectClass::Global(41), Scope::Global)
             })
         };
-        let (_, share) = {
-            let crate::ai_learning::model::Classifier::RandomForest(forest) =
-                &unsure_in_the_middle().classifier
-            else {
-                unreachable!()
-            };
-            forest.predict_with_share(&[vec![50.0]]).unwrap()
-        };
+        let (_, share) =
+            test_support::predict_with_certainty(&unsure_in_the_middle().classifier, &[vec![50.0]]);
         assert!(share[0] < 1.0, "the trees disagree at 50: {share:?}");
 
         assert_eq!(run(0.0)[0], true);

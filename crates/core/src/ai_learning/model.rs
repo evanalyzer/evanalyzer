@@ -7,87 +7,42 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-pub mod knn;
-pub mod mlp;
-pub mod random_forest;
-#[cfg(test)]
-mod write_nn_fixtures;
-
-use crate::ai_learning::model::mlp::MlpArchitecture;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::ai_learning_settings::AiLearningSettings;
+use evanalyzer_nn::NnError;
 use serde::{Deserialize, Serialize};
-use smartcore::linalg::basic::matrix::DenseMatrix;
-use smartcore::metrics::distance::cosine::Cosine;
-use smartcore::metrics::distance::euclidian::Euclidian;
-use smartcore::metrics::distance::hamming::Hamming;
-use smartcore::metrics::distance::manhattan::Manhattan;
-use smartcore::metrics::distance::minkowski::Minkowski;
-use smartcore::neighbors::knn_classifier::KNNClassifier;
 use std::path::Path;
 
-pub const CURRENT_SAVED_CLASSIFIER_VERSION: u32 = 1;
+/// The trained model: a random forest, KNN or MLP (`evanalyzer_nn`, whose
+/// `classifier/**/config.rs` files define what is saved of each).
+pub use evanalyzer_nn::TrainedClassifier as Classifier;
 
-/// A fitted KNN model, one variant per [`KNNDistanceMetric`](evanalyzer_cfg::settings::ai_learning_settings::KNNDistanceMetric).
-///
-/// smartcore's `KNNClassifier<TX, TY, X, Y, D>` is generic over its distance
-/// type `D` - a compile-time choice, unlike `algorithm`/`weight`/`k`, which
-/// are runtime fields of `KNNClassifierParameters` regardless of `D`. Since
-/// the distance metric is a runtime setting here (`KnnSettings::distance`),
-/// this enum is what makes that possible: each variant fixes one concrete
-/// `D`, and `fit_knn`/`Classifier::predict` match on it the same way
-/// `Classifier` itself dispatches across backends.
-///
-/// SERIALIZATION-CRITICAL: stored inside every saved classifier model.
-#[derive(Debug, Serialize, Deserialize)]
-pub enum KnnModel {
-    Euclidean(KNNClassifier<f32, usize, DenseMatrix<f32>, Vec<usize>, Euclidian<f32>>),
-    Manhattan(KNNClassifier<f32, usize, DenseMatrix<f32>, Vec<usize>, Manhattan<f32>>),
-    Cosine(KNNClassifier<f32, usize, DenseMatrix<f32>, Vec<usize>, Cosine<f32>>),
-    Hamming(KNNClassifier<f32, usize, DenseMatrix<f32>, Vec<usize>, Hamming<f32>>),
-    Minkowski(KNNClassifier<f32, usize, DenseMatrix<f32>, Vec<usize>, Minkowski<f32>>),
-}
+/// 2 (2026-11-25): the classifiers moved to `evanalyzer_nn` (MLP weights as
+/// safetensors). Older files are refused - no backwards compatibility.
+pub const CURRENT_SAVED_CLASSIFIER_VERSION: u32 = 2;
 
-/// The trained model, one variant per backend. This — plus `predict` below —
-/// is the single interface the rest of the app (pixel/object training,
-/// inference Commands) uses regardless of which algorithm was chosen; nothing
-/// outside this file needs to know smartcore's or burn's own APIs.
-///
-/// SERIALIZATION-CRITICAL: stored inside every saved classifier model.
-#[derive(Debug, Serialize, Deserialize)]
-pub enum Classifier {
-    RandomForest(random_forest::Forest),
-    Knn(KnnModel),
-    Mlp {
-        architecture: MlpArchitecture,
-        /// Weights recorded via `BinBytesRecorder<FullPrecisionSettings>` —
-        /// an in-memory byte blob, not a filesystem path, so it can be
-        /// embedded directly in `SavedClassifier`.
-        weights: Vec<u8>,
-    },
-}
-
-/// The full artifact saved to `<project>/models/<name>`: the trained weights
+/// The full artifact saved to `<project>/models/<name>`: the trained model
 /// plus everything needed to reproduce its input features and interpret its
-/// output — `AiLearningSettings` (`evanalyzer_cfg`) carries the backend
+/// output - `AiLearningSettings` (`evanalyzer_cfg`) carries the backend
 /// hyperparameters, the feature recipe, the class labels (with the real IDs
-/// `Classifier::predict`'s indices refer to — not display names, since
-/// `evanalyzer_cfg::PixelClassLabel`/`ObjectClassLabel` already snapshot the
-/// name alongside the stable ID for portability), and descriptive metadata.
-/// `Classifier`/`AiLearningSettings` used to be two independently-evolved,
-/// overlapping descriptions of the same model (`FeatureRecipe` here duplicated
-/// what `AiLearningSettings::classifier` already covers); this replaces that
-/// duplication with the one `evanalyzer_cfg` type, which is also the only one
-/// of the two schema-able (`JsonSchema`) and reusable on their own.
+/// the predicted class indices refer to) and descriptive metadata.
 ///
-/// SERIALIZATION-CRITICAL: `version` is the escape hatch for future format
-/// changes — never change the meaning of an existing field for a given
-/// version, bump `version` instead.
+/// SERIALIZATION-CRITICAL: a change of what a file holds (here or in nn's
+/// `config.rs` files) bumps [`CURRENT_SAVED_CLASSIFIER_VERSION`].
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SavedClassifier {
     pub version: u32,
     pub classifier: Classifier,
     pub settings: AiLearningSettings,
+}
+
+/// The classifiers' errors in core's terms.
+pub(crate) fn nn_error(e: NnError) -> InternalErrors {
+    match e {
+        NnError::Cancelled => InternalErrors::Cancelled,
+        NnError::InvalidInput(m) => InternalErrors::InvalidArgument(m),
+        other => InternalErrors::Internal(other.to_string()),
+    }
 }
 
 /// Serializes as JSON (not bincode — bincode's development has ceased; JSON
@@ -107,8 +62,82 @@ pub fn save_to_file(classifier: &SavedClassifier, path: &Path) -> Result<(), Int
 pub fn load_from_file(path: &Path) -> Result<SavedClassifier, InternalErrors> {
     let bytes = std::fs::read(path)
         .map_err(|e| InternalErrors::Internal(format!("failed to read model file: {e}")))?;
+    /// Only the version: an older file can't be read as this one.
+    #[derive(Deserialize)]
+    struct Version {
+        version: u32,
+    }
+    let version = serde_json::from_slice::<Version>(&bytes)
+        .map_err(|e| InternalErrors::Internal(format!("failed to deserialize classifier: {e}")))?
+        .version;
+    if version != CURRENT_SAVED_CLASSIFIER_VERSION {
+        return Err(InternalErrors::InvalidArgument(format!(
+            "the classifier {} was saved by {} version of EVAnalyzer - train it again",
+            path.display(),
+            if version < CURRENT_SAVED_CLASSIFIER_VERSION { "an older" } else { "a newer" }
+        )));
+    }
     serde_json::from_slice(&bytes)
         .map_err(|e| InternalErrors::Internal(format!("failed to deserialize classifier: {e}")))
+}
+
+/// Tests' shortcuts in the shapes the tests were written in (a vector per
+/// row, `usize` classes).
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::Classifier;
+    use evanalyzer_cfg::core_types::InternalErrors;
+    use evanalyzer_cfg::settings::ai_learning_settings::{
+        AiLearningBackendSettings, RandomForestSettings,
+    };
+
+    /// A random forest of `settings` on `rows`/`labels`.
+    pub(crate) fn fit_random_forest(
+        rows: &[Vec<f32>],
+        labels: &[usize],
+        settings: &RandomForestSettings,
+    ) -> Result<Classifier, InternalErrors> {
+        let n_classes = labels.iter().max().map_or(1, |m| m + 1);
+        try_fit(&AiLearningBackendSettings::RandomForest(settings.clone()), rows, labels, n_classes)
+    }
+
+    /// The classifier `backend` selects on `rows`/`labels`.
+    pub(crate) fn try_fit(
+        backend: &AiLearningBackendSettings,
+        rows: &[Vec<f32>],
+        labels: &[usize],
+        n_classes: usize,
+    ) -> Result<Classifier, InternalErrors> {
+        let n_features = rows.first().map_or(0, Vec::len);
+        let labels: Vec<u32> = labels.iter().map(|&l| l as u32).collect();
+        let (progress, _rx) = std::sync::mpsc::channel();
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        crate::ai_learning::training_job::fit_classifier(
+            backend,
+            &rows.concat(),
+            n_features,
+            &labels,
+            n_classes,
+            &progress,
+            &cancel,
+        )
+        .map(|(classifier, _)| classifier)
+    }
+
+    /// The class of each row.
+    pub(crate) fn predict(classifier: &Classifier, rows: &[Vec<f32>]) -> Vec<usize> {
+        predict_with_certainty(classifier, rows).0
+    }
+
+    /// The class of each row and its certainty.
+    pub(crate) fn predict_with_certainty(
+        classifier: &Classifier,
+        rows: &[Vec<f32>],
+    ) -> (Vec<usize>, Vec<f32>) {
+        let n_features = rows.first().map_or(1, Vec::len);
+        let p = classifier.predict(&rows.concat(), n_features).unwrap();
+        (p.classes.into_iter().map(|c| c as usize).collect(), p.certainty)
+    }
 }
 
 #[cfg(test)]
@@ -129,7 +158,7 @@ mod tests {
         ];
         let labels = [0usize, 0, 1, 1];
         let classifier =
-            random_forest::fit_random_forest(&rows, &labels, &RandomForestSettings::default())
+            test_support::fit_random_forest(&rows, &labels, &RandomForestSettings::default())
                 .unwrap();
         SavedClassifier {
             version: CURRENT_SAVED_CLASSIFIER_VERSION,
@@ -161,8 +190,8 @@ mod tests {
         assert_eq!(loaded.version, CURRENT_SAVED_CLASSIFIER_VERSION);
         assert_eq!(loaded.settings.meta.name, "test-model");
 
-        let before = saved.classifier.predict(&[vec![0.5, 0.5]]).unwrap();
-        let after = loaded.classifier.predict(&[vec![0.5, 0.5]]).unwrap();
+        let before = test_support::predict(&saved.classifier, &[vec![0.5, 0.5]]);
+        let after = test_support::predict(&loaded.classifier, &[vec![0.5, 0.5]]);
         assert_eq!(
             before, after,
             "a round-tripped model must predict identically"
