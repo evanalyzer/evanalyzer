@@ -171,6 +171,8 @@ pub fn return_freed_memory_to_os() {
 pub struct SystemDiagnostics {
     pub cpu_cores: usize,
     pub total_ram_bytes: u64,
+    /// A GPU AI models can run on (the name is older than wgpu: CUDA
+    /// before 2026-11-25).
     pub cuda_available: bool,
 }
 
@@ -194,7 +196,7 @@ pub fn system_diagnostics() -> SystemDiagnostics {
     SystemDiagnostics {
         cpu_cores,
         total_ram_bytes,
-        cuda_available: evanalyzer_ai::cuda_is_available(),
+        cuda_available: crate::cuda_is_available(),
     }
 }
 

@@ -39,25 +39,25 @@ impl PieceSize {
     /// number); Auto: for a model seeing a limited neighbourhood as large as
     /// this computer's RAM allows (its result is the same up to float
     /// rounding), for one seeing the whole image always
-    /// [`evanalyzer_ai::WHOLE_IMAGE_PIECE_SIDE`].
+    /// [`evanalyzer_nn::pieces::WHOLE_IMAGE_PIECE_SIDE`].
     pub(crate) fn pieces(
         self,
         bytes_per_pixel: f64,
         width: usize,
         height: usize,
-    ) -> evanalyzer_ai::Pieces {
+    ) -> evanalyzer_nn::Pieces {
         match self {
             PieceSize::Fixed { side } => {
-                evanalyzer_ai::Pieces::fixed(side.clamp(256, 4096) as usize)
+                evanalyzer_nn::Pieces::fixed(side.clamp(256, 4096) as usize)
             }
-            PieceSize::Auto => evanalyzer_ai::Pieces {
-                local_side: evanalyzer_ai::piece_side_for(
+            PieceSize::Auto => evanalyzer_nn::Pieces {
+                local_side: evanalyzer_nn::pieces::piece_side_for(
                     bytes_per_pixel,
                     crate::memory::SystemRam::now().total,
                     width,
                     height,
                 ),
-                whole_image_side: evanalyzer_ai::WHOLE_IMAGE_PIECE_SIDE,
+                whole_image_side: evanalyzer_nn::pieces::WHOLE_IMAGE_PIECE_SIDE,
             },
         }
     }

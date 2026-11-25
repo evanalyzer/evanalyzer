@@ -10,117 +10,10 @@
 use super::*;
 use crate::weights::{ModelMetadata, NamedTensor};
 
-fn tiny_config(grid: [usize; 2]) -> StarDistConfig {
-    StarDistConfig {
-        in_channels: 1,
-        n_rays: 8,
-        grid,
-        unet_depth: 2,
-        unet_filter_base: 4,
-        unet_conv_per_depth: 2,
-        kernel_size: 3,
-        conv_after_unet: 8,
-    }
-}
-
-/// The tensors `config`'s network has, in the loader's order: name and
-/// shape (the layout of `network::StarDistNet::load`, written out again).
-fn layout(config: &StarDistConfig) -> Vec<(String, Vec<usize>)> {
-    let (k, base, n_conv) = (
-        config.kernel_size,
-        config.unet_filter_base,
-        config.unet_conv_per_depth,
-    );
-    let level = |n: usize| base << n;
-    let mut out = Vec::new();
-    let mut conv = |name: String, n_in: usize, n_out: usize, k: usize| {
-        out.push((format!("{name}.weight"), vec![n_out, n_in, k, k]));
-        out.push((format!("{name}.bias"), vec![n_out]));
-        n_out
-    };
-    let (mut pooled, mut c, mut index) = ([1, 1], config.in_channels, 0);
-    while pooled != config.grid {
-        pooled = [0, 1].map(|a| {
-            if config.grid[a] > pooled[a] {
-                pooled[a] * 2
-            } else {
-                pooled[a]
-            }
-        });
-        for _ in 0..n_conv {
-            c = conv(format!("grid.{index}"), c, base, k);
-            index += 1;
-        }
-    }
-    let mut skips = Vec::new();
-    for n in 0..config.unet_depth {
-        for i in 0..n_conv {
-            c = conv(format!("down_level_{n}_no_{i}"), c, level(n), k);
-        }
-        skips.push(c);
-    }
-    for i in 0..n_conv - 1 {
-        c = conv(format!("middle_{i}"), c, level(config.unet_depth), k);
-    }
-    c = conv(
-        format!("middle_{n_conv}"),
-        c,
-        level(config.unet_depth - 1),
-        k,
-    );
-    for n in (0..config.unet_depth).rev() {
-        c += skips[n];
-        for i in 0..n_conv - 1 {
-            c = conv(format!("up_level_{n}_no_{i}"), c, level(n), k);
-        }
-        c = conv(
-            format!("up_level_{n}_no_{n_conv}"),
-            c,
-            level(n.saturating_sub(1)),
-            k,
-        );
-    }
-    if config.conv_after_unet > 0 {
-        c = conv("features".into(), c, config.conv_after_unet, k);
-    }
-    conv("prob".into(), c, 1, 1);
-    conv("dist".into(), c, config.n_rays, 1);
-    out
-}
+use crate::test_support::{layout, stardist_file, tiny_stardist_config as tiny_config};
 
 fn tiny_model(grid: [usize; 2]) -> StarDist {
-    let config = tiny_config(grid);
-    let mut seed = 0x2545_F491_4F6C_DD1Du64;
-    let tensors: Vec<NamedTensor> = layout(&config)
-        .into_iter()
-        .map(|(name, shape)| {
-            let values = (0..shape.iter().product::<usize>())
-                .map(|_| {
-                    seed ^= seed << 13;
-                    seed ^= seed >> 7;
-                    seed ^= seed << 17;
-                    (seed >> 40) as f32 / (1u64 << 24) as f32 - 0.45
-                })
-                .collect();
-            NamedTensor {
-                name,
-                shape,
-                values,
-            }
-        })
-        .collect();
-    let metadata = ModelMetadata {
-        arch: ARCH.into(),
-        arch_version: ARCH_VERSION,
-        config: serde_json::to_string(&config).unwrap(),
-        preprocessing: None,
-        info: Default::default(),
-    };
-    StarDist::from_bytes(
-        &crate::weights::to_bytes(&tensors, &metadata).unwrap(),
-        &Device::flex(),
-    )
-    .unwrap()
+    StarDist::from_bytes(&stardist_file(&tiny_config(grid)), &Device::flex()).unwrap()
 }
 
 fn cells(width: usize, height: usize) -> Vec<f32> {
@@ -200,7 +93,10 @@ fn pieces_give_the_whole_tile() {
     assert!(max(&pieces.prob, &whole_tile.prob) < 1e-5);
     let scale = whole_tile.dist.iter().fold(0.0f32, |m, v| m.max(v.abs()));
     let d = max(&pieces.dist, &whole_tile.dist);
-    assert!(d < 1e-5 * scale.max(1.0), "max |diff| {d} of values up to {scale}");
+    assert!(
+        d < 1e-5 * scale.max(1.0),
+        "max |diff| {d} of values up to {scale}"
+    );
 }
 
 #[test]
@@ -263,7 +159,12 @@ fn read_f32(path: &Path) -> Vec<f32> {
 #[ignore = "needs tests/stardist (2D_versatile_fluo converted + references)"]
 fn real_stardist_gives_stardists_output() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/stardist");
-    let net = StarDist::load(&dir.join("2D_versatile_fluo.safetensors"), &Device::flex()).unwrap();
+    let net = StarDist::load(
+        &dir.join("2D_versatile_fluo.safetensors"),
+        &Device::flex(),
+        false,
+    )
+    .unwrap();
     assert_eq!(net.config(), &StarDistConfig::versatile_fluo());
     for (name, w, h, piece) in [
         ("cells256", 256, 256, 2048),

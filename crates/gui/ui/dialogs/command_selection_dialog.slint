@@ -613,7 +613,6 @@ export component CommandSelectionDialog inherits InkDialog {
     callback remove-module(int);
     callback remove-unused-modules();
     callback cancel();
-    callback import-bioimageio();    // open a bioimage.io rdf.yaml and insert the configured command
 
     // The selected entry is a module (the footer's two ways to add it).
     property <bool> module-picked: root.has-detail && root.detail.is-module && root.selected-id != -1;
@@ -947,20 +946,6 @@ export component CommandSelectionDialog inherits InkDialog {
                                         }
                                     }
 
-                                    // Auto-configure an AI segmentation command from a
-                                    // downloaded bioimage.io model's rdf.yaml.
-                                    HorizontalLayout {
-                                        padding-left: 8px;
-                                        padding-top: 6px;
-                                        padding-bottom: 4px;
-                                        alignment: start;
-                                        InkButton {
-                                            text: "Import bioimage.io model…";
-                                            clicked => {
-                                                root.import-bioimageio();
-                                            }
-                                        }
-                                    }
                                 }
 
                                 // Instance Segmentation
@@ -1425,7 +1410,6 @@ export component CommandPickerModal inherits Rectangle {
     callback remove-module(int);
     callback remove-unused-modules();
     callback cancel();
-    callback import-bioimageio();
 
     // The dialog brings its own backdrop; a click on it cancels.
     CommandSelectionDialog {
@@ -1492,9 +1476,6 @@ export component CommandPickerModal inherits Rectangle {
         }
         cancel => {
             root.cancel();
-        }
-        import-bioimageio => {
-            root.import-bioimageio();
         }
     }
 }

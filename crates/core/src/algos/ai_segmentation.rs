@@ -13,7 +13,6 @@ pub mod piece_size;
 pub mod pixel_classifier;
 pub mod stardist;
 pub mod unet;
-pub mod yolov5;
 
 pub use piece_size::PieceSize;
 
@@ -24,7 +23,7 @@ pub(crate) fn model_bytes(path: &std::path::Path) -> u64 {
 }
 
 /// Nearest-neighbor resize of a label map (OpenCV's `INTER_NEAREST`, as used
-/// by Cellpose and YOLOv5 to scale masks back up): target pixel `d` takes
+/// by Cellpose to scale masks back up): target pixel `d` takes
 /// source pixel `floor(d * src / dst)`.
 pub(crate) fn resize_labels_nearest(
     labels: &[u32],

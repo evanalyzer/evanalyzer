@@ -9,8 +9,9 @@
 use std::path::PathBuf;
 
 use super::PieceSize;
-use evanalyzer_ai::{Image, Request, Response, Task};
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, SegmentationClass};
+use evanalyzer_nn::Image;
+use evanalyzer_nn::model::stardist::{StarDist as StarDistModel, StarDistSettings};
 use macros::CommandsMeta;
 
 use crate::{
@@ -19,27 +20,21 @@ use crate::{
     pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext},
 };
 
-/// Instance segmentation using a pretrained StarDist model exported as TorchScript.
+/// Instance segmentation with a pretrained StarDist 2D model, from an
+/// EVAnalyzer model file (`.safetensors`, converted once from StarDist's own,
+/// e.g. `2D_versatile_fluo` - `crates/nn`).
 ///
-/// The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,
-/// same normalization as the rest of the pipeline) and return two tensors:
-/// an object-probability map `[1, 1, H', W']` and a ray-distance map
-/// `[1, n_rays, H', W']` giving, for each grid cell, the distance to the object
-/// boundary along `n_rays` equally-spaced angles (the StarDist star-convex-polygon
-/// representation). `H'`/`W'` may be smaller than the input size if the model
-/// predicts on a coarser grid; this is detected from the output shape and the
-/// polygons are rescaled back to image resolution automatically.
-///
-/// Some TorchScript exports concatenate both outputs into a single
-/// `[1, 1 + n_rays, H', W']` tensor (channel 0 = probability, the rest =
-/// distances); this is also supported.
+/// For each grid cell the model gives the probability of an object's centre
+/// and the distances to its boundary along `n_rays` equally spaced angles
+/// (StarDist's star-convex polygons). On a grid coarser than the pixels the
+/// polygons are scaled back to the image.
 ///
 /// Per grid cell candidates above `probability_threshold` are converted to
 /// star-convex polygons, then greedily filtered with non-maximum suppression
 /// (polygons whose pixel-overlap ratio with a higher-scoring candidate exceeds
 /// `nms_threshold` are discarded) before being rasterized into the pipeline's
-/// segmentation and instance maps. Runs on GPU automatically if CUDA is
-/// available in the linked libtorch build, otherwise falls back to CPU.
+/// segmentation and instance maps. Runs on a GPU when there is one
+/// (convolutions in half precision there), else on the CPU.
 #[derive(CommandsMeta)]
 #[cmdsmeta(
     category = "segment",
@@ -47,8 +42,8 @@ use crate::{
     display_name = "AI Stardist Segmentation"
 )]
 pub struct Stardist {
-    /// Path to a TorchScript-exported StarDist model (`torch.jit.script`/`torch.jit.trace`).
-    #[cmdsmeta(file_extensions = "pt,pth")]
+    /// The StarDist model file (EVAnalyzer's `.safetensors`).
+    #[cmdsmeta(file_extensions = "safetensors")]
     pub model_path: PathBuf,
 
     /// The class assigned to pixels of every detected object. All other
@@ -203,7 +198,7 @@ const NETWORK_BYTES_PER_PIXEL: f64 = 400.0;
 
 impl Stardist {
     /// The pieces a `width x height` tile runs in (see [`PieceSize::pieces`]).
-    fn pieces(&self, width: usize, height: usize) -> evanalyzer_ai::Pieces {
+    fn pieces(&self, width: usize, height: usize) -> evanalyzer_nn::Pieces {
         self.piece_size
             .pieces(NETWORK_BYTES_PER_PIXEL, width, height)
     }
@@ -220,11 +215,8 @@ impl ImageAlgorithm for Stardist {
         let size = input_image.size();
         let (width, height) = (size.width, size.height);
 
-        let request = Request {
-            model: self.model_path.clone(),
-            task: Task::StarDist {
-                pieces: self.pieces(width, height),
-            },
+        let settings = StarDistSettings {
+            pieces: self.pieces(width, height),
         };
         let image = Image {
             width,
@@ -232,18 +224,9 @@ impl ImageAlgorithm for Stardist {
             channels: 1,
             data: input_image.as_slice(),
         };
-        let Response::StarDist {
-            prob: prob_flat,
-            dist: dist_flat,
-            grid_height: grid_h,
-            grid_width: grid_w,
-            n_rays,
-        } = ai_devices::infer(&request, image)?
-        else {
-            return Err(InternalErrors::Generic(
-                "StarDist: the AI engine gave another kind of answer".into(),
-            ));
-        };
+        let output = ai_devices::infer::<StarDistModel>(&self.model_path, image, &settings)?;
+        let (prob_flat, dist_flat) = (output.prob, output.dist);
+        let (grid_h, grid_w, n_rays) = (output.grid_height, output.grid_width, output.n_rays);
 
         let candidates = self.build_candidates(
             &prob_flat, &dist_flat, grid_h, grid_w, n_rays, width, height,
@@ -299,7 +282,7 @@ impl ImageAlgorithm for Stardist {
 
     /// One inference at a time on the CPU (the AI engine's one slot): the
     /// network's activations on the largest image it gets at once - the
-    /// tile, or a piece of it (`piece_size`, [`evanalyzer_ai::largest_model_input`]).
+    /// tile, or a piece of it (`piece_size`, [`evanalyzer_nn::pieces::largest_model_input`]).
     /// 0.4 KB per pixel: measured 0.37 KB for the layout of StarDist's
     /// `2D_versatile_fluo` (BENCHMARK.md "AI models: RAM per inference" -
     /// [`NETWORK_BYTES_PER_PIXEL`]). On a GPU they are in its memory - planned anyway (the computer may
@@ -307,8 +290,8 @@ impl ImageAlgorithm for Stardist {
     fn shared_ram_bytes(&self, tile_width: usize, tile_height: usize) -> u64 {
         // Before the run it isn't known which of the two the model gets.
         let piece = self.pieces(tile_width, tile_height).largest();
-        let pixels = evanalyzer_ai::largest_model_input(tile_width, piece)
-            * evanalyzer_ai::largest_model_input(tile_height, piece);
+        let pixels = evanalyzer_nn::pieces::largest_model_input(tile_width, piece)
+            * evanalyzer_nn::pieces::largest_model_input(tile_height, piece);
         (NETWORK_BYTES_PER_PIXEL * pixels as f64) as u64 + super::model_bytes(&self.model_path)
     }
 }
@@ -597,8 +580,6 @@ impl Stardist {
 #[allow(clippy::erasing_op, clippy::identity_op)]
 mod tests {
     use super::*;
-    #[cfg(feature = "libtorch-in-process")]
-    use evanalyzer_ai::torch::test_support::{tch::Tensor, trace_and_save_model};
     use kornia_image::{Image, ImageSize};
 
     fn stardist(probability_threshold: f32, nms_threshold: f32) -> Stardist {
@@ -616,18 +597,44 @@ mod tests {
         PipelineContext::new_from_image_test(img).unwrap()
     }
 
-    // ---- execute() - real TorchScript load + inference, see `test_support`.
-    // Only the "single concatenated [1, 1+n_rays, H, W] tensor" output
-    // convention is exercisable this way - `create_by_tracing` can't produce
-    // a saveable module with the "two separate tensors" convention (see
-    // `test_support`'s doc comment), so `split_outputs`'s `[_, _, ..]` branch
-    // stays untested here. ----
+    // ---- execute(): a real model file (a tiny random StarDist, nn's
+    // `test_support`) through the engine ----
+
+    /// The step runs the model file and writes objects: every instance
+    /// pixel has the step's class, every class pixel an instance.
+    #[test]
+    fn execute_runs_the_model_file_and_writes_instances() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stardist.safetensors");
+        let config = evanalyzer_nn::test_support::tiny_stardist_config([2, 2]);
+        std::fs::write(&path, evanalyzer_nn::test_support::stardist_file(&config)).unwrap();
+        let (w, h) = (64, 48);
+        let pixels: Vec<f32> = (0..w * h)
+            .map(|i| ((i * 7919) % 101) as f32 / 101.0)
+            .collect();
+        let cmd = Stardist {
+            model_path: path,
+            ..stardist(0.0, 0.3)
+        };
+        let mut ctx = gray_ctx(w, h, pixels);
+        cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())
+            .unwrap();
+        let classes = ctx.get_segmentation_map().unwrap().as_slice().to_vec();
+        let instances = ctx.get_instance_map().unwrap().as_slice().to_vec();
+        assert!(
+            instances.iter().any(|&i| i > 0),
+            "threshold 0: candidates everywhere"
+        );
+        for (class, instance) in classes.iter().zip(&instances) {
+            assert_eq!(*instance > 0, *class == 1);
+        }
+    }
 
     #[test]
     fn execute_errors_when_the_model_path_does_not_exist() {
         let dir = tempfile::tempdir().unwrap();
         let cmd = Stardist {
-            model_path: dir.path().join("missing.pt"),
+            model_path: dir.path().join("missing.safetensors"),
             ..stardist(0.5, 0.3)
         };
         let mut ctx = gray_ctx(2, 2, vec![0.0; 4]);
@@ -635,87 +642,6 @@ mod tests {
 
         let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
         assert!(matches!(err, InternalErrors::Generic(_)));
-    }
-
-    #[cfg(feature = "libtorch-in-process")]
-    #[test]
-    fn execute_end_to_end_rasterizes_a_candidate_around_a_high_probability_pixel() {
-        // Grid resolution == image resolution (no downsampling), so the
-        // scale factor is 1 and ray distances are plain pixel radii. Channel
-        // 0 (probability) is the input value directly - a single interior
-        // pixel is 1.0 (comfortably above the default 0.5 threshold), every
-        // other pixel is 0.0. The 4 ray-distance channels are a constant
-        // radius-2 disc around that one surviving grid cell; the exact
-        // polygon shape is already covered precisely by
-        // `build_candidates_scales_ray_distance_by_the_grid_to_image_ratio`
-        // et al. above, so this only checks that real inference correctly
-        // drives *some* object into existence around the intended pixel and
-        // leaves a far corner untouched.
-        const N_RAYS: i64 = 4;
-        let (_dir, model_path) = trace_and_save_model(1, 6, 6, |x| {
-            let prob = x.shallow_clone();
-            let radius = x.zeros_like() + 2.0;
-            let mut channels = vec![prob];
-            channels.extend((0..N_RAYS).map(|_| radius.shallow_clone()));
-            Tensor::cat(&channels, 1)
-        });
-        let cmd = Stardist {
-            model_path,
-            ..stardist(0.5, 0.3)
-        };
-
-        let mut values = vec![0.0f32; 36];
-        values[3 * 6 + 3] = 1.0; // row 3, col 3
-        let mut ctx = gray_ctx(6, 6, values);
-        let mut cache = GlobalPipelineCache::default();
-        cmd.execute(&mut ctx, &mut cache).unwrap();
-
-        let seg = ctx.get_segmentation_map().unwrap();
-        let inst = ctx.get_instance_map().unwrap();
-        assert_eq!(
-            seg.as_slice()[3 * 6 + 3],
-            1,
-            "the high-probability pixel itself must be claimed by the object"
-        );
-        assert_ne!(inst.as_slice()[3 * 6 + 3], 0);
-        assert_eq!(
-            seg.as_slice()[0],
-            0,
-            "a far corner outside the radius-2 disc must stay background"
-        );
-        assert_eq!(inst.as_slice()[0], 0);
-    }
-
-    #[cfg(feature = "libtorch-in-process")]
-    #[test]
-    fn execute_errors_when_the_model_output_has_too_few_dimensions() {
-        let (_dir, model_path) = trace_and_save_model(1, 1, 2, |x| x.squeeze_dim(0).squeeze_dim(0));
-        let cmd = Stardist {
-            model_path,
-            ..stardist(0.5, 0.3)
-        };
-        let mut ctx = gray_ctx(2, 1, vec![0.0, 1.0]);
-        let mut cache = GlobalPipelineCache::default();
-
-        let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
-        assert!(matches!(err, InternalErrors::Generic(msg) if msg.contains("too few dimensions")));
-    }
-
-    #[cfg(feature = "libtorch-in-process")]
-    #[test]
-    fn execute_errors_when_the_model_output_has_fewer_than_two_channels() {
-        let (_dir, model_path) = trace_and_save_model(1, 1, 2, |x| x.shallow_clone());
-        let cmd = Stardist {
-            model_path,
-            ..stardist(0.5, 0.3)
-        };
-        let mut ctx = gray_ctx(2, 1, vec![0.0, 1.0]);
-        let mut cache = GlobalPipelineCache::default();
-
-        let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
-        assert!(
-            matches!(err, InternalErrors::Generic(msg) if msg.contains("fewer than 2 channels"))
-        );
     }
 
     fn square(min_x: i64, min_y: i64, side: i64, score: f32) -> Candidate {

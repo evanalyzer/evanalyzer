@@ -40,8 +40,9 @@ pub trait Model: Sized + Send + Sync + 'static {
     type Output;
 
     /// Builds the architecture from the file's metadata and loads the
-    /// weights onto `device`.
-    fn load(file: &Path, device: &Device) -> Result<Self, NnError>;
+    /// weights onto `device` - a GPU when `gpu` (convolutions in f16 there,
+    /// decided 2026-11-25; Cellpose-SAM stays f32).
+    fn load(file: &Path, device: &Device, gpu: bool) -> Result<Self, NnError>;
 
     /// Runs the model on `image`.
     fn infer(&self, image: Image<'_>, settings: &Self::Settings) -> Result<Self::Output, NnError>;

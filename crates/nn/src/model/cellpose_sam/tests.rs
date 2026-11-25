@@ -10,88 +10,10 @@
 use super::*;
 use crate::weights::{ModelMetadata, NamedTensor};
 
-/// A tiny Cellpose-SAM: 16 features, 2 blocks of 2 heads, 32² tiles of 8²
-/// patches (4² tokens), relative positions of 5 rows (resized to 7).
-fn tiny_config() -> CellposeSamConfig {
-    CellposeSamConfig {
-        in_channels: 3,
-        tile_size: 32,
-        patch_size: 8,
-        embed_dim: 16,
-        depth: 2,
-        num_heads: 2,
-        mlp_dim: 32,
-        neck_dim: 8,
-        out_channels: 3,
-    }
-}
+use crate::test_support::{cellpose_sam_file, tiny_cellpose_sam_config as tiny_config};
 
-/// `tiny_config`'s model file with deterministic pseudo-random weights.
 fn tiny_model() -> CellposeSam {
-    let config = tiny_config();
-    let mut seed = 0x9E37_79B9_7F4A_7C15u64;
-    let mut tensor = |name: String, shape: Vec<usize>, scale: f32| {
-        let values = (0..shape.iter().product::<usize>())
-            .map(|_| {
-                seed ^= seed << 13;
-                seed ^= seed >> 7;
-                seed ^= seed << 17;
-                ((seed >> 40) as f32 / (1u64 << 24) as f32 - 0.5) * scale
-            })
-            .collect();
-        NamedTensor {
-            name,
-            shape,
-            values,
-        }
-    };
-    let (c, p, t) = (config.embed_dim, config.patch_size, config.tokens());
-    let (hd, m, n) = (c / config.num_heads, config.mlp_dim, config.neck_dim);
-    let mut tensors = vec![
-        tensor(
-            "encoder.patch_embed.proj.weight".into(),
-            vec![c, 3, p, p],
-            0.2,
-        ),
-        tensor("encoder.patch_embed.proj.bias".into(), vec![c], 0.2),
-        tensor("encoder.pos_embed".into(), vec![1, t, t, c], 0.2),
-        tensor("encoder.neck.0.weight".into(), vec![n, c, 1, 1], 0.5),
-        tensor("encoder.neck.1.weight".into(), vec![n], 1.0),
-        tensor("encoder.neck.1.bias".into(), vec![n], 1.0),
-        tensor("encoder.neck.2.weight".into(), vec![n, n, 3, 3], 0.3),
-        tensor("encoder.neck.3.weight".into(), vec![n], 1.0),
-        tensor("encoder.neck.3.bias".into(), vec![n], 1.0),
-        tensor("out.weight".into(), vec![3 * p * p, n, 1, 1], 0.5),
-        tensor("out.bias".into(), vec![3 * p * p], 0.5),
-    ];
-    for i in 0..config.depth {
-        let b = |s: &str| format!("encoder.blocks.{i}.{s}");
-        tensors.extend([
-            tensor(b("norm1.weight"), vec![c], 1.0),
-            tensor(b("norm1.bias"), vec![c], 1.0),
-            tensor(b("attn.rel_pos_h"), vec![5, hd], 0.5),
-            tensor(b("attn.rel_pos_w"), vec![5, hd], 0.5),
-            tensor(b("attn.qkv.weight"), vec![3 * c, c], 0.5),
-            tensor(b("attn.qkv.bias"), vec![3 * c], 0.5),
-            tensor(b("attn.proj.weight"), vec![c, c], 0.5),
-            tensor(b("attn.proj.bias"), vec![c], 0.5),
-            tensor(b("norm2.weight"), vec![c], 1.0),
-            tensor(b("norm2.bias"), vec![c], 1.0),
-            tensor(b("mlp.lin1.weight"), vec![m, c], 0.5),
-            tensor(b("mlp.lin1.bias"), vec![m], 0.5),
-            tensor(b("mlp.lin2.weight"), vec![c, m], 0.5),
-            tensor(b("mlp.lin2.bias"), vec![c], 0.5),
-        ]);
-    }
-    let metadata = ModelMetadata {
-        arch: ARCH.into(),
-        arch_version: ARCH_VERSION,
-        config: serde_json::to_string(&config).unwrap(),
-        preprocessing: None,
-        info: Default::default(),
-    };
-    let bytes = crate::weights::to_bytes(&tensors, &metadata).unwrap();
-    CellposeSam::from_bytes(&bytes, &Device::flex()).unwrap()
+    CellposeSam::from_bytes(&cellpose_sam_file(&tiny_config()), &Device::flex()).unwrap()
 }
 
 fn cells(width: usize, height: usize) -> Vec<f32> {
@@ -261,7 +183,7 @@ fn read_f32(path: &Path) -> Vec<f32> {
 #[ignore = "needs tests/cellpose-sam (cpsam_v2 converted + references)"]
 fn real_cpsam_gives_cellposes_output() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/cellpose-sam");
-    let net = CellposeSam::load(&dir.join("cpsam_v2.safetensors"), &Device::flex()).unwrap();
+    let net = CellposeSam::load(&dir.join("cpsam_v2.safetensors"), &Device::flex(), false).unwrap();
     assert_eq!(net.config(), &CellposeSamConfig::vit_l());
     for (i, channels) in [(0, 3), (1, 3), (2, 1)] {
         let reference = dir.join("reference");
@@ -310,7 +232,7 @@ fn real_cpsam_gives_cellposes_output() {
 #[ignore = "needs tests/cellpose-sam (cpsam_v2 converted + libtorch engine references)"]
 fn real_cpsam_infer_gives_the_libtorch_engines_output() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/cellpose-sam");
-    let net = CellposeSam::load(&dir.join("cpsam_v2.safetensors"), &Device::flex()).unwrap();
+    let net = CellposeSam::load(&dir.join("cpsam_v2.safetensors"), &Device::flex(), false).unwrap();
     // (name, width, height, net width, net height, replicate)
     for (name, w, h, nw, nh, replicate) in [
         ("cells256-zero", 256, 256, 256, 256, false),

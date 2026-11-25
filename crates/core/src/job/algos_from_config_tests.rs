@@ -1528,19 +1528,6 @@ fn segmentation_mapping_settings_convert_both_classes() {
 }
 
 #[test]
-fn yolo_class_mapping_settings_convert_both_classes() {
-    let mapping = YoloClassMapping::from(YoloClassMappingSettings {
-        model_class: 12,
-        segmentation_class: SegmentationClass(5),
-    });
-    assert_eq!(mapping.model_class, 12);
-    assert_eq!(mapping.segmentation_class, SegmentationClass(5));
-}
-
-/// A U-Net or StarDist step of a project saved before the piece size
-/// existed loads with the default (Auto) - the field is `optional`. In the
-/// project file it is `{"type": "AUTO"}` or `{"type": "FIXED", "side": 1024}`.
-#[test]
 fn ai_steps_saved_without_a_piece_size_get_auto() {
     let mut unet = serde_json::to_value(UNetSettings::default()).unwrap();
     unet.as_object_mut().unwrap().remove("pieceSize").unwrap();

@@ -484,6 +484,18 @@ need `patches/burn-dispatch` (goes with crates/ai, step 3).
 
 ### P3 - Runtime, scheduler, pieces (3-5 days)
 
+State 2026-11-25: done. `nn::runtime::Engine` (the libtorch scheduler's rules: discrete GPUs via
+wgpu else burn-flex, one model copy per device cached by path + mtime, slots - CPU 1, GPU
+`gpu_slots` -, a failing GPU run costs a slot and finally hands over to the CPU, each
+inference on its own thread in the engine's rayon pool so pipeline workers never deadlock);
+`nn::infer::<M>`, `release_models`, `gpu_available`, `test_support` (tiny model files). On the
+GPU U-Net and StarDist convolve in f16 (decided 2026-11-25), Cellpose-SAM stays f32.
+Wired into core: the U-Net, StarDist and Cellpose steps run on nn (model files
+`.safetensors`), `evanalyzer_ai` no longer a dependency of core; the YOLOv5 step and the
+bioimage.io import are removed (decided 2026-11-25, no migration). Left for P2.3: the
+`--ai-plugin` option (ignored now), the no-op `libtorch` features, aliases, CI, crates/ai,
+the burn-dispatch patch.
+
 1. Backend/device choice per `DeviceSelection` + `EngineConfig` (GPU slots, cores),
    lazily on the first run; `EngineInfo` ("burn 0.22 wgpu: <adapter>" / "CPU") for
    the log and the settings dialog (`ai_devices`).

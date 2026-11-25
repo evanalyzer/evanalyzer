@@ -78,7 +78,6 @@ thiserror = "2.0.21"
 syn = { version = "3.0.10", features = ["full", "parsing"] }
 quote = "1.0"
 pathdiff = "0.2.3"
-serde_yaml = "0.9"
 human-sort = "0.2"
 regex = "1.13.2"
 sha2 = "0.11.1"

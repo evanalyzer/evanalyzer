@@ -135,7 +135,7 @@ fn a_saved_unet_loads_with_the_same_results() {
     let (tensors, metadata) = net.to_file_contents(info.clone());
     crate::weights::write(&path, &tensors, &metadata).unwrap();
 
-    let loaded = UNet::load(&path, &device).unwrap();
+    let loaded = UNet::load(&path, &device, false).unwrap();
     assert_eq!(loaded.config(), net.config());
     assert_eq!(loaded.preprocessing(), Preprocessing::ZeroMeanUnitVariance);
     let bytes = std::fs::read(&path).unwrap();
@@ -288,7 +288,7 @@ fn real_romantic_shark_gives_pytorchs_results() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/romantic-shark");
     let reference = dir.join("reference");
     let device = Device::flex();
-    let net = UNet::load(&dir.join("romantic-shark.safetensors"), &device).unwrap();
+    let net = UNet::load(&dir.join("romantic-shark.safetensors"), &device, false).unwrap();
     assert_eq!(net.preprocessing(), Preprocessing::ZeroMeanUnitVariance);
 
     let side = 256;

@@ -29,7 +29,6 @@ bitvec = { workspace = true, features = ["serde", "alloc", "atomic", "std"] }
 csv = { workspace = true }
 duckdb = { workspace = true, features = ["appender-arrow"] }
 evanalyzer_nn = { workspace = true }
-evanalyzer_ai = { workspace = true }
 serde_json = { workspace = true }
 petname =  { workspace = true }
 chrono = { workspace = true }
@@ -41,15 +40,11 @@ clru = { workspace = true }
 rhai = { workspace = true }
 
 [features]
-# AI models (Cellpose, StarDist, U-Net, YOLOv5) through the libtorch plugin
-# library, loaded on the first model run (see `evanalyzer_ai`). The
-# plugin is built on its own: `cargo build-ai-plugin`. Without it, model
-# steps report that the build has no AI model support; trained classifiers
-# (Burn, smartcore) work either way.
-libtorch = ["evanalyzer_ai/torch-plugin"]
-# libtorch linked into the process instead of the plugin - for the model
-# steps' tests (`cargo test -p evanalyzer_core --features libtorch-in-process`).
-libtorch-in-process = ["evanalyzer_ai/test-support"]
+# No-ops since the AI models run on burn (`evanalyzer_nn`, always built in):
+# kept until crates/ai, the build aliases and CI drop them (burn migration
+# P2.3).
+libtorch = []
+libtorch-in-process = []
 
 [target.'cfg(target_os = "linux")'.dependencies]
 duckdb = { workspace = true, features = ["bundled", "parquet"] }

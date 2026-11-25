@@ -215,7 +215,10 @@ impl ImageAlgorithm for AiObjectClassifier {
         check_prediction_count_matches(ids.len(), predicted.len())?;
 
         for (id, class_idx) in ids.into_iter().zip(predicted) {
-            let Some(model_class) = class_labels.get(class_idx as usize).map(|label| label.class) else {
+            let Some(model_class) = class_labels
+                .get(class_idx as usize)
+                .map(|label| label.class)
+            else {
                 continue;
             };
             let Some(&output_class) = mapping.get(&model_class) else {

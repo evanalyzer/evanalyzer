@@ -314,9 +314,7 @@ mod tests {
             (seed >> 40) as f32 / (1u64 << 24) as f32
         };
         let mut sample = |class: usize, out: &mut Vec<f32>| {
-            out.extend(
-                (0..20).map(|f| next() + if f % 4 == 0 { class as f32 * 0.5 } else { 0.0 }),
-            );
+            out.extend((0..20).map(|f| next() + if f % 4 == 0 { class as f32 * 0.5 } else { 0.0 }));
         };
         let forest = std::env::var("MODEL").as_deref() != Ok("mlp");
         let n = if forest { 200_000 } else { 20_000 };

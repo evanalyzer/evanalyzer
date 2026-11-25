@@ -1,8 +1,8 @@
 //! # ai
 //!
-//! Training classifiers from the project's annotations ([`learning`]),
-//! models from bioimage.io ([`bioimageio`]), and where AI inference runs -
-//! set once at startup, see [`configure_ai_devices`].
+//! Training classifiers from the project's annotations ([`learning`]), and
+//! where AI inference runs - set once at startup, see
+//! [`configure_ai_devices`].
 //!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-11-22
@@ -11,7 +11,6 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-pub mod bioimageio;
 pub mod learning;
 
 pub use evanalyzer_core::ai_devices::AiDeviceOptions;

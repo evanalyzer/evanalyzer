@@ -399,9 +399,6 @@ export component AppWindow inherits Window {
                     cancel => {
                         CommandPickerState.cancel();
                     }
-                    import-bioimageio => {
-                        CommandPickerState.import-bioimageio();
-                    }
                 }
                 if (GlobalAppState.active_dialog == DialogType.script-editor): ScriptEditorPanel {
                     width: 100%;

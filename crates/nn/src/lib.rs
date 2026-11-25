@@ -24,23 +24,33 @@
 //! The only crate depending on burn and smartcore. Does not depend on
 //! `evanalyzer_cfg`: core maps its settings to the types here.
 
-pub mod cache;
 pub mod classifier;
 pub mod errors;
 pub mod model;
 pub mod pieces;
 pub mod runtime;
+pub mod test_support;
 pub mod train;
 pub mod weights;
 
+/// burn's device (`Device::flex()` = the CPU) - users of nn need no burn.
+pub use burn::tensor::Device;
 pub use classifier::{Classifier, Predictions, Samples, TrainedClassifier};
 pub use errors::NnError;
 pub use model::{Image, Model, Trainable};
 pub use pieces::Pieces;
-pub use runtime::{DeviceSelection, EngineConfig, EngineInfo};
+pub use runtime::{DeviceInfo, DeviceSelection, EngineConfig, EngineInfo, gpu_available};
 pub use train::{TrainControl, TrainProgress, TrainStats};
 
 use std::path::Path;
+use std::sync::OnceLock;
+
+/// The engine, set up on the first model run (`runtime`).
+static ENGINE: OnceLock<runtime::Engine> = OnceLock::new();
+
+fn engine(config: impl FnOnce() -> EngineConfig) -> &'static runtime::Engine {
+    ENGINE.get_or_init(|| runtime::Engine::new(&config()))
+}
 
 /// Runs model `M` from `file` on `image`. The engine is set up with
 /// `config` on the first call (later calls ignore it); the model is loaded
@@ -51,13 +61,23 @@ pub fn infer<M: Model>(
     image: Image<'_>,
     settings: &M::Settings,
     config: impl FnOnce() -> EngineConfig,
-) -> Result<M::Output, NnError> {
-    let _ = (file, image, settings, config);
-    todo!("P3: runtime + cache")
+) -> Result<M::Output, NnError>
+where
+    M::Settings: Sync,
+    M::Output: Send,
+{
+    engine(config).run::<M, _>(file, |model| model.infer(image, settings))
+}
+
+/// What the engine runs on - `None` before the first model run.
+pub fn engine_info() -> Option<EngineInfo> {
+    ENGINE.get().map(runtime::Engine::info)
 }
 
 /// Lets go of every loaded model on every device (they load again on their
 /// next run). Nothing to do when no model ran yet.
 pub fn release_models() {
-    todo!("P3: cache")
+    if let Some(engine) = ENGINE.get() {
+        engine.release_models();
+    }
 }

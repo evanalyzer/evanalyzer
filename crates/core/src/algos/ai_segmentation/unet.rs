@@ -8,8 +8,9 @@
 
 use std::path::PathBuf;
 
-use evanalyzer_ai::{Image, Request, Response, Task};
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, SegmentationClass};
+use evanalyzer_nn::Image;
+use evanalyzer_nn::model::unet::{UNet as UNetModel, UNetSettings};
 use macros::CommandsMeta;
 
 use super::PieceSize;
@@ -37,26 +38,26 @@ pub enum UNetOutputMode {
     IndependentChannels,
 }
 
-/// Semantic segmentation using a pretrained U-Net exported as TorchScript.
+/// Semantic segmentation with a pretrained U-Net (torch-em `UNet2d`, the
+/// architecture of bioimage.io's U-Nets), from an EVAnalyzer model file
+/// (`.safetensors`, converted once from the original - `crates/nn`).
 ///
-/// The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,
-/// same normalization as the rest of the pipeline) and return either a
-/// `[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already
-/// applies its final sigmoid) or a `[1, C, H, W]` tensor with more than one
-/// channel, in which case `output_mode` and `foreground_channel` decide how the
-/// foreground probability is extracted. Runs on GPU
-/// automatically if CUDA is available in the linked libtorch build, otherwise
-/// falls back to CPU.
+/// The model gives one or more channels per pixel: with one, its
+/// foreground probability; with more, `output_mode` and `foreground_channel`
+/// decide how the foreground probability is taken. The model file says
+/// whether the image is normalized first (zero mean, unit variance). Runs on
+/// a GPU when there is one (convolutions in half precision there), else on
+/// the CPU.
 ///
-/// Any tile size works: the tile is mirror-padded to a multiple of 16 (U-Nets
-/// halve the image 4 times and fail otherwise) plus a 16 px border (context
-/// for the pixels at the tile edge, the "halo" bioimage.io models declare),
-/// and the prediction is cropped back to the tile.
+/// Any tile size works: the tile is mirror-padded to the network's multiple
+/// (16 for depth 4) plus a 16 px border (context for the pixels at the tile
+/// edge, the "halo" bioimage.io models declare), and the prediction is
+/// cropped back to the tile.
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "segment", display_name = "AI UNet Segmentation")]
 pub struct UNet {
-    /// Path to a TorchScript-exported U-Net model (`torch.jit.script`/`torch.jit.trace`).
-    #[cmdsmeta(file_extensions = "pt,pth")]
+    /// The U-Net model file (EVAnalyzer's `.safetensors`).
+    #[cmdsmeta(file_extensions = "safetensors")]
     pub model_path: PathBuf,
 
     /// The class assigned to pixels whose predicted probability reaches
@@ -114,11 +115,11 @@ pub struct UNet {
 
 /// What the network takes per pixel of the image it gets at once (see
 /// `shared_ram_bytes`).
-const NETWORK_BYTES_PER_PIXEL: f64 = 1600.0;
+pub(crate) const NETWORK_BYTES_PER_PIXEL: f64 = 1650.0;
 
 impl UNet {
     /// The pieces a `width x height` tile runs in (see [`PieceSize::pieces`]).
-    fn pieces(&self, width: usize, height: usize) -> evanalyzer_ai::Pieces {
+    fn pieces(&self, width: usize, height: usize) -> evanalyzer_nn::Pieces {
         self.piece_size
             .pieces(NETWORK_BYTES_PER_PIXEL, width, height)
     }
@@ -134,14 +135,11 @@ impl ImageAlgorithm for UNet {
         let size = input_image.size();
         let (width, height) = (size.width, size.height);
 
-        let request = Request {
-            model: self.model_path.clone(),
-            task: Task::UNet {
-                foreground_channel: self.foreground_channel,
-                softmax: matches!(self.output_mode, UNetOutputMode::SoftmaxClasses),
-                boundary_channel: self.boundary_channel,
-                pieces: self.pieces(width, height),
-            },
+        let settings = UNetSettings {
+            foreground_channel: self.foreground_channel.max(0) as usize,
+            softmax: matches!(self.output_mode, UNetOutputMode::SoftmaxClasses),
+            boundary_channel: usize::try_from(self.boundary_channel).ok(),
+            pieces: self.pieces(width, height),
         };
         let image = Image {
             width,
@@ -149,15 +147,8 @@ impl ImageAlgorithm for UNet {
             channels: 1,
             data: input_image.as_slice(),
         };
-        let Response::UNet {
-            probabilities,
-            boundary,
-        } = ai_devices::infer(&request, image)?
-        else {
-            return Err(InternalErrors::Generic(
-                "U-Net: the AI engine gave another kind of answer".into(),
-            ));
-        };
+        let output = ai_devices::infer::<UNetModel>(&self.model_path, image, &settings)?;
+        let (probabilities, boundary) = (output.probabilities, output.boundary);
 
         let foreground_class = self.segmentation_class.as_u32();
         let output_slice = segmentation_map.as_slice_mut();
@@ -201,17 +192,20 @@ impl ImageAlgorithm for UNet {
 
     /// One inference at a time on the CPU (the AI engine's one slot): the
     /// network's activations on the largest image it gets at once - the
-    /// tile, or a piece of it (`piece_size`, [`evanalyzer_ai::largest_model_input`]).
-    /// 1.6 KB per pixel: measured 1.55 KB for bioimage.io's `joyful-pig`,
-    /// 0.67 / 1.3 KB for U-Nets of depth 4 from 32 / 64 filters
-    /// (BENCHMARK.md "AI models: RAM per inference" - [`NETWORK_BYTES_PER_PIXEL`]).
+    /// tile, or a piece of it (`piece_size`, [`evanalyzer_nn::pieces::largest_model_input`]).
+    /// 1.65 KB per pixel: measured 1.61 KB for bioimage.io's
+    /// `romantic-shark` (depth 4, 64 filters, InstanceNorm) on burn's CPU
+    /// backend (`tests::tile_ram::measure_ai_tile_commands`, 2026-11-25;
+    /// libtorch: 1.55 KB for `joyful-pig`, 0.67 / 1.3 KB for U-Nets of depth
+    /// 4 from 32 / 64 filters - BENCHMARK.md "AI models: RAM per inference")
+    /// - [`NETWORK_BYTES_PER_PIXEL`].
     /// On a GPU they are in its memory - planned anyway (the computer may
     /// run on its CPU). Plus the model's weights (one copy).
     fn shared_ram_bytes(&self, tile_width: usize, tile_height: usize) -> u64 {
         // Before the run it isn't known which of the two the model gets.
         let piece = self.pieces(tile_width, tile_height).largest();
-        let pixels = evanalyzer_ai::largest_model_input(tile_width, piece)
-            * evanalyzer_ai::largest_model_input(tile_height, piece);
+        let pixels = evanalyzer_nn::pieces::largest_model_input(tile_width, piece)
+            * evanalyzer_nn::pieces::largest_model_input(tile_height, piece);
         (NETWORK_BYTES_PER_PIXEL * pixels as f64) as u64 + super::model_bytes(&self.model_path)
     }
 }
@@ -251,9 +245,7 @@ impl UNet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(feature = "libtorch-in-process")]
-    use evanalyzer_ai::torch::test_support::{tch::Tensor, trace_and_save_model};
-    use kornia_image::{Image, ImageSize};
+    use kornia_image::ImageSize;
 
     const FG: u32 = 7;
     fn bg() -> u32 {
@@ -261,7 +253,7 @@ mod tests {
     }
 
     fn gray_ctx(width: usize, height: usize, values: Vec<f32>) -> PipelineContext {
-        let img = Image::<f32, 1>::new(ImageSize { width, height }, values).unwrap();
+        let img = kornia_image::Image::<f32, 1>::new(ImageSize { width, height }, values).unwrap();
         PipelineContext::new_from_image_test(img).unwrap()
     }
 
@@ -284,7 +276,8 @@ mod tests {
     /// larger (the kind of model is known only in the run).
     #[test]
     fn a_set_piece_size_is_fixed_auto_follows_the_ram_where_it_may() {
-        use evanalyzer_ai::{Pieces, WHOLE_IMAGE_PIECE_SIDE, piece_side_for};
+        use evanalyzer_nn::Pieces;
+        use evanalyzer_nn::pieces::{WHOLE_IMAGE_PIECE_SIDE, piece_side_for};
         let with = |piece_size| UNet {
             piece_size,
             ..unet(PathBuf::new())
@@ -295,14 +288,18 @@ mod tests {
         assert_eq!(with(fixed(99_999)).pieces(4096, 4096), Pieces::fixed(4096));
         let ram = crate::memory::SystemRam::now().total;
         let auto = with(PieceSize::Auto).pieces(4096, 4096);
-        assert_eq!(auto.local_side, piece_side_for(1600.0, ram, 4096, 4096));
+        assert_eq!(
+            auto.local_side,
+            piece_side_for(NETWORK_BYTES_PER_PIXEL, ram, 4096, 4096)
+        );
         assert_eq!(auto.whole_image_side, WHOLE_IMAGE_PIECE_SIDE);
-        let piece = |p: u64| 1600 * (p + 256).min(4096).pow(2);
+        let per_pixel = NETWORK_BYTES_PER_PIXEL as u64;
+        let piece = |p: u64| per_pixel * (p + 256).min(4096).pow(2);
         assert_eq!(with(fixed(1024)).shared_ram_bytes(4096, 4096), piece(1024));
         assert_eq!(with(fixed(2048)).shared_ram_bytes(4096, 4096), piece(2048));
         assert_eq!(
             with(fixed(4096)).shared_ram_bytes(4096, 4096),
-            1600 * 4096 * 4096
+            per_pixel * 4096 * 4096
         );
         assert_eq!(
             with(PieceSize::Auto).shared_ram_bytes(4096, 4096),
@@ -310,282 +307,73 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "libtorch-in-process")]
+    // ---- execute(): a real model file (a tiny random U-Net, nn's
+    // `test_support`) through the engine ----
+
+    /// The step gives what the model gives, thresholded: the probabilities
+    /// of the model run directly, through `classify_pixels`.
     #[test]
-    fn execute_crops_the_prediction_back_onto_an_odd_sized_tile() {
-        // An identity model on a 37x23 tile: the padded run must be cropped
-        // back exactly - every pixel, edges included, keeps its own value.
-        let (_dir, model_path) = trace_and_save_model(1, 2, 2, |x| x * 1.0);
-        let cmd = unet(model_path);
-        let (w, h) = (37usize, 23usize);
-        let values: Vec<f32> = (0..w * h)
-            .map(|i| {
-                let (x, y) = (i % w, i / w);
-                let on_edge = x == 0 || y == 0 || x == w - 1 || y == h - 1;
-                if on_edge || (x * 7 + y * 3) % 5 == 0 {
-                    0.9
-                } else {
-                    0.1
-                }
-            })
+    fn execute_runs_the_model_file_and_thresholds_its_probabilities() {
+        use evanalyzer_nn::Model;
+        use evanalyzer_nn::model::unet::Preprocessing;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("unet.safetensors");
+        let config = evanalyzer_nn::test_support::tiny_unet_config();
+        std::fs::write(
+            &path,
+            evanalyzer_nn::test_support::unet_file(config, Preprocessing::None),
+        )
+        .unwrap();
+        let (w, h) = (37, 23);
+        let pixels: Vec<f32> = (0..w * h)
+            .map(|i| ((i * 7919) % 101) as f32 / 101.0)
             .collect();
-        let expected: Vec<u32> = values
-            .iter()
-            .map(|&v| if v >= 0.5 { FG } else { bg() })
-            .collect();
-        let mut ctx = gray_ctx(w, h, values);
-        cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())
-            .unwrap();
-        assert_eq!(
-            ctx.get_segmentation_map().unwrap().as_slice(),
-            expected.as_slice()
-        );
-    }
-
-    #[cfg(feature = "libtorch-in-process")]
-    #[test]
-    fn execute_handles_tiles_smaller_than_the_padding() {
-        // Too small to mirror 16 px: the edge pixels are repeated instead.
-        let (_dir, model_path) = trace_and_save_model(1, 2, 2, |x| x * 1.0);
-        let cmd = unet(model_path);
-        let mut ctx = gray_ctx(3, 1, vec![0.9, 0.1, 0.9]);
-        cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())
-            .unwrap();
-        assert_eq!(
-            ctx.get_segmentation_map().unwrap().as_slice(),
-            &[FG, bg(), FG]
-        );
-    }
-
-    // ---- real bioimage.io model ----
-
-    /// Reads a little-endian float32 `.npy` file (the bioimage.io test tensors).
-    fn read_npy_f32(path: &std::path::Path) -> Vec<f32> {
-        let bytes = std::fs::read(path)
-            .unwrap_or_else(|e| panic!("{}: {e} - see the test's doc comment", path.display()));
-        let header_len = u16::from_le_bytes([bytes[8], bytes[9]]) as usize;
-        bytes[10 + header_len..]
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-            .collect()
-    }
-
-    #[cfg(feature = "libtorch-in-process")]
-    /// The bioimage.io `joyful-pig` boundary U-Net (LiveCellSegmentationBoundaryModel)
-    /// on its own 512x512 test input, compared with its reference output -
-    /// at the full size and on an odd 250x250 cutout, which crashed in the
-    /// model before tiles were padded to a multiple of 16. Not checked into
-    /// git (~116 MB): download it from bioimage.io into `tests/joyful-pig/`.
-    /// Run with:
-    ///   cargo test -p evanalyzer_core --features libtorch-in-process --lib real_joyful_pig -- --ignored
-    #[test]
-    #[ignore]
-    fn real_joyful_pig_matches_its_reference_at_any_tile_size() {
-        let dir = PathBuf::from(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../tests/joyful-pig"
-        ));
-        let raw = read_npy_f32(&dir.join("test_input_0.npy"));
-        let reference = read_npy_f32(&dir.join("test_output_0.npy"));
-        let n = 512usize;
-        // The model's declared preprocessing: zero mean, unit variance.
-        let mean = raw.iter().sum::<f32>() / raw.len() as f32;
-        let std = (raw.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / raw.len() as f32).sqrt();
-        let input: Vec<f32> = raw.iter().map(|v| (v - mean) / (std + 1e-6)).collect();
         let cmd = UNet {
             output_mode: UNetOutputMode::IndependentChannels,
             foreground_channel: 0,
-            boundary_channel: 1,
-            ..unet(dir.join("weights-torchscript.pt"))
+            ..unet(path.clone())
         };
-        let expected =
-            UNet::classify_pixels(&reference[..n * n], Some(&reference[n * n..]), 0.5, 0.5, FG);
-
-        // Share of pixels of a `w x h` region at (x0, y0), at least 16 px away
-        // from the region's edges, that differ from the reference.
-        let mismatch = |seg: &[u32], x0: usize, y0: usize, w: usize, h: usize| -> f64 {
-            let (mut diff, mut total) = (0, 0);
-            for y in 16..h - 16 {
-                for x in 16..w - 16 {
-                    total += 1;
-                    if seg[y * w + x] != expected[(y0 + y) * n + x0 + x] {
-                        diff += 1;
-                    }
-                }
-            }
-            diff as f64 / total as f64
-        };
-
-        let mut ctx = gray_ctx(n, n, input.clone());
+        let mut ctx = gray_ctx(w, h, pixels.clone());
         cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())
             .unwrap();
-        let full = mismatch(ctx.get_segmentation_map().unwrap().as_slice(), 0, 0, n, n);
 
-        let (x0, y0, w, h) = (100usize, 130usize, 250usize, 250usize);
-        let cutout: Vec<f32> = (0..h)
-            .flat_map(|y| input[(y0 + y) * n + x0..(y0 + y) * n + x0 + w].to_vec())
-            .collect();
-        let mut ctx = gray_ctx(w, h, cutout);
-        cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())
-            .expect("an odd-sized tile must run (it is padded to a multiple of 16)");
-        let odd = mismatch(ctx.get_segmentation_map().unwrap().as_slice(), x0, y0, w, h);
-        // Not exact: the model normalizes each input it gets (InstanceNorm),
-        // so the mirrored border - and, for the cutout, seeing less of the
-        // image - shifts its statistics a little and flips pixels near the
-        // 0.5 threshold (measured: 0.5 % and 2.5 %).
-        assert!(
-            full < 0.01,
-            "{:.2} % of the pixels differ at 512x512",
-            full * 100.0
-        );
-        assert!(
-            odd < 0.05,
-            "{:.2} % of the pixels differ at 250x250",
-            odd * 100.0
-        );
+        let model = UNetModel::load(&path, &evanalyzer_nn::Device::flex(), false).unwrap();
+        let settings = UNetSettings {
+            foreground_channel: 0,
+            softmax: false,
+            boundary_channel: None,
+            pieces: cmd.pieces(w, h),
+        };
+        let image = Image {
+            width: w,
+            height: h,
+            channels: 1,
+            data: &pixels,
+        };
+        let direct = model.infer(image, &settings).unwrap();
+        let expected = UNet::classify_pixels(&direct.probabilities, None, 0.5, 0.5, FG);
+        // Up to float rounding: the engine runs on its own threads (another
+        // summation order; this tiny random network's InstanceNorm on little
+        // variance turns it into ~1e-4) - pixels at the threshold may land
+        // either side.
+        let ours = ctx.get_segmentation_map().unwrap().as_slice();
+        for ((a, b), p) in ours.iter().zip(&expected).zip(&direct.probabilities) {
+            assert!(
+                a == b || (p - 0.5).abs() < 1e-3,
+                "probability {p}: {a} vs {b}"
+            );
+        }
     }
-
-    // ---- execute() - real TorchScript load + inference, see `test_support` ----
 
     #[test]
     fn execute_errors_when_the_model_path_does_not_exist() {
         let dir = tempfile::tempdir().unwrap();
-        let cmd = unet(dir.path().join("missing.pt"));
+        let cmd = unet(dir.path().join("missing.safetensors"));
         let mut ctx = gray_ctx(2, 2, vec![0.0; 4]);
         let mut cache = GlobalPipelineCache::default();
 
         let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
         assert!(matches!(err, InternalErrors::Generic(_)));
-    }
-
-    #[cfg(feature = "libtorch-in-process")]
-    #[test]
-    fn execute_single_channel_output_is_used_directly_as_the_foreground_probability() {
-        // A single-channel model output is documented as already-activated
-        // foreground probabilities (the model applies its own sigmoid), used
-        // directly with no softmax/channel-selection - so an identity model
-        // (output == input) makes the input pixel values themselves the
-        // probabilities under test.
-        let (_dir, model_path) = trace_and_save_model(1, 1, 2, |x| x.shallow_clone());
-        let cmd = UNet {
-            output_mode: UNetOutputMode::SoftmaxClasses, // irrelevant for 1 channel
-            ..unet(model_path)
-        };
-        let mut ctx = gray_ctx(2, 1, vec![0.1, 0.9]);
-        let mut cache = GlobalPipelineCache::default();
-        cmd.execute(&mut ctx, &mut cache).unwrap();
-
-        let seg = ctx.get_segmentation_map().unwrap();
-        assert_eq!(seg.as_slice(), &[bg(), FG]);
-    }
-
-    #[cfg(feature = "libtorch-in-process")]
-    #[test]
-    fn execute_softmax_classes_selects_the_foreground_channel_after_softmax() {
-        // Two-channel logits built from the single input channel: a large
-        // negative/positive spread so softmax saturates close to 0/1,
-        // cleanly on either side of the default 0.5 threshold regardless of
-        // float rounding.
-        let (_dir, model_path) = trace_and_save_model(1, 1, 2, |x| {
-            let bg_logit = x * -10.0;
-            let fg_logit = x * 10.0;
-            Tensor::cat(&[bg_logit, fg_logit], 1)
-        });
-        let cmd = UNet {
-            output_mode: UNetOutputMode::SoftmaxClasses,
-            foreground_channel: 1,
-            ..unet(model_path)
-        };
-        // x = -1 -> fg softmax ~0 (background); x = 1 -> fg softmax ~1 (foreground).
-        let mut ctx = gray_ctx(2, 1, vec![-1.0, 1.0]);
-        let mut cache = GlobalPipelineCache::default();
-        cmd.execute(&mut ctx, &mut cache).unwrap();
-
-        let seg = ctx.get_segmentation_map().unwrap();
-        assert_eq!(seg.as_slice(), &[bg(), FG]);
-    }
-
-    #[cfg(feature = "libtorch-in-process")]
-    #[test]
-    fn execute_independent_channels_uses_the_selected_channel_without_softmax() {
-        // Channel 0 carries the raw input value directly (no softmax), so an
-        // already-in-[0,1] probability passed as input round-trips exactly -
-        // unlike `SoftmaxClasses`, which would normalize a 1-channel-derived
-        // pair of logits instead.
-        let (_dir, model_path) = trace_and_save_model(1, 1, 2, |x| {
-            let junk = x.zeros_like();
-            Tensor::cat(&[x.shallow_clone(), junk], 1)
-        });
-        let cmd = UNet {
-            output_mode: UNetOutputMode::IndependentChannels,
-            foreground_channel: 0,
-            ..unet(model_path)
-        };
-        let mut ctx = gray_ctx(2, 1, vec![0.1, 0.9]);
-        let mut cache = GlobalPipelineCache::default();
-        cmd.execute(&mut ctx, &mut cache).unwrap();
-
-        let seg = ctx.get_segmentation_map().unwrap();
-        assert_eq!(seg.as_slice(), &[bg(), FG]);
-    }
-
-    #[cfg(feature = "libtorch-in-process")]
-    #[test]
-    fn execute_boundary_channel_carves_out_pixels_whose_boundary_probability_is_high() {
-        // Channel 0 (foreground) saturates to 1.0 for any x >= 1 via clamp,
-        // so both test pixels have an equally "definite" foreground signal;
-        // channel 1 (boundary) keeps varying past that saturation point
-        // (sigmoid(x - 5)), so the two pixels differ only in boundary
-        // probability - isolating the boundary-carving behavior from the
-        // foreground-threshold behavior already covered by
-        // `classify_pixels_boundary_at_or_above_threshold_excludes_the_pixel` above.
-        let (_dir, model_path) = trace_and_save_model(1, 1, 2, |x| {
-            let fg = x.clamp(0.0, 1.0);
-            let boundary = (x - 5.0).sigmoid();
-            Tensor::cat(&[fg, boundary], 1)
-        });
-        let cmd = UNet {
-            output_mode: UNetOutputMode::IndependentChannels,
-            foreground_channel: 0,
-            boundary_channel: 1,
-            boundary_threshold: 0.5,
-            ..unet(model_path)
-        };
-        // x=1: fg saturates to 1.0, boundary = sigmoid(-4) ~0 (open) -> foreground.
-        // x=20: fg saturates to 1.0, boundary = sigmoid(15) ~1 (closed) -> background.
-        let mut ctx = gray_ctx(2, 1, vec![1.0, 20.0]);
-        let mut cache = GlobalPipelineCache::default();
-        cmd.execute(&mut ctx, &mut cache).unwrap();
-
-        let seg = ctx.get_segmentation_map().unwrap();
-        assert_eq!(
-            seg.as_slice(),
-            &[FG, bg()],
-            "equal foreground signal, but only the low-boundary pixel should survive"
-        );
-    }
-
-    #[cfg(feature = "libtorch-in-process")]
-    #[test]
-    fn execute_foreground_channel_out_of_range_is_clamped_to_the_last_channel() {
-        // 2-channel output, but foreground_channel points past the end - must
-        // clamp to the last valid channel (index 1) instead of panicking.
-        let (_dir, model_path) = trace_and_save_model(1, 1, 2, |x| {
-            let bg_logit = x * -10.0;
-            let fg_logit = x * 10.0;
-            Tensor::cat(&[bg_logit, fg_logit], 1)
-        });
-        let cmd = UNet {
-            output_mode: UNetOutputMode::SoftmaxClasses,
-            foreground_channel: 99,
-            ..unet(model_path)
-        };
-        let mut ctx = gray_ctx(1, 1, vec![1.0]);
-        let mut cache = GlobalPipelineCache::default();
-        cmd.execute(&mut ctx, &mut cache).unwrap();
-
-        let seg = ctx.get_segmentation_map().unwrap();
-        assert_eq!(seg.as_slice(), &[FG]);
     }
 
     #[test]

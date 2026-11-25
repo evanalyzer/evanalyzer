@@ -141,7 +141,8 @@ impl Model for CellposeSam {
     type Settings = CellposeSamSettings;
     type Output = CellposeSamOutput;
 
-    fn load(file: &Path, device: &Device) -> Result<Self, NnError> {
+    /// f32 on the GPU too (its matrix products are fast there in f32).
+    fn load(file: &Path, device: &Device, _gpu: bool) -> Result<Self, NnError> {
         let bytes = std::fs::read(file)?;
         Self::from_bytes(&bytes, device).map_err(|e| match e {
             NnError::InvalidModelFile(m) => {

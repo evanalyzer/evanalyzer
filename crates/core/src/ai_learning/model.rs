@@ -74,7 +74,11 @@ pub fn load_from_file(path: &Path) -> Result<SavedClassifier, InternalErrors> {
         return Err(InternalErrors::InvalidArgument(format!(
             "the classifier {} was saved by {} version of EVAnalyzer - train it again",
             path.display(),
-            if version < CURRENT_SAVED_CLASSIFIER_VERSION { "an older" } else { "a newer" }
+            if version < CURRENT_SAVED_CLASSIFIER_VERSION {
+                "an older"
+            } else {
+                "a newer"
+            }
         )));
     }
     serde_json::from_slice(&bytes)
@@ -98,7 +102,12 @@ pub(crate) mod test_support {
         settings: &RandomForestSettings,
     ) -> Result<Classifier, InternalErrors> {
         let n_classes = labels.iter().max().map_or(1, |m| m + 1);
-        try_fit(&AiLearningBackendSettings::RandomForest(settings.clone()), rows, labels, n_classes)
+        try_fit(
+            &AiLearningBackendSettings::RandomForest(settings.clone()),
+            rows,
+            labels,
+            n_classes,
+        )
     }
 
     /// The classifier `backend` selects on `rows`/`labels`.
@@ -136,7 +145,10 @@ pub(crate) mod test_support {
     ) -> (Vec<usize>, Vec<f32>) {
         let n_features = rows.first().map_or(1, Vec::len);
         let p = classifier.predict(&rows.concat(), n_features).unwrap();
-        (p.classes.into_iter().map(|c| c as usize).collect(), p.certainty)
+        (
+            p.classes.into_iter().map(|c| c as usize).collect(),
+            p.certainty,
+        )
     }
 }
 

@@ -17,7 +17,8 @@
 //! - `objectClassId` (Threshold entries, Cellpose, StarDist, U-Net, the pixel
 //!   classifier's mapping) becomes `segmentationClass`.
 //! - In the pixel classifier's mapping the model's class, so far
-//!   `segmentationClass`, becomes `modelClass` - as in YOLO's mapping.
+//!   `segmentationClass`, becomes `modelClass` - as in the (since removed)
+//!   YOLOv5 step's mapping.
 //! - A module's parameter bindings name settings by their path
 //!   (`thresholds.0.object_class_id`); they follow the same renames.
 //!

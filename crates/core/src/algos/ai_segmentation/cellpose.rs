@@ -11,8 +11,9 @@
 
 use std::path::PathBuf;
 
-use evanalyzer_ai::{Image, Request, Response, Task};
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, SegmentationClass};
+use evanalyzer_nn::Image;
+use evanalyzer_nn::model::cellpose_sam::{CellposeSam, CellposeSamSettings};
 use macros::CommandsMeta;
 
 use crate::{
@@ -43,8 +44,9 @@ use crate::{
     display_name = "AI Cellpose Segmentation"
 )]
 pub struct Cellpose {
-    /// Path to a TorchScript-exported Cellpose model (`torch.jit.script`/`torch.jit.trace`).
-    #[cmdsmeta(file_extensions = "pt,pth")]
+    /// The Cellpose-SAM model file (EVAnalyzer's `.safetensors`, converted
+    /// once from Cellpose's own, e.g. `cpsam_v2`).
+    #[cmdsmeta(file_extensions = "safetensors")]
     pub model_path: PathBuf,
 
     /// The class assigned to pixels of every detected object. All other
@@ -127,14 +129,11 @@ impl ImageAlgorithm for Cellpose {
         let resized = (net_width, net_height) != (width, height);
         let (w, h) = (net_width, net_height);
 
-        let request = Request {
-            model: self.model_path.clone(),
-            task: Task::Cellpose {
-                net_width,
-                net_height,
-                input_channels: self.input_channels,
-                replicate_gray_channel: self.replicate_gray_channel,
-            },
+        let settings = CellposeSamSettings {
+            net_width,
+            net_height,
+            input_channels: self.input_channels.clamp(1, 3) as usize,
+            replicate_gray_channel: self.replicate_gray_channel,
         };
         let image = Image {
             width,
@@ -142,16 +141,8 @@ impl ImageAlgorithm for Cellpose {
             channels: 1,
             data: input_image.as_slice(),
         };
-        let Response::Cellpose {
-            flow_y,
-            flow_x,
-            cell_prob,
-        } = ai_devices::infer(&request, image)?
-        else {
-            return Err(InternalErrors::Generic(
-                "Cellpose: the AI engine gave another kind of answer".into(),
-            ));
-        };
+        let output = ai_devices::infer::<CellposeSam>(&self.model_path, image, &settings)?;
+        let (flow_y, flow_x, cell_prob) = (output.flow_y, output.flow_x, output.cell_prob);
 
         let mut labels = self.masks_from_flows(&flow_y, &flow_x, &cell_prob, w, h);
         if resized {
@@ -773,12 +764,7 @@ impl Cellpose {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(feature = "libtorch-in-process")]
-    use evanalyzer_ai::torch::test_support::{tch::Tensor, trace_and_save_model};
 
-    /// The tile size Cellpose(-SAM) runs at: test models are traced at it.
-    #[cfg(feature = "libtorch-in-process")]
-    const TILE_SIZE: i64 = 256;
     use kornia_image::{Image, ImageSize};
 
     fn cellpose(min_object_size: i32) -> Cellpose {
@@ -801,13 +787,49 @@ mod tests {
         PipelineContext::new_from_image_test(img).unwrap()
     }
 
-    // ---- execute() - real TorchScript load + inference, see `test_support` ----
+    // ---- execute(): a real model file (a tiny random Cellpose-SAM of 32²
+    // tiles, nn's `test_support`) through the engine ----
+
+    /// The step runs the model file over several tiles and writes objects:
+    /// every instance pixel has the step's class.
+    #[test]
+    fn execute_runs_the_model_file_and_writes_instances() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cellpose.safetensors");
+        let config = evanalyzer_nn::test_support::tiny_cellpose_sam_config();
+        std::fs::write(
+            &path,
+            evanalyzer_nn::test_support::cellpose_sam_file(&config),
+        )
+        .unwrap();
+        let (w, h) = (70, 45);
+        let pixels: Vec<f32> = (0..w * h)
+            .map(|i| ((i * 7919) % 101) as f32 / 101.0)
+            .collect();
+        let cmd = Cellpose {
+            model_path: path,
+            probability_threshold: 0.0,
+            replicate_gray_channel: true,
+            ..cellpose(0)
+        };
+        let mut ctx = gray_ctx(w, h, pixels);
+        cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())
+            .unwrap();
+        let classes = ctx.get_segmentation_map().unwrap().as_slice().to_vec();
+        let instances = ctx.get_instance_map().unwrap().as_slice().to_vec();
+        assert_eq!(instances.len(), w * h);
+        for (class, instance) in classes.iter().zip(&instances) {
+            if *instance > 0 {
+                assert_eq!(*class, 7);
+            }
+        }
+    }
 
     #[test]
     fn execute_errors_when_the_model_path_does_not_exist() {
         let dir = tempfile::tempdir().unwrap();
         let cmd = Cellpose {
-            model_path: dir.path().join("missing.pt"),
+            model_path: dir.path().join("missing.safetensors"),
             ..cellpose(0)
         };
         let mut ctx = gray_ctx(2, 2, vec![0.0; 4]);
@@ -816,150 +838,6 @@ mod tests {
         let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
         assert!(matches!(err, InternalErrors::Generic(_)));
     }
-
-    #[cfg(feature = "libtorch-in-process")]
-    /// dY=0, dX=0 everywhere (a cell pixel never moves, so it is its own
-    /// sink), cell-probability logit derived directly from the input pixel
-    /// value: `value * 20 - 10`, i.e. an input near `1.0` saturates the
-    /// post-sigmoid probability near `1.0` (cell) and near `0.0` saturates
-    /// near `0.0` (background) - comfortably on either side of the default
-    /// 0.5 threshold. Two *adjacent* cell pixels each become their own sink
-    /// at zero flow, but those sinks are themselves 8-connected, so
-    /// `label_sinks` still merges them into one instance - this is the real
-    /// tensor-plumbing test, the merge logic itself is covered directly by
-    /// `label_sinks_gives_the_same_label_to_pixels_converging_to_adjacent_sinks`.
-    ///
-    /// Always traced at `TILE_SIZE` (256x256): `run_model_tiled`
-    /// invokes the model at that fixed size regardless of the logical image
-    /// size passed to `execute()` (see `gray_ctx`), matching how a real
-    /// Cellpose-SAM export behaves.
-    fn flow_free_cellpose_model(in_channels: i64) -> (tempfile::TempDir, std::path::PathBuf) {
-        trace_and_save_model(in_channels, TILE_SIZE, TILE_SIZE, |x| {
-            let image_channel = x.narrow(1, 0, 1);
-            let flow_y = image_channel.zeros_like();
-            let flow_x = image_channel.zeros_like();
-            let cell_logit = image_channel * 20.0 - 10.0;
-            Tensor::cat(&[flow_y, flow_x, cell_logit], 1)
-        })
-    }
-
-    #[cfg(feature = "libtorch-in-process")]
-    #[test]
-    fn execute_end_to_end_merges_adjacent_cell_pixels_into_one_instance() {
-        let (_dir, model_path) = flow_free_cellpose_model(2);
-        let cmd = Cellpose {
-            model_path,
-            input_channels: 2,
-            min_object_size: 0,
-            ..cellpose(0)
-        };
-        let mut ctx = gray_ctx(3, 1, vec![0.0, 1.0, 1.0]);
-        let mut cache = GlobalPipelineCache::default();
-        cmd.execute(&mut ctx, &mut cache).unwrap();
-
-        let seg = ctx.get_segmentation_map().unwrap();
-        assert_eq!(seg.as_slice(), &[0u32, 7, 7]);
-        let inst = ctx.get_instance_map().unwrap();
-        assert_eq!(inst.as_slice()[0], 0);
-        assert_eq!(
-            inst.as_slice()[1],
-            inst.as_slice()[2],
-            "two adjacent cell pixels must share one instance id"
-        );
-        assert_ne!(inst.as_slice()[1], 0);
-    }
-
-    #[cfg(feature = "libtorch-in-process")]
-    #[test]
-    fn execute_single_input_channel_skips_the_zero_fill_padding() {
-        // input_channels = 1 takes the `image` tensor directly (no
-        // concatenated zero channels) - a model traced for a genuine 1-channel
-        // input exercises that branch instead of the zero-fill one above.
-        let (_dir, model_path) = flow_free_cellpose_model(1);
-        let cmd = Cellpose {
-            model_path,
-            input_channels: 1,
-            min_object_size: 0,
-            ..cellpose(0)
-        };
-        let mut ctx = gray_ctx(2, 1, vec![0.0, 1.0]);
-        let mut cache = GlobalPipelineCache::default();
-        cmd.execute(&mut ctx, &mut cache).unwrap();
-
-        let seg = ctx.get_segmentation_map().unwrap();
-        assert_eq!(seg.as_slice(), &[0u32, 7]);
-    }
-
-    #[cfg(feature = "libtorch-in-process")]
-    #[test]
-    fn execute_errors_when_the_model_output_has_too_few_dimensions() {
-        let (_dir, model_path) = trace_and_save_model(2, TILE_SIZE, TILE_SIZE, |x| {
-            // Collapses [1,2,256,256] down to rank 2, well short of the
-            // required `[1, C, 256, 256]`.
-            x.narrow(1, 0, 1).squeeze_dim(0).squeeze_dim(0)
-        });
-        let cmd = Cellpose {
-            model_path,
-            min_object_size: 0,
-            ..cellpose(0)
-        };
-        let mut ctx = gray_ctx(2, 1, vec![0.0, 1.0]);
-        let mut cache = GlobalPipelineCache::default();
-
-        let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
-        assert!(matches!(err, InternalErrors::Generic(msg) if msg.contains("too few dimensions")));
-    }
-
-    #[cfg(feature = "libtorch-in-process")]
-    #[test]
-    fn execute_errors_when_the_model_output_has_fewer_than_three_channels() {
-        let (_dir, model_path) = trace_and_save_model(2, TILE_SIZE, TILE_SIZE, |x| {
-            let c = x.narrow(1, 0, 1);
-            Tensor::cat(&[c.shallow_clone(), c.shallow_clone()], 1)
-        });
-        let cmd = Cellpose {
-            model_path,
-            min_object_size: 0,
-            ..cellpose(0)
-        };
-        let mut ctx = gray_ctx(2, 1, vec![0.0, 1.0]);
-        let mut cache = GlobalPipelineCache::default();
-
-        let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
-        assert!(
-            matches!(err, InternalErrors::Generic(msg) if msg.contains("fewer than 3 channels"))
-        );
-    }
-
-    #[cfg(feature = "libtorch-in-process")]
-    #[test]
-    fn execute_errors_when_the_model_output_tile_size_is_wrong() {
-        // A real Cellpose-SAM export always returns a 256x256 tile (its ViT
-        // encoder can't run at any other size); a model that doesn't must be
-        // rejected rather than silently misaligned during stitching.
-        let (_dir, model_path) = trace_and_save_model(2, TILE_SIZE, TILE_SIZE, |x| {
-            let c = x.narrow(1, 0, 1);
-            let cropped = c.narrow(3, 0, 128); // half the tile width
-            Tensor::cat(
-                &[cropped.shallow_clone(), cropped.shallow_clone(), cropped],
-                1,
-            )
-        });
-        let cmd = Cellpose {
-            model_path,
-            min_object_size: 0,
-            ..cellpose(0)
-        };
-        let mut ctx = gray_ctx(4, 1, vec![0.0; 4]);
-        let mut cache = GlobalPipelineCache::default();
-
-        let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
-        assert!(
-            matches!(err, InternalErrors::Generic(msg) if msg.contains("expected exactly 256x256"))
-        );
-    }
-
-    // ---- tiling ----
 
     // ---- follow_flows ----
 
@@ -1060,36 +938,6 @@ mod tests {
             "never enlarges"
         );
         assert_eq!(cmd(1000).resize_factor(size(2000, 4000)), 0.25);
-    }
-
-    #[cfg(feature = "libtorch-in-process")]
-    #[test]
-    fn execute_with_max_resize_runs_at_low_resolution_and_scales_masks_back() {
-        // A 300x300 image shrunk to 150x150 (max_resize 150): the masks come
-        // back at full size with the left/right split preserved.
-        let (_dir, model_path) = flow_free_cellpose_model(2);
-        let cmd = Cellpose {
-            model_path,
-            max_resize: 150,
-            ..cellpose(0)
-        };
-        let (width, height) = (300usize, 300usize);
-        let mut values = vec![0f32; width * height];
-        for y in 0..height {
-            for x in 150..width {
-                values[y * width + x] = 1.0;
-            }
-        }
-        let mut ctx = gray_ctx(width, height, values);
-        let mut cache = GlobalPipelineCache::default();
-        cmd.execute(&mut ctx, &mut cache).unwrap();
-
-        let seg = ctx.get_segmentation_map().unwrap().as_slice();
-        assert_eq!(seg.len(), width * height);
-        for y in [0, 149, 299] {
-            assert_eq!(seg[y * width + 10], 0, "background stays background");
-            assert_eq!(seg[y * width + 290], 7, "the cell side is segmented");
-        }
     }
 
     // ---- flow_threshold ----
@@ -1294,31 +1142,6 @@ mod tests {
         let final_positions: Vec<(usize, usize)> = (0..4).map(|x| (0, x)).collect();
         let labels = Cellpose::masks_from_seeds(&final_positions, &[true; 4], 4, 1);
         assert_eq!(labels, vec![0; 4]);
-    }
-
-    #[cfg(feature = "libtorch-in-process")]
-    #[test]
-    fn execute_with_replicate_gray_channel_feeds_the_image_into_every_channel() {
-        // The model's cell logit comes from channel 1 only: zero-filled, no
-        // cell is found; replicated, the bright pixel is.
-        let (_dir, model_path) = trace_and_save_model(2, TILE_SIZE, TILE_SIZE, |x| {
-            let second = x.narrow(1, 1, 1);
-            let zeros = second.zeros_like();
-            Tensor::cat(&[zeros.shallow_clone(), zeros, second * 20.0 - 10.0], 1)
-        });
-        let run = |replicate_gray_channel| {
-            let cmd = Cellpose {
-                model_path: model_path.clone(),
-                replicate_gray_channel,
-                ..cellpose(0)
-            };
-            let mut ctx = gray_ctx(2, 1, vec![0.0, 1.0]);
-            cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())
-                .unwrap();
-            ctx.get_segmentation_map().unwrap().as_slice().to_vec()
-        };
-        assert_eq!(run(false), vec![0, 0]);
-        assert_eq!(run(true), vec![0, 7]);
     }
 
     // ---- write_instances ----

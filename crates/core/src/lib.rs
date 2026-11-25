@@ -40,7 +40,12 @@ pub use crate::storage::duckdb::{
     RESULTS_SCHEMA_VERSION, ResultsConnection, add_review_columns, reject_newer_results,
 };
 pub use crate::storage::mask_codec::{decode_mask, encode_mask};
-pub use evanalyzer_ai::cuda_is_available;
+/// Whether a GPU for AI models is there (`evanalyzer_nn`: a discrete GPU
+/// wgpu finds - the name is older than wgpu). Opens the adapters once: slow,
+/// keep it off startup paths.
+pub fn cuda_is_available() -> bool {
+    evanalyzer_nn::gpu_available()
+}
 
 // Image reader
 pub use crate::image::ChannelInfo;

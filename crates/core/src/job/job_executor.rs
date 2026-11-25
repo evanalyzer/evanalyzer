@@ -545,7 +545,7 @@ impl<'a> JobExecutor {
         // again while the user changes settings (a batch run's
         // `preview_tile_settings` is always `None`).
         if self.preview_tile_settings.is_none() {
-            evanalyzer_ai::release_models();
+            evanalyzer_nn::release_models();
         }
         // Before `Finished`: whoever reads the results next sees the outcome.
         if let Err(e) = self.result_storage.finish_run(&result) {
@@ -5998,17 +5998,21 @@ mod estimate_ram_per_worker_bytes_tests {
         // model and the whole-image models' 1024, plus the planned halo.
         let ram = crate::memory::SystemRam::now().total;
         let input = |bytes_per_pixel: f64, side: usize| {
-            let local = evanalyzer_ai::piece_side_for(bytes_per_pixel, ram, side, side);
-            let piece = local.max(evanalyzer_ai::WHOLE_IMAGE_PIECE_SIDE);
-            evanalyzer_ai::largest_model_input(side, piece) as u64
+            let local = evanalyzer_nn::pieces::piece_side_for(bytes_per_pixel, ram, side, side);
+            let piece = local.max(evanalyzer_nn::pieces::WHOLE_IMAGE_PIECE_SIDE);
+            evanalyzer_nn::pieces::largest_model_input(side, piece) as u64
         };
         let tile = MAX_TILE_SIZE;
+        let unet_per_pixel = crate::algos::ai_segmentation::unet::NETWORK_BYTES_PER_PIXEL;
         assert_eq!(with_step(20_000, None).shared_bytes, 0);
         assert_eq!(
             with_step(20_000, unet()).shared_bytes,
-            1600 * input(1600.0, tile).pow(2)
+            unet_per_pixel as u64 * input(unet_per_pixel, tile).pow(2)
         );
-        assert_eq!(with_step(1024, unet()).shared_bytes, 1600 * 1024 * 1024);
+        assert_eq!(
+            with_step(1024, unet()).shared_bytes,
+            unet_per_pixel as u64 * 1024 * 1024
+        );
         assert_eq!(
             with_step(20_000, stardist()).shared_bytes,
             400 * input(400.0, tile).pow(2)

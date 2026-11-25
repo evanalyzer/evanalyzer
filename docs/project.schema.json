@@ -329,7 +329,7 @@
           "minimum": 0
         },
         "modelPath": {
-          "description": "Path to a TorchScript-exported Cellpose model (`torch.jit.script`/`torch.jit.trace`).",
+          "description": "The Cellpose-SAM model file (EVAnalyzer's `.safetensors`, converted\nonce from Cellpose's own, e.g. `cpsam_v2`).",
           "type": "string",
           "default": ""
         },
@@ -6252,19 +6252,6 @@
           "required": [
             "type"
           ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "YOLOV5"
-            }
-          },
-          "$ref": "#/$defs/Yolov5Settings",
-          "required": [
-            "type"
-          ]
         }
       ]
     },
@@ -7464,11 +7451,11 @@
       ]
     },
     "StardistSettings": {
-      "description": "Instance segmentation using a pretrained StarDist model exported as TorchScript.\n\nThe model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return two tensors:\nan object-probability map `[1, 1, H', W']` and a ray-distance map\n`[1, n_rays, H', W']` giving, for each grid cell, the distance to the object\nboundary along `n_rays` equally-spaced angles (the StarDist star-convex-polygon\nrepresentation). `H'`/`W'` may be smaller than the input size if the model\npredicts on a coarser grid; this is detected from the output shape and the\npolygons are rescaled back to image resolution automatically.\n\nSome TorchScript exports concatenate both outputs into a single\n`[1, 1 + n_rays, H', W']` tensor (channel 0 = probability, the rest =\ndistances); this is also supported.\n\nPer grid cell candidates above `probability_threshold` are converted to\nstar-convex polygons, then greedily filtered with non-maximum suppression\n(polygons whose pixel-overlap ratio with a higher-scoring candidate exceeds\n`nms_threshold` are discarded) before being rasterized into the pipeline's\nsegmentation and instance maps. Runs on GPU automatically if CUDA is\navailable in the linked libtorch build, otherwise falls back to CPU.",
+      "description": "Instance segmentation with a pretrained StarDist 2D model, from an\nEVAnalyzer model file (`.safetensors`, converted once from StarDist's own,\ne.g. `2D_versatile_fluo` - `crates/nn`).\n\nFor each grid cell the model gives the probability of an object's centre\nand the distances to its boundary along `n_rays` equally spaced angles\n(StarDist's star-convex polygons). On a grid coarser than the pixels the\npolygons are scaled back to the image.\n\nPer grid cell candidates above `probability_threshold` are converted to\nstar-convex polygons, then greedily filtered with non-maximum suppression\n(polygons whose pixel-overlap ratio with a higher-scoring candidate exceeds\n`nms_threshold` are discarded) before being rasterized into the pipeline's\nsegmentation and instance maps. Runs on a GPU when there is one\n(convolutions in half precision there), else on the CPU.",
       "type": "object",
       "properties": {
         "modelPath": {
-          "description": "Path to a TorchScript-exported StarDist model (`torch.jit.script`/`torch.jit.trace`).",
+          "description": "The StarDist model file (EVAnalyzer's `.safetensors`).",
           "type": "string",
           "default": ""
         },
@@ -8296,7 +8283,7 @@
       }
     },
     "UNetSettings": {
-      "description": "Semantic segmentation using a pretrained U-Net exported as TorchScript.\n\nThe model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return either a\n`[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already\napplies its final sigmoid) or a `[1, C, H, W]` tensor with more than one\nchannel, in which case `output_mode` and `foreground_channel` decide how the\nforeground probability is extracted. Runs on GPU\nautomatically if CUDA is available in the linked libtorch build, otherwise\nfalls back to CPU.\n\nAny tile size works: the tile is mirror-padded to a multiple of 16 (U-Nets\nhalve the image 4 times and fail otherwise) plus a 16 px border (context\nfor the pixels at the tile edge, the \"halo\" bioimage.io models declare),\nand the prediction is cropped back to the tile.",
+      "description": "Semantic segmentation with a pretrained U-Net (torch-em `UNet2d`, the\narchitecture of bioimage.io's U-Nets), from an EVAnalyzer model file\n(`.safetensors`, converted once from the original - `crates/nn`).\n\nThe model gives one or more channels per pixel: with one, its\nforeground probability; with more, `output_mode` and `foreground_channel`\ndecide how the foreground probability is taken. The model file says\nwhether the image is normalized first (zero mean, unit variance). Runs on\na GPU when there is one (convolutions in half precision there), else on\nthe CPU.\n\nAny tile size works: the tile is mirror-padded to the network's multiple\n(16 for depth 4) plus a 16 px border (context for the pixels at the tile\nedge, the \"halo\" bioimage.io models declare), and the prediction is\ncropped back to the tile.",
       "type": "object",
       "properties": {
         "boundaryChannel": {
@@ -8324,7 +8311,7 @@
           "minimum": 0
         },
         "modelPath": {
-          "description": "Path to a TorchScript-exported U-Net model (`torch.jit.script`/`torch.jit.trace`).",
+          "description": "The U-Net model file (EVAnalyzer's `.safetensors`).",
           "type": "string",
           "default": ""
         },
@@ -8605,92 +8592,6 @@
           ]
         }
       ]
-    },
-    "YoloClassMappingSettings": {
-      "description": "Which project segmentation class the objects of one model class get.",
-      "type": "object",
-      "properties": {
-        "modelClass": {
-          "description": "Index of the class in the model (`0` = its first class).",
-          "type": "integer",
-          "format": "int32",
-          "default": 0,
-          "maximum": 1000,
-          "minimum": 0
-        },
-        "segmentationClass": {
-          "description": "The project's segmentation class objects of `model_class` are written as.",
-          "$ref": "#/$defs/SegmentationClass",
-          "default": 1
-        }
-      }
-    },
-    "Yolov5Settings": {
-      "description": "Instance segmentation (or detection) with a YOLOv5 model exported as TorchScript.\n\n[AI YOLOv5 Segmentation] -> [Extract Objects]\n\nTakes a YOLOv5 TorchScript export (`export.py --include torchscript`) with\na fixed 640x640 input. Segmentation models (`yolov5*-seg`) give every\nobject its mask; plain detection models give filled boxes. Any number of\nmodel classes is supported.\n\nTiles larger than 640 px are analyzed in overlapping 640x640 windows at\nfull resolution (small tiles are padded), so small objects stay\ndetectable; objects seen by several windows are merged. Gray images are\ngiven to the model as RGB with equal channels.",
-      "type": "object",
-      "properties": {
-        "classMapping": {
-          "description": "Maps the model's classes to this project's segmentation classes;\nobjects of classes not listed are dropped. Leave empty to write model\nclass `i` as segmentation class `i + 1`, for every class.",
-          "type": "array",
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/YoloClassMappingSettings"
-          }
-        },
-        "confidenceThreshold": {
-          "description": "Minimum confidence (objectness x class score) of a detection.",
-          "type": "number",
-          "format": "float",
-          "default": 0.25,
-          "maximum": 1,
-          "minimum": 0
-        },
-        "imageScale": {
-          "description": "Factor the image is scaled by before it is given to the model, the\nmasks are scaled back afterwards. Use it when the model was trained on\ndownscaled images: `640 / training image size`, e.g. `0.3125` for\n2048 px images YOLOv5 shrank to 640. `1` = full resolution.",
-          "type": "number",
-          "format": "float",
-          "default": 1.0,
-          "maximum": 4,
-          "minimum": 0.05
-        },
-        "iouThreshold": {
-          "description": "Detections of the same class overlapping more than this (box\nintersection over union) are merged into the more confident one.",
-          "type": "number",
-          "format": "float",
-          "default": 0.44999998807907104,
-          "maximum": 1,
-          "minimum": 0
-        },
-        "maskThreshold": {
-          "description": "Mask probability above which a pixel belongs to its object\n(segmentation models only).",
-          "type": "number",
-          "format": "float",
-          "default": 0.5,
-          "maximum": 1,
-          "minimum": 0
-        },
-        "minObjectSize": {
-          "description": "Objects with fewer pixels than this (after overlapping objects were\nresolved) are removed. `0` keeps every object.",
-          "type": "integer",
-          "format": "int32",
-          "default": 15,
-          "maximum": 100000,
-          "minimum": 0
-        },
-        "modelPath": {
-          "description": "Path to a YOLOv5 model exported as TorchScript.",
-          "type": "string",
-          "default": ""
-        },
-        "windowOverlap": {
-          "description": "Overlap of neighboring 640x640 windows, in pixels. Must be larger\nthan the biggest object, so every object lies completely inside some\nwindow.",
-          "type": "integer",
-          "format": "int32",
-          "default": 128,
-          "maximum": 512,
-          "minimum": 0
-        }
-      }
     },
     "ZProjection": {
       "description": "How the planes of a z-stack are combined into one image - `None`: they\naren't, one plane is read.",

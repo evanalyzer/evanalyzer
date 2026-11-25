@@ -2304,108 +2304,6 @@ impl PipelinesController {
                 }
             });
 
-            // Picker: import a bioimage.io model - pick its rdf.yaml, configure an
-            // AI segmentation command from it, and insert it like a normal step.
-            let manager = self.clone();
-            ui.global::<CommandPickerState>()
-                .on_import_bioimageio(move || {
-                    let Some(ui) = manager.ui.upgrade() else {
-                        return;
-                    };
-                    let picker = ui.global::<CommandPickerState>();
-                    let pipeline_id = picker.get_pipeline_id() as u32;
-                    let after_idx = picker.get_insert_after_idx();
-                    if manager.viewing(pipeline_id) {
-                        return;
-                    }
-
-                    let request = FileRequest::open_file("Import bioimage.io model")
-                        .filter("bioimage.io RDF", &["yaml", "yml"]);
-                    let manager = manager.clone();
-                    manager.app_state.clone().file_browser.open(request, move |path| {
-                        // Cancelled: leave the command picker open.
-                        let Some(path) = path else {
-                            return;
-                        };
-                        // The RDF is read through the backend, so a model on
-                        // the server resolves to server paths.
-                        crate::helper::ui_thread::spawn(move || {
-                            let result = evanalyzer_app::ai::bioimageio::configure_from(
-                                manager.app_state.backend().files(),
-                                &path,
-                            );
-                            let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
-                                let Some(ui) = manager.ui.upgrade() else {
-                                    return;
-                                };
-                                match result {
-                                    Ok(configured) => {
-                                        let step = PipelineStepSettings {
-                                            id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
-                                            enabled: true,
-                                            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(configured.command),
-                                        };
-                                        {
-                                            let mut project = manager.app_state.get_project_write();
-                                            if let Some(pipeline) =
-                                                project.pipelines.iter_mut().find(|p| p.id.0 == pipeline_id)
-                                            {
-                                                let insert_at = if after_idx < 0 {
-                                                    0
-                                                } else {
-                                                    ((after_idx as usize) + 1).min(pipeline.steps.len())
-                                                };
-                                                pipeline.steps.insert(insert_at, step);
-                                                evanalyzer_app::project::utils::assign_step_ids(
-                                                    &mut pipeline.steps,
-                                                );
-                                            }
-                                        }
-                                        ui.global::<GlobalAppState>()
-                                            .set_active_dialog(DialogType::None);
-                                        manager.pipeline_settings_changed();
-                                        manager.sync_steps_of_selected_pipeline_to_slint(
-                                            PipelineId(pipeline_id),
-                                            false,
-                                        );
-
-                                        // Surface any caveats (assumed defaults, required
-                                        // normalization, remote weights) so the user can verify.
-                                        if !configured.notes.is_empty() {
-                                            let body = configured
-                                                .notes
-                                                .iter()
-                                                .map(|n| format!("• {n}"))
-                                                .collect::<Vec<_>>()
-                                                .join("\n\n");
-                                            let msg = format!(
-                                                "Imported a model from {}.\n\nPlease review:\n\n{body}",
-                                                path.display()
-                                            );
-                                            let warning = ui.global::<WarningState>();
-                                            warning.set_info(true);
-                                            warning.set_title("bioimage.io model imported".into());
-                                            warning.set_message(msg.into());
-                                            ui.global::<GlobalAppState>()
-                                                .set_active_dialog(DialogType::Warning);
-                                        }
-                                    }
-                                    Err(e) => {
-                                        let warning = ui.global::<WarningState>();
-                                        warning.set_info(false);
-                                        warning.set_title("bioimage.io import failed".into());
-                                        warning.set_message(
-                                            format!("Could not import the bioimage.io model:\n\n{e}").into(),
-                                        );
-                                        ui.global::<GlobalAppState>()
-                                            .set_active_dialog(DialogType::Warning);
-                                    }
-                                }
-                            });
-                        });
-                    });
-                });
-
             // Step parameter changed
             let manager = self.clone();
             ui.global::<PipelinesPanelState>().on_param_changed(
@@ -13476,19 +13374,20 @@ mod tests {
     }
 
     #[test]
-    fn browse_file_and_bioimageio_import_do_nothing_when_cancelled() {
+    fn browse_file_does_nothing_when_cancelled() {
         // The test UiState's file browser has no window: it reports
         // "cancelled" right away.
         let (ui, ui_state, _controller) = selected(vec![]);
         let token_before = ui.global::<PipelinesPanelState>().get_browse_result_token();
-        ui.global::<PipelinesPanelState>()
-            .invoke_browse_file("pt, onnx".into(), "/tmp".into(), 3);
+        ui.global::<PipelinesPanelState>().invoke_browse_file(
+            "safetensors".into(),
+            "/tmp".into(),
+            3,
+        );
         assert_eq!(
             ui.global::<PipelinesPanelState>().get_browse_result_token(),
             token_before
         );
-        ui.global::<CommandPickerState>().set_pipeline_id(1);
-        ui.global::<CommandPickerState>().invoke_import_bioimageio();
         drain_ui_queue();
         assert!(step_names(&ui_state, 1).is_empty());
     }

@@ -287,14 +287,16 @@ impl Model for UNet {
     type Settings = UNetSettings;
     type Output = UNetOutput;
 
-    fn load(file: &Path, device: &Device) -> Result<Self, NnError> {
+    fn load(file: &Path, device: &Device, gpu: bool) -> Result<Self, NnError> {
         let bytes = std::fs::read(file)?;
-        Self::from_bytes(&bytes, device).map_err(|e| match e {
+        let mut net = Self::from_bytes(&bytes, device).map_err(|e| match e {
             NnError::InvalidModelFile(m) => {
                 NnError::InvalidModelFile(format!("{}: {m}", file.display()))
             }
             other => other,
-        })
+        })?;
+        net.set_half_convs(gpu);
+        Ok(net)
     }
 
     fn infer(&self, image: Image<'_>, settings: &UNetSettings) -> Result<UNetOutput, NnError> {

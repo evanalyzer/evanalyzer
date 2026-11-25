@@ -1,8 +1,8 @@
 //! # ai_devices
 //!
-//! Which devices AI models (Cellpose, StarDist, U-Net, YOLOv5) run on, set
-//! once at startup from the command line (`--ai-devices`, `--gpu-slots`),
-//! and [`infer`]: a model run on the engine they set up.
+//! Which devices AI models (Cellpose-SAM, StarDist, U-Net) run on, set once
+//! at startup from the command line (`--ai-devices`, `--gpu-slots`), and
+//! [`infer`]: a model run on the engine they set up (`evanalyzer_nn`).
 //!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-10-10
@@ -11,8 +11,8 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use evanalyzer_ai::{DeviceSelection, EngineConfig, Image, Request, Response};
 use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_nn::{DeviceSelection, EngineConfig, Image, Model};
 use std::fmt;
 use std::str::FromStr;
 use std::sync::OnceLock;
@@ -41,8 +41,8 @@ pub struct AiDeviceOptions {
     pub devices: AiDeviceSelection,
     /// Parallel inferences per GPU, at least 1 (see [`parse_gpu_slots`]).
     pub gpu_slots: usize,
-    /// The AI plugin library to try first (`--ai-plugin`), see
-    /// [`evanalyzer_ai::set_plugin_path`].
+    /// `--ai-plugin`: unused since the libtorch plugin is gone - the option
+    /// goes with crates/ai (burn migration P2.3).
     pub plugin: Option<std::path::PathBuf>,
 }
 
@@ -62,9 +62,8 @@ static OPTIONS: OnceLock<AiDeviceOptions> = OnceLock::new();
 /// before the first AI step runs; returns `false` (and changes nothing) if
 /// options were already set or AI inference already started.
 pub fn configure_ai_devices(options: AiDeviceOptions) -> bool {
-    if let Some(plugin) = &options.plugin {
-        evanalyzer_ai::set_plugin_path(plugin.clone());
-    }
+    // `plugin`: the libtorch plugin is gone - ignored until the option goes
+    // with crates/ai (burn migration P2.3).
     OPTIONS
         .set(AiDeviceOptions {
             gpu_slots: options.gpu_slots.max(1),
@@ -79,10 +78,19 @@ pub(crate) fn ai_device_options() -> &'static AiDeviceOptions {
     OPTIONS.get_or_init(AiDeviceOptions::default)
 }
 
-/// Runs `request` on `image` with the AI engine (see
-/// `evanalyzer_ai`), set up with these options on the first call.
-pub(crate) fn infer(request: &Request, image: Image<'_>) -> Result<Response, InternalErrors> {
-    evanalyzer_ai::infer(request, image, engine_config).map_err(InternalErrors::Generic)
+/// Model `M` from `file` on `image` with the engine (`evanalyzer_nn::infer`),
+/// set up with these options on the first call.
+pub(crate) fn infer<M: Model>(
+    file: &std::path::Path,
+    image: Image<'_>,
+    settings: &M::Settings,
+) -> Result<M::Output, InternalErrors>
+where
+    M::Settings: Sync,
+    M::Output: Send,
+{
+    evanalyzer_nn::infer::<M>(file, image, settings, engine_config)
+        .map_err(|e| InternalErrors::Generic(e.to_string()))
 }
 
 fn engine_config() -> EngineConfig {

@@ -71,65 +71,34 @@ fn configured(command: PipelineCommand) -> PipelineCommand {
             kernel_size: 5,
             sigma: 1.0,
         }),
-        #[cfg(feature = "libtorch-in-process")]
         C::UNet(s) => C::UNet(UNetSettings {
-            model_path: models().unet.clone(),
+            model_path: real_model(UNET),
             ..s
         }),
-        #[cfg(feature = "libtorch-in-process")]
         C::Stardist(s) => C::Stardist(StardistSettings {
-            model_path: models().stardist.clone(),
+            model_path: real_model(STARDIST),
             ..s
         }),
-        #[cfg(feature = "libtorch-in-process")]
         C::Cellpose(s) => C::Cellpose(CellposeSettings {
-            model_path: models().cellpose.clone(),
-            ..s
-        }),
-        #[cfg(feature = "libtorch-in-process")]
-        C::Yolov5(s) => C::Yolov5(Yolov5Settings {
-            model_path: models().yolo.clone(),
+            model_path: real_model(CELLPOSE),
             ..s
         }),
         other => other,
     }
 }
 
-/// Stand-in networks of the real layouts for the AI steps
-/// (`evanalyzer_ai::torch::test_support`): what the analysis keeps of an
-/// inference per worker doesn't depend on the weights.
-#[cfg(feature = "libtorch-in-process")]
-struct Models {
-    _dirs: Vec<tempfile::TempDir>,
-    unet: std::path::PathBuf,
-    stardist: std::path::PathBuf,
-    cellpose: std::path::PathBuf,
-    yolo: std::path::PathBuf,
-}
+/// The AI steps run on the real models, converted to EVAnalyzer's files
+/// (git-ignored, see `docs/nn_burn_migration_plan.md`): what the analysis
+/// keeps of an inference depends on the outputs (StarDist's candidates) -
+/// random weights would detect anything. Without them, not measured.
+const UNET: &str = "tests/romantic-shark/romantic-shark.safetensors";
+const STARDIST: &str = "tests/stardist/2D_versatile_fluo.safetensors";
+const CELLPOSE: &str = "tests/cellpose-sam/cpsam_v2.safetensors";
 
-#[cfg(feature = "libtorch-in-process")]
-fn models() -> &'static Models {
-    use evanalyzer_ai::torch::test_support as t;
-    static MODELS: std::sync::OnceLock<Models> = std::sync::OnceLock::new();
-    MODELS.get_or_init(|| {
-        let mut dirs = Vec::new();
-        let mut keep = |(dir, path): (tempfile::TempDir, std::path::PathBuf)| {
-            dirs.push(dir);
-            path
-        };
-        let unet = keep(t::bench_unet_model(32));
-        // Cells of 24 px at ~4000 on ~500 (see `tile`).
-        let stardist = keep(t::stardist_cells_model(2000.0, 12.0));
-        let cellpose = keep(t::bench_cellpose_model(0));
-        let yolo = keep(t::bench_yolo_box_model());
-        Models {
-            _dirs: dirs,
-            unet,
-            stardist,
-            cellpose,
-            yolo,
-        }
-    })
+fn real_model(file: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(file)
 }
 
 /// Commands reading a color (RGB) image.
@@ -148,6 +117,7 @@ fn needs_rgb(command: &PipelineCommand) -> bool {
 fn tile(
     side: usize,
     rgb: bool,
+    normalized: bool,
     output: &std::path::Path,
 ) -> (PipelineContext, GlobalPipelineCache) {
     let size = ImageSize {
@@ -161,6 +131,9 @@ fn tile(
             let cell = (4..28).contains(&cx) && (4..28).contains(&cy);
             (if cell { 4000.0 } else { 500.0 }) + ((x * 7 + y * 13) % 97) as f32
         })
+        // The AI models were trained on normalized images (~0..1, as a
+        // normalizing step before them gives).
+        .map(|v| if normalized { v / 5000.0 } else { v })
         .collect();
     let image = || match rgb {
         false => Arc::new(ImageContainer::F32Gray(ManagedImage {
@@ -234,11 +207,19 @@ fn peak_bytes(command: &PipelineCommand, side: usize) -> Result<usize, String> {
     let algorithm = into_algorithm(command.clone()).map_err(|e| e.to_string())?;
     // Where Save Image writes (removed after).
     let output = tempfile::tempdir().map_err(|e| e.to_string())?;
-    let (mut ctx, mut cache) = tile(side, needs_rgb(command), output.path());
+    let ai = is_ai_model(command);
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(1)
         .build()
         .unwrap();
+    if ai {
+        // Loads the model first (kept by the engine for the run): its
+        // weights are the step's shared RAM, not per tile pixel.
+        let (mut ctx, mut cache) = tile(64, false, true, output.path());
+        pool.install(|| algorithm.run(&mut ctx, &mut cache))
+            .map_err(|e| e.to_string())?;
+    }
+    let (mut ctx, mut cache) = tile(side, needs_rgb(command), ai, output.path());
     let before = counting_allocator::in_use();
     counting_allocator::reset_peak();
     pool.install(|| algorithm.run(&mut ctx, &mut cache))
@@ -254,9 +235,12 @@ const TOLERANCE: f64 = 0.25;
 fn not_measured(command: &PipelineCommand) -> Option<&'static str> {
     use PipelineCommand as C;
     match command {
-        #[cfg(not(feature = "libtorch-in-process"))]
-        C::Cellpose(_) | C::Stardist(_) | C::UNet(_) | C::Yolov5(_) => {
-            Some("needs libtorch - run with `--features libtorch-in-process`")
+        C::UNet(_) if !real_model(UNET).exists() => Some("needs the converted U-Net (see `UNET`)"),
+        C::Stardist(_) if !real_model(STARDIST).exists() => {
+            Some("needs the converted StarDist (see `STARDIST`)")
+        }
+        C::Cellpose(_) if !real_model(CELLPOSE).exists() => {
+            Some("needs the converted Cellpose-SAM (see `CELLPOSE`)")
         }
         C::PixelClassifier(_) => Some("needs a trained classifier"),
         _ => None,
@@ -265,12 +249,45 @@ fn not_measured(command: &PipelineCommand) -> Option<&'static str> {
 
 /// Every tile command's RAM per tile pixel beyond the worker's buffers,
 /// against what it declares - in a process of its own (the allocator counts
-/// the whole process). Run by `tile_commands_need_what_they_declare`.
+/// the whole process). Run by `tile_commands_need_what_they_declare`; the AI
+/// model steps by `measure_ai_tile_commands`.
 #[test]
 #[ignore]
 fn measure_tile_commands() {
+    measure(|command| !is_ai_model(command));
+}
+
+/// The AI model steps: real networks, ~0.7 TFLOP per Cellpose-SAM tile -
+/// hours in a debug build, so not part of
+/// `tile_commands_need_what_they_declare`. Release build, with the converted
+/// models (`UNET`, `STARDIST`, `CELLPOSE`):
+/// `cargo test --release --target x86_64-unknown-linux-gnu -p evanalyzer_core --lib
+/// measure_ai_tile_commands -- --ignored --nocapture --test-threads=1`.
+#[test]
+#[ignore]
+fn measure_ai_tile_commands() {
+    // The CPU: on a GPU the network's memory is the GPU's, not counted here
+    // (a process of its own - the first configuration counts).
+    crate::ai_devices::configure_ai_devices(crate::ai_devices::AiDeviceOptions {
+        devices: crate::ai_devices::AiDeviceSelection::Cpu,
+        ..Default::default()
+    });
+    measure(is_ai_model);
+}
+
+fn is_ai_model(command: &PipelineCommand) -> bool {
+    use PipelineCommand as C;
+    matches!(command, C::UNet(_) | C::Stardist(_) | C::Cellpose(_))
+}
+
+/// Every tile command `wanted` takes: its RAM per tile pixel against what
+/// it declares.
+fn measure(wanted: fn(&PipelineCommand) -> bool) {
     let mut failed = Vec::new();
     for command in (0..).map_while(default_command).map(configured) {
+        if !wanted(&command) {
+            continue;
+        }
         let Ok(algorithm) = into_algorithm(command.clone()) else {
             continue;
         };
@@ -282,7 +299,15 @@ fn measure_tile_commands() {
             println!("TILE {name}: not measured - {why}");
             continue;
         }
-        let declared = algorithm.ram_per_tile_pixel();
+        // An AI model step: its network's activations are its shared RAM
+        // (one inference at a time), on top of what it keeps per worker.
+        let network = if is_ai_model(&command) {
+            let shared = |side| algorithm.shared_ram_bytes(side, side) as f64;
+            (shared(LARGE) - shared(SMALL)) / (LARGE * LARGE - SMALL * SMALL) as f64
+        } else {
+            0.0
+        };
+        let declared = algorithm.ram_per_tile_pixel() + network;
         let start = std::time::Instant::now();
         match (peak_bytes(&command, SMALL), peak_bytes(&command, LARGE)) {
             (Ok(small), Ok(large)) => {
@@ -295,10 +320,12 @@ fn measure_tile_commands() {
                     large as f64 / 1e6,
                     start.elapsed().as_secs_f64()
                 );
-                if per_pixel > declared + TOLERANCE {
+                // The networks' activations: up to 1 % off (another
+                // summation of buffers per backend version).
+                if per_pixel > declared + TOLERANCE + 0.01 * network {
                     failed.push(format!(
                         "{name}: {per_pixel:.2} bytes per tile pixel, declares {declared} \
-                         (`ram_per_tile_pixel`)"
+                         (`ram_per_tile_pixel` + the network's per pixel)"
                     ));
                 }
             }

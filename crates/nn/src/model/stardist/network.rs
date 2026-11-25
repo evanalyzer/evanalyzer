@@ -32,7 +32,7 @@ use burn::module::Module;
 use burn::tensor::activation::{relu, sigmoid};
 use burn::tensor::module::{conv2d, interpolate, max_pool2d};
 use burn::tensor::ops::{ConvOptions, InterpolateMode, InterpolateOptions, MaxPoolOptions};
-use burn::tensor::{Device, Tensor};
+use burn::tensor::{DType, Device, Tensor};
 use safetensors::SafeTensors;
 
 /// One convolution: `[out, in, k, k]` and its bias.
@@ -57,15 +57,25 @@ impl Conv {
         })
     }
 
-    /// "same"-padded convolution (odd kernel: the same on both sides).
-    fn forward(&self, x: Tensor<4>) -> Tensor<4> {
+    /// "same"-padded convolution (odd kernel: the same on both sides). When
+    /// `half` (the GPU) in f16 with the bias added after: CubeCL's tensor
+    /// core kernels take neither f32 nor a bias (the U-Net's
+    /// `network::conv_forward`).
+    fn forward(&self, x: Tensor<4>, half: bool) -> Tensor<4> {
         let pad = self.weight.dims()[2] / 2;
+        let options = ConvOptions::new([1, 1], [pad, pad], [1, 1], 1);
+        if !half {
+            return conv2d(x, self.weight.clone(), Some(self.bias.clone()), options);
+        }
+        let n = self.bias.dims()[0];
         conv2d(
-            x,
-            self.weight.clone(),
-            Some(self.bias.clone()),
-            ConvOptions::new([1, 1], [pad, pad], [1, 1], 1),
+            x.cast(DType::F16),
+            self.weight.clone().cast(DType::F16),
+            None,
+            options,
         )
+        .cast(DType::F32)
+            + self.bias.clone().reshape([1, n, 1, 1])
     }
 }
 
@@ -75,9 +85,9 @@ fn pool(x: Tensor<4>, pool: [usize; 2]) -> Tensor<4> {
 }
 
 /// Convolutions with ReLU, one after the other.
-fn convs(convs: &[Conv], mut x: Tensor<4>) -> Tensor<4> {
+fn convs(convs: &[Conv], mut x: Tensor<4>, half: bool) -> Tensor<4> {
     for conv in convs {
-        x = relu(conv.forward(x));
+        x = relu(conv.forward(x, half));
     }
     x
 }
@@ -96,6 +106,9 @@ pub(crate) struct StarDistNet {
     dist: Conv,
     #[module(skip)]
     grid_pools: Vec<[usize; 2]>,
+    /// Convolutions in f16 (the GPU, see `Conv::forward`).
+    #[module(skip)]
+    pub(crate) half: bool,
 }
 
 impl StarDistNet {
@@ -186,6 +199,7 @@ impl StarDistNet {
             prob: Conv::load(file, "prob", channels, 1, 1, device)?,
             dist: Conv::load(file, "dist", channels, config.n_rays, 1, device)?,
             grid_pools,
+            half: false,
         })
     }
 
@@ -193,26 +207,29 @@ impl StarDistNet {
     /// `(prob [B, 1, H/gy, W/gx], dist [B, n_rays, H/gy, W/gx])`.
     pub(crate) fn forward(&self, mut x: Tensor<4>) -> (Tensor<4>, Tensor<4>) {
         for (round, pool_size) in self.grid.iter().zip(&self.grid_pools) {
-            x = pool(convs(round, x), *pool_size);
+            x = pool(convs(round, x, self.half), *pool_size);
         }
         let mut skips = Vec::with_capacity(self.down.len());
         for level in &self.down {
-            x = convs(level, x);
+            x = convs(level, x, self.half);
             skips.push(x.clone());
             x = pool(x, [2, 2]);
         }
-        x = convs(&self.middle, x);
+        x = convs(&self.middle, x, self.half);
         for (level, skip) in self.up.iter().zip(skips.into_iter().rev()) {
             let [_, _, h, w] = x.dims();
             let upsampled = interpolate(
                 x,
                 InterpolateOptions::new(InterpolateMode::Nearest).with_output_size([2 * h, 2 * w]),
             );
-            x = convs(level, Tensor::cat(vec![upsampled, skip], 1));
+            x = convs(level, Tensor::cat(vec![upsampled, skip], 1), self.half);
         }
         if let Some(features) = &self.features {
-            x = relu(features.forward(x));
+            x = relu(features.forward(x, self.half));
         }
-        (sigmoid(self.prob.forward(x.clone())), self.dist.forward(x))
+        (
+            sigmoid(self.prob.forward(x.clone(), self.half)),
+            self.dist.forward(x, self.half),
+        )
     }
 }

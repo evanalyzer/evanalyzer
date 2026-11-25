@@ -63,6 +63,12 @@ impl StarDist {
         &self.config
     }
 
+    /// Convolutions in f16 with the bias added after (the GPU's tensor
+    /// cores, see the U-Net's `network::conv_forward`).
+    pub fn set_half_convs(&mut self, half: bool) {
+        self.network.half = half;
+    }
+
     /// A StarDist from a model file's bytes (see `config.rs`).
     pub fn from_bytes(bytes: &[u8], device: &Device) -> Result<Self, NnError> {
         let file = ModelFile::parse(bytes)?;
@@ -143,14 +149,16 @@ impl Model for StarDist {
     type Settings = StarDistSettings;
     type Output = StarDistOutput;
 
-    fn load(file: &Path, device: &Device) -> Result<Self, NnError> {
+    fn load(file: &Path, device: &Device, gpu: bool) -> Result<Self, NnError> {
         let bytes = std::fs::read(file)?;
-        Self::from_bytes(&bytes, device).map_err(|e| match e {
+        let mut net = Self::from_bytes(&bytes, device).map_err(|e| match e {
             NnError::InvalidModelFile(m) => {
                 NnError::InvalidModelFile(format!("{}: {m}", file.display()))
             }
             other => other,
-        })
+        })?;
+        net.set_half_convs(gpu);
+        Ok(net)
     }
 
     fn infer(

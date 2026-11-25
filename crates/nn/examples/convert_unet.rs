@@ -57,7 +57,7 @@ fn main() {
     let (tensors, metadata) = net.to_file_contents(info);
     evanalyzer_nn::weights::write(output, &tensors, &metadata).unwrap();
 
-    let loaded = UNet::load(output, &device).unwrap();
+    let loaded = UNet::load(output, &device, false).unwrap();
     assert_eq!(loaded.config(), net.config());
     assert_eq!(loaded.preprocessing(), preprocessing);
     println!(
