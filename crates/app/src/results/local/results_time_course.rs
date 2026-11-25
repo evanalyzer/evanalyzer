@@ -799,11 +799,11 @@ fn sql_u32_array(ids: &[u32]) -> String {
 mod tests {
     use super::*;
     use crate::results::Grouping;
-    use crate::results::local::test_support::{ObjectSpec, seed_db};
+    use crate::results::local::test_support::{ObjectSpec, TestResults, seed_db};
 
     /// `objects`, with every image analysed on time points `0..times` (one
     /// z-plane), `frame_interval_s` apart.
-    fn open(objects: &[ObjectSpec], times: i32, frame_interval_s: Option<f64>) -> ResultsGenerator {
+    fn open(objects: &[ObjectSpec], times: i32, frame_interval_s: Option<f64>) -> TestResults {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("results.evadb");
         seed_db(&path, objects);
@@ -822,8 +822,7 @@ mod tests {
             )
             .unwrap();
         }
-        std::mem::forget(dir);
-        ResultsGenerator::open_database(path).expect("open database")
+        TestResults::open(dir, &path)
     }
 
     /// img1 and img2 at T0, img1 again at T1, nothing at T2.
@@ -977,7 +976,7 @@ mod tests {
         ]
     }
 
-    fn open_family() -> ResultsGenerator {
+    fn open_family() -> TestResults {
         let db = open(&family(), 4, None);
         db.connection()
             .execute_batch(

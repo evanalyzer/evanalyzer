@@ -341,18 +341,15 @@ fn nr_of_c_stacks_falls_back_to_one_when_images_table_is_empty() {
     assert_eq!(generator.get_nr_of_c_stacks(), 1);
 }
 
-use super::super::test_support::{ObjectSpec, seed_db};
+use super::super::test_support::{ObjectSpec, TestResults, seed_db};
 
 /// Opens a fresh `ResultsGenerator` over a temp `.evadb` seeded with
-/// `objects` (see `test_support::seed_db`). Leaks the backing `TempDir`
-/// (the returned generator only holds an open `Connection`, not the
-/// directory) - acceptable for a short-lived test process.
-fn open(objects: &[ObjectSpec]) -> ResultsGenerator {
+/// `objects` (see `test_support::seed_db`) - its folder goes with it.
+fn open(objects: &[ObjectSpec]) -> TestResults {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("results.evadb");
     seed_db(&path, objects);
-    std::mem::forget(dir);
-    ResultsGenerator::open_database(path.into()).unwrap()
+    TestResults::open(dir, &path)
 }
 
 fn plane() -> PlaneFilter {
@@ -420,7 +417,7 @@ fn seeded_id(idx: usize) -> String {
 
 /// Two cells (100 px, 200 px) and four spots (10, 20, 30, 40 px): the
 /// first two spots in cell 0, the third in cell 1, the last in none.
-fn cells_with_spots() -> ResultsGenerator {
+fn cells_with_spots() -> TestResults {
     let generator = open(&[
         ObjectSpec::new("img1.tif", "Cell", 1, 100),
         ObjectSpec::new("img1.tif", "Cell", 1, 200),
@@ -2242,7 +2239,7 @@ fn get_available_columns_only_lists_coloc_count_for_classes_that_actually_coloca
 
 /// Class 1 objects (area 10..40) with partners of class 2 and 3: both,
 /// only 2, only 3 (2 of them), none.
-fn coloc_combinations() -> ResultsGenerator {
+fn coloc_combinations() -> TestResults {
     let id = |n: u32| format!("00000000-0000-0000-0000-00000000000{n}");
     open(&[
         ObjectSpec::new("img1.tif", "ClassA", 1, 10).with_coloc(&format!(
@@ -4769,7 +4766,7 @@ fn object_list_shows_intensities_in_gray_values_and_zero_for_an_unmeasured_chann
 /// | A1_02  | 1       | 0.4 | 0.6          |
 /// | A1_03  | 0       | 0.9 | -            |
 /// | B2_01  | 1       | 0.5 | 0.8          |
-fn with_measurements() -> (ResultsGenerator, Column, Column) {
+fn with_measurements() -> (TestResults, Column, Column) {
     let generator = open(&[
         ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
         ObjectSpec::new("A1_01.tif", "ClassA", 1, 20),

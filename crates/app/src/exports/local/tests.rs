@@ -309,7 +309,6 @@ fn transposed_wells_and_folders_have_a_row_per_group() {
         "well,count_per_image_avg_nucleus,area_px_avg_nucleus,\
          count_per_image_avg_spot,area_px_avg_spot"
     );
-    let folders = lines(&dir.path().join("folders.csv"));
     // The image names have no well: one group.
     assert_eq!(wells.len(), 2, "{wells:?}");
     // A1 and B1 as folders, and the images right in the image folder.

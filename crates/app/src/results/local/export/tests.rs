@@ -10,7 +10,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use super::super::test_support::{ObjectSpec, seed_db};
+use super::super::test_support::{ObjectSpec, TestResults, seed_db};
 use super::grouped::stream_grouped_by_image_pages;
 use super::*;
 use crate::results::{ColorScale, ColorSchema};
@@ -406,19 +406,14 @@ fn cell_text_reads_back_every_cell_value_variant_as_plain_text() {
 }
 
 /// Opens a fresh `ResultsGenerator` over a temp `.evadb` seeded with
-/// `objects` (see `test_support::seed_db`). Leaks the backing `TempDir`
-/// (the returned generator only holds an open `Connection`, not the
-/// directory) - acceptable for a short-lived test process.
-fn open(objects: &[ObjectSpec]) -> (ResultsGenerator, PathBuf) {
+/// `objects` (see `test_support::seed_db`), and a folder to export into
+/// in the same temp folder - which goes with the results.
+fn open(objects: &[ObjectSpec]) -> (TestResults, PathBuf) {
     let dir = tempfile::tempdir().expect("tempdir");
     let db_path = dir.path().join("results.evadb");
     seed_db(&db_path, objects);
     let out_dir = dir.path().join("out");
-    std::mem::forget(dir);
-    (
-        ResultsGenerator::open_database(db_path).expect("open database"),
-        out_dir,
-    )
+    (TestResults::open(dir, &db_path), out_dir)
 }
 
 /// Same as `open`, plus one extra `images` row with no objects at all
@@ -429,10 +424,7 @@ fn open(objects: &[ObjectSpec]) -> (ResultsGenerator, PathBuf) {
 /// happen through its own connection, before `ResultsGenerator` ever
 /// opens the file (matching how `seed_db` itself closes its connection
 /// before returning).
-fn open_with_empty_image(
-    objects: &[ObjectSpec],
-    empty_image_name: &str,
-) -> (ResultsGenerator, PathBuf) {
+fn open_with_empty_image(objects: &[ObjectSpec], empty_image_name: &str) -> (TestResults, PathBuf) {
     let dir = tempfile::tempdir().expect("tempdir");
     let db_path = dir.path().join("results.evadb");
     seed_db(&db_path, objects);
@@ -446,11 +438,7 @@ fn open_with_empty_image(
         .expect("insert empty image");
     }
     let out_dir = dir.path().join("out");
-    std::mem::forget(dir);
-    (
-        ResultsGenerator::open_database(db_path).expect("open database"),
-        out_dir,
-    )
+    (TestResults::open(dir, &db_path), out_dir)
 }
 
 fn no_progress() -> impl FnMut(&str, usize, usize) {
@@ -1241,7 +1229,7 @@ fn assert_grid_matches_at(
 }
 
 /// A time series: img1 and img2 at time point 0, img1 again at 1.
-fn time_series() -> (ResultsGenerator, PathBuf) {
+fn time_series() -> (TestResults, PathBuf) {
     open(&[
         ObjectSpec::new("img1.tif", "ClassA", 1, 100),
         ObjectSpec::new("img2.tif", "ClassA", 1, 200),
@@ -1249,10 +1237,11 @@ fn time_series() -> (ResultsGenerator, PathBuf) {
     ])
 }
 
-/// The CSV `name` of an export of `export`'s settings, as rows of cells.
-fn exported_csv(export: ResultExport, name: &str) -> Vec<Vec<String>> {
-    let out_dir = export.output_dir.clone();
-    let (database, _) = time_series();
+/// The CSV `name` of an export of `export`'s settings (into a folder of
+/// its own), as rows of cells.
+fn exported_csv(mut export: ResultExport, name: &str) -> Vec<Vec<String>> {
+    let (database, out_dir) = time_series();
+    export.output_dir = out_dir.clone();
     export
         .start_export(&database, &no_cancel(), &mut no_progress())
         .expect("export");
@@ -1263,20 +1252,12 @@ fn exported_csv(export: ResultExport, name: &str) -> Vec<Vec<String>> {
         .collect()
 }
 
-fn out_dir() -> PathBuf {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("out");
-    std::mem::forget(dir);
-    path
-}
-
 /// Every time point by default, time point by time point, each row with
 /// its "T" - no "Z": the results have one z-plane.
 #[test]
 fn a_time_series_list_has_every_time_point_with_its_t() {
     let rows = exported_csv(
         ResultExport {
-            output_dir: out_dir(),
             format: ExportFormat::CSV,
             columns: vec![Column::AreaSizePx],
             with_list_view: true,
@@ -1299,7 +1280,6 @@ fn a_time_series_list_has_every_time_point_with_its_t() {
 fn the_grouped_export_has_a_row_per_time_point_and_image() {
     let rows = exported_csv(
         ResultExport {
-            output_dir: out_dir(),
             format: ExportFormat::CSV,
             columns: vec![Column::AreaSizePx],
             aggregations: vec![Aggregation::Avg],
@@ -1328,7 +1308,6 @@ fn the_grouped_export_has_a_row_per_time_point_and_image() {
 fn a_time_point_range_exports_only_those() {
     let rows = exported_csv(
         ResultExport {
-            output_dir: out_dir(),
             format: ExportFormat::CSV,
             t_stacks: Some(Range { start: 1, end: 2 }),
             columns: vec![Column::AreaSizePx],
@@ -1369,7 +1348,7 @@ fn results_of_one_plane_have_no_plane_columns() {
 /// `open`, with the planes a run records analysing
 /// (`images.t_stacks_analyzed`/`z_stacks_analyzed`): every image at every time point
 /// `0..times` (one z-plane) - also those where nothing was found.
-fn open_analysed(objects: &[ObjectSpec], times: i32) -> (ResultsGenerator, PathBuf) {
+fn open_analysed(objects: &[ObjectSpec], times: i32) -> (TestResults, PathBuf) {
     let dir = tempfile::tempdir().expect("tempdir");
     let db_path = dir.path().join("results.evadb");
     seed_db(&db_path, objects);
@@ -1388,11 +1367,7 @@ fn open_analysed(objects: &[ObjectSpec], times: i32) -> (ResultsGenerator, PathB
         .unwrap();
     }
     let out_dir = dir.path().join("out");
-    std::mem::forget(dir);
-    (
-        ResultsGenerator::open_database(db_path).expect("open database"),
-        out_dir,
-    )
+    (TestResults::open(dir, &db_path), out_dir)
 }
 
 /// Every analysed time point - also one where no image found anything -
@@ -1437,7 +1412,9 @@ fn the_grouped_export_has_every_analysed_time_point_and_image() {
     );
 }
 
-fn time_course_export(format: ExportFormat, layout: TimeCourseLayout) -> PathBuf {
+/// The time course exported; the results (whose temp folder holds the
+/// files - kept while the test reads them) and where the files are.
+fn time_course_export(format: ExportFormat, layout: TimeCourseLayout) -> (TestResults, PathBuf) {
     let (database, out_dir) = open_analysed(
         &[
             ObjectSpec::new("img1.tif", "ClassA", 1, 100),
@@ -1459,14 +1436,14 @@ fn time_course_export(format: ExportFormat, layout: TimeCourseLayout) -> PathBuf
     }
     .start_export(&database, &no_cancel(), &mut no_progress())
     .expect("time course export");
-    out_dir
+    (database, out_dir)
 }
 
 /// Long: a row per time point and class line - the empty T2 too; wide:
 /// per value and statistic, a row per time point, a column per line.
 #[test]
 fn the_time_course_exports_long_and_wide_csv() {
-    let out_dir = time_course_export(ExportFormat::CSV, TimeCourseLayout::Both);
+    let (_results, out_dir) = time_course_export(ExportFormat::CSV, TimeCourseLayout::Both);
     let long = std::fs::read_to_string(out_dir.join("time_course.csv")).unwrap();
     assert_eq!(
         long.lines().collect::<Vec<_>>(),
@@ -1490,7 +1467,7 @@ fn the_time_course_exports_long_and_wide_csv() {
 #[test]
 fn the_time_course_xlsx_has_a_sheet_per_table() {
     let sheets = |layout| {
-        let out_dir = time_course_export(ExportFormat::XLSX, layout);
+        let (_results, out_dir) = time_course_export(ExportFormat::XLSX, layout);
         let workbook: calamine::Xlsx<_> =
             calamine::open_workbook(out_dir.join("time_course.xlsx")).expect("open");
         workbook.sheet_names()
@@ -2654,7 +2631,7 @@ fn a_csv_document_that_cannot_be_created_is_an_error_naming_it() {
 
 /// `img1.tif`'s two time points with an image measurement each, and one
 /// object's value; `img2.tif` with a value too.
-fn with_measurements() -> (ResultsGenerator, PathBuf, String) {
+fn with_measurements() -> (TestResults, PathBuf, String) {
     let (generator, out_dir) = open(&[
         ObjectSpec::new("img1.tif", "ClassA", 1, 10),
         ObjectSpec::new("img2.tif", "ClassA", 1, 20),
@@ -2775,13 +2752,23 @@ fn a_profile_is_exported_with_its_positions_and_not_offered_as_a_value() {
     );
 }
 
+/// A temp folder to export into, used as its path; dropped, it goes.
+struct OutDir(tempfile::TempDir);
+
+impl std::ops::Deref for OutDir {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        self.0.path()
+    }
+}
+
 fn profile_export(
     content: crate::results::ProfileExportContent,
     layout: TimeCourseLayout,
-) -> (PathBuf, ResultExport) {
-    let dir = tempfile::tempdir().unwrap().keep();
+) -> (OutDir, ResultExport) {
+    let dir = OutDir(tempfile::tempdir().unwrap());
     let export = ResultExport {
-        output_dir: dir.clone(),
+        output_dir: dir.to_path_buf(),
         format: ExportFormat::CSV,
         with_profile: true,
         profile: crate::results::ProfileExport {
@@ -2847,7 +2834,7 @@ fn the_profile_objects_export_long_and_wide() {
 #[test]
 fn a_profile_export_needs_its_measurement() {
     let db = super::super::test_support::profile_database();
-    let (_, mut export) = profile_export(
+    let (_dir, mut export) = profile_export(
         crate::results::ProfileExportContent::Lines,
         TimeCourseLayout::Long,
     );
@@ -3059,7 +3046,7 @@ fn the_measurements_of_unknown_images_are_only_the_header() {
 /// `track_seven` with a pixel size of 500 nm (0.5 µm) and 30 s between
 /// time points, and its motion: path length 5 px, VCL 5 px per time
 /// point, BCF 1 per time point, MSD D 4 px² per time point.
-fn timed_track_seven() -> (ResultsGenerator, PathBuf) {
+fn timed_track_seven() -> (TestResults, PathBuf) {
     let (database, out_dir) = open_analysed(&track_seven(), 2);
     database
         .connection()
@@ -3555,7 +3542,7 @@ fn the_profile_objects_keep_to_the_chosen_image_and_class() {
 #[test]
 fn profile_objects_of_results_without_profiles_are_refused() {
     let (generator, _, _) = with_measurements();
-    let (_, export) = profile_export(
+    let (_dir, export) = profile_export(
         crate::results::ProfileExportContent::Objects,
         TimeCourseLayout::Long,
     );

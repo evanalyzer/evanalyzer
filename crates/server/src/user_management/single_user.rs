@@ -25,6 +25,9 @@ pub struct SingleUser {
     pub user_home: PathBuf,
     /// Folders the user's worker may access.
     pub allowed_dirs: Vec<PathBuf>,
+    /// A test's home: a temp folder, removed with the account.
+    #[cfg(test)]
+    test_home: Option<tempfile::TempDir>,
 }
 
 impl SingleUser {
@@ -41,6 +44,8 @@ impl SingleUser {
             stored_password,
             allowed_dirs: super::expand_dirs(&allowed_dirs, &home),
             user_home: home,
+            #[cfg(test)]
+            test_home: None,
         }
     }
 
@@ -48,13 +53,15 @@ impl SingleUser {
     /// for tests.
     #[cfg(test)]
     pub fn for_tests() -> Self {
-        let home = tempfile::tempdir().unwrap().keep();
-        Self::new(
+        let home = tempfile::tempdir().unwrap();
+        let mut user = Self::new(
             "admin".into(),
             "plain:1234".into(),
-            home,
+            home.path().to_path_buf(),
             vec!["{home}".into()],
-        )
+        );
+        user.test_home = Some(home);
+        user
     }
 }
 

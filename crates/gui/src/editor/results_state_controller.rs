@@ -6810,19 +6810,20 @@ pub(crate) mod tests {
     /// Builds a real, headless `AppWindow` with
     /// callbacks attached and a real seeded `.evadb` already opened via
     /// `open_database` - the common setup every test below this point
-    /// shares. Leaks the backing `TempDir` (only the file path is needed
-    /// afterwards) - acceptable for a short-lived test process.
-    fn controller_with_open_database() -> (AppWindow, Arc<ResultsStateController>) {
+    /// shares. The database's temp folder comes first: bound first, it is
+    /// dropped last - after the window and the controller that has the
+    /// database open.
+    fn controller_with_open_database() -> (tempfile::TempDir, AppWindow, Arc<ResultsStateController>)
+    {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("results.evadb");
         seed_test_db(&path);
-        std::mem::forget(dir);
 
         let ui = test_ui_window();
         let controller = make_controller_with_ui(ui.as_weak());
         controller.attach_callbacks();
         controller.open_database(path);
-        (ui, controller)
+        (dir, ui, controller)
     }
 
     /// "Open results" on a finished analysis' note opens that analysis'
@@ -6994,7 +6995,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_clicked_box_shows_its_class_or_image_in_the_list() {
-        let (ui, controller) = controller_with_open_database();
+        let (_dir, ui, controller) = controller_with_open_database();
         let state = ui.global::<ResultsState>();
         state.set_rail_mode(ResultsRailMode::Charts);
 
@@ -7034,7 +7035,7 @@ pub(crate) mod tests {
 
     #[test]
     fn open_database_populates_classes_columns_images_and_default_filters() {
-        let (ui, controller) = controller_with_open_database();
+        let (_dir, ui, controller) = controller_with_open_database();
 
         let classes = controller.classes.lock().unwrap();
         assert_eq!(classes.len(), 2);
@@ -7072,7 +7073,7 @@ pub(crate) mod tests {
 
     #[test]
     fn list_image_and_class_filters_narrow_the_cached_row_locations() {
-        let (ui, controller) = controller_with_open_database();
+        let (_dir, ui, controller) = controller_with_open_database();
         let state = ui.global::<ResultsState>();
 
         state.invoke_list_image_selected("A1_01.tif".into(), true);
@@ -7131,7 +7132,7 @@ pub(crate) mod tests {
         // panic, and narrowing the dropdown's visible rows doesn't touch
         // the real query filter or the row cache it drives. The actual
         // filtering logic is unit-tested directly below instead.
-        let (ui, controller) = controller_with_open_database();
+        let (_dir, ui, controller) = controller_with_open_database();
         let state = ui.global::<ResultsState>();
 
         state.invoke_list_image_filter_changed("A1".into());
@@ -7596,7 +7597,7 @@ pub(crate) mod tests {
     /// eye hides one, again shows it.
     #[test]
     fn the_split_drawer_picks_the_classes_drawn() {
-        let (ui, controller) = controller_with_open_database();
+        let (_dir, ui, controller) = controller_with_open_database();
         drain_ui_queue();
         let state = ui.global::<ResultsState>();
         let shown = || -> Vec<(String, bool)> {
@@ -7622,7 +7623,7 @@ pub(crate) mod tests {
     /// and back when the view is applied again (another analysis, a switch).
     #[test]
     fn the_split_drawers_hidden_classes_are_kept_in_the_view() {
-        let (ui, controller) = controller_with_open_database();
+        let (_dir, ui, controller) = controller_with_open_database();
         drain_ui_queue();
         let state = ui.global::<ResultsState>();
 
@@ -7768,7 +7769,7 @@ pub(crate) mod tests {
 
     #[test]
     fn list_columns_group_by_coloc_details_and_pagination_do_not_panic() {
-        let (ui, controller) = controller_with_open_database();
+        let (_dir, ui, controller) = controller_with_open_database();
         let state = ui.global::<ResultsState>();
 
         state.invoke_list_columns_item_selected("area_px".into(), true);
@@ -7876,7 +7877,7 @@ pub(crate) mod tests {
     /// row stays selected, the bar on the image says which (and steps).
     #[test]
     fn a_clicked_row_peeks_at_its_object_on_the_image() {
-        let (ui, controller) = controller_with_open_database();
+        let (_dir, ui, controller) = controller_with_open_database();
         let state = ui.global::<ResultsState>();
         ui.global::<crate::LayoutState>()
             .set_mode(crate::WorkspaceMode::Results);
@@ -7920,7 +7921,7 @@ pub(crate) mod tests {
 
     #[test]
     fn matrix_toolbar_callbacks_update_the_filter_and_refresh_the_grid() {
-        let (ui, controller) = controller_with_open_database();
+        let (_dir, ui, controller) = controller_with_open_database();
         let state = ui.global::<ResultsState>();
 
         state.invoke_matrix_value_clicked();
@@ -8001,7 +8002,7 @@ pub(crate) mod tests {
 
     #[test]
     fn plate_well_and_image_heatmap_drill_down_all_the_way() {
-        let (ui, controller) = controller_with_open_database();
+        let (_dir, ui, controller) = controller_with_open_database();
         let state = ui.global::<ResultsState>();
 
         state.invoke_rail_mode_selected(ResultsRailMode::Matrix);
@@ -8056,7 +8057,7 @@ pub(crate) mod tests {
     /// without recoloring it.
     #[test]
     fn breadcrumb_nav_back_to_plate_refreshes_stale_plate_cells() {
-        let (ui, controller) = controller_with_open_database();
+        let (_dir, ui, controller) = controller_with_open_database();
         let state = ui.global::<ResultsState>();
 
         state.invoke_rail_mode_selected(ResultsRailMode::Matrix);
@@ -8493,7 +8494,7 @@ pub(crate) mod tests {
 
     #[test]
     fn toggle_active_well_disabled_flips_the_database_and_refreshes_the_well_grid() {
-        let (ui, controller) = controller_with_open_database();
+        let (_dir, ui, controller) = controller_with_open_database();
         let state = ui.global::<ResultsState>();
 
         state.invoke_plate_cell_clicked("A1".into());
@@ -8541,14 +8542,14 @@ pub(crate) mod tests {
 
     #[test]
     fn toggle_active_well_disabled_with_nothing_selected_does_not_panic() {
-        let (ui, _controller) = controller_with_open_database();
+        let (_dir, ui, _controller) = controller_with_open_database();
         ui.global::<ResultsState>()
             .invoke_toggle_active_well_disabled();
     }
 
     #[test]
     fn well_cell_and_image_heatmap_cell_click_with_an_unknown_key_warns_but_does_not_panic() {
-        let (ui, _controller) = controller_with_open_database();
+        let (_dir, ui, _controller) = controller_with_open_database();
         let state = ui.global::<ResultsState>();
         state.invoke_plate_cell_clicked("Z99".into());
         state.invoke_well_cell_clicked("does-not-exist.tif".into());
@@ -8558,7 +8559,7 @@ pub(crate) mod tests {
 
     #[test]
     fn chart_callbacks_switch_kind_and_axes_without_panicking() {
-        let (ui, controller) = controller_with_open_database();
+        let (_dir, ui, controller) = controller_with_open_database();
         let state = ui.global::<ResultsState>();
 
         state.invoke_chart_column_selected("area_px".into());
@@ -8586,7 +8587,7 @@ pub(crate) mod tests {
 
     #[test]
     fn z_and_t_changed_update_the_plane_filter_and_refresh() {
-        let (ui, controller) = controller_with_open_database();
+        let (_dir, ui, controller) = controller_with_open_database();
         let state = ui.global::<ResultsState>();
         state.invoke_z_changed(2);
         state.invoke_t_changed(3);
@@ -10866,7 +10867,7 @@ pub(crate) mod tests {
     /// project (else they can't be opened), the split on.
     fn split_controller() -> (AppWindow, Arc<ResultsStateController>) {
         use evanalyzer_cfg::settings::images_settings::{ImageEntry, SeriesSettings};
-        let (ui, controller) = controller_with_open_database();
+        let (_dir, ui, controller) = controller_with_open_database();
         {
             let mut project = controller._app_state.get_project_write();
             project.images.root = Some(PathBuf::from("/data/images"));

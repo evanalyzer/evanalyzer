@@ -21,6 +21,33 @@
 use duckdb::Connection;
 use std::path::Path;
 
+/// A test's results database and the temp folder it lives in: used as the
+/// `ResultsGenerator` (it derefs to it); dropped, the database closes
+/// first, then the folder goes - tests clean up after themselves.
+pub(crate) struct TestResults {
+    // In this order: the connection closes before the folder is removed.
+    results: super::results_generator::ResultsGenerator,
+    _dir: tempfile::TempDir,
+}
+
+impl TestResults {
+    /// Opens the database at `path`, which lies in `dir`.
+    pub(crate) fn open(dir: tempfile::TempDir, path: &Path) -> Self {
+        Self {
+            results: super::results_generator::ResultsGenerator::open_database(path.into())
+                .expect("open database"),
+            _dir: dir,
+        }
+    }
+}
+
+impl std::ops::Deref for TestResults {
+    type Target = super::results_generator::ResultsGenerator;
+    fn deref(&self) -> &Self::Target {
+        &self.results
+    }
+}
+
 /// A row's worth of single-channel (channel 0) intensity data, as the JSON
 /// [`ObjectSpec::with_intensities`] takes (see [`json_columns_sql`]).
 pub(crate) const CH0_INTENSITIES_JSON: &str = r#"{"0":{"sum_normalized":1.0,"sum_gray":255.0,"mean_normalized":0.5,"mean_gray":127.0,"min_normalized":0.0,"min_gray":0.0,"max_normalized":1.0,"max_gray":255.0}}"#;
@@ -517,12 +544,11 @@ mod tests {
 /// Three neurons: two of class A in image A01 (one reaching radius 20,
 /// one radius 30), one of class B in B01 (radius 10), with their
 /// intersections per radius - and an ordinary measurement.
-pub(crate) fn profile_database() -> super::results_generator::ResultsGenerator {
+pub(crate) fn profile_database() -> TestResults {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("results.evadb");
     seed_profile_db(&path);
-    std::mem::forget(dir);
-    super::results_generator::ResultsGenerator::open_database(path).unwrap()
+    TestResults::open(dir, &path)
 }
 
 /// [`profile_database`]'s results, written to `path`.

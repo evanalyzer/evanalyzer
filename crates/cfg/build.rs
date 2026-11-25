@@ -86,6 +86,9 @@ mod settings {
             "/src/settings/export_settings.rs"
         ));
     }
+    // Markers, leave-out reasons, z-projection: helpers the app uses,
+    // not the schema.
+    #[allow(dead_code)]
     pub mod images_settings {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),

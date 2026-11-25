@@ -350,7 +350,7 @@ mod tests {
     use super::*;
     use crate::results::Grouping;
 
-    fn database() -> ResultsGenerator {
+    fn database() -> super::super::test_support::TestResults {
         profile_database()
     }
 

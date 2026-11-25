@@ -1136,19 +1136,14 @@ fn value_to_f64(value: Value) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::super::results_generator::ResultsGenerator;
-    use super::super::test_support::{ObjectSpec, seed_db};
+    use super::super::test_support::{ObjectSpec, TestResults, seed_db};
     use super::*;
 
-    fn open(objects: &[ObjectSpec]) -> ResultsGenerator {
+    fn open(objects: &[ObjectSpec]) -> TestResults {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("results.evadb");
         seed_db(&path, objects);
-        // Leaking the tempdir keeps the backing file alive for the life of
-        // the returned `ResultsGenerator` (which only holds an open
-        // `duckdb::Connection`, not the directory) - acceptable for a test
-        // process that exits shortly after.
-        std::mem::forget(dir);
-        ResultsGenerator::open_database(path).expect("open database")
+        TestResults::open(dir, &path)
     }
 
     fn plane() -> PlaneFilter {
