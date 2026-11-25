@@ -1,0 +1,20 @@
+[package]
+name = "evanalyzer_nn"
+description = "Neural network crate, containing models architecture, weight importer, backend and device choice (GPU, CPU), GPU scheduler, training loops"
+version = { workspace = true }
+edition = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+publish = { workspace = true }
+
+
+[lib]
+name = "evanalyzer_nn"
+doctest = false
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+postcard = { workspace = true }
+log = { workspace = true }
+tempfile = { workspace = true, optional = true }
+burn = { workspace = true }

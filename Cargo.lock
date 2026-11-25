@@ -2679,6 +2679,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "evanalyzer_nn"
+version = "0.0.0-dev"
+dependencies = [
+ "burn",
+ "log",
+ "postcard",
+ "serde",
+ "tempfile",
+]
+
+[[package]]
 name = "evanalyzer_server"
 version = "0.0.0-dev"
 dependencies = [

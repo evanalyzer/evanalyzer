@@ -18,6 +18,7 @@ publish = false
 evanalyzer_core = { path = "crates/core" }
 evanalyzer_cfg = { path = "crates/cfg" }
 evanalyzer_ai = { path = "crates/ai" }
+evanalyzer_nn = { path = "crates/nn" }
 evanalyzer_app = { path = "crates/app" }
 evanalyzer_gui    = { path = "crates/gui" }
 evanalyzer_cli    = { path = "crates/cli" }
