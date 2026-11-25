@@ -512,17 +512,30 @@ impl Object {
             return FittingEllipse::default();
         }
 
-        let xc = self.sum_x as f64 / n;
-        let yc = self.sum_y as f64 / n;
-
-        let mu20 = (self.sum_x2 as f64 / n) - xc.powi(2);
-        let mu02 = (self.sum_y2 as f64 / n) - yc.powi(2);
-        let mu11 = (self.sum_xy as f64 / n) - (xc * yc);
+        // The central moments exactly, in integers: `sum_x2/n - (sum_x/n)²`
+        // in floating point subtracts two large, nearly equal numbers (the
+        // pixels' image coordinates squared) and lost so much that a line
+        // of pixels far from the origin got a negative spread - a NaN minor
+        // axis and a wrong eccentricity.
+        let central = |sum_ab: u64, sum_a: u64, sum_b: u64| {
+            let (count, sum_ab, sum_a, sum_b) = (
+                self.area as i128,
+                sum_ab as i128,
+                sum_a as i128,
+                sum_b as i128,
+            );
+            (count * sum_ab - sum_a * sum_b) as f64 / (n * n)
+        };
+        let mu20 = central(self.sum_x2, self.sum_x, self.sum_x);
+        let mu02 = central(self.sum_y2, self.sum_y, self.sum_y);
+        let mu11 = central(self.sum_xy, self.sum_x, self.sum_y);
 
         let common = ((mu20 - mu02).powi(2) + 4.0 * mu11.powi(2)).sqrt();
 
         let major = (8.0 * (mu20 + mu02 + common)).sqrt() as f32;
-        let minor = (8.0 * (mu20 + mu02 - common)).sqrt() as f32;
+        // A line of pixels: exactly 0, which rounding in `common` can take
+        // below 0 - never the root of a negative number.
+        let minor = (8.0 * (mu20 + mu02 - common)).max(0.0).sqrt() as f32;
 
         // Calculate Eccentricity
         // We use .max(0.0) to prevent NaN from tiny floating point inaccuracies
@@ -2801,6 +2814,48 @@ mod tests {
             object.colocalized_with[&ObjectClass::Global(5)],
             [ObjectId(9)]
         );
+    }
+
+    /// A diagonal line of three pixels far from the image origin: minor
+    /// axis 0 and eccentricity 1 wherever it lies - in floating point the
+    /// pixels' spread came out below 0 (NaN minor axis, eccentricity 0),
+    /// stored for 263 objects of a real results file.
+    #[test]
+    fn a_line_of_pixels_has_minor_axis_0_and_eccentricity_1_anywhere_in_the_image() {
+        for (x0, y0) in [(0u64, 0u64), (1621, 342), (893, 1829), (40_000, 30_000)] {
+            let pixels = [(x0, y0), (x0 + 1, y0 + 1), (x0 + 2, y0 + 2)];
+            let object = Object::new(ObjectInit {
+                area: 3,
+                sum_x: pixels.iter().map(|p| p.0).sum(),
+                sum_y: pixels.iter().map(|p| p.1).sum(),
+                sum_x2: pixels.iter().map(|p| p.0 * p.0).sum(),
+                sum_y2: pixels.iter().map(|p| p.1 * p.1).sum(),
+                sum_xy: pixels.iter().map(|p| p.0 * p.1).sum(),
+                ..Default::default()
+            });
+            let ellipse = object.get_ellipse();
+            assert_eq!(ellipse.minor, 0.0, "at {x0},{y0}");
+            assert_eq!(ellipse.eccentricity, 1.0, "at {x0},{y0}");
+            assert!((ellipse.major - 4.618_802).abs() < 1e-4, "at {x0},{y0}");
+        }
+    }
+
+    /// Lines of pixels - straight, diagonal, with gaps: the narrowest
+    /// caliper width 0, never NaN.
+    #[test]
+    fn a_line_of_pixels_has_min_feret_0() {
+        let (t, f) = (true, false);
+        let patterns: [&[&[bool]]; 4] = [
+            &[&[t, t, t]],
+            &[&[t], &[t], &[t]],
+            &[&[t, f, f], &[f, t, f], &[f, f, t]],
+            &[&[t, f, f, f], &[f, t, f, f], &[f, f, f, f], &[f, f, f, t]],
+        ];
+        for pattern in patterns {
+            let (min_feret, feret) = object_from_pattern(pattern).feret_diameters();
+            assert_eq!(min_feret, 0.0, "{pattern:?}");
+            assert!(feret > 0.0, "{pattern:?}");
+        }
     }
 
     /// The Feret diameters of a filled 3 x 4 rectangle: over the pixel

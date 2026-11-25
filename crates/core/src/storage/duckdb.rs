@@ -742,7 +742,7 @@ const ARROW_BATCH_ROWS: usize = 50_000;
 
 /// The `objects` table's DOUBLE columns (placed by
 /// `ObjectColumns::finish`).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum F64 {
     CentroidXPx,
     CentroidYPx,
@@ -1028,12 +1028,19 @@ impl ObjectColumns {
         }
     }
 
+    /// Never NaN or infinity: a measurement that can't be computed is NULL
+    /// or a defined value (checked in debug builds, so every test does).
     fn f64(&mut self, column: F64, value: f64) {
+        debug_assert!(value.is_finite(), "{column:?} = {value}: not a number");
         self.f64[column as usize].append_value(value);
     }
 
-    /// NULL for `None`.
+    /// NULL for `None` - see [`Self::f64`].
     fn f64_opt(&mut self, column: F64, value: Option<f64>) {
+        debug_assert!(
+            value.is_none_or(f64::is_finite),
+            "{column:?} = {value:?}: not a number"
+        );
         self.f64[column as usize].append_option(value);
     }
 
