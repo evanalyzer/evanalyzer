@@ -47,6 +47,9 @@ mod undo_history;
 // Wraps AppHandle and the Slint window handle
 // ----------------------------------------------------------------
 
+/// See [`UiState::on_analysis_finished`].
+type AnalysisFinishedListener = Box<dyn Fn(&std::path::Path) + Send + Sync>;
+
 pub struct UiState {
     pub app: AppHandle, // cloneable handle - no Arc needed, AppHandle is already Arc inside
     pub ui_handle: slint::Weak<AppWindow>,
@@ -100,6 +103,12 @@ pub struct UiState {
     /// `image_states`.
     image_states_listener: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
     results_views_listener: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+    exports_listener: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+    /// Called with a finished analysis' folder (not a preview's).
+    analysis_finished_listener: Mutex<Option<AnalysisFinishedListener>>,
+    /// The exports the run dialog left on for the run going on (`None`:
+    /// those set to run after analysis).
+    exports_for_run: Mutex<Option<Vec<u32>>>,
     /// Called once another image (or series) is shown - see `image_opened`.
     image_opened_listeners: Mutex<Vec<Box<dyn Fn() + Send + Sync>>>,
     /// Called once a trained model is saved - see `model_saved`.
@@ -148,6 +157,9 @@ impl UiState {
             local_backend,
             image_states_listener: Mutex::new(None),
             results_views_listener: Mutex::new(None),
+            exports_listener: Mutex::new(None),
+            analysis_finished_listener: Mutex::new(None),
+            exports_for_run: Mutex::new(None),
             image_opened_listeners: Mutex::new(Vec::new()),
             model_saved_listeners: Mutex::new(Vec::new()),
             pipeline_added_listeners: Mutex::new(Vec::new()),
@@ -212,6 +224,46 @@ impl UiState {
     /// Calls `f` when an undo or redo changed the project's results views.
     pub fn on_results_views_restored(&self, f: impl Fn() + Send + Sync + 'static) {
         *self.results_views_listener.lock().expect("Poisoned") = Some(Box::new(f));
+    }
+
+    /// Calls `f` when an undo or redo changed the project's exports.
+    pub fn on_exports_restored(&self, f: impl Fn() + Send + Sync + 'static) {
+        *self.exports_listener.lock().expect("Poisoned") = Some(Box::new(f));
+    }
+
+    fn exports_restored(&self) {
+        if let Some(listener) = self.exports_listener.lock().expect("Poisoned").as_ref() {
+            listener();
+        }
+    }
+
+    /// Calls `f` with the folder of every analysis that finished (on the
+    /// worker's thread).
+    pub fn on_analysis_finished(&self, f: impl Fn(&std::path::Path) + Send + Sync + 'static) {
+        *self.analysis_finished_listener.lock().expect("Poisoned") = Some(Box::new(f));
+    }
+
+    /// An analysis finished into `output_dir`.
+    pub fn analysis_finished(&self, output_dir: &std::path::Path) {
+        if let Some(listener) = self
+            .analysis_finished_listener
+            .lock()
+            .expect("Poisoned")
+            .as_ref()
+        {
+            listener(output_dir);
+        }
+    }
+
+    /// The exports to run after the run being started (the run dialog's
+    /// "Afterwards").
+    pub fn set_exports_for_run(&self, ids: Option<Vec<u32>>) {
+        *self.exports_for_run.lock().expect("Poisoned") = ids;
+    }
+
+    /// The exports to run after the run that just finished - asked once.
+    pub fn take_exports_for_run(&self) -> Option<Vec<u32>> {
+        self.exports_for_run.lock().expect("Poisoned").take()
     }
 
     fn results_views_restored(&self) {
@@ -565,9 +617,11 @@ impl UiState {
             .push(current, self.undo_budget());
 
         let views_changed;
+        let exports_changed;
         {
             let mut project = self.app.get_project_write();
             views_changed = project.settings.results_views != prev.results_views;
+            exports_changed = project.settings.exports != prev.exports;
             // Folding the images list and the class eyes are no edits:
             // they stay as they are.
             let folded = std::mem::take(&mut project.settings.images.collapsed_folders);
@@ -589,6 +643,9 @@ impl UiState {
         if views_changed {
             self.results_views_restored();
         }
+        if exports_changed {
+            self.exports_restored();
+        }
         true
     }
 
@@ -606,9 +663,11 @@ impl UiState {
             .push(current, self.undo_budget());
 
         let views_changed;
+        let exports_changed;
         {
             let mut project = self.app.get_project_write();
             views_changed = project.settings.results_views != next.results_views;
+            exports_changed = project.settings.exports != next.exports;
             // Folding the images list and the class eyes are no edits:
             // they stay as they are.
             let folded = std::mem::take(&mut project.settings.images.collapsed_folders);
@@ -625,6 +684,9 @@ impl UiState {
         self.mark_dirty();
         if views_changed {
             self.results_views_restored();
+        }
+        if exports_changed {
+            self.exports_restored();
         }
         true
     }

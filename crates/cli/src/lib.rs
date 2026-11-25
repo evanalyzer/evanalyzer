@@ -16,7 +16,10 @@ mod commands;
 mod overrides;
 mod table;
 
-pub use args::{CliCommand, JobsSubCommand, ProjectSubCommand, ResultsSubCommand};
+pub use args::{
+    CliCommand, ExportSubCommand, JobsSubCommand, ProjectSubCommand, ResultsSubCommand,
+    TrustSubCommand,
+};
 
 use evanalyzer_app::backend::Backend;
 use evanalyzer_cfg::core_types::InternalErrors;
@@ -56,6 +59,16 @@ pub fn run(command: CliCommand, backend: &dyn Backend) -> Result<(), InternalErr
             args::JobsSubCommand::Attach(attach_args) => {
                 commands::jobs::run_attach(attach_args, backend)
             }
+        },
+        CliCommand::Export(export_sub_command) => match export_sub_command {
+            args::ExportSubCommand::List(list_args) => {
+                commands::exports::run_list(list_args, backend)
+            }
+            args::ExportSubCommand::View(view_args) => {
+                commands::exports::run_view(view_args, backend)
+            }
+            args::ExportSubCommand::Run(run_args) => commands::exports::run_run(run_args, backend),
+            args::ExportSubCommand::Trust(trust) => commands::trust::run(trust, backend),
         },
         CliCommand::TrainClassifier(train_classifier_args) => {
             commands::train_classifier::run(train_classifier_args, backend)

@@ -29,8 +29,10 @@ pub mod ai_learning_controller;
 pub(crate) mod ai_learning_features;
 pub mod annotations_controller;
 pub mod classification_controller;
+pub(crate) mod column_picker;
 pub mod command_palette_controller;
 pub mod connection_controller;
+pub mod exports_controller;
 pub mod focus_controller;
 pub mod histogram_controller;
 pub mod image_meta_controller;
@@ -56,6 +58,7 @@ pub(crate) mod step_model_patch;
 pub mod template_controller;
 #[cfg(test)]
 pub(crate) mod test_support;
+pub mod trusted_scripts_controller;
 pub mod undo_redo_controller;
 pub(crate) mod view_channel;
 pub mod viewport_cache;
@@ -92,6 +95,8 @@ pub struct Editor {
     script_editor_controller: script_editor_controller::ScriptEditorController,
     command_palette_controller: command_palette_controller::CommandPaletteController,
     start_page_controller: Arc<start_page_controller::StartPageController>,
+    exports_controller: Arc<exports_controller::ExportsController>,
+    trusted_scripts_controller: Arc<trusted_scripts_controller::TrustedScriptsController>,
 }
 
 impl Editor {
@@ -265,8 +270,20 @@ impl Editor {
             project_controller.clone(),
         ));
 
+        let exports_controller = Arc::new(exports_controller::ExportsController::new(
+            ui.clone(),
+            app_state.clone(),
+        ));
+        let trusted_scripts_controller =
+            Arc::new(trusted_scripts_controller::TrustedScriptsController::new(
+                ui.clone(),
+                app_state.clone(),
+            ));
+
         Self {
             start_page_controller,
+            exports_controller,
+            trusted_scripts_controller,
             connection_controller,
             script_editor_controller,
             command_palette_controller,
@@ -296,6 +313,8 @@ impl Editor {
         self.image_list_controller.attach_callbacks();
         self.project_controller.attach_callbacks();
         self.start_page_controller.attach_callbacks();
+        self.exports_controller.attach_callbacks();
+        self.trusted_scripts_controller.attach_callbacks();
         self.histogram_controller.attach_callbacks();
         self.viewport_image_controller.attach_callbacks();
         self.image_meta_controller.attach_callbacks();

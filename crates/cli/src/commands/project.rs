@@ -50,9 +50,7 @@ pub fn run(args: ProjectInfoArgs, backend: &dyn Backend) -> Result<(), InternalE
             "pipelines": pipelines.iter().map(|(name, enabled, steps)| json!({
                 "name": name,
                 "enabled": enabled,
-                "steps": steps,
-            })).collect::<Vec<_>>(),
-        });
+                "steps": steps })).collect::<Vec<_>>() });
         println!("{}", serde_json::to_string_pretty(&out).unwrap());
         return Ok(());
     }
@@ -192,6 +190,35 @@ pub fn run_validate(args: ValidateArgs, backend: &dyn Backend) -> Result<(), Int
         println!("  error: {channels}");
     }
 
+    let export_problems = evanalyzer_app::exports::check::check_exports(settings);
+    let export_errors = export_problems
+        .iter()
+        .filter(|p| p.severity == Severity::Error)
+        .count();
+    if !settings.exports.is_empty() {
+        println!("Checked {} export(s)", settings.exports.len());
+        if export_problems.is_empty() {
+            println!("No problems found in the exports.");
+        }
+    }
+    for problem in &export_problems {
+        let severity = match problem.severity {
+            Severity::Error => "error",
+            Severity::Warning => "warning",
+        };
+        let place = match problem
+            .export
+            .and_then(|id| settings.exports.iter().find(|e| e.id == id))
+        {
+            Some(export) => match problem.entry {
+                Some(i) => format!("export “{}”, entry {}", export.name, i + 1),
+                None => format!("export “{}”", export.name),
+            },
+            None => "exports".to_string(),
+        };
+        println!("  {severity}: {place}: {}", problem.message);
+    }
+
     let mut failures = Vec::new();
     if !missing.is_empty() {
         failures.push(format!(
@@ -201,6 +228,9 @@ pub fn run_validate(args: ValidateArgs, backend: &dyn Backend) -> Result<(), Int
     }
     if errors > 0 {
         failures.push(format!("{errors} error(s) in the pipelines"));
+    }
+    if export_errors > 0 {
+        failures.push(format!("{export_errors} error(s) in the exports"));
     }
     if failures.is_empty() {
         return Ok(());
@@ -385,6 +415,34 @@ mod tests {
             panic!("expected InvalidArgument, got {err:?}");
         };
         assert!(msg.contains("1 of 1"));
+    }
+
+    /// A broken export fails the check; a sound one passes.
+    #[test]
+    fn validate_checks_the_exports() {
+        let mut settings = ProjectSettings {
+            exports: serde_json::from_value(serde_json::json!([
+                { "id": 1, "name": "Tables", "entries": [{ "kind": "DATA", "outputs": ["OBJECTS"] }] },
+                { "id": 2, "name": "tables" }
+            ]))
+            .unwrap(),
+            ..Default::default()
+        };
+        let file = TempProjectFile::new(&settings);
+        let validate = |file: &TempProjectFile| {
+            run_validate(ValidateArgs {
+                project: file.path.clone(),
+                image: None,
+                set: Vec::new(),
+            })
+        };
+        let Err(InternalErrors::InvalidArgument(msg)) = validate(&file) else {
+            panic!("expected the duplicate name to fail the check");
+        };
+        assert_eq!(msg, "1 error(s) in the exports");
+
+        settings.exports[1].name = "Images".into();
+        assert!(validate(&TempProjectFile::new(&settings)).is_ok());
     }
 
     /// A project whose pipeline "Nuclei" measures as step 1, the

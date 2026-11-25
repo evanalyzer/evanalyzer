@@ -1,0 +1,1533 @@
+// Copyright 2026 Joachim Danmayr.
+// Licensed under the PolyForm Noncommercial License 1.0.0.
+
+// exports/exports_view.slint — the Exports tab: the project's exports on the
+// left, the one picked in the middle (what it writes, where to, when), the
+// entry picked on the right with the last run's report. Sits on the ground,
+// not over other content: no blur.
+
+import { Ink, InkIcons, InkCheckList, InkButton, InkButtonKind, InkIconButton, InkCheckbox, InkSwitch, InkSegmented, InkSelect, InkTextField, InkListRow, InkLabel, InkCaption, InkHint, InkBanner, InkTone, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator, InkProgressBar } from "../ink/ink.slint";
+import { ExportsState, ExportRow, ExportEntryRow, RunPart } from "../api/exports.slint";
+import { PipelineRunningState } from "../api/pipeline_running.slint";
+import { ColumnPicker, ValuesClassesPart, RelatedPart } from "../results/results_panel.slint";
+import { ViewPanel } from "../results/results_view_bar.slint";
+
+// A column's card.
+component Card inherits Rectangle {
+    background: Ink.panel;
+    border-radius: Ink.radius-lg;
+    border-width: 1px;
+    border-color: Ink.border;
+    clip: true;
+}
+
+// A card's head: its title and what is next to it.
+component CardHead inherits HorizontalLayout {
+    in property <string> title;
+    in property <string> count;
+    padding-left: 14px;
+    padding-right: 10px;
+    height: 44px;
+    spacing: 8px;
+    Text {
+        text: root.title;
+        font-size: Ink.fs-body;
+        font-weight: 600;
+        color: Ink.text;
+        vertical-alignment: center;
+    }
+    Text {
+        text: root.count;
+        font-size: Ink.fs-body;
+        color: Ink.text-mute;
+        vertical-alignment: center;
+        horizontal-stretch: 1;
+    }
+    @children
+}
+
+// A text setting: given by `value`, kept on Enter and when the focus
+// leaves (`commit`).
+component Field inherits InkTextField {
+    callback commit(string);
+    accepted(text) => {
+        root.commit(text);
+    }
+    changed has-focus => {
+        if !self.has-focus && self.text != self.value {
+            root.commit(self.text);
+        }
+    }
+}
+
+// A labelled setting: the label above, the control below.
+component Setting inherits VerticalLayout {
+    in property <string> label;
+    spacing: 4px;
+    InkCaption {
+        text: root.label;
+    }
+    @children
+}
+
+// What the last run did on one analysis (board 4 L1): ✓ / ⚠, its name
+// and age, a few words, the folder (its path as the tip), ▾ for the
+// report's lines.
+component RunPartRow inherits VerticalLayout {
+    in property <RunPart> part;
+    callback toggled();
+    callback open-folder();
+    spacing: 2px;
+    Rectangle {
+        height: 34px;
+        border-radius: Ink.radius-md;
+        background: ta.has-hover ? Ink.row-hover : transparent;
+        ta := TouchArea {
+            clicked => {
+                root.toggled();
+            }
+        }
+        HorizontalLayout {
+            padding-left: 6px;
+            padding-right: 2px;
+            spacing: 8px;
+            VerticalLayout {
+                alignment: center;
+                Image {
+                    width: 14px;
+                    source: root.part.ok ? InkIcons.check : InkIcons.warning;
+                    colorize: root.part.ok ? Ink.ok : Ink.warn;
+                    image-fit: contain;
+                }
+            }
+            Text {
+                text: root.part.name;
+                font-size: Ink.fs-body;
+                font-weight: 500;
+                color: Ink.text;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            if root.part.when != "": Text {
+                text: "· " + root.part.when;
+                font-size: Ink.fs-secondary;
+                color: Ink.text-mute;
+                vertical-alignment: center;
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: root.part.summary;
+                font-size: Ink.fs-secondary;
+                color: root.part.ok ? Ink.text-mute : Ink.warn;
+                vertical-alignment: center;
+            }
+            VerticalLayout {
+                alignment: center;
+                width: 26px;
+                if root.part.folder != "": InkIconButton {
+                    size: 26px;
+                    on-row: true;
+                    icon: InkIcons.folder;
+                    label: "Open exported folder";
+                    clicked => {
+                        root.open-folder();
+                    }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                InkIconButton {
+                    size: 26px;
+                    on-row: true;
+                    icon: root.part.open ? InkIcons.caret-up : InkIcons.caret-down;
+                    label: root.part.open ? "Hide the report" : "Show the report";
+                    clicked => {
+                        root.toggled();
+                    }
+                }
+            }
+        }
+    }
+    if root.part.open: Rectangle {
+        background: Ink.hover;
+        border-radius: Ink.radius-md;
+        VerticalLayout {
+            padding: 8px;
+            padding-left: 10px;
+            spacing: 2px;
+            for line in root.part.lines: Text {
+                text: line;
+                font-family: Ink.font-mono;
+                font-size: Ink.fs-secondary;
+                color: Ink.text-dim;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
+
+// One entry of the export: what it writes; picked, its settings show on
+// the right.
+component EntryCard inherits Rectangle {
+    in property <ExportEntryRow> entry;
+    in property <int> index;
+    in property <bool> selected;
+    in property <bool> first;
+    in property <bool> last;
+    callback clicked();
+
+    height: 58px;
+    border-radius: Ink.radius-lg;
+    border-width: root.selected ? 2px : 1px;
+    border-color: root.selected ? Ink.focus : Ink.border;
+    background: ta.has-hover && !root.selected ? Ink.hover : Ink.panel;
+    accessible-role: list-item;
+    accessible-label: root.entry.title;
+    accessible-item-selected: root.selected;
+
+    ta := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 6px;
+        spacing: 12px;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 32px;
+                height: 32px;
+                border-radius: Ink.radius-md;
+                background: root.entry.kind == "SCRIPT" ? Ink.warn-tint : Ink.info-tint;
+                Text {
+                    text: root.entry.kind == "SCRIPT" ? (root.entry.format == "R" ? "R" : "Py")
+                        : root.entry.kind == "DRAWN_IMAGES" ? "◫" : "▤";
+                    font-size: Ink.fs-body;
+                    font-weight: 600;
+                    color: root.entry.kind == "SCRIPT" ? Ink.warn : Ink.info;
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            Text {
+                text: root.entry.title;
+                font-size: Ink.fs-body;
+                font-weight: 600;
+                color: Ink.text;
+                overflow: elide;
+            }
+            Text {
+                text: root.entry.subtitle;
+                font-size: Ink.fs-secondary;
+                color: Ink.text-dim;
+                overflow: elide;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            InkIconButton {
+                size: 26px;
+                icon: InkIcons.caret-up;
+                label: "Earlier";
+                enabled: !root.first;
+                clicked => {
+                    ExportsState.move-entry(root.index, -1);
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            InkIconButton {
+                size: 26px;
+                icon: InkIcons.caret-down;
+                label: "Later";
+                enabled: !root.last;
+                clicked => {
+                    ExportsState.move-entry(root.index, 1);
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            InkIconButton {
+                size: 26px;
+                icon: InkIcons.delete;
+                label: "Remove this entry";
+                clicked => {
+                    ExportsState.remove-entry(root.index);
+                }
+            }
+        }
+    }
+}
+
+// The classes, as the Results List lists them.
+component Classes inherits InkCheckList {
+    title: "CLASSES · " + ExportsState.classes-summary;
+    items: ExportsState.classes;
+    list-height: self.items.length * 24px + 4px;
+    item-selected(key, value, on) => {
+        ExportsState.set-entry-field("class:" + key, on ? "1" : "0");
+    }
+    select-all => {
+        ExportsState.set-entry-field("all-classes", "");
+    }
+    select-none => {
+        ExportsState.set-entry-field("no-classes", "");
+    }
+}
+
+// One plane range: All, or from - to (counted from 0).
+component PlaneRange inherits Setting {
+    in property <string> key;
+    in property <bool> ranged;
+    in property <string> from;
+    in property <string> to;
+    HorizontalLayout {
+        spacing: 8px;
+        InkSegmented {
+            width: 140px;
+            label: root.label;
+            model: ["All", "Range"];
+            selected: root.ranged ? 1 : 0;
+            picked(i) => {
+                ExportsState.set-entry-field(root.key, i == 0 ? "all" : (root.from == "" ? "0" : root.from) + "-" + (root.to == "" ? "0" : root.to));
+            }
+        }
+        if root.ranged: Field {
+            width: 64px;
+            label: root.label + " from";
+            mono: true;
+            value: root.from;
+            commit(text) => {
+                ExportsState.set-entry-field(root.key, text + "-" + root.to);
+            }
+        }
+        if root.ranged: Text {
+            text: "to";
+            color: Ink.text-dim;
+            font-size: Ink.fs-body;
+            vertical-alignment: center;
+        }
+        if root.ranged: Field {
+            width: 64px;
+            label: root.label + " to";
+            mono: true;
+            value: root.to;
+            commit(text) => {
+                ExportsState.set-entry-field(root.key, root.from + "-" + text);
+            }
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+    }
+}
+
+// The z-planes and time points an entry writes.
+component Planes inherits VerticalLayout {
+    spacing: 12px;
+    PlaneRange {
+        label: "Z-planes";
+        key: "z-planes";
+        ranged: ExportsState.z-range;
+        from: ExportsState.z-from;
+        to: ExportsState.z-to;
+    }
+    PlaneRange {
+        label: "Time points";
+        key: "t-planes";
+        ranged: ExportsState.t-range;
+        from: ExportsState.t-from;
+        to: ExportsState.t-to;
+    }
+}
+
+// An output's own settings, under its tick.
+component OutputSettings inherits Rectangle {
+    background: Ink.raised;
+    border-radius: Ink.radius-md;
+    VerticalLayout {
+        padding: 10px;
+        padding-left: 12px;
+        spacing: 10px;
+        @children
+    }
+}
+
+// The settings of the entry picked, by its kind.
+component EntrySettings inherits VerticalLayout {
+    // A table's part shown (the Results List's: Columns, Images, Classes,
+    // Values - and Table, its file).
+    in property <string> part;
+    spacing: 14px;
+
+    // A data export's outputs - the old export dialog's ticks; an output's
+    // own settings under it while ticked; then the settings of them all.
+    if ExportsState.entry-kind == "DATA" && root.part == "Outputs": VerticalLayout {
+        spacing: 4px;
+        for row in ExportsState.outputs: VerticalLayout {
+            spacing: 4px;
+            if row.group != "": Text {
+                text: row.group;
+                font-size: Ink.fs-caption;
+                font-weight: 600;
+                color: Ink.text-mute;
+                height: 26px;
+                vertical-alignment: bottom;
+            }
+            InkCheckbox {
+                text: row.text;
+                tip: row.tip;
+                checked: row.on;
+                toggled(on) => {
+                    ExportsState.set-entry-field("output:" + row.key, on ? "1" : "0");
+                }
+            }
+            if row.on && row.key == "TRACKS": OutputSettings {
+                HorizontalLayout {
+                    spacing: 8px;
+                    Setting {
+                        label: "At least (time points)";
+                        Field {
+                            width: 64px;
+                            label: "At least time points";
+                            mono: true;
+                            value: ExportsState.tracks-min-points;
+                            commit(text) => {
+                                ExportsState.set-entry-field("tracks-min-points", text);
+                            }
+                        }
+                    }
+                    Setting {
+                        label: "Speed in";
+                        InkSegmented {
+                            label: "Speed in";
+                            model: ["px/frame", "µm/min", "µm/s"];
+                            selected: ExportsState.tracks-speed;
+                            picked(i) => {
+                                ExportsState.set-entry-field("tracks-speed", i);
+                            }
+                        }
+                    }
+                }
+                InkSwitch {
+                    text: "Only tracks from the first time point";
+                    checked: ExportsState.tracks-from-start;
+                    toggled(on) => {
+                        ExportsState.set-entry-field("tracks-from-start", on ? "1" : "0");
+                    }
+                }
+                InkSwitch {
+                    text: "Leave out tracks touching the image edge";
+                    checked: ExportsState.tracks-no-edge;
+                    toggled(on) => {
+                        ExportsState.set-entry-field("tracks-no-edge", on ? "1" : "0");
+                    }
+                }
+            }
+            if row.on && row.key == "TIME_COURSE": OutputSettings {
+                Setting {
+                    label: "A line per";
+                    InkSegmented {
+                        label: "A line per";
+                        model: ["Class", "Image", "Well", "Track"];
+                        selected: ExportsState.time-lines;
+                        picked(i) => {
+                            ExportsState.set-entry-field("time-lines", i);
+                        }
+                    }
+                }
+                Setting {
+                    label: "Tables";
+                    InkSegmented {
+                        label: "Tables";
+                        model: ["Long (scripts)", "Wide", "Both"];
+                        tips: ["A row per time point and line", "A table per value: a row per time point, a column per line", "Both"];
+                        selected: ExportsState.time-layout;
+                        picked(i) => {
+                            ExportsState.set-entry-field("time-layout", i);
+                        }
+                    }
+                }
+                InkSwitch {
+                    text: "Relative to the first time point (%)";
+                    checked: ExportsState.time-relative;
+                    toggled(on) => {
+                        ExportsState.set-entry-field("time-relative", on ? "1" : "0");
+                    }
+                }
+                if ExportsState.time-lines == 3: InkSwitch {
+                    text: "Each track with its parents' history";
+                    checked: ExportsState.time-with-parents;
+                    toggled(on) => {
+                        ExportsState.set-entry-field("time-with-parents", on ? "1" : "0");
+                    }
+                }
+            }
+            if row.on && row.key == "PROFILE": OutputSettings {
+                Setting {
+                    label: "Profile";
+                    InkSelect {
+                        label: "Profile";
+                        placeholder: ExportsState.profile-names.length == 0 ? "No profile in the newest analysis" : "Pick the profile…";
+                        model: ExportsState.profile-names;
+                        value: ExportsState.profile-name;
+                        enabled: ExportsState.profile-names.length > 0;
+                        picked(i, name) => {
+                            ExportsState.set-entry-field("profile-pick", i);
+                        }
+                    }
+                }
+                Setting {
+                    label: "Rows";
+                    InkSegmented {
+                        label: "Rows";
+                        model: ["Lines (statistics)", "Each object"];
+                        selected: ExportsState.profile-objects ? 1 : 0;
+                        picked(i) => {
+                            ExportsState.set-entry-field("profile-objects", i == 1 ? "1" : "0");
+                        }
+                    }
+                }
+                if !ExportsState.profile-objects: Setting {
+                    label: "A line per";
+                    InkSegmented {
+                        label: "A line per";
+                        model: ["Class", "Image", "Well", "All"];
+                        selected: ExportsState.profile-lines;
+                        picked(i) => {
+                            ExportsState.set-entry-field("profile-lines", i);
+                        }
+                    }
+                }
+            }
+            if row.on && row.key == "IMAGE_HEATMAP": OutputSettings {
+                Setting {
+                    label: "Square size";
+                    InkSegmented {
+                        label: "Square size";
+                        model: ["32 px", "64 px", "128 px", "256 px"];
+                        selected: ExportsState.square;
+                        picked(i) => {
+                            ExportsState.set-entry-field("square", i);
+                        }
+                    }
+                }
+            }
+        }
+        if ExportsState.any-heatmap: Setting {
+            label: "Colors (every heatmap)";
+            InkSelect {
+                label: "Colors";
+                model: ["Excel", "Viridis", "Plasma", "Inferno", "Cividis", "Coolwarm", "Red - blue", "Yellow - green - blue", "Haline", "Algae", "Thermal"];
+                selected: ExportsState.colors;
+                picked(i) => {
+                    ExportsState.set-entry-field("colors", i);
+                }
+            }
+        }
+        Rectangle {
+            height: 1px;
+            background: Ink.border-soft;
+        }
+        Text {
+            text: "FOR ALL OUTPUTS";
+            font-size: Ink.fs-caption;
+            font-weight: 600;
+            color: Ink.text-mute;
+            height: 26px;
+            vertical-alignment: bottom;
+        }
+        VerticalLayout {
+            spacing: 12px;
+            HorizontalLayout {
+                spacing: 10px;
+                Setting {
+                    label: "Format (tables)";
+                    InkSegmented {
+                        label: "File format";
+                        model: ["CSV", "XLSX"];
+                        selected: ExportsState.format;
+                        picked(i) => {
+                            ExportsState.set-entry-field("format", i);
+                        }
+                    }
+                }
+                Setting {
+                    label: "One file per";
+                    InkSelect {
+                        label: "One file per";
+                        model: ["(one file)", "Image", "Well", "Folder", "Class"];
+                        selected: ExportsState.split;
+                        picked(i) => {
+                            ExportsState.set-entry-field("split", i);
+                        }
+                    }
+                }
+            }
+            if ExportsState.format == 1 && ExportsState.split > 0: Setting {
+                label: "Split into";
+                InkSegmented {
+                    label: "Split into";
+                    model: ["Files", "Sheets"];
+                    selected: ExportsState.split-into;
+                    picked(i) => {
+                        ExportsState.set-entry-field("split-into", i);
+                    }
+                }
+            }
+            if ExportsState.can-transpose: InkSwitch {
+                text: "Classes side by side (objects, images, wells, folders)";
+                checked: ExportsState.transposed;
+                toggled(on) => {
+                    ExportsState.set-entry-field("transposed", on ? "1" : "0");
+                }
+            }
+            Planes { }
+            Setting {
+                label: "Images of the run";
+                InkSegmented {
+                    label: "Images of the run";
+                    model: ["All", "Included", "Left out"];
+                    selected: ExportsState.images;
+                    tips: ["Every image, also those left out", "The images the analysis kept", "Only the images left out"];
+                    picked(i) => {
+                        ExportsState.set-entry-field("images", i);
+                    }
+                }
+            }
+        }
+    }
+    if ExportsState.entry-kind == "DATA" && root.part == "Columns": VerticalLayout {
+        spacing: 12px;
+            if ExportsState.columns-default: InkHint {
+                text: "The table's default columns - a pick makes them its own.";
+                wrap: word-wrap;
+            }
+            ColumnPicker {
+                grouped: ExportsState.picker-grouped;
+                filter: ExportsState.picker-filter;
+                presets: ExportsState.picker-presets;
+                sections: ExportsState.picker-sections;
+                intensity-title: ExportsState.picker-intensity-title;
+                intensity-open: ExportsState.picker-intensity-open;
+                intensity-channels: ExportsState.picker-intensity-channels;
+                intensity-stats: ExportsState.picker-intensity-stats;
+                intensity-cells: ExportsState.picker-intensity-cells;
+                has-coloc: ExportsState.picker-has-coloc;
+                coloc-groups: ExportsState.picker-coloc-groups;
+                coloc-title: ExportsState.coloc-title;
+                coloc-open: ExportsState.coloc-open;
+                coloc-partner-items: ExportsState.coloc-partner-items;
+                coloc-partner-summary: ExportsState.coloc-partner-summary;
+                coloc-partner-order: ExportsState.coloc-partner-order;
+                coloc-count: ExportsState.coloc-count;
+                coloc-only-occurring: ExportsState.coloc-only-occurring;
+                filter-edited(text) => {
+                    ExportsState.picker("filter", text, true);
+                }
+                picked(key, on) => {
+                    ExportsState.picker("picked", key, on);
+                }
+                section-toggled(group, open) => {
+                    ExportsState.picker("section", group, open);
+                }
+                section-select(group, on) => {
+                    ExportsState.picker("section-select", group, on);
+                }
+                intensity-line(by-channel, index) => {
+                    ExportsState.picker(by-channel ? "intensity-channel" : "intensity-value", index, true);
+                }
+                preset(key) => {
+                    ExportsState.picker("preset", key, true);
+                }
+                coloc-box-toggled(open) => {
+                    ExportsState.picker("coloc-box", "", open);
+                }
+                coloc-partner-toggled(key) => {
+                    ExportsState.picker("coloc-partner", key, true);
+                }
+                coloc-partners-all(on) => {
+                    ExportsState.picker("coloc-partners-all", "", on);
+                }
+                coloc-count-picked(index) => {
+                    ExportsState.picker("coloc-count", index, true);
+                }
+                coloc-only-occurring-changed(on) => {
+                    ExportsState.picker("coloc-only-occurring", "", on);
+                }
+            }
+            // Children and linked objects: tables of objects, images, wells,
+            // folders and coloc pairs.
+            RelatedPart {
+                pill-width: 380px;
+                children <=> ExportsState.related-children;
+                children-summary: ExportsState.related-children-summary;
+                aggregations <=> ExportsState.related-aggregations;
+                aggregate-summary: ExportsState.related-aggregate-summary;
+                parents <=> ExportsState.related-parents;
+                parent-summary: ExportsState.related-parent-summary;
+                child-selected(key, on) => {
+                    ExportsState.set-entry-field("child:" + key, on ? "1" : "0");
+                }
+                children-all(all) => {
+                    ExportsState.set-entry-field(all ? "children-all" : "children-none", "");
+                }
+                aggregation-selected(key, on) => {
+                    ExportsState.set-entry-field("child-aggregation:" + key, on ? "1" : "0");
+                }
+                parent-selected(key, on) => {
+                    ExportsState.set-entry-field("parent:" + key, on ? "1" : "0");
+                }
+                parents-all(all) => {
+                    ExportsState.set-entry-field(all ? "parents-all" : "parents-none", "");
+                }
+            }
+            if ExportsState.columns-note != "": InkHint {
+                text: ExportsState.columns-note;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                if !ExportsState.columns-default: InkButton {
+                    small: true;
+                    text: "Default columns";
+                    clicked => {
+                        ExportsState.set-entry-field("clear-columns", "");
+                    }
+                }
+                if ExportsState.views.length > 0: InkSelect {
+                    width: 200px;
+                    label: "Take the columns of a view";
+                    placeholder: "Take a view's columns…";
+                    selected: -1;
+                    model: ExportsState.views;
+                    picked(i, name) => {
+                        ExportsState.set-entry-field("columns-from-view:" + name, "");
+                    }
+                }
+            }
+    }
+    // Values, then classes - the Results List's part (canvas S1); a row
+    // per object: the classes alone.
+    if ExportsState.entry-kind == "DATA" && (root.part == "Values & classes" || root.part == "Classes"): ValuesClassesPart {
+        grouped: ExportsState.grouped;
+        show-empty: ExportsState.show-empty;
+        values-title: "VALUES · OF EACH ROW";
+        values <=> ExportsState.aggregations;
+        classes-title: "CLASSES · " + ExportsState.classes-summary;
+        classes <=> ExportsState.classes;
+        empty-text: "Rows for classes without objects";
+        empty-classes: ExportsState.empty-classes;
+        value-selected(key, on) => {
+            ExportsState.set-entry-field("aggregation:" + key, on ? "1" : "0");
+        }
+        values-all => {
+            ExportsState.set-entry-field("all-aggregations", "");
+        }
+        values-none => {
+            ExportsState.set-entry-field("no-aggregations", "");
+        }
+        class-selected(key, on) => {
+            ExportsState.set-entry-field("class:" + key, on ? "1" : "0");
+        }
+        classes-all => {
+            ExportsState.set-entry-field("all-classes", "");
+        }
+        classes-none => {
+            ExportsState.set-entry-field("no-classes", "");
+        }
+        empty-classes-toggled(on) => {
+            ExportsState.set-entry-field("empty-classes", on ? "1" : "0");
+        }
+    }
+
+    if ExportsState.entry-kind == "DRAWN_IMAGES": VerticalLayout {
+        spacing: 14px;
+        Setting {
+            label: "Objects drawn as";
+            InkSegmented {
+                label: "Objects drawn as";
+                model: ["Outline", "Filled", "Box"];
+                selected: ExportsState.style;
+                picked(i) => {
+                    ExportsState.set-entry-field("style", i);
+                }
+            }
+        }
+        Setting {
+            label: "Brightness";
+            InkSegmented {
+                label: "Brightness";
+                model: ["As in the viewer", "Automatic"];
+                selected: ExportsState.brightness;
+                picked(i) => {
+                    ExportsState.set-entry-field("brightness", i);
+                }
+            }
+        }
+        Setting {
+            label: "Size (longer side)";
+            InkSegmented {
+                label: "Size";
+                model: ["1024 px", "2048 px", "4096 px", "8192 px"];
+                selected: ExportsState.max-side;
+                picked(i) => {
+                    ExportsState.set-entry-field("max-side", i);
+                }
+            }
+        }
+        Planes { }
+        Setting {
+            label: "Images of the run";
+            InkSegmented {
+                label: "Images of the run";
+                model: ["All", "Included", "Left out"];
+                selected: ExportsState.images;
+                picked(i) => {
+                    ExportsState.set-entry-field("images", i);
+                }
+            }
+        }
+        Classes { }
+    }
+
+    // An entry a newer version wrote: kept as it is, nothing to set.
+    if ExportsState.entry-kind == "UNKNOWN": InkHint {
+        text: "This entry was made with a newer version of EVAnalyzer. It is kept as it is and saved with the project - update EVAnalyzer to change or run it.";
+        wrap: word-wrap;
+    }
+    if ExportsState.entry-kind == "SCRIPT": VerticalLayout {
+        spacing: 14px;
+        Setting {
+            label: "Script (in the project's scripts folder)";
+            InkSelect {
+                label: "Script";
+                placeholder: "No script in the scripts folder yet";
+                model: ExportsState.script-files;
+                value: ExportsState.script-file;
+                enabled: ExportsState.script-files.length > 0;
+                picked(i, file) => {
+                    ExportsState.set-entry-field("script-file", file);
+                }
+            }
+        }
+        Setting {
+            label: "Language";
+            InkSegmented {
+                label: "Language";
+                model: ["R", "Python"];
+                selected: ExportsState.language;
+                picked(i) => {
+                    ExportsState.set-entry-field("language", i);
+                }
+            }
+        }
+        Setting {
+            label: "Its output folder (empty: the script's name)";
+            Field {
+                label: "Output folder";
+                value: ExportsState.script-output;
+                commit(text) => {
+                    ExportsState.set-entry-field("script-output", text);
+                }
+            }
+        }
+        InkHint {
+            text: "Called as: <interpreter> <script> --input <export folder> --output <export folder>/<output>, in the project's folder.";
+            wrap: word-wrap;
+        }
+    }
+}
+
+export component ExportsView inherits Rectangle {
+    background: Ink.ground;
+
+    // -- An export's ⋯ (its row, or the card's head): the same menu --
+    property <int> menu-id: -1;
+    property <string> menu-name;
+    property <length> menu-x;
+    property <length> menu-y;
+    // Counted up: the card's head opens its Run ▾ (⋯ › Run on…).
+    property <int> run-on-request: 0;
+    // The docked run unfolded.
+    property <bool> dock-open: true;
+    // An analysis runs (its exports are its last step): one at a time, so
+    // no export starts meanwhile.
+    property <bool> analysing: PipelineRunningState.active && (!PipelineRunningState.done || PipelineRunningState.exporting);
+    function open-menu(id: int, name: string, x: length, y: length) {
+        root.menu-id = id;
+        root.menu-name = name;
+        root.menu-x = max(0px, x);
+        root.menu-y = y;
+        export-menu.show();
+    }
+    // Floats: blurred like every menu (InkMenuFrame).
+    export-menu := PopupWindow {
+        x: root.menu-x;
+        y: root.menu-y;
+        InkMenuFrame {
+            menu-width: 236px;
+            open-y: root.absolute-position.y + root.menu-y;
+            InkMenuCaption {
+                text: root.menu-name;
+            }
+            InkMenuItem {
+                icon: InkIcons.run;
+                text: "Run";
+                enabled: !ExportsState.running && !root.analysing;
+                clicked => {
+                    ExportsState.select(root.menu-id);
+                    ExportsState.run();
+                }
+            }
+            InkMenuItem {
+                text: "Run on…";
+                enabled: !ExportsState.running && !root.analysing;
+                clicked => {
+                    ExportsState.select(root.menu-id);
+                    root.run-on-request += 1;
+                }
+            }
+            InkMenuSeparator { }
+            InkMenuItem {
+                icon: InkIcons.copy;
+                text: "Duplicate";
+                clicked => {
+                    ExportsState.duplicate(root.menu-id);
+                }
+            }
+            InkMenuSeparator { }
+            InkMenuItem {
+                icon: InkIcons.caret-up;
+                text: "Move up";
+                enabled: !ExportsState.running;
+                clicked => {
+                    ExportsState.move-export(root.menu-id, -1);
+                }
+            }
+            InkMenuItem {
+                icon: InkIcons.caret-down;
+                text: "Move down";
+                enabled: !ExportsState.running;
+                clicked => {
+                    ExportsState.move-export(root.menu-id, 1);
+                }
+            }
+            InkMenuSeparator { }
+            InkMenuItem {
+                icon: InkIcons.delete;
+                text: "Delete export…";
+                danger: true;
+                enabled: !ExportsState.running;
+                clicked => {
+                    ExportsState.delete-asked-name = root.menu-name;
+                    ExportsState.delete-asked = root.menu-id;
+                }
+            }
+        }
+    }
+
+    init => {
+        ExportsState.refresh();
+    }
+
+    HorizontalLayout {
+        padding: 12px;
+        spacing: 12px;
+        alignment: start;
+
+        // -- The exports --
+        Card {
+            width: 300px;
+            VerticalLayout {
+                CardHead {
+                    title: "Exports";
+                    count: ExportsState.exports.length == 0 ? "" : ExportsState.after-count + " of " + ExportsState.exports.length + " after analysis";
+                    VerticalLayout {
+                        alignment: center;
+                        InkButton {
+                            small: true;
+                            text: "New";
+                            icon: InkIcons.add;
+                            clicked => {
+                                ExportsState.new-export();
+                            }
+                        }
+                    }
+                }
+                Rectangle {
+                    height: 1px;
+                    background: Ink.border;
+                }
+                Flickable {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        padding: 6px;
+                        spacing: 2px;
+                        alignment: start;
+                        // Like every list (InkListRow): place, name, what it
+                        // writes, the last run, ⋯ - and an "After analysis"
+                        // chip in the eye's place: the eye means show / hide
+                        // in the other lists (design canvas "Quick export,
+                        // open folder, run on", boards 5 and 9).
+                        for row[i] in ExportsState.exports: InkListRow {
+                            lead: i + 1;
+                            title: row.name;
+                            subtitle: row.summary;
+                            trailing: row.status;
+                            selected: row.id == ExportsState.selected-id;
+                            has-more: true;
+                            chip: "After analysis";
+                            chip-on: row.after;
+                            chip-tip: row.after ? "Runs as the last step of every analysis - click: only by hand" : "Click: run it as the last step of every analysis";
+                            clicked => {
+                                ExportsState.select(row.id);
+                            }
+                            chip-toggled => {
+                                ExportsState.set-after(row.id, !row.after);
+                            }
+                            context-menu(x, y) => {
+                                root.open-menu(row.id, row.name, min(self.x + x, self.width - 236px), self.absolute-position.y - root.absolute-position.y + y + 4px);
+                            }
+                        }
+                        if ExportsState.exports.length == 0: InkHint {
+                            text: "No exports yet. An export writes the same tables, images and script results from every run.";
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+            }
+        }
+
+        // -- The export picked --
+        Card {
+            width: 520px;
+            if ExportsState.selected-id < 0: VerticalLayout {
+                alignment: center;
+                padding: 24px;
+                InkHint {
+                    text: "Pick an export, or make a new one.";
+                    horizontal-alignment: center;
+                }
+            }
+            if ExportsState.selected-id >= 0: VerticalLayout {
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 10px;
+                    height: 52px;
+                    spacing: 8px;
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 1;
+                        Field {
+                            label: "Name";
+                            value: ExportsState.name;
+                            commit(text) => {
+                                ExportsState.set-export-field("name", text);
+                            }
+                        }
+                    }
+                    // Run | ▾: on the newest, or on the analyses picked
+                    // (design canvas "Quick export, open folder, run on",
+                    // board 3 R1).
+                    // Running: Stop in its place (board 6).
+                    if ExportsState.running: VerticalLayout {
+                        alignment: center;
+                        InkButton {
+                            text: "Stop";
+                            icon: InkIcons.stop;
+                            tip: "Stops the export at its next step";
+                            clicked => {
+                                ExportsState.cancel();
+                            }
+                        }
+                    }
+                    run-on-anchor := VerticalLayout {
+                        visible: !ExportsState.running;
+                        width: ExportsState.running ? 0px : self.preferred-width;
+                        alignment: center;
+                        HorizontalLayout {
+                            spacing: 1px;
+                            InkButton {
+                                text: "Run";
+                                kind: InkButtonKind.primary;
+                                icon: InkIcons.run;
+                                join-right: true;
+                                enabled: !root.analysing && ExportsState.problems == "";
+                                disabled-reason: root.analysing ? "An analysis is running - its exports run as its last step" : ExportsState.problems;
+                                tip: "Runs it on the project's newest analysis";
+                                clicked => {
+                                    ExportsState.run();
+                                }
+                            }
+                            InkButton {
+                                width: 30px;
+                                kind: InkButtonKind.primary;
+                                icon: InkIcons.caret-down;
+                                join-left: true;
+                                tip: "Run on…";
+                                enabled: !root.analysing && ExportsState.problems == "";
+                                disabled-reason: root.analysing ? "An analysis is running - its exports run as its last step" : ExportsState.problems;
+                                clicked => {
+                                    ExportsState.run-on-open();
+                                    run-on-menu.show();
+                                }
+                            }
+                        }
+                    }
+                    run-on-menu := PopupWindow {
+                        x: run-on-anchor.x + run-on-anchor.width - 320px;
+                        y: run-on-anchor.y + run-on-anchor.height - 8px;
+                        close-policy: close-on-click-outside;
+                        InkMenuFrame {
+                            menu-width: 320px;
+                            open-y: run-on-anchor.absolute-position.y + run-on-anchor.height - 8px;
+                            InkMenuCaption {
+                                text: "Run on";
+                            }
+                            if ExportsState.run-on.length == 0: InkMenuItem {
+                                text: "No analysis in the Results list";
+                                enabled: false;
+                            }
+                            // Two lines per analysis: its name, when it was
+                            // made (board 9) - its images at the right.
+                            for row[i] in ExportsState.run-on: Rectangle {
+                                height: 40px;
+                                border-radius: Ink.radius-sm;
+                                background: row-ta.has-hover ? Ink.hover : transparent;
+                                accessible-role: checkbox;
+                                accessible-label: row.name + ", " + row.when;
+                                accessible-checked: row.on;
+                                accessible-action-default => {
+                                    ExportsState.run-on-pick(i, !row.on);
+                                }
+                                row-ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        ExportsState.run-on-pick(i, !row.on);
+                                    }
+                                }
+                                HorizontalLayout {
+                                    padding-left: 8px;
+                                    padding-right: 8px;
+                                    spacing: 9px;
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Rectangle {
+                                            width: 14px;
+                                            height: 14px;
+                                            border-radius: Ink.radius-xs;
+                                            border-width: row.on ? 0px : 1px;
+                                            border-color: Ink.text-faint;
+                                            background: row.on ? Ink.primary : Ink.field;
+                                            Image {
+                                                visible: row.on;
+                                                source: InkIcons.check;
+                                                width: 10px;
+                                                height: 10px;
+                                                colorize: Ink.on-primary;
+                                            }
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        horizontal-stretch: 1;
+                                        Text {
+                                            text: row.name;
+                                            font-size: Ink.fs-body;
+                                            font-weight: 500;
+                                            color: Ink.text;
+                                            overflow: elide;
+                                        }
+                                        Text {
+                                            text: row.when + (i == 0 ? " · newest" : "");
+                                            font-size: Ink.fs-secondary;
+                                            color: Ink.text-mute;
+                                            overflow: elide;
+                                        }
+                                    }
+                                    Text {
+                                        text: row.images;
+                                        font-size: Ink.fs-secondary;
+                                        font-family: Ink.font-mono;
+                                        color: Ink.text-mute;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                            InkMenuSeparator { }
+                            HorizontalLayout {
+                                padding: 6px;
+                                spacing: 8px;
+                                InkButton {
+                                    small: true;
+                                    text: "All";
+                                    clicked => {
+                                        ExportsState.run-on-pick(-1, true);
+                                    }
+                                }
+                                InkButton {
+                                    small: true;
+                                    text: "Newest only";
+                                    clicked => {
+                                        ExportsState.run-on-pick(-1, false);
+                                    }
+                                }
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                }
+                                InkButton {
+                                    small: true;
+                                    kind: InkButtonKind.primary;
+                                    icon: InkIcons.run;
+                                    property <int> ticked: ExportsState.run-on-ticked;
+                                    text: self.ticked == 1 ? "Run on 1 analysis" : "Run on " + self.ticked + " analyses";
+                                    enabled: self.ticked > 0;
+                                    clicked => {
+                                        run-on-menu.close();
+                                        ExportsState.run-on-picked();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // The same menu as the export's row in the list.
+                    head-more := VerticalLayout {
+                        alignment: center;
+                        InkIconButton {
+                            size: 30px;
+                            icon: InkIcons.more;
+                            label: "Actions";
+                            clicked => {
+                                root.open-menu(ExportsState.selected-id, ExportsState.name, head-more.absolute-position.x - root.absolute-position.x + head-more.width - 236px, head-more.absolute-position.y - root.absolute-position.y + head-more.height + 4px);
+                            }
+                        }
+                    }
+                    // The list's ⋯ › Run on… asks for the Run ▾ here.
+                    property <int> run-on-asked: root.run-on-request;
+                    changed run-on-asked => {
+                        ExportsState.run-on-open();
+                        run-on-menu.show();
+                    }
+                }
+                Rectangle {
+                    height: 1px;
+                    background: Ink.border;
+                }
+                // Running: the settings stay as they are until it is done
+                // (board 6) - greyed, not reacting.
+                if ExportsState.running: HorizontalLayout {
+                    padding: 12px;
+                    padding-bottom: 0px;
+                    InkBanner {
+                        tone: InkTone.info;
+                        text: "Running - the settings can be changed again once it is done.";
+                    }
+                }
+                Rectangle {
+                    vertical-stretch: 1;
+                    settings-flick := Flickable {
+                    width: 100%;
+                    height: 100%;
+                    opacity: ExportsState.running ? 0.5 : 1.0;
+                    VerticalLayout {
+                        padding: 14px;
+                        spacing: 14px;
+                        alignment: start;
+                        if ExportsState.problems != "": InkBanner {
+                            tone: InkTone.warn;
+                            text: ExportsState.problems;
+                        }
+                        HorizontalLayout {
+                            Text {
+                                text: "What it writes";
+                                font-size: Ink.fs-body;
+                                font-weight: 600;
+                                color: Ink.text;
+                                horizontal-stretch: 1;
+                            }
+                            Text {
+                                text: "top to bottom";
+                                font-size: Ink.fs-secondary;
+                                color: Ink.text-mute;
+                            }
+                        }
+                        for entry[i] in ExportsState.entries: EntryCard {
+                            entry: entry;
+                            index: i;
+                            selected: i == ExportsState.entry;
+                            first: i == 0;
+                            last: i == ExportsState.entries.length - 1;
+                            clicked => {
+                                ExportsState.select-entry(i);
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+                            InkCaption {
+                                text: "Add";
+                                vertical-alignment: center;
+                            }
+                            InkButton {
+                                small: true;
+                                text: "Data export";
+                                clicked => {
+                                    ExportsState.add-entry("DATA");
+                                }
+                            }
+                            InkButton {
+                                small: true;
+                                text: "Drawn images";
+                                clicked => {
+                                    ExportsState.add-entry("DRAWN_IMAGES");
+                                }
+                            }
+                            InkButton {
+                                small: true;
+                                text: "Script";
+                                clicked => {
+                                    ExportsState.add-entry("SCRIPT");
+                                }
+                            }
+                        }
+                        Rectangle {
+                            height: 1px;
+                            background: Ink.border;
+                        }
+                        Setting {
+                            label: "Where";
+                            InkSegmented {
+                                label: "Where";
+                                model: ["Results folder", "Fixed folder"];
+                                selected: ExportsState.location;
+                                picked(i) => {
+                                    ExportsState.set-export-field("location", i);
+                                }
+                            }
+                            Field {
+                                label: "Folder";
+                                mono: true;
+                                placeholder: ExportsState.location == 0 ? "(the results folder itself)" : "exports";
+                                value: ExportsState.folder;
+                                commit(text) => {
+                                    ExportsState.set-export-field("folder", text);
+                                }
+                            }
+                            InkHint {
+                                text: ExportsState.location == 0 ? "A subfolder of the run's results folder - empty: the folder itself." : "Relative to the project's folder - the same for every run.";
+                                wrap: word-wrap;
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 14px;
+                            Setting {
+                                label: "A file already there";
+                                InkSegmented {
+                                    label: "A file already there";
+                                    model: ["Overwrite", "Keep, new _2"];
+                                    selected: ExportsState.if-exists;
+                                    picked(i) => {
+                                        ExportsState.set-export-field("if-exists", i);
+                                    }
+                                }
+                            }
+                            Setting {
+                                label: "Lengths in";
+                                InkSegmented {
+                                    label: "Lengths in";
+                                    model: ["µm", "nm"];
+                                    selected: ExportsState.length-unit;
+                                    picked(i) => {
+                                        ExportsState.set-export-field("length-unit", i);
+                                    }
+                                }
+                            }
+                        }
+                        Setting {
+                            label: "Prefix of every file (optional)";
+                            Field {
+                                label: "Prefix";
+                                value: ExportsState.prefix;
+                                commit(text) => {
+                                    ExportsState.set-export-field("prefix", text);
+                                }
+                            }
+                        }
+                        InkSwitch {
+                            text: "Run after analysis";
+                            checked: ExportsState.after;
+                            toggled(on) => {
+                                ExportsState.set-export-field("after", on ? "1" : "0");
+                            }
+                        }
+                    }
+                    }
+                    if ExportsState.running: TouchArea { }
+                }
+                // -- The run, docked below the settings on its own ground
+                // (board 7 S2): running, its progress; done, the last run -
+                // foldable to its head --
+                if ExportsState.running || ExportsState.last-run-title != "": Rectangle {
+                    height: 1px;
+                    background: Ink.border;
+                }
+                if ExportsState.running || ExportsState.last-run-title != "": Rectangle {
+                    background: Ink.ground;
+                    VerticalLayout {
+                        padding: 12px;
+                        padding-top: 6px;
+                        spacing: 6px;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            height: 32px;
+                            Text {
+                                text: ExportsState.running ? "Running" : ExportsState.last-run-title;
+                                font-size: Ink.fs-body;
+                                font-weight: 600;
+                                color: Ink.text;
+                                vertical-alignment: center;
+                                overflow: elide;
+                                horizontal-stretch: 1;
+                            }
+                            if !ExportsState.running && ExportsState.last-run-note != "": Text {
+                                text: ExportsState.last-run-note;
+                                font-size: Ink.fs-secondary;
+                                color: Ink.text-mute;
+                                vertical-alignment: center;
+                            }
+                            if !ExportsState.running && ExportsState.run-parts.length == 1 && ExportsState.run-parts[0].folder != "": VerticalLayout {
+                                alignment: center;
+                                InkIconButton {
+                                    size: 26px;
+                                    icon: InkIcons.folder;
+                                    label: "Open exported folder";
+                                    clicked => {
+                                        ExportsState.open-folder(ExportsState.run-parts[0].folder);
+                                    }
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                InkIconButton {
+                                    size: 26px;
+                                    icon: root.dock-open ? InkIcons.caret-down : InkIcons.caret-up;
+                                    label: root.dock-open ? "Fold the run" : "Show the run";
+                                    clicked => {
+                                        root.dock-open = !root.dock-open;
+                                    }
+                                }
+                            }
+                        }
+                        if root.dock-open && ExportsState.running: VerticalLayout {
+                            spacing: 6px;
+                            InkProgressBar {
+                                height: 6px;
+                                tone: InkTone.info;
+                                value: ExportsState.progress-fraction;
+                            }
+                            Text {
+                                text: ExportsState.progress;
+                                font-family: Ink.font-mono;
+                                font-size: Ink.fs-secondary;
+                                color: Ink.text-dim;
+                                overflow: elide;
+                            }
+                        }
+                        if root.dock-open && !ExportsState.running: Flickable {
+                            height: min(dock-content.preferred-height, 300px);
+                            dock-content := VerticalLayout {
+                                spacing: 6px;
+                                // The last run (board 4 L1): on one analysis its
+                                // lines (its folder in the head), on several a row
+                                // per analysis.
+                                VerticalLayout {
+                                    spacing: 4px;
+                                    if ExportsState.run-parts.length == 1: VerticalLayout {
+                                        spacing: 2px;
+                                        for line in ExportsState.run-parts[0].lines: Text {
+                                            text: line;
+                                            font-family: Ink.font-mono;
+                                            font-size: Ink.fs-secondary;
+                                            color: Ink.text-dim;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+                                    if ExportsState.run-parts.length > 1: VerticalLayout {
+                                        spacing: 2px;
+                                        for part[i] in ExportsState.run-parts: RunPartRow {
+                                            part: part;
+                                            toggled => {
+                                                ExportsState.run-part-toggle(i);
+                                            }
+                                            open-folder => {
+                                                ExportsState.open-folder(part.folder);
+                                            }
+                                        }
+                                    }
+                                }
+                                if ExportsState.log != "": Rectangle {
+                                    background: Ink.viewport;
+                                    border-radius: Ink.radius-md;
+                                    VerticalLayout {
+                                        padding: 10px;
+                                        Text {
+                                            text: ExportsState.log;
+                                            font-family: Ink.font-mono;
+                                            font-size: Ink.fs-secondary;
+                                            color: #E8E8EA;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // -- The entry picked: a panel like the Results List's; locked
+        // while a run goes on (board 6) --
+        Rectangle {
+            // A readable width - a wider window leaves the ground free
+            // (canvas W1); at the smallest window the room left (412 px).
+            width: clamp(root.width - 300px - 520px - 48px, 400px, 440px);
+            ViewPanel {
+                width: 100%;
+                height: 100%;
+                opacity: ExportsState.running ? 0.5 : 1.0;
+                foldable: false;
+                property <bool> data: ExportsState.entry-kind == "DATA";
+                property <bool> grouped: ExportsState.grouped;
+                title: ExportsState.entry >= 0 && ExportsState.entry < ExportsState.entries.length ? ExportsState.entries[ExportsState.entry].title : "Settings";
+                parts: !self.data ? [] : self.grouped ? ["Outputs", "Columns", "Values & classes"] : ["Outputs", "Columns", "Classes"];
+                // Classes stays open when the rows change it to Classes & values
+                // and back.
+                part: ExportsState.panel-part == "Classes" || ExportsState.panel-part == "Values & classes"
+                    ? (self.grouped ? "Values & classes" : "Classes") : ExportsState.panel-part;
+                part-picked(part) => {
+                    ExportsState.panel-part = part;
+                }
+                if ExportsState.entry < 0: InkHint {
+                    text: "Pick what it writes to see its settings.";
+                }
+                if ExportsState.entry >= 0: EntrySettings {
+                    part: parent.current;
+                }
+            }
+            if ExportsState.running: TouchArea { }
+        }
+    }
+}

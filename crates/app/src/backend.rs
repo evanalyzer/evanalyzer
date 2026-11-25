@@ -21,6 +21,7 @@ use crate::jobs::{AnalysisRequest, JobInfo, PreviewRequest, RunningJob, StartPre
 use crate::results::ResultsSource;
 use crate::training::{RunningTraining, StartTrainingError, TrainingRequest};
 use crate::user::settings::AppSettings;
+use crate::user::trust::ScriptTrust;
 use evanalyzer_cfg::core_types::InternalErrors;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -153,6 +154,15 @@ pub trait Backend: Send + Sync {
 
     /// Saves the user's app preferences - see [`Self::load_app_settings`].
     fn save_app_settings(&self, settings: &AppSettings) -> Result<(), InternalErrors>;
+
+    /// The folders and scripts the user allows exports to run, kept in the
+    /// user folder on the backend's machine (where the scripts run) - in a
+    /// file of its own, not the settings. None if nothing was trusted yet.
+    fn load_script_trust(&self) -> Result<ScriptTrust, InternalErrors>;
+
+    /// Saves the trusted folders and scripts - see
+    /// [`Self::load_script_trust`].
+    fn save_script_trust(&self, trust: &ScriptTrust) -> Result<(), InternalErrors>;
 }
 
 /// What the machine a backend computes on offers.

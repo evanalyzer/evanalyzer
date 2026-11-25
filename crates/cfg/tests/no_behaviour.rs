@@ -96,6 +96,10 @@ const ALLOWED: &[&str] = &[
     "fn has_drive_prefix",
     // What serde needs (`default = "..."`, `skip_serializing_if = "..."`).
     "fn default_ring_width",
+    "fn default_table_format",
+    "fn default_aggregations",
+    "fn default_min_points",
+    "fn default_max_side",
     "fn is_zero",
     "fn is_one_plane",
 ];

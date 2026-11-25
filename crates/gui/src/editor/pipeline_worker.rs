@@ -638,6 +638,8 @@ impl PipelineWorker {
                         self_handle
                             .results_list_controller
                             .analysis_finished(&output_dir);
+                        // The exports set to run afterwards.
+                        self_handle.app_state.analysis_finished(&output_dir);
                     }
 
                     ("Analysis completed successfully.".to_string(), false)

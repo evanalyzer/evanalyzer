@@ -16,6 +16,9 @@ export struct ColumnSection {
     title: string,
     open: bool,
     items: [MultiSelectItem],
+    // Per item: always picked, shown ticked and greyed - not to untick
+    // (the Exports tab's image, class, object id). Empty = none.
+    locked: [bool],
 }
 
 /// A cell of the List's intensity grid (channels × values): the column's
@@ -684,8 +687,7 @@ export global ResultsState {
 
     // Images mode's per-column aggregation(s) — `get_grouped_by_image`
     // accepts more than one, adding one output column per (selected column
-    // x selected aggregation) combination, same as the export dialog's own
-    // AGGREGATIONS picker.
+    // x selected aggregation) combination.
     in-out property <[MultiSelectItem]> list-aggregation-items: [];
     in-out property <string> list-aggregate: "1 of 7 aggregations";
     callback list-aggregation-item-selected(string, bool);
@@ -1125,9 +1127,6 @@ export global ResultsState {
     // "24 of 80 lines shown", else "".
     in property <string> chart-time-note: "";
     callback chart-time-changed();
-    // "Export data…": the export dialog, set to the chart's time course
-    // (Profile: its profile).
-    callback chart-time-export();
     // The selected object's curve (Profile) and a marker (the critical
     // radius: a vertical line) with its label - paths in the same box, ""
     // none.
@@ -1187,7 +1186,4 @@ export global ResultsState {
     // columns, per-channel intensity — see `chart_value_expr` in
     // results_generator.rs) or nothing has loaded yet; empty otherwise.
     in-out property <string> chart-error: "";
-
-    // -------- Export --------
-    callback export-dialog-open();
 }

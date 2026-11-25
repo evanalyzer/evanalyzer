@@ -56,6 +56,8 @@ pub struct Worker {
     token: String,
     idle_timeout: Option<Duration>,
     max_job_duration: Option<Duration>,
+    /// Exports' scripts run, with these interpreters - `None`: never.
+    scripts: Option<crate::exports::Interpreters>,
 }
 
 impl Worker {
@@ -73,7 +75,16 @@ impl Worker {
             token,
             idle_timeout: None,
             max_job_duration: None,
+            scripts: None,
         })
+    }
+
+    /// Lets exports' scripts run here, with `interpreters` (the server's,
+    /// never the client's) - a server's `workers.allow_scripts`. Off by
+    /// default: a script is code that runs as this process's account.
+    pub fn with_scripts(mut self, interpreters: crate::exports::Interpreters) -> Self {
+        self.scripts = Some(interpreters);
+        self
     }
 
     /// Ends the process once no client has been connected and no analysis
@@ -101,6 +112,7 @@ impl Worker {
     /// Serves clients until the process exits, one thread per connection.
     pub fn run(self, backend: Arc<dyn Backend>) {
         let token = Arc::new(self.token);
+        let scripts = Arc::new(self.scripts);
         // Shared by all connections: analyses outlive the one that started them.
         let jobs = Arc::new(JobRegistry::with_max_duration(self.max_job_duration));
         let connections = Arc::new(AtomicUsize::new(0));
@@ -129,6 +141,7 @@ impl Worker {
             let token = Arc::clone(&token);
             let jobs = Arc::clone(&jobs);
             let connections = Arc::clone(&connections);
+            let scripts = Arc::clone(&scripts);
             std::thread::spawn(move || {
                 let peer = stream
                     .peer_addr()
@@ -144,7 +157,7 @@ impl Worker {
                     return;
                 }
                 connections.fetch_add(1, Ordering::SeqCst);
-                match serve_connection(stream, &token, backend, jobs) {
+                match serve_connection(stream, &token, backend, jobs, scripts) {
                     Ok(()) => log::info!("Client {peer} disconnected"),
                     Err(reason) => log::warn!("Client {peer} rejected: {reason}"),
                 }
@@ -265,7 +278,8 @@ fn native_paths(request: Request) -> Request {
         },
         other @ (Request::ReadTile { .. }
         | Request::QueryResults { .. }
-        | Request::ExportResults { .. }
+        | Request::ExportParquet { .. }
+        | Request::RunExport { .. }
         | Request::ListJobs
         | Request::AttachJob { .. }
         | Request::ForgetJob { .. }
@@ -273,7 +287,9 @@ fn native_paths(request: Request) -> Request {
         | Request::Places
         | Request::SystemInfo
         | Request::LoadAppSettings
-        | Request::SaveAppSettings(_)) => other,
+        | Request::SaveAppSettings(_)
+        | Request::LoadScriptTrust
+        | Request::SaveScriptTrust(_)) => other,
     }
 }
 
@@ -290,6 +306,7 @@ fn serve_connection(
     token: &str,
     backend: Arc<dyn Backend>,
     jobs: Arc<JobRegistry>,
+    scripts: Arc<Option<crate::exports::Interpreters>>,
 ) -> Result<(), String> {
     stream.set_nodelay(true).ok();
     stream
@@ -365,6 +382,7 @@ fn serve_connection(
     let session = Arc::new(Session {
         backend,
         jobs,
+        scripts,
         outgoing,
         running: Mutex::new(HashMap::new()),
         analyses: Mutex::new(HashMap::new()),
@@ -399,6 +417,8 @@ struct Session {
     backend: Arc<dyn Backend>,
     /// The worker's analyses, shared with all connections.
     jobs: Arc<JobRegistry>,
+    /// See `Worker::with_scripts`.
+    scripts: Arc<Option<crate::exports::Interpreters>>,
     outgoing: Sender<Vec<u8>>,
     /// Cancel handles of running previews, trainings and exports, by
     /// request id - cancelled when the connection drops.
@@ -434,7 +454,11 @@ impl Session {
                 // An export has no "started" reply: the client may cancel it
                 // right away, before its thread runs - so its cancel flag is
                 // known here already, where a `Cancel` is handled.
-                let export_cancel = matches!(request, Request::ExportResults { .. }).then(|| {
+                let export_cancel = matches!(
+                    request,
+                    Request::ExportParquet { .. } | Request::RunExport { .. }
+                )
+                .then(|| {
                     let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
                     self.running
                         .lock()
@@ -594,14 +618,11 @@ impl Session {
                     Err(e) => self.fail(id, &e),
                 }
             }
-            Request::ExportResults { handle } => {
-                let prepared = self.results_for(handle).and_then(|source| {
-                    Ok((
-                        source,
-                        from_postcard::<crate::results::ResultExport>(blobs.first())?,
-                    ))
-                });
-                let (source, export) = match prepared {
+            Request::ExportParquet { handle } => {
+                let prepared = self
+                    .results_for(handle)
+                    .and_then(|source| Ok((source, from_postcard::<PathBuf>(blobs.first())?)));
+                let (source, out_dir) = match prepared {
                     Ok(prepared) => prepared,
                     Err(e) => {
                         self.running.lock().unwrap().remove(&id);
@@ -609,7 +630,52 @@ impl Session {
                     }
                 };
                 let flag = export_cancel.unwrap_or_default();
-                let result = source.export(&export, &flag, &mut |message, current, total| {
+                let result =
+                    source.export_parquet(&out_dir, &flag, &mut |message, current, total| {
+                        let progress = Reply::ExportProgress {
+                            message: message.to_string(),
+                            current,
+                            total,
+                        };
+                        self.reply(id, progress, Vec::new());
+                    });
+                self.running.lock().unwrap().remove(&id);
+                self.reply(
+                    id,
+                    Reply::ExportDone(result.map_err(|e| WireError::from(&e))),
+                    none(),
+                );
+            }
+            Request::RunExport { handle } => {
+                let prepared = self.results_for(handle).and_then(|source| {
+                    let run = serde_json::from_slice::<crate::exports::ExportRun>(
+                        blobs.first().map(Vec::as_slice).unwrap_or_default(),
+                    )
+                    .map_err(|e| {
+                        InternalErrors::InvalidArgument(format!("malformed export: {e}"))
+                    })?;
+                    Ok((source, run))
+                });
+                let (source, mut run) = match prepared {
+                    Ok(prepared) => prepared,
+                    Err(e) => {
+                        self.running.lock().unwrap().remove(&id);
+                        return self.fail(id, &e);
+                    }
+                };
+                // Scripts only where the server allows them, with its own
+                // interpreters - never what the client sends.
+                match self.scripts.as_ref() {
+                    Some(interpreters) => run.interpreters = interpreters.clone(),
+                    None => {
+                        run.scripts = crate::exports::ScriptPermission::Refused(
+                            "scripts don't run on this server (its administrator can allow them)"
+                                .into(),
+                        )
+                    }
+                }
+                let flag = export_cancel.unwrap_or_default();
+                let result = source.run_export(&run, &flag, &mut |message, current, total| {
                     let progress = Reply::ExportProgress {
                         message: message.to_string(),
                         current,
@@ -620,7 +686,7 @@ impl Session {
                 self.running.lock().unwrap().remove(&id);
                 self.reply(
                     id,
-                    Reply::ExportDone(result.map_err(|e| WireError::from(&e))),
+                    Reply::ExportRunDone(result.map_err(|e| WireError::from(&e))),
                     none(),
                 );
             }
@@ -641,6 +707,14 @@ impl Session {
                 Err(e) => self.fail(id, &e),
             },
             Request::SaveAppSettings(settings) => match self.backend.save_app_settings(&settings) {
+                Ok(()) => self.reply(id, Reply::Done, none()),
+                Err(e) => self.fail(id, &e),
+            },
+            Request::LoadScriptTrust => match self.backend.load_script_trust() {
+                Ok(trust) => self.reply(id, Reply::ScriptTrust(trust), none()),
+                Err(e) => self.fail(id, &e),
+            },
+            Request::SaveScriptTrust(trust) => match self.backend.save_script_trust(&trust) {
                 Ok(()) => self.reply(id, Reply::Done, none()),
                 Err(e) => self.fail(id, &e),
             },
@@ -979,6 +1053,7 @@ mod session_tests {
     use crate::jobs::{AnalysisRequest, PreviewRequest, RunningJob};
     use crate::training::{RunningTraining, TrainingRequest};
     use crate::user::settings::AppSettings;
+    use crate::user::trust::ScriptTrust;
     use evanalyzer_cfg::settings::ai_learning_settings::{
         AiLearningBackendSettings, AiLearningClassifierSettings, AiLearningSettings,
     };
@@ -1080,6 +1155,12 @@ mod session_tests {
         fn save_app_settings(&self, _: &AppSettings) -> Result<(), InternalErrors> {
             Err(broken("save_app_settings"))
         }
+        fn load_script_trust(&self) -> Result<ScriptTrust, InternalErrors> {
+            Err(broken("load_script_trust"))
+        }
+        fn save_script_trust(&self, _: &ScriptTrust) -> Result<(), InternalErrors> {
+            Err(broken("save_script_trust"))
+        }
     }
 
     fn session_with(backend: FailingBackend) -> (Arc<Session>, Receiver<Vec<u8>>) {
@@ -1087,6 +1168,7 @@ mod session_tests {
         let session = Arc::new(Session {
             backend: Arc::new(backend),
             jobs: Arc::new(JobRegistry::default()),
+            scripts: Arc::new(None),
             outgoing,
             running: Mutex::new(HashMap::new()),
             analyses: Mutex::new(HashMap::new()),
@@ -1139,6 +1221,11 @@ mod session_tests {
             (
                 Request::SaveAppSettings(AppSettings::default()),
                 "save_app_settings",
+            ),
+            (Request::LoadScriptTrust, "load_script_trust"),
+            (
+                Request::SaveScriptTrust(ScriptTrust::default()),
+                "save_script_trust",
             ),
             (Request::ListDir { path: path() }, "list_dir"),
             (Request::Stat { path: path() }, "stat"),
@@ -1206,7 +1293,7 @@ mod session_tests {
         let (session, rx) = failing_session();
         for request in [
             Request::QueryResults { handle: 42 },
-            Request::ExportResults { handle: 42 },
+            Request::ExportParquet { handle: 42 },
         ] {
             let (_, reply) = reply_to(&session, &rx, request);
             assert!(

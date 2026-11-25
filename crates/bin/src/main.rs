@@ -109,7 +109,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 home,
                 idle_timeout,
                 max_job_minutes,
-            } => start_worker(listen, token, roots, home, idle_timeout, max_job_minutes),
+                allow_scripts,
+                rscript,
+                python,
+            } => start_worker(
+                listen,
+                token,
+                roots,
+                home,
+                idle_timeout,
+                max_job_minutes,
+                allow_scripts
+                    .then_some(evanalyzer_app::exports::Interpreters { r: rscript, python }),
+            ),
             TopCommand::HashPassword => print_password_hash(),
             TopCommand::Server { .. } => {
                 start_server(server_config.expect("loaded above for the server command"))
@@ -216,6 +228,7 @@ fn start_worker(
     home: Option<PathBuf>,
     idle_timeout_minutes: Option<u64>,
     max_job_minutes: Option<u64>,
+    scripts: Option<evanalyzer_app::exports::Interpreters>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let token = match token {
         Some(token) => token,
@@ -234,6 +247,10 @@ fn start_worker(
     if let Some(minutes) = max_job_minutes {
         info!("Cancelling analyses after {minutes} min");
         worker = worker.with_max_job_duration(std::time::Duration::from_secs(minutes * 60));
+    }
+    if let Some(interpreters) = scripts {
+        info!("Exports may run their R / Python scripts");
+        worker = worker.with_scripts(interpreters);
     }
     info!(
         "EVAnalyzer worker listening on ws://{}",
@@ -458,6 +475,7 @@ mod tests {
                 Vec::new(),
                 None,
                 Some(1),
+                None,
                 None,
             );
 

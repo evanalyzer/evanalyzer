@@ -1,6 +1,8 @@
 //! # plate
 //!
-//! The plate, its wells and the image heatmaps: as grids or as a flat list.
+//! The plate, its wells and the image heatmaps: as grids (XLSX) or as a
+//! flat list - a data export's PLATE, WELL_GRID, WELL_LIST and
+//! IMAGE_HEATMAP outputs (see `reused.rs`, which names the files).
 //!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-11-22
@@ -9,12 +11,104 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use super::*;
+use crate::results::local::class_display_label;
+use crate::results::{
+    Aggregation, Cell, CellValue, ColorScale, ColorSchema, Column, ColumnEntry, DatabaseResult,
+    ExportProgress, Grouping, ImageHeatmapFilter, PlaneFilter, PlateFilterMulti, PlateSize,
+    ResultsSource, View, WellSize, WellsBatchFilterMulti,
+};
+use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
+use rust_xlsxwriter::{Color, Format, FormatAlign, Workbook, Worksheet, XlsxError};
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
-impl ResultExport {
-    pub(super) fn export_plate_and_well(
+#[cfg(test)]
+mod tests;
+
+/// What a plate layout writes, and how: its grids or lists, of which
+/// images, classes, columns and aggregations, planes and colours.
+#[derive(Clone, Default)]
+pub(super) struct PlateExport {
+    pub output_dir: PathBuf,
+    pub t_stacks: Option<std::range::Range<u32>>,
+    pub z_stacks: Option<std::range::Range<u32>>,
+    /// The images; empty: every image not left out.
+    pub image_rel_paths: Vec<String>,
+    pub columns: Vec<Column>,
+    pub color_schema: ColorSchema,
+    pub color_scale: ColorScale,
+    pub grouping: Grouping,
+    pub object_classes: Vec<ObjectClass>,
+    pub aggregations: Vec<Aggregation>,
+    pub plate_size: PlateSize,
+    pub well_size: Option<WellSize>,
+    pub well_order: Option<Vec<u32>>,
+    pub square_size: Option<usize>,
+    pub with_plate_view_heatmap: bool,
+    pub with_well_view_heatmap: bool,
+    pub with_plate_view_list: bool,
+    pub with_well_view_list: bool,
+    pub with_heatmap: bool,
+}
+
+impl PlateExport {
+    /// Writes what is asked for into `output_dir` (`plate.xlsx`,
+    /// `well.xlsx`, `plate_list.xlsx`, `well_list.xlsx`, `heatmap_<image>.xlsx`).
+    pub(super) fn write(
         &self,
-        database: &ResultsGenerator,
+        database: &dyn ResultsSource,
+        cancel: &AtomicBool,
+    ) -> Result<(), InternalErrors> {
+        let mut progress = |_: &str, _: usize, _: usize| {};
+        let any = self.with_plate_view_heatmap
+            || self.with_well_view_heatmap
+            || self.with_plate_view_list
+            || self.with_well_view_list
+            || self.with_heatmap;
+        if any {
+            std::fs::create_dir_all(&self.output_dir).map_err(|e| {
+                InternalErrors::Io(format!(
+                    "Could not create {}: {e}",
+                    self.output_dir.display()
+                ))
+            })?;
+        }
+        if self.with_plate_view_heatmap || self.with_well_view_heatmap {
+            self.export_plate_and_well(database, cancel, &mut progress)?;
+        }
+        if self.with_plate_view_list || self.with_well_view_list {
+            self.export_plate_and_well_as_flat_list(database, cancel, &mut progress)?;
+        }
+        if self.with_heatmap {
+            self.export_heatmap(database, cancel, &mut progress)?;
+        }
+        Ok(())
+    }
+
+    fn output_path(&self, file_name: &str) -> PathBuf {
+        self.output_dir.join(file_name)
+    }
+
+    /// The images: the picked ones, else every image not left out.
+    fn images(&self, database: &dyn ResultsSource) -> Result<Vec<String>, InternalErrors> {
+        let all = database.get_images()?;
+        let wanted: HashSet<&str> = self.image_rel_paths.iter().map(String::as_str).collect();
+        Ok(all
+            .into_iter()
+            .filter(|image| match wanted.is_empty() {
+                true => !image.disabled,
+                false => wanted.contains(image.rel_path.to_string_lossy().as_ref()),
+            })
+            .map(|image| image.rel_path.to_string_lossy().into_owned())
+            .collect())
+    }
+}
+
+impl PlateExport {
+    fn export_plate_and_well(
+        &self,
+        database: &dyn ResultsSource,
         cancel: &AtomicBool,
         on_progress: ExportProgress,
     ) -> Result<(), InternalErrors> {
@@ -209,9 +303,9 @@ impl ResultExport {
     // Only ever needs `View::List` data - never overlaps in query cost with
     // `export_plate_and_well`'s `View::Heatmap`-only fetches above, even
     // though both run in the same export when this is enabled.
-    pub(super) fn export_plate_and_well_as_flat_list(
+    fn export_plate_and_well_as_flat_list(
         &self,
-        database: &ResultsGenerator,
+        database: &dyn ResultsSource,
         cancel: &AtomicBool,
         on_progress: ExportProgress,
     ) -> Result<(), InternalErrors> {
@@ -468,9 +562,9 @@ impl ResultExport {
     // sharing one document, since a heatmap is inherently local to a single
     // image. Same single-plane caveat as `export_plate_and_well` applies:
     // only the first z/t in the given ranges is rendered.
-    pub(super) fn export_heatmap(
+    fn export_heatmap(
         &self,
-        database: &ResultsGenerator,
+        database: &dyn ResultsSource,
         cancel: &AtomicBool,
         on_progress: ExportProgress,
     ) -> Result<(), InternalErrors> {
@@ -481,7 +575,7 @@ impl ResultExport {
             self.object_classes.clone()
         };
         let available_columns = database.get_available_columns()?;
-        let images = resolve_images(database, self)?;
+        let images = self.images(database)?;
         let planes = ExportPlanes::of(database, self)?;
 
         for (image_idx, image) in images.iter().enumerate() {
@@ -544,13 +638,13 @@ impl ResultExport {
     }
 }
 
-pub(super) const GRID_CELL_PX: u32 = 60;
+const GRID_CELL_PX: u32 = 60;
 
-pub(super) const GRID_HEADER_PX: u32 = 24;
+const GRID_HEADER_PX: u32 = 24;
 
-pub(super) const GRID_NUM_FORMAT: &str = "0.00";
+const GRID_NUM_FORMAT: &str = "0.00";
 
-pub(super) const EMPTY_CELL_BG: u32 = 0xE0E0E0;
+const EMPTY_CELL_BG: u32 = 0xE0E0E0;
 
 /// Writes one square, colored grid block (`result`, a `View::Heatmap`
 /// `DatabaseResult`) starting at `start_row`: a bold caption, a header row
@@ -558,7 +652,7 @@ pub(super) const EMPTY_CELL_BG: u32 = 0xE0E0E0;
 /// row's label in column 0 and its cells across — see `write_cell` for how
 /// a cell's value/color are actually rendered. Returns the next free row
 /// (one blank row after the block).
-pub(super) fn write_grid_block(
+fn write_grid_block(
     worksheet: &mut Worksheet,
     start_row: u32,
     caption: &str,
@@ -626,7 +720,7 @@ pub(super) fn write_grid_block(
 /// this row is disabled - see `Cell::disabled`) strikes the whole row
 /// through. Unlike `write_grid_block`, this is a plain table, not a matrix
 /// - no square sizing or per-cell color.
-pub(super) fn write_flat_pivot(
+fn write_flat_pivot(
     path: &Path,
     sheet_name: &str,
     key_labels: &[&str],
@@ -692,3 +786,355 @@ pub(super) fn write_flat_pivot(
     workbook.save(path).map_err(xlsx_err)?;
     Ok(())
 }
+
+// -- Shared cell and sheet helpers --
+
+fn xlsx_err(error: XlsxError) -> InternalErrors {
+    InternalErrors::Internal(format!("XLSX export error: {error}"))
+}
+
+/// The font size, background fill, strikethrough and/or number format
+/// `write_cell` applies for a given `Cell` - split out from `write_cell`
+/// itself so the formatting logic can be unit-tested directly against
+/// `Format` (which implements `Eq`) instead of only indirectly through a
+/// written-and-reread `.xlsx` file. Every cell gets `EXPORT_FONT_SIZE` at
+/// minimum. `bg_color` when it's set (`0` is every non-colored cell's
+/// sentinel throughout `results_generator.rs`) takes priority since it's
+/// real data (e.g. a class badge's own color); `EMPTY_CELL_BG` (see above)
+/// comes next; `alternating_color` only ever paints `ALTERNATING_ROW_BG` as
+/// a last-resort fallback, for a cell that has no color of its own to show.
+/// `disabled` additionally strikes the text through, so a value derived
+/// from (or, for a well/plate cell, affected by) a disabled image visibly
+/// reads as "shown but excluded from the statistics" rather than looking
+/// like any other value. `num_format` (e.g. `"0.00"`, used by the plate/
+/// well/heatmap grids - see `write_grid_block`) is applied last, along with
+/// centering the cell both horizontally and vertically - `num_format` is
+/// only ever passed for a grid cell, never a flat list/grouped-by-image
+/// one, so it doubles as "this is a grid cell" for alignment purposes too.
+/// The number format keeps a long float from forcing the column far wider
+/// than `GRID_CELL_PX` to avoid Excel's `#####` "too narrow to display"
+/// placeholder.
+/// Font color of a cell from a failed image - the GUI's light-theme
+/// `Theme.warn`.
+const FAILED_FONT_COLOR: u32 = 0xC07800;
+
+fn cell_format(cell: &Cell, num_format: Option<&str>) -> Format {
+    let mut format = Format::new().set_font_size(EXPORT_FONT_SIZE);
+    if cell.disabled {
+        // Gray out a disabled cell regardless of any heatmap/class color it
+        // would otherwise carry - a struck-through value on top of its
+        // normal color still read as "just another colored cell" at a
+        // glance, same complaint as the GUI grid before it switched
+        // disabled tiles to a flat gray fill instead of their heatmap
+        // color.
+        format = format.set_background_color(Color::RGB(EMPTY_CELL_BG));
+        format = format.set_font_strikethrough();
+    } else if cell.bg_color != 0 {
+        format = format.set_background_color(Color::RGB(cell.bg_color));
+    } else if matches!(cell.value, CellValue::Empty) && cell.search_key.is_some() {
+        format = format.set_background_color(Color::RGB(EMPTY_CELL_BG));
+    } else if cell.alternating_color {
+        format = format.set_background_color(Color::RGB(ALTERNATING_ROW_BG));
+    }
+    if cell.failed || cell.any_failed {
+        // The image's analysis stopped with an error (or, for a well, one
+        // of its images' did): its values are incomplete / it's left out -
+        // same warning color the GUI uses.
+        format = format
+            .set_font_color(Color::RGB(FAILED_FONT_COLOR))
+            .set_italic();
+    }
+    if let Some(num_format) = num_format {
+        format = format
+            .set_num_format(num_format)
+            .set_align(FormatAlign::Center)
+            .set_align(FormatAlign::VerticalCenter);
+    }
+    format
+}
+
+/// Writes one `Cell` — its value, typed appropriately (`write_string`/
+/// `write_number`, not everything flattened to text, so the sheet stays
+/// sortable/usable as real data) rather than pre-formatted display text —
+/// plus whatever `cell_format` computes for it. `num_format` is forwarded
+/// straight to `cell_format` (see its doc comment) - pass `None` outside a
+/// plate/well/heatmap grid. A real well/field with no value (`CellValue::Empty`
+/// with a `search_key` - see `EMPTY_CELL_BG`) is written as `"-"`; a grid
+/// position with no well/field at all is left a true blank.
+fn write_cell(
+    worksheet: &mut Worksheet,
+    row: u32,
+    col: u16,
+    cell: &Cell,
+    num_format: Option<&str>,
+) -> Result<(), InternalErrors> {
+    let format = cell_format(cell, num_format);
+
+    match &cell.value {
+        CellValue::Empty => {
+            if cell.search_key.is_some() {
+                // A real well/field with no value (see `EMPTY_CELL_BG`
+                // above) - label it "-" rather than leaving the filled
+                // cell looking blank.
+                worksheet
+                    .write_string_with_format(row, col, "-", &format)
+                    .map_err(xlsx_err)?;
+            } else {
+                worksheet.write_blank(row, col, &format).map_err(xlsx_err)?;
+            }
+        }
+        CellValue::String(s) | CellValue::Class((s, _)) => {
+            worksheet
+                .write_string_with_format(row, col, s, &format)
+                .map_err(xlsx_err)?;
+        }
+        CellValue::Float(value) => {
+            worksheet
+                .write_number_with_format(row, col, *value as f64, &format)
+                .map_err(xlsx_err)?;
+        }
+        CellValue::Integer(value) => {
+            worksheet
+                .write_number_with_format(row, col, *value as f64, &format)
+                .map_err(xlsx_err)?;
+        }
+    }
+    Ok(())
+}
+
+/// `Column`'s human-readable label, matching `get_available_columns()`'s
+/// own `display_name` for that column — falls back to the raw db key
+/// (`Column::as_key`) for a column this database's `available_columns`
+/// doesn't list - a coloc combination (`Column::Coloc`) or stale export
+/// settings - its own label with the class names.
+fn column_display_name(
+    column: &Column,
+    available_columns: &[ColumnEntry],
+    classes: &[evanalyzer_cfg::settings::classification_settings::Class],
+) -> String {
+    available_columns
+        .iter()
+        .find(|entry| entry.key == *column)
+        .map(|entry| entry.display_name.clone())
+        .unwrap_or_else(|| column.display_label(classes))
+}
+
+fn aggregation_label(aggregation: &Aggregation) -> &'static str {
+    match aggregation {
+        Aggregation::Avg => "Average",
+        Aggregation::Min => "Minimum",
+        Aggregation::Max => "Maximum",
+        Aggregation::Stddev => "Std Dev",
+        Aggregation::Sum => "Sum",
+        Aggregation::Median => "Median",
+        Aggregation::Skewness => "Skewness",
+    }
+}
+
+fn sanitize_filename_component(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// Extracts a `View::List` value cell's number — always `CellValue::Float`
+/// in practice (see `well_fields_to_result`/`get_group_by_plate`'s own
+/// `View::List` arms), but matching `Integer` too costs nothing and keeps
+/// this from silently going quiet if that ever changes.
+fn cell_to_f64(cell: &Cell) -> Option<f64> {
+    match &cell.value {
+        CellValue::Float(value) => Some(*value as f64),
+        CellValue::Integer(value) => Some(*value as f64),
+        _ => None,
+    }
+}
+
+fn plain_cell(value: CellValue) -> Cell {
+    Cell {
+        value,
+        bg_color: 0,
+        alternating_color: false,
+        search_key: None,
+        disabled: false,
+        any_disabled: false,
+        failed: false,
+        any_failed: false,
+    }
+}
+
+const EXPORT_FONT_SIZE: f64 = 10.0;
+
+/// Light gray Excel gives every other coloc-detail row (`Cell::alternating_color`)
+/// so the fanned-out rows belonging to one source object stay visually
+/// grouped — matches `Theme.list-row-alt-bg`'s role in the GUI's own List
+/// view, just as a plain hex constant here since XLSX formatting has no
+/// theme to pull from.
+const ALTERNATING_ROW_BG: u32 = 0xF1F1F1;
+
+/// The planes an export covers: the ones with objects (`get_planes`) within
+/// the chosen time points and z-planes (`None`: all), time point by time
+/// point, then z-plane. Whether the results have several time points
+/// (`by_t`) or z-planes (`by_z`) decides the extra "T"/"Z" columns of the
+/// lists and the plane in the grids' tab names - results of one plane look
+/// as they always did.
+struct ExportPlanes {
+    planes: Vec<PlaneFilter>,
+    by_t: bool,
+    by_z: bool,
+}
+
+impl ExportPlanes {
+    fn of(database: &dyn ResultsSource, export: &PlateExport) -> Result<Self, InternalErrors> {
+        let all = database.get_planes()?;
+        let within = |value: u32, range: &Option<std::range::Range<u32>>| {
+            range.is_none_or(|range| range.start <= value && value < range.end)
+        };
+        let mut planes: Vec<PlaneFilter> = all
+            .iter()
+            .filter(|p| within(p.t_stack, &export.t_stacks) && within(p.z_stack, &export.z_stacks))
+            .copied()
+            .collect();
+        if planes.is_empty() {
+            // No objects there: still the first chosen plane - the
+            // per-image and plate exports list their images then, with
+            // nothing found.
+            planes.push(PlaneFilter {
+                t_stack: export.t_stacks.map_or(0, |range| range.start),
+                z_stack: export.z_stacks.map_or(0, |range| range.start),
+            });
+        }
+        Ok(Self {
+            by_t: all.iter().any(|p| p.t_stack != all[0].t_stack),
+            by_z: all.iter().any(|p| p.z_stack != all[0].z_stack),
+            planes,
+        })
+    }
+
+    /// The lists' extra columns: "T", "Z" - each only when the results have
+    /// several.
+    fn header(&self) -> Vec<String> {
+        let mut header = Vec::new();
+        if self.by_t {
+            header.push("T".to_string());
+        }
+        if self.by_z {
+            header.push("Z".to_string());
+        }
+        header
+    }
+
+    /// `plane` in the lists' extra columns (see [`Self::header`]).
+    fn cells(&self, plane: PlaneFilter) -> Vec<Cell> {
+        let mut cells = Vec::new();
+        if self.by_t {
+            cells.push(plain_cell(CellValue::Integer(plane.t_stack as i32)));
+        }
+        if self.by_z {
+            cells.push(plain_cell(CellValue::Integer(plane.z_stack as i32)));
+        }
+        cells
+    }
+
+    /// `plane` in the flat lists' extra key columns (see [`Self::header`]).
+    fn texts(&self, plane: PlaneFilter) -> Vec<String> {
+        self.cells(plane).iter().map(cell_text).collect()
+    }
+
+    /// `plane` before a grid's tab name ("T1 Nuclei", "T1 Z2 Nuclei") - first,
+    /// so a long class name is what Excel's 31 characters cut, not the plane.
+    fn tab_name(&self, plane: PlaneFilter, name: &str) -> String {
+        let mut parts = Vec::new();
+        if self.by_t {
+            parts.push(format!("T{}", plane.t_stack));
+        }
+        if self.by_z {
+            parts.push(format!("Z{}", plane.z_stack));
+        }
+        parts.push(name.to_string());
+        parts.join(" ")
+    }
+}
+
+/// A usable base filename for `image_rel_path`'s heatmap document — its
+/// file stem (no directory, no extension), since the rel path's own
+/// separators/extension aren't valid or wanted in a sibling file's name.
+fn image_stub(image_rel_path: &str) -> String {
+    Path::new(image_rel_path)
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| image_rel_path.to_string())
+}
+
+/// Check for cancle the export process
+fn check_cancelled(cancel: &AtomicBool) -> Result<(), InternalErrors> {
+    if cancel.load(Ordering::Relaxed) {
+        Err(InternalErrors::Cancelled)
+    } else {
+        Ok(())
+    }
+}
+
+/// Plain-text form of a `Cell`'s value for CSV, dropping its color/formatting
+/// (CSV has no cells to color) — matches the CLI's identically-named helper
+/// in `crates/cli/src/commands/common.rs`, kept separate there since it's
+/// also used by that crate's table/JSON rendering, unrelated to export.
+fn cell_text(cell: &Cell) -> String {
+    match &cell.value {
+        CellValue::Empty => String::new(),
+        CellValue::String(s) => s.clone(),
+        CellValue::Class((s, _)) => s.clone(),
+        CellValue::Float(v) => v.to_string(),
+        CellValue::Integer(v) => v.to_string(),
+    }
+}
+
+/// Hands out sanitized, unique-within-one-workbook Excel sheet names.
+/// Excel rejects a sheet name that's empty, over 31 characters, contains
+/// `[ ] : * ? / \`, or duplicates another sheet in the same workbook —
+/// `unique` fixes up all four so a class's own (arbitrary, user-entered)
+/// name is always safe to use directly as a tab name.
+struct SheetNamer {
+    used: HashSet<String>,
+}
+
+impl SheetNamer {
+    fn new() -> Self {
+        Self {
+            used: HashSet::new(),
+        }
+    }
+
+    fn unique(&mut self, wanted: &str) -> String {
+        let mut sanitized: String = wanted
+            .chars()
+            .map(|c| if "[]:*?/\\".contains(c) { '_' } else { c })
+            .collect();
+        sanitized = sanitized.trim().to_string();
+        if sanitized.is_empty() {
+            sanitized = "Sheet".to_string();
+        }
+        if sanitized.chars().count() > 31 {
+            sanitized = sanitized.chars().take(31).collect();
+        }
+
+        let mut candidate = sanitized.clone();
+        let mut suffix_n = 2;
+        while self.used.contains(&candidate) {
+            let suffix = format!(" ({suffix_n})");
+            let max_base = 31usize.saturating_sub(suffix.chars().count());
+            let base: String = sanitized.chars().take(max_base).collect();
+            candidate = format!("{base}{suffix}");
+            suffix_n += 1;
+        }
+        self.used.insert(candidate.clone());
+        candidate
+    }
+}
+
+const LIST_VALUE_COL_PX: u32 = 90;

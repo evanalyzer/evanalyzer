@@ -23,6 +23,10 @@ pub enum CliCommand {
     /// Analyses on the --remote server
     #[command(subcommand)]
     Jobs(JobsSubCommand),
+    /// A project's exports: the tables, images and scripts written from a
+    /// run's results (docs/exports.md)
+    #[command(subcommand)]
+    Export(ExportSubCommand),
     /// Train a pixel or object classifier from a project's labeled objects
     ///
     /// The model is saved under the project's `models/` folder.
@@ -60,6 +64,98 @@ pub enum ResultsSubCommand {
     View(ViewArgs),
     /// List a results database's column ids (for --group-by)
     Columns(ColumnsArgs),
+}
+
+#[derive(Subcommand)]
+pub enum ExportSubCommand {
+    /// List the project's exports
+    List(ExportListArgs),
+    /// Show one export's settings
+    View(ExportViewArgs),
+    /// Run an export on a run's results
+    ///
+    /// The files go where the export says (--output: there, this once).
+    /// Scripts someone else wrote need --allow-scripts - there is nobody
+    /// to ask; --no-scripts leaves them out.
+    Run(ExportRunArgs),
+    /// The folders and scripts exports may run without asking (the same
+    /// list as the app's Settings › Trusted scripts)
+    #[command(subcommand)]
+    Trust(TrustSubCommand),
+}
+
+#[derive(Subcommand)]
+pub enum TrustSubCommand {
+    /// List the trusted folders and scripts and whether each script still
+    /// matches what was allowed
+    List,
+    /// Trust every script in a folder (e.g. a project's), also after it
+    /// changes
+    Folder(TrustPathArgs),
+    /// Allow a script as it is now - it asks again once it changes
+    Allow(TrustPathArgs),
+    /// Take the trust of a folder or script back
+    Revoke(TrustRevokeArgs),
+}
+
+#[derive(Args)]
+pub struct TrustPathArgs {
+    /// The folder or script (absolute on a --remote server)
+    pub path: PathBuf,
+}
+
+#[derive(Args)]
+pub struct TrustRevokeArgs {
+    /// The folder or script, as `trust list` shows it
+    #[arg(required_unless_present = "all")]
+    pub path: Option<PathBuf>,
+    /// Every folder and script
+    #[arg(long, conflicts_with = "path")]
+    pub all: bool,
+}
+
+#[derive(Args)]
+pub struct ExportRunArgs {
+    /// The export: its id or its name
+    pub export: String,
+    /// The project (.evaproj)
+    #[arg(long)]
+    pub project: PathBuf,
+    /// The results: a .evadb file or its folder (default: the project's
+    /// newest analysis)
+    #[arg(long)]
+    pub results: Option<PathBuf>,
+    /// Write into this folder instead of the export's own output, this once
+    #[arg(long)]
+    pub output: Option<PathBuf>,
+    /// Run the export's scripts without asking
+    #[arg(long, conflicts_with = "no_scripts")]
+    pub allow_scripts: bool,
+    /// Leave the export's scripts out
+    #[arg(long)]
+    pub no_scripts: bool,
+}
+
+#[derive(Args)]
+pub struct ExportListArgs {
+    /// The project (.evaproj)
+    #[arg(long)]
+    pub project: PathBuf,
+    /// Print the exports as JSON, as the project file has them
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args)]
+pub struct ExportViewArgs {
+    /// The export: its id or its name
+    pub export: String,
+    /// The project (.evaproj)
+    #[arg(long)]
+    pub project: PathBuf,
+    /// Print the export as JSON, as the project file has it
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Subcommand)]
@@ -108,6 +204,19 @@ pub struct AnalyzeArgs {
     /// it ran with.
     #[arg(long = "set", value_name = "SETTING=VALUE")]
     pub set: Vec<String>,
+
+    /// Run this export afterwards instead of those set to run after every
+    /// run (id or name, repeatable)
+    #[arg(long = "export", value_name = "EXPORT", conflicts_with = "no_exports")]
+    pub exports: Vec<String>,
+
+    /// Run no export afterwards
+    #[arg(long)]
+    pub no_exports: bool,
+
+    /// Let the exports run their scripts without asking
+    #[arg(long)]
+    pub allow_scripts: bool,
 }
 
 #[derive(Args)]
@@ -217,13 +326,11 @@ pub enum ExportCommand {
     Csv(TableExportArgs),
     /// Export rows as an XLSX workbook
     Xlsx(TableExportArgs),
-    /// Export the raw `objects` table as a single Parquet file
+    /// Export the raw `objects` table as a Parquet file
     ///
-    /// Unlike `csv`/`xlsx`, this is an unfiltered, every-column dump of the
-    /// database's `objects` table (via DuckDB's own `COPY ... TO ...
-    /// (FORMAT parquet)`) — there's no column selection or image/class/z/t
-    /// filtering to apply, so it takes a plainer set of arguments than
-    /// `TableExportArgs`.
+    /// Unlike `csv`/`xlsx`, an unfiltered dump of every column of the
+    /// results' `objects` table, as stored (lengths in nm). Results with
+    /// measurements also get `<name>_measurements.parquet` next to it.
     Parquet(ParquetExportArgs),
     // Chart image export (histogram/scatter/heatmap PNGs) isn't wired up
     // yet: the current results backend (ResultCharts) only computes chart
@@ -255,6 +362,11 @@ pub struct TableExportArgs {
     #[command(flatten)]
     pub tracks: TrackArgs,
 
+    /// The unit of lengths, areas and volumes (also in the column names:
+    /// area_um2, area_nm2)
+    #[arg(long, value_enum, default_value = "um")]
+    pub length_unit: LengthUnitKind,
+
     /// One row per measurement value
     ///
     /// Image, plane, object or region, step, measurement, value - the
@@ -274,6 +386,13 @@ pub struct TableExportArgs {
     /// over it.
     #[arg(long, requires = "project", conflicts_with_all = ["tracks", "measurements"])]
     pub view: Option<String>,
+}
+
+#[derive(Copy, Clone, Default, ValueEnum)]
+pub enum LengthUnitKind {
+    #[default]
+    Um,
+    Nm,
 }
 
 /// `--tracks`: a row per track instead of per object.

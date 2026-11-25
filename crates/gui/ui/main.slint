@@ -26,7 +26,7 @@ import { AiLearningState, AiTrainingSettingsSlint, BrightnessRowSlint, ChannelCh
 import { RunAnalysisState } from "api/run_analysis.slint";
 import { ResultsListState } from "api/results_list.slint";
 import { ResultsState } from "api/results.slint";
-import { ExportDialogState } from "api/export.slint";
+import { AnalysisRow, DataOutputRow, ExportEntryRow, ExportRow, ExportsState, RunPart } from "api/exports.slint";
 import { FileBrowserCrumb, FileBrowserEntry, FileBrowserMode, FileBrowserPlace, FileBrowserState } from "api/file_browser.slint";
 
 import { GlobalShortcuts, DialogShortcuts } from "shortcuts.slint";
@@ -54,6 +54,11 @@ import {
 } from "dialogs/classification_confirm_delete.slint";
 
 import { DeleteAnalysisDialog } from "dialogs/delete_analysis_dialog.slint";
+import { ScriptTrustDialog } from "dialogs/script_trust_dialog.slint";
+import { QuickExportDialog } from "dialogs/quick_export_dialog.slint";
+import { DeleteExportDialog } from "dialogs/delete_export_dialog.slint";
+import { QuickExportState } from "api/quick_export.slint";
+import { ScriptTrustState, TrustedScriptsState, TrustedFolderRow, TrustedScriptRow } from "api/script_trust.slint";
 
 import {
     ConfirmAutoAddClassesDialog,
@@ -83,7 +88,6 @@ import { ConnectDialog } from "dialogs/connect_dialog.slint";
 
 import { AiLearningDialog } from "dialogs/ai_learning_dialog.slint";
 import { RunAnalysisDialog } from "dialogs/run_analysis_dialog.slint";
-import { ExportDialog } from "results/export_dialog.slint";
 
 import { FileBrowserDialog } from "dialogs/file_browser_dialog.slint";
 import { ClassSelectDialog } from "dialogs/classification_select_dialog.slint";
@@ -186,7 +190,17 @@ export {
     TrainingImageRowSlint,
     TrainingObjectRowSlint,
     ResultsState,
-    ExportDialogState,
+    ExportsState,
+    ScriptTrustState,
+    TrustedScriptsState,
+    TrustedFolderRow,
+    TrustedScriptRow,
+    QuickExportState,
+    ExportRow,
+    ExportEntryRow,
+    AnalysisRow,
+    DataOutputRow,
+    RunPart,
     FileBrowserState,
     FileBrowserMode,
     FileBrowserPlace,
@@ -472,9 +486,26 @@ export component AppWindow inherits Window {
             height: 100%;
         }
 
-        if ExportDialogState.active: ExportDialog {
+        // Results › Export…: the view shown, once - or kept as an export.
+        if QuickExportState.shown: Rectangle {
             width: 100%;
             height: 100%;
+            QuickExportDialog { }
+        }
+
+        // The Exports tab's trash: asked first.
+        if ExportsState.delete-asked >= 0: Rectangle {
+            width: 100%;
+            height: 100%;
+            DeleteExportDialog { }
+        }
+
+        // An export's script not allowed yet: asked over everything else
+        // (also after a run, with another dialog open).
+        if ScriptTrustState.shown: Rectangle {
+            width: 100%;
+            height: 100%;
+            ScriptTrustDialog { }
         }
 
         // The file browser sits above every other overlay: some dialogs (e.g.

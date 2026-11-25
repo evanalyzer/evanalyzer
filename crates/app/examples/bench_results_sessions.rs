@@ -9,12 +9,12 @@
 
 // Benchmark: several results files opened one after another in one process,
 // as the results window does when the user switches between analyses - each
-// opened, read (a grouped-by-image export: every object once), and closed
+// opened, read (a per-image export: every object once), and closed
 // again before the next. Reports RSS after each file is closed: what the
 // earlier files still hold.
 //
 // `--together`: every file open at once instead (the results window and a
-// running analysis), each read in full (the list as CSV: every object's
+// running analysis), each read in full (the objects as CSV: every object's
 // columns) - RSS and DuckDB's memory with all of them open.
 //
 // `--max-ram MB` first: the app's RAM limit (as `evanalyzer --max-ram`) -
@@ -23,9 +23,10 @@
 // Usage: cargo run --release -p evanalyzer_app --example bench_results_sessions -- \
 //     <out dir> [--max-ram MB] [--together] <a.evadb> <b.evadb> ...
 
-use evanalyzer_app::results::{
-    Aggregation, Column, ExportFormat, LocalResultsGenerator, ResultExport,
-};
+use evanalyzer_app::backend::Backend;
+use evanalyzer_app::backend::local::LocalBackend;
+use evanalyzer_app::exports::{ExportRun, ScriptPermission};
+use evanalyzer_app::results::ResultsSource;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
@@ -57,29 +58,49 @@ fn duckdb_mb(db: &str) -> i64 {
         / 1_000_000
 }
 
+/// A project export (`run_export`) of `entry` into `out`.
+fn run_export(results: &dyn ResultsSource, entry: serde_json::Value, out: &std::path::Path) {
+    let export = serde_json::from_value(serde_json::json!({
+        "id": 1, "name": "bench", "entries": [entry]
+    }))
+    .expect("an export");
+    let report = results
+        .run_export(
+            &ExportRun {
+                export,
+                project_dir: out.to_path_buf(),
+                results_dir: out.to_path_buf(),
+                output: Some(out.to_path_buf()),
+                scripts: ScriptPermission::Skip,
+                interpreters: Default::default(),
+                drawing: None,
+            },
+            &AtomicBool::new(false),
+            &mut |_, _, _| {},
+        )
+        .expect("export");
+    assert!(report.all_written(), "{report:?}");
+}
+
 fn together(out: &std::path::Path, dbs: &[String]) {
     let databases: Vec<_> = dbs
         .iter()
-        .map(|db| LocalResultsGenerator::open_database(PathBuf::from(db)).expect("open database"))
+        .map(|db| {
+            LocalBackend::default()
+                .open_results(std::path::Path::new(db))
+                .expect("open results")
+        })
         .collect();
     let start = Instant::now();
     for (i, database) in databases.iter().enumerate() {
         let _ = std::fs::remove_dir_all(out);
         std::fs::create_dir_all(out).unwrap();
-        let export = ResultExport {
-            output_dir: out.to_path_buf(),
-            format: ExportFormat::CSV,
-            columns: vec![
-                Column::AreaSizePx,
-                Column::IntensityAvg(0),
-                Column::Circularity,
-            ],
-            with_list_view: true,
-            ..Default::default()
-        };
-        export
-            .start_export(database, &AtomicBool::new(false), &mut |_, _, _| {})
-            .expect("export");
+        run_export(
+            database.as_ref(),
+            serde_json::json!({ "kind": "DATA", "outputs": ["OBJECTS"],
+                "columns": ["area_px", "intensity_mean_gray_ch0", "circularity"] }),
+            out,
+        );
         let duckdb: Vec<String> = dbs[..=i]
             .iter()
             .map(|db| duckdb_mb(db).to_string())
@@ -121,19 +142,16 @@ fn main() {
         std::fs::create_dir_all(&out).unwrap();
         let start = Instant::now();
         {
-            let database =
-                LocalResultsGenerator::open_database(PathBuf::from(db)).expect("open database");
-            let export = ResultExport {
-                output_dir: out.clone(),
-                format: ExportFormat::CSV,
-                columns: vec![Column::Count, Column::AreaSizePx, Column::IntensityAvg(0)],
-                aggregations: vec![Aggregation::Avg, Aggregation::Median],
-                with_grouped_by_image_list: true,
-                ..Default::default()
-            };
-            export
-                .start_export(&database, &AtomicBool::new(false), &mut |_, _, _| {})
-                .expect("export");
+            let database = LocalBackend::default()
+                .open_results(std::path::Path::new(db))
+                .expect("open results");
+            run_export(
+                database.as_ref(),
+                serde_json::json!({ "kind": "DATA", "outputs": ["IMAGES"],
+                    "columns": ["count", "area_px", "intensity_mean_gray_ch0"],
+                    "aggregations": ["AVG", "MEDIAN"] }),
+                &out,
+            );
             println!(
                 "file {}: open + read {:.1}s, rss while open={} MB",
                 i + 1,

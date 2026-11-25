@@ -284,13 +284,13 @@ pub(super) fn tree_segments(
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::{ObjectSpec, seed_db};
+    use super::super::test_support::{ObjectSpec, TestResults, seed_db};
     use super::*;
 
     /// Two neurons: soma 0 (class 1) with a root segment 2 and its two
     /// children 3, 4 (class 3); soma 1 with one segment 5. Measured: the
     /// first neuron's total length, segment 3's branch level.
-    fn database(measured: bool) -> ResultsGenerator {
+    fn database(measured: bool) -> TestResults {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("results.evadb");
         let mut specs = vec![
@@ -302,8 +302,7 @@ mod tests {
         }
         specs[5] = ObjectSpec::new("B01_1.tif", "Segment", 3, 30);
         seed_db(&path, &specs);
-        std::mem::forget(dir);
-        let db = ResultsGenerator::open_database(path).unwrap();
+        let db = TestResults::open(dir, &path);
         let id = |i: usize| format!("00000000-0000-0000-0000-{i:012}");
         let mut sql = String::new();
         for (child, parents) in [

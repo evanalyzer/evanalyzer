@@ -10,26 +10,27 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-mod export;
+pub(crate) mod colorize;
 mod results_charts;
-pub use export::drawn_images::{colorize, colorize_thumbnail};
+pub use colorize::{colorize, colorize_thumbnail};
 mod results_generator;
 mod results_profile;
 mod results_time_course;
 mod results_tracks;
 mod results_trees;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 pub use results_charts::ResultCharts;
 pub use results_generator::ResultsGenerator;
+pub(crate) use results_generator::class_display_label;
 
 use crate::backend::ExportProgressFn;
 use crate::results::{
     BoxplotFilter, BoxplotResult, ColumnEntry, DatabaseResult, GroupedByImageFilter,
     HistogramFilter, HistogramResult, ImageEntry, ImageHeatmapFilter, ImageReviewChange,
-    ListFilter, PlateFilter, ResultExport, ResultsSource, ScatterFilter, ScatterResult,
-    TimeCourseFilter, TimeCourseResult, View, WellFilter,
+    ListFilter, PlateFilter, ResultsSource, ScatterFilter, ScatterResult, TimeCourseFilter,
+    TimeCourseResult, View, WellFilter,
 };
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::classification_settings::Class;
@@ -107,6 +108,36 @@ impl ResultsSource for LocalResults {
         self.with(|db| db.get_image_heatmap(filter, view))
     }
 
+    fn get_group_by_plate_multi(
+        &self,
+        filter: &crate::results::PlateFilterMulti,
+        view: &View,
+    ) -> Result<Vec<DatabaseResult>, InternalErrors> {
+        self.with(|db| db.get_group_by_plate_multi(filter, view))
+    }
+
+    fn get_wells_for_plate_multi(
+        &self,
+        filter: &crate::results::WellsBatchFilterMulti,
+        view: &View,
+    ) -> Result<Vec<std::collections::HashMap<String, DatabaseResult>>, InternalErrors> {
+        self.with(|db| db.get_wells_for_plate_multi(filter, view))
+    }
+
+    fn analysed_planes(&self, rel_path: &str) -> Result<Vec<(u32, u32)>, InternalErrors> {
+        self.with(|db| db.analysed_planes(rel_path))
+    }
+
+    fn for_each_drawn_object(
+        &self,
+        rel_path: &str,
+        plane: (u32, u32),
+        wanted: Option<&[u32]>,
+        each: &mut dyn FnMut(crate::results::DrawnObject) -> Result<(), InternalErrors>,
+    ) -> Result<(), InternalErrors> {
+        self.with(|db| db.for_each_drawn_object(rel_path, plane, wanted, each))
+    }
+
     fn get_images(&self) -> Result<Vec<ImageEntry>, InternalErrors> {
         self.with(|db| db.get_images())
     }
@@ -170,6 +201,14 @@ impl ResultsSource for LocalResults {
         self.with(|db| results_time_course::time_course(db, filter))
     }
 
+    fn time_course_each(
+        &self,
+        filter: &TimeCourseFilter,
+        each: &mut dyn FnMut(&crate::results::TimeCoursePoint) -> Result<(), InternalErrors>,
+    ) -> Result<(), InternalErrors> {
+        self.with(|db| results_time_course::TimeCourseQuery::prepare(db, filter)?.for_each(each))
+    }
+
     fn profile_columns(&self) -> Result<Vec<crate::results::MeasurementColumn>, InternalErrors> {
         self.with(results_profile::profile_columns)
     }
@@ -228,6 +267,13 @@ impl ResultsSource for LocalResults {
         self.with(|db| db.track_summary(filter))
     }
 
+    fn measurement_rows(
+        &self,
+        filter: &crate::results::MeasurementRowsFilter,
+    ) -> Result<Vec<crate::results::MeasurementRow>, InternalErrors> {
+        self.with(|db| db.measurement_rows(filter))
+    }
+
     fn track_paths(
         &self,
         filter: &crate::results::TrackPathsFilter,
@@ -250,26 +296,59 @@ impl ResultsSource for LocalResults {
         self.with(|db| ResultCharts {}.image_tracks(db, filter))
     }
 
-    fn export(
+    fn export_parquet(
         &self,
-        export: &ResultExport,
+        out_dir: &std::path::Path,
         cancel: &AtomicBool,
         on_progress: ExportProgressFn,
     ) -> Result<(), InternalErrors> {
         // Within what this backend may reach (a server: its `--root`s) -
-        // the folder written to and the one the drawn images are read from
-        // are the client's to choose.
-        self.files.check_write(&export.output_dir)?;
-        if let Some(drawn) = &export.drawn_images {
-            self.files.check(&drawn.image_root)?;
+        // the folder written to is the client's to choose.
+        self.files.check_write(out_dir)?;
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(InternalErrors::Cancelled);
         }
-        // Its own connection, so the (possibly long) export doesn't block
-        // the results window's queries. Cloned from the open one rather than
-        // opening the path again: on Windows the OS locks the file
-        // exclusively even against a second handle from the same process, so
-        // a second open locked the app out of its own database on every export.
+        on_progress("Exporting Parquet", 0, 1);
+        // Its own connection, so the export doesn't block the results
+        // window's queries (cloned: a second open of the file is locked on
+        // Windows).
         let database = self.with(|db| db.try_clone())?;
-        export.start_export(&database, cancel, on_progress)
+        database.export_parquet(out_dir)?;
+        on_progress("Exporting Parquet", 1, 1);
+        Ok(())
+    }
+
+    fn run_export(
+        &self,
+        run: &crate::exports::ExportRun,
+        cancel: &AtomicBool,
+        on_progress: ExportProgressFn,
+    ) -> Result<crate::exports::ExportReport, InternalErrors> {
+        // Its own connection, as an export above: the results window's
+        // queries go on meanwhile.
+        let own = LocalResults {
+            database: Mutex::new(self.with(|db| db.try_clone())?),
+            files: self.files.clone(),
+        };
+        // Within what this backend may reach (a server: its `--root`s): the
+        // folder the drawn images are read from is the client's to choose -
+        // as the folders written to (`may_write`).
+        if let Some(drawing) = &run.drawing {
+            self.files.check(&drawing.image_root)?;
+        }
+        let may_write = |folder: &std::path::Path| self.files.check_write(folder).map(|_| ());
+        crate::exports::local::run_export(&own, run, &may_write, cancel, on_progress)
+    }
+}
+
+impl LocalResults {
+    /// Results on an open `database`, every folder reachable - for tests.
+    #[cfg(test)]
+    pub(crate) fn from_generator(database: ResultsGenerator) -> Self {
+        Self {
+            database: Mutex::new(database),
+            files: crate::files::LocalFileSystem::default(),
+        }
     }
 }
 
@@ -277,15 +356,39 @@ impl ResultsSource for LocalResults {
 mod tests {
     use super::test_support::{ObjectSpec, seed_db};
     use super::*;
+    use crate::exports::{ExportRun, ScriptPermission};
     use crate::files::LocalFileSystem;
-    use crate::results::{DrawnImages, ExportFormat};
+    use crate::results::DrawnImages;
 
-    fn export(results: &LocalResults, export: ResultExport) -> Result<(), InternalErrors> {
-        results.export(&export, &AtomicBool::new(false), &mut |_, _, _| {})
+    fn run(
+        results: &LocalResults,
+        output: std::path::PathBuf,
+        drawing: Option<DrawnImages>,
+    ) -> Result<crate::exports::ExportReport, InternalErrors> {
+        let export = serde_json::from_value(serde_json::json!({
+            "id": 1, "name": "x", "entries": [
+                { "kind": "DATA", "outputs": ["OBJECTS"], "images": "ALL" }
+            ]
+        }))
+        .unwrap();
+        results.run_export(
+            &ExportRun {
+                export,
+                project_dir: output.clone(),
+                results_dir: output.clone(),
+                output: Some(output),
+                scripts: ScriptPermission::Skip,
+                interpreters: Default::default(),
+                drawing,
+            },
+            &AtomicBool::new(false),
+            &mut |_, _, _| {},
+        )
     }
 
     /// A server's export (`--root`): written only within its folders, the
-    /// drawn images read only from there - a client chooses both.
+    /// drawn images read only from there - a client chooses both. The
+    /// Parquet files the same.
     #[test]
     fn a_restricted_export_writes_and_reads_only_within_its_folders() {
         let root = tempfile::tempdir().unwrap();
@@ -294,30 +397,33 @@ mod tests {
         seed_db(&db, &[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
         let files = LocalFileSystem::restricted_to(&[root.path().to_path_buf()]).unwrap();
         let results = LocalResults::open(db, files).unwrap();
-        let list = |output_dir: std::path::PathBuf| ResultExport {
-            output_dir,
-            format: ExportFormat::CSV,
-            with_list_view: true,
-            ..Default::default()
-        };
+        let no_progress = &mut |_: &str, _: usize, _: usize| {};
 
         for escape in [outside.path().join("out"), root.path().join("../out")] {
             assert!(
-                export(&results, list(escape.clone())).is_err(),
+                run(&results, escape.clone(), None).is_err(),
                 "{}",
                 escape.display()
             );
             assert!(!escape.exists(), "{} written", escape.display());
+            assert!(
+                results
+                    .export_parquet(&escape, &AtomicBool::new(false), no_progress)
+                    .is_err()
+            );
         }
-        let mut drawn = list(root.path().join("drawn"));
-        drawn.drawn_images = Some(DrawnImages {
+        let drawing = DrawnImages {
             image_root: outside.path().to_path_buf(),
             ..Default::default()
-        });
-        assert!(export(&results, drawn).is_err(), "images read from outside");
+        };
+        assert!(
+            run(&results, root.path().join("drawn"), Some(drawing)).is_err(),
+            "images read from outside"
+        );
         assert!(!root.path().join("drawn").exists());
 
-        export(&results, list(root.path().join("out"))).expect("within the root");
-        assert!(root.path().join("out").read_dir().unwrap().next().is_some());
+        let report = run(&results, root.path().join("out"), None).expect("within the root");
+        assert!(report.all_written(), "{report:?}");
+        assert!(root.path().join("out/objects.csv").is_file());
     }
 }

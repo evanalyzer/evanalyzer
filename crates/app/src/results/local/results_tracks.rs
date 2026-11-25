@@ -247,6 +247,7 @@ impl<'a> TrackSummaryQuery<'a> {
                     let first_t = row.get::<_, i64>(3)? as u32;
                     Ok(TrackSummary {
                         image: image.name.clone(),
+                        image_rel_path: image.rel_path.clone(),
                         group: image.group.clone(),
                         track_id: row.get(0)?,
                         z: row.get::<_, i64>(1)? as u32,
@@ -711,12 +712,12 @@ impl ResultsGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::results::local::test_support::{ObjectSpec, seed_db};
+    use crate::results::local::test_support::{ObjectSpec, TestResults, seed_db};
     use crate::results::{Grouping, TimeCourseStat};
 
     /// The results of `objects` over `times` time points, then `sql` on
     /// them (edges, pixel sizes, a frame interval).
-    fn open(objects: &[ObjectSpec], times: i32, sql: &str) -> ResultsGenerator {
+    fn open(objects: &[ObjectSpec], times: i32, sql: &str) -> TestResults {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("results.evadb");
         seed_db(&path, objects);
@@ -736,8 +737,7 @@ mod tests {
             .unwrap();
             conn.execute_batch(sql).unwrap();
         }
-        std::mem::forget(dir);
-        ResultsGenerator::open_database(path).expect("open database")
+        TestResults::open(dir, &path)
     }
 
     /// Track 7 in img1: (0, 0) → (3, 4) → (3, 0), areas 10, 20, 30. Track 8

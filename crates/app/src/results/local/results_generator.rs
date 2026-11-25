@@ -26,6 +26,29 @@ use std::path::PathBuf;
 pub(super) struct GroupingSql {
     pub(super) column: &'static str,
     pub(super) regex: String,
+    /// `Grouping::Folder`: an image without a folder is in
+    /// [`ROOT_FOLDER`](crate::results::present::ROOT_FOLDER).
+    pub(super) folder: bool,
+}
+
+impl GroupingSql {
+    /// The group (well or folder) of an image as SQL, its columns read
+    /// with `prefix` (`"i."`, `""`). A well the regex doesn't find is
+    /// `''`; an image directly in the image root is in the root folder.
+    pub(super) fn group(&self, prefix: &str) -> String {
+        let extract = format!(
+            "regexp_extract({prefix}{}, '{}', 1)",
+            self.column, self.regex
+        );
+        match self.folder {
+            true => format!(
+                "CASE WHEN regexp_matches({prefix}{}, '[/\\\\]') THEN {extract} ELSE '{}' END",
+                self.column,
+                crate::results::present::ROOT_FOLDER
+            ),
+            false => extract,
+        }
+    }
 }
 
 pub struct ResultsGenerator {
@@ -52,9 +75,12 @@ pub struct ResultsGenerator {
 }
 
 mod columns;
+mod drawing;
 mod grouped;
 mod images;
 mod list;
+mod measurement_rows;
+mod parquet;
 mod plate;
 mod sql;
 #[cfg(test)]
@@ -126,6 +152,7 @@ impl ResultsGenerator {
                 _ => "image_name",
             },
             regex: self.grouping_regex(grouping)?.replace('\'', "''"),
+            folder: matches!(grouping, Grouping::Folder),
         })
     }
 

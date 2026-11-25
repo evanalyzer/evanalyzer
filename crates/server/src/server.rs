@@ -244,6 +244,12 @@ pub fn serve(config: ServerConfig) -> std::io::Result<()> {
     session_management.worker_max_threads = config.workers.max_threads;
     session_management.worker_max_ram_mb = config.workers.max_ram_mb;
     session_management.worker_max_job_minutes = config.workers.max_job_minutes;
+    session_management.worker_scripts = config.workers.allow_scripts.then(|| {
+        (
+            config.workers.rscript.clone(),
+            config.workers.python.clone(),
+        )
+    });
     session_management.max_workers = config.limits.max_workers;
     Server {
         tls: tls.map(|tls| tls.config),
@@ -1203,13 +1209,23 @@ mod tests {
                 .local_addr()
                 .unwrap()
                 .port();
+            let home = dir.join("home");
+            std::fs::create_dir_all(&home).unwrap();
             let server = Server {
                 tls: tls.map(|tls| Arc::clone(&tls.config)),
                 max_connections,
                 max_pending_logins,
                 throttle: Arc::default(),
                 refusing: Arc::default(),
-                user_management: Arc::new(SingleUser::for_tests()),
+                // At home in the test's folder: the server's thread runs on
+                // after the test (it never drops its user), the folder goes
+                // with the test.
+                user_management: Arc::new(SingleUser::new(
+                    "admin".into(),
+                    "plain:1234".into(),
+                    home,
+                    vec!["{home}".into()],
+                )),
                 session_management: Arc::new(
                     SessionManagement::with_store(dir.join("sessions.json"), fake_worker(dir))
                         .unwrap(),

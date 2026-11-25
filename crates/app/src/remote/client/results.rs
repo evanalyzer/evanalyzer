@@ -16,7 +16,6 @@ use crate::backend::ExportProgressFn;
 use crate::remote::results::{ResultsAnswer, ResultsQuery};
 use crate::remote::wire::frame::Frame;
 use crate::remote::wire::protocol::{ClientMsg, Reply, Request, from_postcard, to_postcard};
-use crate::results::ResultExport;
 use evanalyzer_cfg::core_types::InternalErrors;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -81,17 +80,18 @@ impl RemoteResults {
         }
     }
 
-    /// `ResultsSource::export`: the worker writes the files and streams its
-    /// progress; `cancel` stops it.
-    pub(in crate::remote) fn export_results(
+    /// `ResultsSource::export_parquet`: the worker writes the files and
+    /// streams its progress; `cancel` stops it.
+    pub(in crate::remote) fn export_parquet_remote(
         &self,
-        export: &ResultExport,
+        out_dir: &std::path::Path,
         cancel: &AtomicBool,
         on_progress: ExportProgressFn,
     ) -> Result<(), InternalErrors> {
         let (session, handle) = self.session()?;
-        let request = Request::ExportResults { handle };
-        let (id, rx) = session.request_with_blobs(request, vec![to_postcard(export)?])?;
+        let request = Request::ExportParquet { handle };
+        let (id, rx) =
+            session.request_with_blobs(request, vec![to_postcard(&out_dir.to_path_buf())?])?;
         let mut cancel_sent = false;
         let result = loop {
             if !cancel_sent && cancel.load(std::sync::atomic::Ordering::SeqCst) {
@@ -110,6 +110,57 @@ impl RemoteResults {
                 }) => on_progress(&message, current, total),
                 Ok(Frame {
                     msg: Reply::ExportDone(result),
+                    ..
+                }) => break result.map_err(|e| e.into_internal()),
+                Ok(Frame {
+                    msg: Reply::Failed(e),
+                    ..
+                }) => break Err(e.into_internal()),
+                Ok(_) => break Err(unexpected_reply()),
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    break Err(session.disconnected());
+                }
+            }
+        };
+        session.finish(id);
+        result
+    }
+}
+
+impl RemoteResults {
+    /// `ResultsSource::run_export` on the server: the run sent, its
+    /// progress streamed back, cancelled when `cancel` is set.
+    pub(in crate::remote) fn run_export_remote(
+        &self,
+        run: &crate::exports::ExportRun,
+        cancel: &AtomicBool,
+        on_progress: ExportProgressFn,
+    ) -> Result<crate::exports::ExportReport, InternalErrors> {
+        let (session, handle) = self.session()?;
+        let request = Request::RunExport { handle };
+        // JSON, not postcard: the export's entries are a tagged enum
+        // (`"kind"`), which postcard can't carry.
+        let blob = serde_json::to_vec(run).map_err(|e| InternalErrors::Internal(e.to_string()))?;
+        let (id, rx) = session.request_with_blobs(request, vec![blob])?;
+        let mut cancel_sent = false;
+        let result = loop {
+            if !cancel_sent && cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                cancel_sent = true;
+                let _ = session.send(&ClientMsg::Cancel { id });
+            }
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(Frame {
+                    msg:
+                        Reply::ExportProgress {
+                            message,
+                            current,
+                            total,
+                        },
+                    ..
+                }) => on_progress(&message, current, total),
+                Ok(Frame {
+                    msg: Reply::ExportRunDone(result),
                     ..
                 }) => break result.map_err(|e| e.into_internal()),
                 Ok(Frame {
@@ -149,6 +200,7 @@ mod tests {
     use crate::results::*;
     use crate::training::*;
     use crate::user::settings::AppSettings;
+    use crate::user::trust::ScriptTrust;
     use evanalyzer_cfg::core_types::InternalErrors;
     use evanalyzer_cfg::settings::classification_settings::Class;
     use std::path::{Path, PathBuf};
@@ -164,6 +216,78 @@ mod tests {
         let url = format!("ws://{}", worker.local_addr().unwrap());
         std::thread::spawn(move || worker.run(Arc::new(backend)));
         RemoteBackend::connect(&url, TOKEN).unwrap()
+    }
+
+    /// An export runs on the server, next to the results: its table is
+    /// written there; a script only where the worker allows scripts.
+    #[test]
+    fn an_export_runs_on_the_server_and_scripts_only_where_allowed() {
+        use crate::exports::{EntryStatus, ExportRun, ScriptPermission};
+        use crate::results::local::test_support::{ObjectSpec, seed_db};
+        let dir = tempfile::tempdir().unwrap();
+        let database = dir.path().join("results.evadb");
+        seed_db(&database, &[ObjectSpec::new("a.tif", "Cell", 1, 10)]);
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(project.join("scripts")).unwrap();
+        std::fs::write(
+            project.join("scripts/touch.py"),
+            "import sys, os\nos.makedirs(sys.argv[-1], exist_ok=True)\nopen(os.path.join(sys.argv[-1], 'done'), 'w').close()\n",
+        )
+        .unwrap();
+        let run = ExportRun {
+            export: serde_json::from_value(serde_json::json!({
+                "id": 1, "name": "Remote", "entries": [
+                    { "kind": "DATA", "outputs": ["IMAGES"] },
+                    { "kind": "SCRIPT", "language": "PYTHON", "file": "scripts/touch.py" }
+                ]
+            }))
+            .unwrap(),
+            project_dir: project,
+            results_dir: dir.path().to_path_buf(),
+            output: None,
+            scripts: ScriptPermission::All,
+            interpreters: Default::default(),
+            drawing: None,
+        };
+        let cancel = AtomicBool::new(false);
+
+        let backend = connect(LocalBackend::default());
+        let results = backend.open_results(&database).unwrap();
+        let mut progress = Vec::new();
+        let report = results
+            .run_export(&run, &cancel, &mut |message, _, _| {
+                progress.push(message.to_string())
+            })
+            .unwrap();
+        assert_eq!(report.entries[0].status, EntryStatus::Written);
+        assert!(dir.path().join("images.csv").exists());
+        let EntryStatus::Skipped(why) = &report.entries[1].status else {
+            panic!("{report:?}");
+        };
+        assert!(why.contains("don't run on this server"), "{why}");
+        assert!(progress.contains(&"images".to_string()), "{progress:?}");
+
+        let python = if cfg!(windows) { "python" } else { "python3" };
+        if std::process::Command::new(python)
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let worker = Worker::bind("127.0.0.1:0", TOKEN.into())
+            .unwrap()
+            .with_scripts(crate::exports::Interpreters::default());
+        let url = format!("ws://{}", worker.local_addr().unwrap());
+        std::thread::spawn(move || worker.run(Arc::new(LocalBackend::default())));
+        let allowing = RemoteBackend::connect(&url, TOKEN).unwrap();
+        let report = allowing
+            .open_results(&database)
+            .unwrap()
+            .run_export(&run, &cancel, &mut |_, _, _| {})
+            .unwrap();
+        assert!(report.all_written(), "{report:?}");
+        assert!(dir.path().join("touch/done").exists());
     }
 
     /// The `.evadb` of a local analysis of a one-image project (plus the
@@ -308,7 +432,7 @@ mod tests {
         // connection (this analysis found no objects - none listed).
         let list = ListFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![Column::AreaSizePx],
             with_coloc_details: false,
@@ -482,11 +606,8 @@ mod tests {
         };
         lost(remote_db.get_images().map(drop));
         lost(remote_db.run_status().map(drop));
-        lost(remote_db.export(
-            &ResultExport {
-                output_dir: dir.path().join("export"),
-                ..Default::default()
-            },
+        lost(remote_db.export_parquet(
+            &dir.path().join("export"),
             &AtomicBool::new(false),
             &mut |_, _, _| {},
         ));
@@ -628,6 +749,12 @@ mod tests {
         ) -> Result<Vec<TrackSummary>, InternalErrors> {
             Err(broken("track summary"))
         }
+        fn measurement_rows(
+            &self,
+            _: &crate::results::MeasurementRowsFilter,
+        ) -> Result<Vec<crate::results::MeasurementRow>, InternalErrors> {
+            Err(broken("measurement rows"))
+        }
         fn track_paths(
             &self,
             _: &crate::results::TrackPathsFilter,
@@ -643,14 +770,14 @@ mod tests {
         fn image_tracks(&self, _: &ImageTracksFilter) -> Result<ImageTracks, InternalErrors> {
             Err(broken("image tracks"))
         }
-        fn export(
+        fn export_parquet(
             &self,
-            export: &ResultExport,
+            out_dir: &Path,
             cancel: &AtomicBool,
             on_progress: ExportProgressFn,
         ) -> Result<(), InternalErrors> {
             on_progress("halfway", 1, 2);
-            if export.output_dir != Path::new(WAIT_FOR_CANCEL) {
+            if out_dir != Path::new(WAIT_FOR_CANCEL) {
                 return Err(broken("export"));
             }
             let deadline = Instant::now() + Duration::from_secs(10);
@@ -711,6 +838,12 @@ mod tests {
         fn save_app_settings(&self, settings: &AppSettings) -> Result<(), InternalErrors> {
             self.0.save_app_settings(settings)
         }
+        fn load_script_trust(&self) -> Result<ScriptTrust, InternalErrors> {
+            self.0.load_script_trust()
+        }
+        fn save_script_trust(&self, trust: &ScriptTrust) -> Result<(), InternalErrors> {
+            self.0.save_script_trust(trust)
+        }
     }
 
     /// `result` failed with the worker's "`what` is broken".
@@ -748,7 +881,7 @@ mod tests {
         failed_with(
             db.get_object_list(&ListFilter {
                 plane: plane(),
-                images: None,
+                images: crate::results::ImageSet::All,
                 object_classes: None,
                 columns: vec![Column::AreaSizePx],
                 with_coloc_details: false,
@@ -766,7 +899,7 @@ mod tests {
             db.object_list_page_starts(
                 &ListFilter {
                     plane: plane(),
-                    images: None,
+                    images: crate::results::ImageSet::All,
                     object_classes: None,
                     columns: vec![Column::AreaSizePx],
                     with_coloc_details: false,
@@ -785,7 +918,7 @@ mod tests {
         failed_with(
             db.get_grouped_by_image(&GroupedByImageFilter {
                 plane: plane(),
-                images: None,
+                images: crate::results::ImageSet::All,
                 object_classes: None,
                 columns: vec![Column::Count],
                 aggregation: vec![Aggregation::Avg],
@@ -892,8 +1025,8 @@ mod tests {
         let db = remote.open_results(Path::new("/data/any.evadb")).unwrap();
         let mut progress = Vec::new();
 
-        let result = db.export(
-            &ResultExport::default(),
+        let result = db.export_parquet(
+            Path::new("/data/out"),
             &AtomicBool::new(false),
             &mut |message, current, total| progress.push((message.to_string(), current, total)),
         );
@@ -908,14 +1041,7 @@ mod tests {
         cancel: &AtomicBool,
         on_progress: ExportProgressFn,
     ) -> Result<(), InternalErrors> {
-        db.export(
-            &ResultExport {
-                output_dir: PathBuf::from(WAIT_FOR_CANCEL),
-                ..Default::default()
-            },
-            cancel,
-            on_progress,
-        )
+        db.export_parquet(Path::new(WAIT_FOR_CANCEL), cancel, on_progress)
     }
 
     #[test]
@@ -1031,7 +1157,7 @@ mod tests {
                                 };
                                 (Reply::ResultsAnswer, vec![to_postcard(&wrong).unwrap()])
                             }
-                            (Request::ExportResults { .. }, Odd::WrongReply) => (
+                            (Request::ExportParquet { .. }, Odd::WrongReply) => (
                                 Reply::Failed(WireError::message("no space left")),
                                 Vec::new(),
                             ),
@@ -1079,7 +1205,7 @@ mod tests {
         let image = "a.tif";
         let list = ListFilter {
             plane: plane(),
-            images: None,
+            images: crate::results::ImageSet::All,
             object_classes: None,
             columns: vec![Column::AreaSizePx],
             with_coloc_details: false,
@@ -1160,8 +1286,8 @@ mod tests {
         assert_eq!(db.get_nr_of_z_stacks(), 1);
         assert_eq!(db.get_nr_of_t_stacks(), 1);
         unexpected(
-            db.export(
-                &ResultExport::default(),
+            db.export_parquet(
+                Path::new("/data/out"),
                 &AtomicBool::new(false),
                 &mut |_, _, _| {},
             ),
@@ -1179,8 +1305,8 @@ mod tests {
         unexpected(db.get_images(), "images");
         unexpected(db.enable_image("a.tif", true), "enable image");
         assert_eq!(db.get_nr_of_z_stacks(), 1, "a failed count falls back");
-        let result = db.export(
-            &ResultExport::default(),
+        let result = db.export_parquet(
+            Path::new("/data/out"),
             &AtomicBool::new(false),
             &mut |_, _, _| {},
         );

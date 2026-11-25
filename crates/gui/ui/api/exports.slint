@@ -1,0 +1,267 @@
+// Copyright 2026 Joachim Danmayr.
+// Licensed under the PolyForm Noncommercial License 1.0.0.
+
+// api/exports.slint — the Exports tab's state: the project's exports
+// (`docs/exports.md`), the one being edited, its entries and the one picked.
+// Edits go to Rust as (key, value) pairs; Rust pushes the state back.
+
+import { MultiSelectItem } from "../ink/multi_select.slint";
+import { ColumnSection, ColumnPreset, IntensityCell, ColocGroup } from "results.slint";
+
+// One export in the list.
+export struct ExportRow {
+    id: int,
+    name: string,
+    // "2 tables · drawn images · script".
+    summary: string,
+    // Runs after analysis.
+    after: bool,
+    // The last run here: "", "✓ 09:14", "⚠ script failed".
+    status: string,
+    // 0 neutral, 1 ok, 2 warning.
+    status-tone: int,
+}
+
+// One entry of the export being edited.
+export struct ExportEntryRow {
+    // "TABLE", "PLATE_LAYOUT", "DRAWN_IMAGES", "SCRIPT".
+    kind: string,
+    // "Table · objects.csv".
+    title: string,
+    // "A row per image · 3 columns · avg".
+    subtitle: string,
+    // "CSV", "XLSX", "PNG", "R".
+    format: string,
+}
+
+// An output of a data export, as the Outputs part lists it.
+export struct DataOutputRow {
+    key: string,
+    text: string,
+    // What it writes, as a tip ("" = none).
+    tip: string,
+    // The group's caption on its first output ("" on the others).
+    group: string,
+    on: bool,
+}
+
+/// What the last run did on one analysis (design canvas "Quick export,
+/// open folder, run on", board 4 L1): its name and age, all written or
+/// not, a few words ("2 files", "1 failed"), where it wrote ("" not on
+/// this computer), the report's lines, unfolded.
+export struct RunPart {
+    name: string,
+    when: string,
+    ok: bool,
+    summary: string,
+    folder: string,
+    lines: [string],
+    open: bool,
+}
+
+/// An analysis the Run ▾ lists: its results file, name, when it was made
+/// ("24 Nov 2026 07:30"), its images ("96 images"; "…" not read yet),
+/// ticked.
+export struct AnalysisRow {
+    path: string,
+    name: string,
+    when: string,
+    images: string,
+    on: bool,
+}
+
+export global ExportsState {
+    // -- The list --
+    in property <[ExportRow]> exports: [];
+    in property <int> selected-id: -1;
+
+    // -- The export being edited (selected-id) --
+    in property <string> name;
+    in property <string> prefix;
+    // 0 the results folder, 1 a fixed folder.
+    in property <int> location;
+    in property <string> folder;
+    // 0 overwrite, 1 rename.
+    in property <int> if-exists;
+    // 0 µm, 1 nm.
+    in property <int> length-unit;
+    in property <bool> after;
+    // What is wrong with it ("" none) - it can't run then.
+    in property <string> problems;
+    in property <[ExportEntryRow]> entries: [];
+    in property <int> entry: -1;
+    // The part of a table's settings shown (kept by the view).
+    in-out property <string> panel-part: "Outputs";
+
+    // -- The entry picked (entry), by its kind --
+    in property <string> entry-kind;
+    // Format, split, split into, images (indexes into the models below).
+    in property <int> format;
+    in property <int> split;
+    in property <int> split-into;
+    in property <int> images;
+    // The classes (as the Results List ticks them: all ticked - every
+    // class, also ones new in a run).
+    in-out property <[MultiSelectItem]> classes: [];
+    in property <string> classes-summary;
+    // The column picker (the Results List's, `ColumnPicker`) over the
+    // newest analysis' columns.
+    in property <string> picker-filter;
+    in property <bool> picker-grouped;
+    in property <[ColumnPreset]> picker-presets;
+    in property <[ColumnSection]> picker-sections;
+    in property <string> picker-intensity-title;
+    in property <bool> picker-intensity-open;
+    in property <[string]> picker-intensity-channels;
+    in property <[string]> picker-intensity-stats;
+    in property <[IntensityCell]> picker-intensity-cells;
+    in property <bool> picker-has-coloc;
+    in property <[ColocGroup]> picker-coloc-groups;
+    in property <string> coloc-title;
+    in property <bool> coloc-open;
+    in property <[MultiSelectItem]> coloc-partner-items;
+    in property <string> coloc-partner-summary;
+    in property <string> coloc-partner-order;
+    in property <int> coloc-count;
+    in property <bool> coloc-only-occurring;
+    // A data export: its outputs, whether its values are summed up (the
+    // Values part), rows per image / well / folder (classes without
+    // objects), something to transpose, a heatmap ticked.
+    in property <[DataOutputRow]> outputs: [];
+    in property <bool> grouped;
+    in property <bool> show-empty;
+    in property <bool> can-transpose;
+    in property <bool> any-heatmap;
+    // The tracks: at least N time points, from the start, not at the
+    // edge, the speed unit (index).
+    in property <string> tracks-min-points;
+    in property <bool> tracks-from-start;
+    in property <bool> tracks-no-edge;
+    in property <int> tracks-speed;
+    // A time course: line kind, layout (indexes), relative,
+    // with the parents' history.
+    in property <int> time-lines;
+    in property <int> time-layout;
+    in property <bool> time-relative;
+    in property <bool> time-with-parents;
+    // A profile (`rows` 8): the newest analysis' profiles, the one picked,
+    // its lines, each object instead.
+    in property <[string]> profile-names: [];
+    in property <string> profile-name;
+    in property <int> profile-lines;
+    in property <bool> profile-objects;
+    // A plate layout: square size and colours (indexes).
+    in property <int> square;
+    in property <int> colors;
+    // The z-planes and time points: a range each, or all.
+    in property <bool> z-range;
+    in property <string> z-from;
+    in property <string> z-to;
+    in property <bool> t-range;
+    in property <string> t-from;
+    in property <string> t-to;
+    // The children and linked objects (the Results List's lists).
+    in-out property <[MultiSelectItem]> related-children: [];
+    in property <string> related-children-summary;
+    in-out property <[MultiSelectItem]> related-aggregations: [];
+    in property <string> related-aggregate-summary;
+    in-out property <[MultiSelectItem]> related-parents: [];
+    in property <string> related-parent-summary;
+    // The classes side by side (object, image, well and folder rows).
+    in property <bool> transposed;
+    // Grouped rows: a row also for classes without objects.
+    in property <bool> empty-classes;
+    // No columns set: the default ones (ticked as such).
+    in property <bool> columns-default: true;
+    // Why there are none to pick, or keys the newest analysis lacks ("").
+    in property <string> columns-note;
+    in-out property <[MultiSelectItem]> aggregations: [];
+    // The results views columns can be taken from.
+    in property <[string]> views: [];
+    // Drawn images.
+    in property <int> style;
+    in property <int> brightness;
+    in property <int> max-side;
+    // Script.
+    in property <string> script-file;
+    in property <int> language;
+    in property <string> script-output;
+    in property <[string]> script-files: [];
+
+    // -- Running --
+    in property <bool> running;
+    in property <string> progress;
+    // How far the run is, 0..1 (all its analyses).
+    in property <float> progress-fraction;
+    // The export running: "“Export”" (the top bar's pill).
+    in property <string> run-name;
+    // -- After an analysis: the exports set to run afterwards (a note) --
+    in property <bool> after-shown;
+    in property <string> after-text;
+    // 0 running, 1 done, 2 a problem.
+    in property <int> after-tone;
+    callback after-close();
+    callback after-open();
+    // Where the exports wrote is on this computer: Open folder.
+    in property <bool> after-folder;
+    callback after-open-folder();
+
+    // The last run: "Last run · 09:14 · 3 analyses" ("" none), "2 written
+    // · 1 with a problem", a part per analysis.
+    in property <string> last-run-title;
+    in property <string> last-run-note;
+    in property <[RunPart]> run-parts: [];
+    callback run-part-toggle(int);
+    // A script's output of the last run.
+    in property <string> log;
+
+    // The tab was shown, or the project changed: everything anew.
+    callback refresh();
+    callback select(int);
+    callback new-export();
+    callback duplicate(int);
+    callback delete(int);
+    // Moves the export (its id) by a place up (-1) or down (1): the order
+    // they run in after an analysis.
+    callback move-export(int, int);
+    // How many run after analysis (the list's head).
+    in property <int> after-count;
+    // The trash asked about this export (its id, -1 none): the confirm.
+    in-out property <int> delete-asked: -1;
+    in-out property <string> delete-asked-name;
+    callback set-after(int, bool);
+    // A setting of the export being edited: "name", "prefix", "location",
+    // "folder", "if-exists", "length-unit", "after".
+    callback set-export-field(string, string);
+    callback add-entry(string);
+    callback remove-entry(int);
+    callback move-entry(int, int);
+    callback select-entry(int);
+    // A setting of the entry picked: "rows", "format", "split",
+    // "split-into", "images", "class:<id>", "aggregation:<key>",
+    // "all-classes", "no-classes", "all-aggregations", "no-aggregations",
+    // "clear-columns", "transposed", "empty-classes", "child:<p>:<c>",
+    // "children-all", "children-none", "child-aggregation:<name>",
+    // "parent:<id>", "parents-all", "parents-none",
+    // "columns-from-view:<name>",
+    // "grid", "aggregation", "style", "brightness", "max-side",
+    // "script-file", "language", "script-output", "name".
+    callback set-entry-field(string, string);
+    // The column picker: (what, key, on) - "filter", "picked", "section",
+    // "section-select", "intensity-channel", "intensity-value", "preset",
+    // "coloc-box", "coloc-partner", "coloc-partners-all", "coloc-count",
+    // "coloc-only-occurring".
+    callback picker(string, string, bool);
+    // Runs the export on the project's newest analysis.
+    callback run();
+    // -- Run ▾: on the analyses picked --
+    in property <[AnalysisRow]> run-on: [];
+    in property <int> run-on-ticked;
+    callback run-on-open();
+    // A tick (its index), or All / Newest only (-1, on = all).
+    callback run-on-pick(int, bool);
+    callback run-on-picked();
+    // -- Open exported folder --
+    callback open-folder(string);
+    callback cancel();
+}

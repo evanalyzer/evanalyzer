@@ -278,7 +278,7 @@ fn main() {
         }
         let filter = GroupedByImageFilter {
             plane: plane.clone(),
-            images: None,
+            images: evanalyzer_app::results::ImageSet::All,
             object_classes: None,
             columns: vec![Column::Count, Column::AreaSizePx],
             aggregation: vec![Aggregation::Avg],
@@ -299,10 +299,68 @@ fn main() {
         );
     }
 
+    // Per well / per folder, the classes side by side (2026-11-24) beside
+    // the normal rows: the GUI's first page and every page at the
+    // export's size.
+    for (name, grouping) in [
+        ("well", evanalyzer_app::results::Grouping::Auto),
+        ("folder", evanalyzer_app::results::Grouping::Folder),
+    ] {
+        for transposed in [false, true] {
+            let by_group = |after: Option<String>, limit: i32| GroupedByImageFilter {
+                plane,
+                images: evanalyzer_app::results::ImageSet::All,
+                object_classes: None,
+                columns: vec![Column::Count, Column::AreaSizePx],
+                aggregation: vec![Aggregation::Avg, Aggregation::Sum],
+                page: Pagination { limit, after },
+                transpond_table: transposed,
+                grouping: Some(grouping.clone()),
+                empty_classes: true,
+                sort: None,
+            };
+            let label = if transposed { "transposed" } else { "normal" };
+            let first = format!("per-{name} {label}, GUI first page (500)");
+            if wanted(&first) {
+                report(
+                    &first,
+                    time(iters, || {
+                        generator
+                            .get_grouped_by_image(&by_group(None, 500))
+                            .unwrap()
+                            .rows
+                            .len()
+                    }),
+                );
+            }
+            let all = format!("per-{name} {label}, export (pages of 20000)");
+            if wanted(&all) {
+                report(
+                    &all,
+                    time(iters, || {
+                        let mut total = 0;
+                        let mut after = None;
+                        loop {
+                            let page = generator
+                                .get_grouped_by_image(&by_group(after, 20000))
+                                .unwrap();
+                            total += page.rows.len();
+                            if page.source_object_count < 20000 {
+                                break;
+                            }
+                            after = page.row_names.last().cloned();
+                        }
+                        total
+                    }),
+                );
+            }
+        }
+    }
+
     for transposed in [false, true] {
         let by_image = |after: Option<String>, limit: i32| GroupedByImageFilter {
             plane: plane.clone(),
-            images: None,
+            images: evanalyzer_app::results::ImageSet::All,
             object_classes: None,
             columns: vec![Column::Count, Column::AreaSizePx],
             aggregation: vec![Aggregation::Avg, Aggregation::Sum],
@@ -420,7 +478,7 @@ fn main() {
                 source
                     .get_object_list(&ListFilter {
                         plane: plane.clone(),
-                        images: None,
+                        images: evanalyzer_app::results::ImageSet::All,
                         object_classes: None,
                         columns: vec![Column::AreaSizePx],
                         with_coloc_details: false,
@@ -492,7 +550,7 @@ fn main() {
         .collect();
     let list_page = |columns: Vec<Column>, with_coloc_details| ListFilter {
         plane: plane.clone(),
-        images: None,
+        images: evanalyzer_app::results::ImageSet::All,
         object_classes: None,
         columns,
         with_coloc_details,

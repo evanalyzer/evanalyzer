@@ -209,17 +209,39 @@ impl ResultsGenerator {
         }
 
         // Intensity is measured per image channel, so there's one Avg/Sum/
-        // Min/Max column per channel rather than a single shared one.
+        // Min/Max column per channel rather than a single shared one. The
+        // spread (SD, median, quartiles, MAD) came later: offered only for
+        // results that store it - an older file's query would fail.
+        let spread = [
+            (
+                "intensity_std_gray",
+                Column::IntensityStd as fn(u32) -> Column,
+            ),
+            ("intensity_median_gray", Column::IntensityMedian),
+            (
+                "intensity_lower_quartile_gray",
+                Column::IntensityLowerQuartile,
+            ),
+            (
+                "intensity_upper_quartile_gray",
+                Column::IntensityUpperQuartile,
+            ),
+            ("intensity_mad_gray", Column::IntensityMad),
+        ];
+        let mut stored = Vec::new();
+        for (name, column) in spread {
+            if self.has_object_column(name)? {
+                stored.push(column);
+            }
+        }
         for channel in 0..self.get_nr_of_c_stacks() {
             ret.push(entry(Column::IntensityAvg(channel), "intensity"));
             ret.push(entry(Column::IntensitySum(channel), "intensity"));
             ret.push(entry(Column::IntensityMin(channel), "intensity"));
             ret.push(entry(Column::IntensityMax(channel), "intensity"));
-            ret.push(entry(Column::IntensityStd(channel), "intensity"));
-            ret.push(entry(Column::IntensityMedian(channel), "intensity"));
-            ret.push(entry(Column::IntensityLowerQuartile(channel), "intensity"));
-            ret.push(entry(Column::IntensityUpperQuartile(channel), "intensity"));
-            ret.push(entry(Column::IntensityMad(channel), "intensity"));
+            for column in &stored {
+                ret.push(entry(column(channel), "intensity"));
+            }
         }
 
         // The measurement steps' measurements, by step - and the objects

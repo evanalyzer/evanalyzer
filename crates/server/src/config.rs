@@ -114,6 +114,14 @@ pub struct WorkersConfig {
     /// one user's analysis can't take the machine for good. Default: no
     /// limit - analyses of whole slides can take hours.
     pub max_job_minutes: Option<u64>,
+    /// Exports may run their R / Python scripts (`--allow-scripts`). A
+    /// script is code from a project that runs as the user's account in
+    /// their worker. Default `false`.
+    pub allow_scripts: bool,
+    /// `Rscript` for those scripts (`--rscript`). Default: from the PATH.
+    pub rscript: Option<PathBuf>,
+    /// Python for those scripts (`--python`). Default: from the PATH.
+    pub python: Option<PathBuf>,
 }
 
 impl Default for WorkersConfig {
@@ -126,6 +134,9 @@ impl Default for WorkersConfig {
             max_threads: None,
             max_ram_mb: None,
             max_job_minutes: None,
+            allow_scripts: false,
+            rscript: None,
+            python: None,
         }
     }
 }

@@ -128,7 +128,7 @@ mod tests {
     use evanalyzer_app::results::ResultsSource;
     use evanalyzer_app::templates::TemplateFolders;
     use evanalyzer_app::training::{RunningTraining, StartTrainingError, TrainingRequest};
-    use evanalyzer_app::user::AppSettings;
+    use evanalyzer_app::user::{AppSettings, ScriptTrust};
     use evanalyzer_cfg::core_types::InternalErrors;
     use std::collections::VecDeque;
     use std::path::Path;
@@ -201,6 +201,12 @@ mod tests {
             unreachable!()
         }
         fn save_app_settings(&self, _: &AppSettings) -> Result<(), InternalErrors> {
+            unreachable!()
+        }
+        fn load_script_trust(&self) -> Result<ScriptTrust, InternalErrors> {
+            unreachable!()
+        }
+        fn save_script_trust(&self, _: &ScriptTrust) -> Result<(), InternalErrors> {
             unreachable!()
         }
     }

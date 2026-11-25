@@ -32,6 +32,11 @@ pub struct AppSettings {
     #[serde(default)]
     pub pipeline_focus_mode: bool,
 
+    /// Where the interpreters for exports' scripts are on this computer
+    /// (unset: from the `PATH`).
+    #[serde(default)]
+    pub script_interpreters: crate::exports::Interpreters,
+
     /// Show every step's advanced settings without expanding them.
     #[serde(default)]
     pub always_show_advanced_settings: bool,

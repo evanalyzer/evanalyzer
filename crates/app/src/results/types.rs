@@ -389,10 +389,51 @@ pub struct ImageHeatmapFilter {
     pub square_size: Option<usize>,
 }
 
+/// An object as a picture of its image draws it (see
+/// `ResultsSource::for_each_drawn_object`): its box in image pixels, its
+/// classes, its stored mask (`mask_codec`, if kept) and, for a volume's
+/// object, its first plane and depth.
+#[derive(Clone, Debug)]
+pub struct DrawnObject {
+    pub bbox: [u32; 4],
+    pub classes: Vec<i32>,
+    pub mask: Option<Vec<u8>>,
+    pub volume: (Option<u32>, Option<u32>),
+}
+
+/// Which images a list or a per-image table is of. Part of the filter, so
+/// every caller - the Results views, an export, on this computer or a
+/// server - picks them the same way; an export of all images never sends
+/// a list of every path with each page.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub enum ImageSet {
+    /// Every image.
+    #[default]
+    All,
+    /// Every image that isn't left out.
+    Enabled,
+    /// These images (relative paths); none matches nothing.
+    Listed(Vec<String>),
+    /// The images that aren't left out from `first` to `last` (relative
+    /// paths in the results' order - sorted as text -, both included): a
+    /// block of an export, so each block's objects are read once.
+    EnabledRange { first: String, last: String },
+}
+
+impl From<Option<Vec<String>>> for ImageSet {
+    /// A view's list of images: `None` is every image.
+    fn from(images: Option<Vec<String>>) -> Self {
+        match images {
+            Some(rel_paths) => Self::Listed(rel_paths),
+            None => Self::All,
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ListFilter {
     pub plane: PlaneFilter,
-    pub images: Option<Vec<String>>,
+    pub images: ImageSet,
     pub object_classes: Option<Vec<ObjectClass>>,
     pub columns: Vec<Column>,
     pub with_coloc_details: bool,
@@ -423,7 +464,7 @@ pub enum RelatedTo {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct GroupedByImageFilter {
     pub plane: PlaneFilter,
-    pub images: Option<Vec<String>>,
+    pub images: ImageSet,
     pub object_classes: Option<Vec<ObjectClass>>,
     pub columns: Vec<Column>,
     pub aggregation: Vec<Aggregation>,
@@ -556,30 +597,36 @@ pub struct HistogramFilter {
     pub full_range: bool,
 }
 
-/// How the time course is exported (`ResultExport::with_time_course`); the
-/// values are `ResultExport::columns`, wells and groups from
-/// `ResultExport::grouping`.
+/// A page of the measurement values (`ResultsSource::measurement_rows`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct TimeCourseExport {
-    pub lines: TimeCourseLines,
-    pub statistics: Vec<TimeCourseStat>,
-    pub normalize: TimeCourseNormalize,
-    pub layout: TimeCourseLayout,
-    /// Track lines across divisions and fusions.
-    #[serde(default)]
-    pub history: TrackHistory,
+pub struct MeasurementRowsFilter {
+    /// `None`: every image.
+    pub images: Option<Vec<String>>,
+    /// The measurements by key; `None`: all.
+    pub keys: Option<Vec<String>>,
+    /// The page: at most `limit` rows after the first `offset`.
+    pub limit: u32,
+    pub offset: u64,
 }
 
-impl Default for TimeCourseExport {
-    fn default() -> Self {
-        Self {
-            lines: TimeCourseLines::default(),
-            statistics: TimeCourseStat::DEFAULT.to_vec(),
-            normalize: TimeCourseNormalize::default(),
-            layout: TimeCourseLayout::default(),
-            history: TrackHistory::default(),
-        }
-    }
+/// One measurement value with what it is about (the `measurements` table).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MeasurementRow {
+    pub image: String,
+    pub t: i32,
+    /// `None` for a value of a whole volume.
+    pub z: Option<i32>,
+    pub region: Option<String>,
+    pub object_id: Option<String>,
+    pub related_object_id: Option<String>,
+    pub class: Option<String>,
+    pub step: Option<String>,
+    pub measurement: Option<String>,
+    pub unit: Option<String>,
+    pub key: String,
+    pub value: Option<f64>,
+    /// A profile's position (e.g. a Sholl ring's radius).
+    pub position: Option<f64>,
 }
 
 /// One row per track (Results › Tracks, its export): when it was seen,
@@ -625,6 +672,9 @@ impl Default for TrackSummaryFilter {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct TrackSummary {
     pub image: String,
+    /// The image's path below the image folder.
+    #[serde(default)]
+    pub image_rel_path: String,
     /// Its well / group (`TrackSummaryFilter::grouping`), empty for none.
     pub group: String,
     pub z: u32,
@@ -884,31 +934,6 @@ impl TrackMotion {
             MotionKind::AngularSpeed | MotionKind::Frequency => value * per_time,
             MotionKind::Diffusion => value * length * length * per_time,
         })
-    }
-}
-
-/// The tracks export (`tracks.csv` / a "Tracks" sheet) - see
-/// [`TrackSummaryFilter`] for the filters.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct TrackSummaryExport {
-    pub statistics: Vec<TimeCourseStat>,
-    pub min_points: u32,
-    pub from_start: bool,
-    pub no_edge: bool,
-    /// The speed's unit - px/frame when µm can't be (no pixel size or
-    /// frame interval).
-    pub speed_unit: SpeedUnit,
-}
-
-impl Default for TrackSummaryExport {
-    fn default() -> Self {
-        Self {
-            statistics: vec![TimeCourseStat::Mean],
-            min_points: 1,
-            from_start: false,
-            no_edge: false,
-            speed_unit: SpeedUnit::UmPerMin,
-        }
     }
 }
 
@@ -1210,29 +1235,6 @@ pub struct TreeSegment {
     pub straightness: Option<f64>,
 }
 
-/// What a profile export holds (`ResultExport::with_profile`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ProfileExportContent {
-    /// The chart's lines: per line and position n, mean, SD, median, Q1, Q3.
-    #[default]
-    Lines,
-    /// Each object's profile: per object and position its value (wide: a
-    /// row per object, a column per position, a position it doesn't reach
-    /// as 0).
-    Objects,
-}
-
-/// How a profile is exported (`ResultExport::with_profile`): images,
-/// classes and wells from the export's own settings.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct ProfileExport {
-    /// The profile measurement's key ("sholl_01/intersections").
-    pub key: String,
-    pub lines: ProfileLines,
-    pub content: ProfileExportContent,
-    pub layout: TimeCourseLayout,
-}
-
 /// One scatter plot: every matched object's `(x_column, y_column)` pair,
 /// one point per object.
 #[derive(Clone, Serialize, Deserialize)]
@@ -1369,13 +1371,6 @@ pub struct BoxplotBox {
 pub struct BoxplotResult {
     pub boxes: Vec<BoxplotBox>,
 }
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ExportFormat {
-    #[default]
-    XLSX,
-    CSV,
-    Parquet,
-}
 
 /// One export step/document completing — `current`/`total` describe
 /// progress *within* the step named by `message` (e.g. "Plate/Well: ch2@spot"
@@ -1383,88 +1378,6 @@ pub enum ExportFormat {
 /// progress across List/Plate/Well/Heatmap combined, since those phases
 /// have no shared unit to make a single running percentage meaningful.
 pub type ExportProgress<'a> = &'a mut dyn FnMut(&str, usize, usize);
-
-#[derive(Default, Clone, Serialize, Deserialize)]
-pub struct ResultExport {
-    /// Directory the export writes its file(s) into — created if missing.
-    /// Every document below lives directly under it (`list.xlsx`,
-    /// `plate.xlsx`, `well.xlsx`, `heatmap_{image}.xlsx`).
-    pub output_dir: PathBuf,
-
-    /// Optional prefix added to each output file name, as
-    /// `{prefix}_{name}` (e.g. `exp1_list.xlsx`). Blank means none; unsafe
-    /// characters are replaced by `_`.
-    pub outputfile_prefix: Option<String>,
-
-    pub format: ExportFormat,
-    /// The time points exported; `None`: all of them. Only the planes the
-    /// results have objects in are exported (see `get_planes`).
-    #[serde(with = "option_range_serde")]
-    pub t_stacks: Option<Range<u32>>,
-    /// The z-planes exported; `None`: all of them.
-    #[serde(with = "option_range_serde")]
-    pub z_stacks: Option<Range<u32>>,
-    /// `[]` means every image in the database (see `resolve_images`).
-    pub image_rel_paths: Vec<String>,
-
-    // Variants
-    pub columns: Vec<Column>,
-    pub color_schema: ColorSchema,
-    pub color_scale: ColorScale,
-    pub grouping: Grouping,
-    /// `[]` means every object class registered in the database (see
-    /// `export_plate_and_well`/`export_heatmap`).
-    pub object_classes: Vec<ObjectClass>,
-
-    // Matrix view options
-    pub aggregations: Vec<Aggregation>,
-    pub plate_size: PlateSize,
-    pub well_size: Option<WellSize>,
-    pub well_order: Option<Vec<u32>>,
-    pub square_size: Option<usize>,
-
-    // What to export
-    pub with_list_view: bool,
-    pub with_list_coloc_details: bool,
-    /// `list_{image}.xlsx` per image instead of one shared `list.xlsx` —
-    /// needed once a single image's own object count risks Excel's
-    /// 1,048,576-row-per-sheet limit (a large plate scan can comfortably
-    /// exceed that combined across images, even if no single image does).
-    pub with_list_one_file_per_image: bool,
-    /// `grouped_by_image.xlsx`: one row per image, one column per
-    /// (selected column × selected aggregation) combination — see
-    /// `export_grouped_by_image`. Independent of `with_list_view`: it's a
-    /// separate document, not a variant of the per-object list.
-    pub with_grouped_by_image_list: bool,
-    /// `time_course.{csv,xlsx}`: per time point, statistics of the columns
-    /// over each line's objects (see `TimeCourseExport`).
-    pub with_time_course: bool,
-    pub time_course: TimeCourseExport,
-    /// `tracks.{csv,xlsx}`: a row per track (see `TrackSummaryExport`).
-    pub with_track_summary: bool,
-    /// `measurements.{csv,xlsx}`: one row per measurement value, like the
-    /// results' `measurements` table - the measurements among `columns`
-    /// (none chosen: all), of the chosen images and planes.
-    #[serde(default)]
-    pub with_measurements: bool,
-    /// `profile_lines.{csv,xlsx}` / `profile_objects.{csv,xlsx}`: a profile
-    /// measurement (e.g. the Sholl intersections) - see `ProfileExport`.
-    #[serde(default)]
-    pub with_profile: bool,
-    #[serde(default)]
-    pub profile: ProfileExport,
-    pub track_summary: TrackSummaryExport,
-    pub with_plate_view_heatmap: bool,
-    pub with_well_view_heatmap: bool,
-    pub with_plate_view_list: bool,
-    pub with_well_view_list: bool,
-    pub with_heatmap: bool,
-    /// If true each object class is shown in a separate table instead of in rows
-    pub transpond_table: bool,
-    /// "Images with objects drawn": a PNG per image (see `DrawnImages`).
-    #[serde(default)]
-    pub drawn_images: Option<DrawnImages>,
-}
 
 /// Where the images are and how they're drawn for "Images with objects
 /// drawn" - the results database knows the objects, not the images.

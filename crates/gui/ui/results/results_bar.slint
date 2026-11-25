@@ -6,6 +6,8 @@
 // analysis shown (a menu of all), where in the plate one is; on the right
 // Z/T and Export.
 
+import { QuickExportState } from "../api/quick_export.slint";
+import { ExportsState } from "../api/exports.slint";
 import {
     ResultsRailMode,
     ResultsState,
@@ -473,6 +475,14 @@ export component ResultsBarNav inherits HorizontalLayout {
             }
 
             InkMenuItem {
+                icon: InkIcons.export;
+                text: "Save as export…";
+                clicked => {
+                    QuickExportState.save-view(root.menu-id);
+                }
+            }
+
+            InkMenuItem {
                 icon: InkIcons.undo;
                 text: "Back to how it was saved";
                 enabled: root.menu-index >= 0 && root.menu-index < ResultsState.views-revertable.length && ResultsState.views-revertable[root.menu-index];
@@ -607,7 +617,8 @@ export component ResultsBarActions inherits HorizontalLayout {
         }
     }
 
-    VerticalLayout {
+    // An export running: its pill in the top bar instead (one at a time).
+    if !ExportsState.running: VerticalLayout {
         alignment: center;
         horizontal-stretch: 0;
         InkButton {
@@ -617,7 +628,8 @@ export component ResultsBarActions inherits HorizontalLayout {
             enabled: ResultsState.database-name != "";
             disabled-reason: "Open an analysis first";
             clicked => {
-                ResultsState.export-dialog-open();
+                // The view as it is shown (and kept, ticked).
+                QuickExportState.open(-1);
             }
         }
     }

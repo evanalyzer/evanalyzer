@@ -26,6 +26,7 @@ use crate::training::StartTrainingError;
 use crate::training::TrainingRequest;
 use crate::user::folder;
 use crate::user::settings::{self, AppSettings};
+use crate::user::trust::{self, ScriptTrust};
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_core::{ImageReader, ReadMode};
 use std::path::{Path, PathBuf};
@@ -130,6 +131,18 @@ impl Backend for LocalBackend {
     fn save_app_settings(&self, app_settings: &AppSettings) -> Result<(), InternalErrors> {
         let path = folder::settings_file_in(&self.user_folder());
         settings::save_app_settings_to(&path, app_settings)
+            .map_err(|e| InternalErrors::Io(format!("Could not save {}: {e}", path.display())))
+    }
+
+    fn load_script_trust(&self) -> Result<ScriptTrust, InternalErrors> {
+        Ok(trust::load_trust_from(&folder::trust_file_in(
+            &self.user_folder(),
+        )))
+    }
+
+    fn save_script_trust(&self, script_trust: &ScriptTrust) -> Result<(), InternalErrors> {
+        let path = folder::trust_file_in(&self.user_folder());
+        trust::save_trust_to(&path, script_trust)
             .map_err(|e| InternalErrors::Io(format!("Could not save {}: {e}", path.display())))
     }
 

@@ -389,6 +389,22 @@ impl PipelinesController {
             });
 
             // Run-analysis dialog cancelled: just close it, nothing to run.
+            // Afterwards: an export switched off (or on) for this run.
+            let weak = ui.as_weak();
+            ui.global::<RunAnalysisState>()
+                .on_export_toggled(move |index, on| {
+                    let Some(ui) = weak.upgrade() else {
+                        return;
+                    };
+                    let rows = ui.global::<RunAnalysisState>().get_exports();
+                    if let Ok(index) = usize::try_from(index)
+                        && let Some(mut row) = rows.row_data(index)
+                    {
+                        row.on = on;
+                        rows.set_row_data(index, row);
+                    }
+                });
+
             let manager = self.clone();
             ui.global::<RunAnalysisState>().on_cancel(move || {
                 if let Some(ui) = manager.ui.upgrade() {
@@ -876,6 +892,12 @@ impl PipelinesController {
             ui.global::<PipelineRunningState>().on_cancel(move || {
                 if let Some(cancel) = manager.pipeline_cancel_flag.lock().unwrap().as_ref() {
                     cancel.cancel();
+                }
+                // Its last step, the exports run after analysis: stopped too.
+                if let Some(ui) = manager.ui.upgrade()
+                    && ui.global::<PipelineRunningState>().get_exporting()
+                {
+                    ui.global::<crate::ExportsState>().invoke_cancel();
                 }
             });
 
@@ -2913,6 +2935,7 @@ impl PipelinesController {
             // The preview needs none of the editor's state.
             editor: Default::default(),
             results_views: Default::default(),
+            exports: Default::default(),
         }
     }
 
@@ -3239,6 +3262,11 @@ impl PipelinesController {
         running.set_done(false);
         running.set_has_error(false);
         running.set_status_message("".into());
+        running.set_exporting(false);
+        running.set_export_text("".into());
+        running.set_export_fraction(0.0);
+        running.set_export_note("".into());
+        running.set_export_problem(false);
         running.set_active(true);
         ui.global::<PipelinesPanelState>().set_run_locked(true);
     }
@@ -3340,6 +3368,22 @@ impl PipelinesController {
         state.set_base_names(ModelRc::new(VecModel::from(names)));
         state.set_base_paths(ModelRc::new(VecModel::from(paths)));
         state.set_base_index(open as i32);
+        // Afterwards: the exports set to run after analysis, all on.
+        let exports: Vec<crate::RunExportRow> = self
+            .app_state
+            .get_project()
+            .settings
+            .exports
+            .iter()
+            .filter(|export| export.run_after_analysis)
+            .map(|export| crate::RunExportRow {
+                id: export.id as i32,
+                name: export.name.as_str().into(),
+                summary: crate::editor::exports_controller::summary(export).into(),
+                on: true,
+            })
+            .collect();
+        state.set_exports(ModelRc::new(VecModel::from(exports)));
         ui.global::<GlobalAppState>()
             .set_active_dialog(DialogType::RunAnalysisConfirm);
     }
@@ -3350,6 +3394,11 @@ impl PipelinesController {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
+        // One at a time: no analysis while an export runs.
+        if ui.global::<crate::ExportsState>().get_running() {
+            self.show_warning("An export is running - wait for it or stop it in the Exports tab.");
+            return;
+        }
         let state = ui.global::<RunAnalysisState>();
         let job_name = state.get_job_name().to_string();
         // Left blank: the name the dialog showed.
@@ -3368,6 +3417,14 @@ impl PipelinesController {
             .map(|path| PathBuf::from(path.as_str()));
         ui.global::<GlobalAppState>()
             .set_active_dialog(DialogType::None);
+        // The exports left on run when it is done.
+        let exports: Vec<u32> = state
+            .get_exports()
+            .iter()
+            .filter(|row| row.on)
+            .filter_map(|row| u32::try_from(row.id).ok())
+            .collect();
+        self.app_state.set_exports_for_run(Some(exports));
 
         let job_name = (!job_name.trim().is_empty()).then_some(job_name);
         self.trigger_pipeline_full_run(job_name, base_results);
@@ -12697,6 +12754,41 @@ mod tests {
         );
     }
 
+    /// Afterwards: the exports set to run after analysis, all on; one
+    /// switched off stays off for this run only - what is left on goes
+    /// with the run.
+    #[test]
+    fn the_run_dialog_lists_the_exports_to_run_afterwards() {
+        let (ui, ui_state, _controller) = selected(vec![]);
+        {
+            let mut project = ui_state.get_project_write();
+            project.tmp_settings.current_project = Some(PathBuf::from("/data/exp/project.evaproj"));
+            project.settings.exports = serde_json::from_value(serde_json::json!([
+                { "id": 1, "name": "Per image", "runAfterAnalysis": true,
+                  "entries": [{ "kind": "DATA", "outputs": ["IMAGES"] }] },
+                { "id": 2, "name": "By hand only" },
+                { "id": 3, "name": "Tracks", "runAfterAnalysis": true }
+            ]))
+            .unwrap();
+        }
+        ui.global::<PipelinesPanelState>().invoke_run_all();
+        let state = ui.global::<RunAnalysisState>();
+        let rows: Vec<crate::RunExportRow> = state.get_exports().iter().collect();
+        let names: Vec<String> = rows.iter().map(|r| r.name.to_string()).collect();
+        assert_eq!(names, ["Per image", "Tracks"]);
+        assert!(rows.iter().all(|r| r.on));
+        assert_eq!(rows[0].summary, "a data export");
+
+        state.invoke_export_toggled(1, false);
+        assert!(!state.get_exports().row_data(1).unwrap().on);
+        state.invoke_confirm();
+        assert_eq!(ui_state.take_exports_for_run(), Some(vec![1]));
+        // Asked once.
+        assert_eq!(ui_state.take_exports_for_run(), None);
+        // The project's setting is untouched.
+        assert!(ui_state.get_project().settings.exports[2].run_after_analysis);
+    }
+
     #[test]
     fn run_all_asks_for_a_job_name_and_dispatches_a_full_run() {
         let (ui, ui_state, controller) = selected(vec![]);
@@ -12729,6 +12821,24 @@ mod tests {
         ui.global::<RunAnalysisState>().invoke_confirm();
         let task = controller.task_request.0.lock().unwrap().take().unwrap();
         assert_eq!(task.job_name.as_deref(), Some(shown.as_str()));
+    }
+
+    /// One at a time: while an export runs, no analysis starts.
+    #[test]
+    fn no_analysis_starts_while_an_export_runs() {
+        let (ui, ui_state, controller) = selected(vec![]);
+        ui_state.get_project_write().tmp_settings.current_project =
+            Some(PathBuf::from("/data/exp/project.evaproj"));
+        ui.global::<crate::ExportsState>().set_running(true);
+        ui.global::<PipelinesPanelState>().invoke_run_all();
+        ui.global::<RunAnalysisState>().invoke_confirm();
+        assert!(controller.task_request.0.lock().unwrap().is_none());
+        assert!(!ui.global::<PipelineRunningState>().get_active());
+
+        ui.global::<crate::ExportsState>().set_running(false);
+        ui.global::<PipelinesPanelState>().invoke_run_all();
+        ui.global::<RunAnalysisState>().invoke_confirm();
+        assert!(controller.task_request.0.lock().unwrap().is_some());
     }
 
     #[test]

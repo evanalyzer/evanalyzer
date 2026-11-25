@@ -36,6 +36,7 @@ use crate::training::StartTrainingError;
 use crate::training::TrainedClassifier;
 use crate::training::TrainingRequest;
 use crate::user::settings::AppSettings;
+use crate::user::trust::ScriptTrust;
 use evanalyzer_cfg::core_types::InternalErrors;
 use std::path::Path;
 use std::sync::Arc;
@@ -310,6 +311,21 @@ impl Backend for RemoteBackend {
 
     fn save_app_settings(&self, settings: &AppSettings) -> Result<(), InternalErrors> {
         let request = Request::SaveAppSettings(settings.clone());
+        match self.files.call(request, Vec::new())?.msg {
+            Reply::Done => Ok(()),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn load_script_trust(&self) -> Result<ScriptTrust, InternalErrors> {
+        match self.files.call(Request::LoadScriptTrust, Vec::new())?.msg {
+            Reply::ScriptTrust(trust) => Ok(trust),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn save_script_trust(&self, trust: &ScriptTrust) -> Result<(), InternalErrors> {
+        let request = Request::SaveScriptTrust(trust.clone());
         match self.files.call(request, Vec::new())?.msg {
             Reply::Done => Ok(()),
             _ => Err(unexpected_reply()),

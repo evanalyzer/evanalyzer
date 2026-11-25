@@ -553,6 +553,31 @@ component PlatePanel inherits ViewPanel {
         intensity-cells: ResultsState.matrix-intensity-cells;
         has-coloc: ResultsState.list-coloc-partner-items.length > 0;
         coloc-groups: ResultsState.matrix-coloc-groups;
+        coloc-title: ResultsState.list-coloc-title;
+        coloc-open: ResultsState.list-coloc-open;
+        coloc-partner-items: ResultsState.list-coloc-partner-items;
+        coloc-partner-summary: ResultsState.list-coloc-partner-summary;
+        coloc-partner-order: ResultsState.list-coloc-partner-order;
+        coloc-count: ResultsState.list-coloc-count;
+        coloc-only-occurring: ResultsState.list-coloc-only-occurring;
+        coloc-box-toggled(open) => {
+            ResultsState.list-coloc-open = open;
+            ResultsState.list-coloc-toggled(open);
+        }
+        coloc-partner-toggled(key) => {
+            ResultsState.list-coloc-partner-toggled(key);
+        }
+        coloc-partners-all(on) => {
+            ResultsState.list-coloc-partners-all(on);
+        }
+        coloc-count-picked(index) => {
+            ResultsState.list-coloc-count = index;
+            ResultsState.list-coloc-count-picked(index);
+        }
+        coloc-only-occurring-changed(on) => {
+            ResultsState.list-coloc-only-occurring = on;
+            ResultsState.list-coloc-only-occurring-changed(on);
+        }
         filter-edited(text) => {
             ResultsState.matrix-columns-filter = text;
             ResultsState.matrix-columns-filter-changed(text);

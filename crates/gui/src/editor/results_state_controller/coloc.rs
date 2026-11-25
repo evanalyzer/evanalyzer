@@ -21,11 +21,11 @@ use crate::ColumnSection;
 use evanalyzer_app::results::{ColocColumn, ColocMatch};
 
 /// The group of the coloc columns with each class.
-pub(super) const COLOC_GROUP: &str = "Coloc";
+pub(crate) const COLOC_GROUP: &str = "Coloc";
 /// The group of the "with at least" columns.
-pub(super) const COLOC_AT_LEAST_GROUP: &str = "Coloc · at least";
+pub(crate) const COLOC_AT_LEAST_GROUP: &str = "Coloc · at least";
 /// The group of the "with exactly" columns (and "with no class").
-pub(super) const COLOC_EXACTLY_GROUP: &str = "Coloc · exactly";
+pub(crate) const COLOC_EXACTLY_GROUP: &str = "Coloc · exactly";
 
 /// Without "only combinations that occur", every combination is offered up
 /// to this many partner classes (2^n of them) - beyond, only those that
@@ -34,7 +34,7 @@ const MAX_CLASSES_FOR_ALL_COMBINATIONS: usize = 8;
 
 /// The sidebar's coloc settings.
 #[derive(Debug, Clone, PartialEq)]
-pub(super) struct ColocSettings {
+pub(crate) struct ColocSettings {
     /// The partner classes the combinations are made of (sorted).
     pub partners: Vec<ObjectClass>,
     /// Count the partner objects, else the objects (1 / 0).
@@ -54,13 +54,13 @@ impl Default for ColocSettings {
 }
 
 /// Whether `column` is a coloc column (not a coloc pairs row).
-pub(super) fn is_coloc_column(column: &Column) -> bool {
+pub(crate) fn is_coloc_column(column: &Column) -> bool {
     matches!(column, Column::ColocCount(_) | Column::Coloc(_))
 }
 
 /// The classes that are colocalization partners somewhere (the results'
 /// `ColocCount` columns).
-pub(super) fn coloc_classes(raw: &[ColumnEntry]) -> Vec<ObjectClass> {
+pub(crate) fn coloc_classes(raw: &[ColumnEntry]) -> Vec<ObjectClass> {
     raw.iter()
         .filter_map(|entry| match entry.key {
             Column::ColocCount(class) => Some(class),
@@ -72,7 +72,7 @@ pub(super) fn coloc_classes(raw: &[ColumnEntry]) -> Vec<ObjectClass> {
 /// The coloc groups (`ColumnEntry::coloc_group`): the partner classes of
 /// one Colocalize step each, in the results' order - classes without a
 /// group together last.
-pub(super) fn coloc_groups(raw: &[ColumnEntry]) -> Vec<Vec<ObjectClass>> {
+pub(crate) fn coloc_groups(raw: &[ColumnEntry]) -> Vec<Vec<ObjectClass>> {
     let mut numbered: Vec<(u32, ObjectClass)> = raw
         .iter()
         .filter_map(|entry| match entry.key {
@@ -100,7 +100,7 @@ pub(super) fn coloc_groups(raw: &[ColumnEntry]) -> Vec<Vec<ObjectClass>> {
 
 /// The sets of partner classes objects have (the results' "with exactly"
 /// columns among all classes).
-pub(super) fn coloc_sets(raw: &[ColumnEntry]) -> Vec<Vec<ObjectClass>> {
+pub(crate) fn coloc_sets(raw: &[ColumnEntry]) -> Vec<Vec<ObjectClass>> {
     raw.iter()
         .filter_map(|entry| match &entry.key {
             Column::Coloc(ColocColumn {
@@ -115,7 +115,7 @@ pub(super) fn coloc_sets(raw: &[ColumnEntry]) -> Vec<Vec<ObjectClass>> {
 
 /// The settings a fresh analysis starts with: every partner class, objects
 /// - or partners if `selected` (a view's columns) counts partners.
-pub(super) fn default_settings(raw: &[ColumnEntry], selected: &[Column]) -> ColocSettings {
+pub(crate) fn default_settings(raw: &[ColumnEntry], selected: &[Column]) -> ColocSettings {
     ColocSettings {
         partners: coloc_classes(raw),
         count_partners: selected.iter().any(counts_partners),
@@ -149,7 +149,7 @@ fn subsets(classes: &[ObjectClass]) -> Vec<Vec<ObjectClass>> {
 
 /// The coloc columns `settings` offer, in their order: with each class, with
 /// at least, with exactly, with no class.
-pub(super) fn coloc_columns(raw: &[ColumnEntry], settings: &ColocSettings) -> Vec<Column> {
+pub(crate) fn coloc_columns(raw: &[ColumnEntry], settings: &ColocSettings) -> Vec<Column> {
     let partners = &settings.partners;
     let count = settings.count_partners;
     // What objects have of the chosen classes.
@@ -221,7 +221,7 @@ pub(super) fn coloc_columns(raw: &[ColumnEntry], settings: &ColocSettings) -> Ve
 }
 
 /// The group a coloc column is listed in.
-pub(super) fn coloc_group(column: &Column) -> &'static str {
+pub(crate) fn coloc_group(column: &Column) -> &'static str {
     match column {
         Column::Coloc(ColocColumn {
             how: ColocMatch::AtLeast,
@@ -239,7 +239,7 @@ pub(super) fn coloc_group(column: &Column) -> &'static str {
 /// The columns the pickers offer: the results' own (`raw`), their coloc
 /// columns made by `settings` - and the chosen coloc columns `selected`
 /// (e.g. a view's) that `settings` don't make, so they can be unticked.
-pub(super) fn offered_columns(
+pub(crate) fn offered_columns(
     raw: &[ColumnEntry],
     settings: &ColocSettings,
     selected: &[Column],
@@ -278,7 +278,7 @@ pub(super) fn offered_columns(
 /// A chosen coloc column after the settings changed to `settings`: counted
 /// the new way, among the new classes - `None` where it names a class no
 /// longer chosen (or is "no class" while counting partners).
-pub(super) fn adapt_column(column: &Column, settings: &ColocSettings) -> Option<Column> {
+pub(crate) fn adapt_column(column: &Column, settings: &ColocSettings) -> Option<Column> {
     let (how, with) = match column {
         Column::ColocCount(class) => (ColocMatch::AtLeast, vec![*class]),
         Column::Coloc(c) => (c.how, c.with.clone()),
@@ -300,35 +300,38 @@ pub(super) fn adapt_column(column: &Column, settings: &ColocSettings) -> Option<
 
 /// A column's name in the pickers: lengths, areas and volumes in µm, µm²
 /// and µm³ - the unit the table shows them in (`in_micrometers`).
-pub(super) fn picker_label(name: &str) -> String {
+pub(crate) fn picker_label(name: &str) -> String {
     name.replace("[nm²]", "[µm²]")
         .replace("[nm³]", "[µm³]")
         .replace("[nm]", "[µm]")
 }
 
 /// A model of `items` for a Slint property.
-pub(super) fn model_of<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
+pub(crate) fn model_of<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
     ModelRc::from(Rc::new(VecModel::from(items)))
 }
 
 /// The coloc box's own entry in `column_sections_open`.
-const COLOC_BOX: &str = "coloc box";
+pub(crate) const COLOC_BOX: &str = "coloc box";
 
 /// A section of the sidebar's column picker, made off the UI thread.
-pub(super) struct SectionUi {
+pub(crate) struct SectionUi {
     pub group: String,
     pub title: String,
     pub open: bool,
     pub items: Vec<MultiSelectItem>,
+    /// Per item: always picked, greyed (see `ColumnSection::locked`).
+    pub locked: Vec<bool>,
 }
 
 impl SectionUi {
-    pub(super) fn into_slint(self) -> ColumnSection {
+    pub(crate) fn into_slint(self) -> ColumnSection {
         ColumnSection {
             group: self.group.into(),
             title: self.title.into(),
             open: self.open,
             items: ModelRc::from(Rc::new(VecModel::from(self.items))),
+            locked: ModelRc::from(Rc::new(VecModel::from(self.locked))),
         }
     }
 }
@@ -338,7 +341,7 @@ impl SectionUi {
 /// columns left out (their own lists) - those the search `filter` (lower
 /// case) matches; the coloc box's title and whether it is open. `single`:
 /// one column is chosen (Plate, Charts) - titles without counts.
-pub(super) fn picker_sections(
+pub(crate) fn picker_sections(
     available: &[ColumnEntry],
     selected: &[Column],
     classes: &[Class],
@@ -354,6 +357,7 @@ pub(super) fn picker_sections(
             title: String::new(),
             open: true,
             items: Vec::new(),
+            locked: Vec::new(),
         })
         .collect();
     for entry in available {
@@ -388,6 +392,7 @@ pub(super) fn picker_sections(
                 title: String::new(),
                 open: true,
                 items: vec![item],
+                locked: Vec::new(),
             }),
         }
     }
@@ -437,7 +442,7 @@ impl ResultsStateController {
     /// The results' own columns (a database opened): kept, the coloc
     /// settings from the start, and the columns the pickers offer made of
     /// them - returned.
-    pub(super) fn set_raw_columns(&self, raw: Vec<ColumnEntry>) -> Vec<ColumnEntry> {
+    pub(crate) fn set_raw_columns(&self, raw: Vec<ColumnEntry>) -> Vec<ColumnEntry> {
         let selected = self.list_filter.lock().expect("Poisoned").columns.clone();
         *self.coloc_settings.lock().expect("Poisoned") = default_settings(&raw, &selected);
         *self.raw_columns.lock().expect("Poisoned") = raw;
@@ -447,7 +452,7 @@ impl ResultsStateController {
 
     /// `available_columns` anew from the results' columns and the coloc
     /// settings - with the coloc columns List, Plate and Charts show.
-    pub(super) fn refresh_offered_columns(&self) {
+    pub(crate) fn refresh_offered_columns(&self) {
         let raw = self.raw_columns.lock().expect("Poisoned").clone();
         if raw.is_empty() {
             return;
@@ -469,7 +474,7 @@ impl ResultsStateController {
 
     /// The coloc settings as the chosen columns (a view's) count: partners
     /// if they do - then the columns offered again.
-    pub(super) fn sync_coloc_with_columns(&self) {
+    pub(crate) fn sync_coloc_with_columns(&self) {
         let selected = self.list_filter.lock().expect("Poisoned").columns.clone();
         if let Some(column) = selected.iter().find(|c| is_coloc_column(c)) {
             self.coloc_settings.lock().expect("Poisoned").count_partners = counts_partners(column);
@@ -479,7 +484,7 @@ impl ResultsStateController {
 
     /// The sidebar's columns: the flat list (the summary), the sections
     /// and the coloc box, as `list_filter` chooses.
-    pub(super) fn push_list_columns(&self) {
+    pub(crate) fn push_list_columns(&self) {
         let available = self.available_columns.lock().expect("Poisoned").clone();
         let raw = self.raw_columns.lock().expect("Poisoned").clone();
         let classes = self.classes.lock().expect("Poisoned").clone();
@@ -492,67 +497,14 @@ impl ResultsStateController {
         let summary = chip_summary(selected.len(), items.len());
         let groups = column_groups(&available);
 
-        let (sections, coloc, coloc_title, coloc_open) =
-            picker_sections(&available, &selected, &classes, &open, &filter, false);
-
-        let partner_items: Vec<MultiSelectItem> = coloc_classes(&raw)
-            .into_iter()
-            .map(|class| {
-                let known = classes.iter().find(|c| c.global() == class);
-                MultiSelectItem {
-                    key: class.to_u32().unwrap_or_default().to_string().into(),
-                    value: known
-                        .map(|c| c.name.clone())
-                        .unwrap_or_else(|| format!("class {}", class.to_u32().unwrap_or_default()))
-                        .into(),
-                    color: known.map_or(Color::default(), |c| bg_color_to_slint(c.color)),
-                    group: "".into(),
-                    selected: settings.partners.contains(&class),
-                }
-            })
-            .collect();
-        let partner_summary = match settings.partners.len() {
-            0 => "None".to_string(),
-            n if n == partner_items.len() => "All classes".to_string(),
-            _ => partner_items
-                .iter()
-                .filter(|item| item.selected)
-                .map(|item| item.value.to_string())
-                .collect::<Vec<_>>()
-                .join(", "),
-        };
-        let partner_order = partner_items
-            .iter()
-            .filter(|item| item.selected)
-            .map(|item| item.value.to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let count = i32::from(settings.count_partners);
-        let only_occurring = settings.only_occurring;
-
-        // The panel's parts: the starting sets, the intensity grid, the coloc
-        // columns by kind.
-        let presets = super::column_panel::preset_cards(
-            &super::column_panel::presets(&available, &raw),
-            &selected,
-        );
-        let (intensity_channels, intensity_cells) =
-            super::column_panel::intensity_grid(&available, &selected, &classes);
-        let intensity_section = sections.iter().find(|section| section.group == "intensity");
-        let intensity_title = intensity_section
-            .map(|section| section.title.clone())
-            .unwrap_or_default();
-        let intensity_open = intensity_section.is_some_and(|section| section.open);
-        let coloc_kinds = super::column_panel::coloc_group_blocks(
-            &available,
-            &coloc_groups(&raw),
-            &selected,
-            &settings,
-            &classes,
-            &open,
-            &filter,
-        );
-
+        let parts = crate::editor::column_picker::PickerSource {
+            raw: &raw,
+            classes: &classes,
+            settings: &settings,
+            open: &open,
+            filter: &filter,
+        }
+        .parts(&available, &selected);
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             let Some(ui) = ui_weak.upgrade() else {
@@ -563,31 +515,40 @@ impl ResultsStateController {
             state.set_list_columns(model(items));
             state.set_list_columns_summary(summary);
             state.set_list_columns_groups(ModelRc::from(Rc::new(VecModel::from(groups))));
-            let sections: Vec<ColumnSection> =
-                sections.into_iter().map(SectionUi::into_slint).collect();
+            let sections: Vec<ColumnSection> = parts
+                .sections
+                .into_iter()
+                .map(SectionUi::into_slint)
+                .collect();
             state.set_list_column_sections(ModelRc::from(Rc::new(VecModel::from(sections))));
-            let coloc: Vec<ColumnSection> = coloc.into_iter().map(SectionUi::into_slint).collect();
+            let coloc: Vec<ColumnSection> = parts
+                .coloc_sections
+                .into_iter()
+                .map(SectionUi::into_slint)
+                .collect();
             state.set_list_coloc_sections(ModelRc::from(Rc::new(VecModel::from(coloc))));
-            state.set_list_coloc_title(coloc_title.into());
-            state.set_list_coloc_open(coloc_open);
-            state.set_list_coloc_partner_items(model(partner_items));
-            state.set_list_coloc_partner_summary(partner_summary.into());
-            state.set_list_coloc_partner_order(partner_order.into());
-            state.set_list_coloc_count(count);
-            state.set_list_coloc_only_occurring(only_occurring);
-            state.set_list_column_presets(model_of(presets));
+            state.set_list_coloc_title(parts.coloc_title.into());
+            state.set_list_coloc_open(parts.coloc_open);
+            state.set_list_coloc_partner_items(model(parts.partner_items));
+            state.set_list_coloc_partner_summary(parts.partner_summary.into());
+            state.set_list_coloc_partner_order(parts.partner_order.into());
+            state.set_list_coloc_count(parts.count);
+            state.set_list_coloc_only_occurring(parts.only_occurring);
+            state.set_list_column_presets(model_of(parts.presets));
             state.set_list_intensity_channels(model_of(
-                intensity_channels
+                parts
+                    .intensity_channels
                     .into_iter()
                     .map(slint::SharedString::from)
                     .collect(),
             ));
-            state.set_list_intensity_stats(model_of(super::column_panel::intensity_heads()));
-            state.set_list_intensity_cells(model_of(intensity_cells));
-            state.set_list_intensity_title(intensity_title.into());
-            state.set_list_intensity_open(intensity_open);
+            state.set_list_intensity_stats(model_of(parts.intensity_stats));
+            state.set_list_intensity_cells(model_of(parts.intensity_cells));
+            state.set_list_intensity_title(parts.intensity_title.into());
+            state.set_list_intensity_open(parts.intensity_open);
             state.set_list_coloc_groups(model_of(
-                coloc_kinds
+                parts
+                    .coloc_groups
                     .into_iter()
                     .map(super::column_panel::ColocGroupUi::into_slint)
                     .collect(),
@@ -604,24 +565,12 @@ impl ResultsStateController {
     fn change_coloc_settings(self: &Arc<Self>, change: impl FnOnce(&mut ColocSettings)) {
         let settings = {
             let mut settings = self.coloc_settings.lock().expect("Poisoned");
-            change(&mut settings);
-            settings.partners.sort();
-            settings.partners.dedup();
+            crate::editor::column_picker::change_settings(&mut settings, change);
             settings.clone()
         };
         {
             let mut list = self.list_filter.lock().expect("Poisoned");
-            let mut columns: Vec<Column> = Vec::with_capacity(list.columns.len());
-            for column in list
-                .columns
-                .iter()
-                .filter_map(|c| adapt_column(c, &settings))
-            {
-                if !columns.contains(&column) {
-                    columns.push(column);
-                }
-            }
-            list.columns = columns;
+            list.columns = crate::editor::column_picker::adapt_columns(&list.columns, &settings);
         }
         let matrix_changed = {
             let mut matrix = self.matrix_filter.lock().expect("Poisoned");
@@ -664,34 +613,19 @@ impl ResultsStateController {
     /// (`group`) - those the search shows.
     fn select_column_section(self: &Arc<Self>, group: &str, selected: bool) {
         let filter = self.column_filter.lock().expect("Poisoned").to_lowercase();
-        // A coloc block's kind: only that group's columns.
-        let (group, block) = match group.split_once(super::column_panel::BLOCK_SEPARATOR) {
-            Some((group, number)) => {
-                let groups = coloc_groups(&self.raw_columns.lock().expect("Poisoned"));
-                let block = number
-                    .parse::<usize>()
-                    .ok()
-                    .and_then(|n| groups.get(n.wrapping_sub(1)).cloned());
-                (group, block)
-            }
-            None => (group, None),
-        };
-        let in_section: Vec<Column> = self
-            .available_columns
-            .lock()
-            .expect("Poisoned")
-            .iter()
-            .filter(|entry| entry.group == group)
-            .filter(|entry| match &block {
-                Some(block) => super::column_panel::coloc_with(&entry.key)
-                    .is_some_and(|with| !with.is_empty() && with.iter().all(|c| block.contains(c))),
-                None => true,
-            })
-            .filter(|entry| {
-                filter.is_empty() || entry.display_name.to_lowercase().contains(&filter)
-            })
-            .map(|entry| entry.key.clone())
-            .collect();
+        let raw = self.raw_columns.lock().expect("Poisoned").clone();
+        let classes = self.classes.lock().expect("Poisoned").clone();
+        let settings = self.coloc_settings.lock().expect("Poisoned").clone();
+        let open = self.column_sections_open.lock().expect("Poisoned").clone();
+        let available = self.available_columns.lock().expect("Poisoned").clone();
+        let in_section = crate::editor::column_picker::PickerSource {
+            raw: &raw,
+            classes: &classes,
+            settings: &settings,
+            open: &open,
+            filter: &filter,
+        }
+        .section_columns(&available, group);
         {
             let mut list = self.list_filter.lock().expect("Poisoned");
             if selected {
@@ -708,7 +642,7 @@ impl ResultsStateController {
         self.refresh_list();
     }
 
-    pub(super) fn attach_coloc_callbacks(self: &Arc<Self>, ui: &AppWindow) {
+    pub(crate) fn attach_coloc_callbacks(self: &Arc<Self>, ui: &AppWindow) {
         let state = ui.global::<ResultsState>();
 
         let manager = self.clone();

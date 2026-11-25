@@ -28,6 +28,7 @@ use crate::remote::wire::pixels::image_to_raw;
 use crate::training::TrainingItems;
 use crate::training::TrainingRequest;
 use crate::user::settings::AppSettings;
+use crate::user::trust::ScriptTrust;
 use evanalyzer_cfg::core_types::{InternalErrors, PipelineId, StepId, TrainingProgressEvent};
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 use serde::{Deserialize, Serialize};
@@ -42,7 +43,7 @@ use std::sync::Arc;
 ///   a renamed, removed or retyped variant or field. They travel as JSON, so
 ///   a new field with `#[serde(default)]` is compatible;
 /// - any type that travels as postcard - [`ResultsQuery`](crate::remote::results::ResultsQuery), [`ResultsAnswer`](crate::remote::results::ResultsAnswer)
-///   and `ResultExport` with everything in them. Postcard isn't
+///   with everything in them. Postcard isn't
 ///   self-describing: *any* change there is incompatible, and the other side
 ///   misreads it instead of failing. The test
 ///   `the_binary_wire_format_only_changes_with_the_protocol_version` (with
@@ -69,7 +70,15 @@ use std::sync::Arc;
 // run).
 // 56: one query and one answer variant per results call, from the list in
 // `remote/results.rs` (the answers were shared: `Table`, `Count`, ...).
-pub const PROTOCOL_VERSION: u32 = 56;
+// 58: the trusted scripts (`LoadScriptTrust` / `SaveScriptTrust`, a
+// `ScriptTrust` in `ScriptPermission::Trusted`) - no longer hashes in the
+// app settings.
+// 59: `ListFilter::images` / `GroupedByImageFilter::images` are an
+// `ImageSet` (all, enabled, listed, a block of enabled images) - an export
+// of all images sends no list of paths per page.
+// 60: `ExportResults` (the old results export, a `ResultExport`) is
+// `ExportParquet` (a folder): the tables are written by `RunExport`.
+pub const PROTOCOL_VERSION: u32 = 60;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -136,9 +145,16 @@ pub(crate) enum Request {
     QueryResults {
         handle: u64,
     },
-    /// A postcard-encoded `ResultExport` follows as blob 0; progress
-    /// streams back until `ExportDone`.
-    ExportResults {
+    /// A postcard-encoded `PathBuf` (the folder to write into) follows as
+    /// blob 0: the results' raw tables as Parquet; progress streams back
+    /// until `ExportDone`.
+    ExportParquet {
+        handle: u64,
+    },
+    /// A JSON-encoded `exports::ExportRun` follows as blob 0 (its entries
+    /// are a tagged enum postcard can't carry); progress
+    /// streams back (`ExportProgress`) until `ExportRunDone`.
+    RunExport {
         handle: u64,
     },
     TemplateFolders,
@@ -171,6 +187,9 @@ pub(crate) enum Request {
     /// The user's app preferences, stored in their user folder there.
     LoadAppSettings,
     SaveAppSettings(AppSettings),
+    /// The folders and scripts the user trusts, in their user folder there.
+    LoadScriptTrust,
+    SaveScriptTrust(ScriptTrust),
 }
 
 pub(crate) fn to_postcard<T: Serialize>(value: &T) -> Result<Vec<u8>, InternalErrors> {
@@ -245,9 +264,11 @@ pub(crate) enum Reply {
         total: usize,
     },
     ExportDone(Result<(), WireError>),
+    ExportRunDone(Result<crate::exports::ExportReport, WireError>),
     TemplateFolders(TemplateFolders),
     SystemInfo(SystemInfo),
     AppSettings(AppSettings),
+    ScriptTrust(ScriptTrust),
     Places(Vec<Place>),
     DirEntries(Vec<DirEntry>),
     Stat(Option<DirEntry>),
@@ -724,9 +745,6 @@ mod tests {
             .trace_simple_type::<crate::results::Column>()
             .unwrap();
         tracer
-            .trace_simple_type::<crate::results::ExportFormat>()
-            .unwrap();
-        tracer
             .trace_simple_type::<evanalyzer_cfg::core_types::ObjectClass>()
             .unwrap();
         tracer
@@ -761,9 +779,6 @@ mod tests {
             .trace_simple_type::<crate::results::ProfileLines>()
             .unwrap();
         tracer
-            .trace_simple_type::<crate::results::ProfileExportContent>()
-            .unwrap();
-        tracer
             .trace_simple_type::<crate::results::DrawStyle>()
             .unwrap();
         tracer
@@ -778,11 +793,11 @@ mod tests {
         tracer
             .trace_simple_type::<crate::results::ImageReviewChange>()
             .unwrap();
+        tracer
+            .trace_simple_type::<crate::results::ImageSet>()
+            .unwrap();
         tracer.trace_type::<ResultsQuery>(&samples).unwrap();
         tracer.trace_type::<ResultsAnswer>(&samples).unwrap();
-        tracer
-            .trace_type::<crate::results::ResultExport>(&samples)
-            .unwrap();
         let registry = tracer.registry().unwrap();
         let current = serde_json::to_string_pretty(&serde_json::json!({
             "protocol_version": PROTOCOL_VERSION,
@@ -806,8 +821,8 @@ mod tests {
             .and_then(|stored| stored["protocol_version"].as_u64());
         if stored_version == Some(u64::from(PROTOCOL_VERSION)) {
             panic!(
-                "The binary wire format changed (a type in ResultsQuery, ResultsAnswer or \
-                 ResultExport) without a new protocol version: clients and workers of \
+                "The binary wire format changed (a type in ResultsQuery or ResultsAnswer) \
+                 without a new protocol version: clients and workers of \
                  different builds would misread each other. Bump PROTOCOL_VERSION in \
                  protocol.rs, then update {} with\n  \
                  UPDATE_WIRE_FORMAT=1 cargo test -p evanalyzer_app --lib wire_format",

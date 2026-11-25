@@ -12,15 +12,17 @@ import { Ink } from "../ink/palette.slint";
 
 import { InkCheckList, InkMultiSelect, InkSearchField, InkSegmented, InkSwitch, InkTipSide, InkTipZone, InkMenuItem } from "../ink/ink.slint";
 import { ViewBar, BarChip, BarLabel, BarSpacer, BarCount, BarMore, BarFolded, ViewPanel } from "results_view_bar.slint";
-import { ColumnPicker } from "results_panel.slint";
+import { ColumnPicker, ValuesClassesPart, RelatedPart } from "results_panel.slint";
 
 /// The List's left panel (design canvas "Results rework", ColumnPanel E
-/// with PanelNav D): the part the bar's chip names - Columns, Images,
-/// Classes, Values.
+/// with PanelNav D): Columns, Images, and Values & classes (a row per
+/// object: Classes).
 component ListPanel inherits ViewPanel {
     in property <bool> grouped;
-    parts: root.grouped ? ["Columns", "Images", "Classes", "Values"] : ["Columns", "Images", "Classes"];
-    part: ResultsState.list-panel-part;
+    parts: root.grouped ? ["Columns", "Images", "Values & classes"] : ["Columns", "Images", "Classes"];
+    // The values-and-classes part stays open when the rows change its name.
+    part: ResultsState.list-panel-part == "Classes" || ResultsState.list-panel-part == "Values" || ResultsState.list-panel-part == "Values & classes"
+        ? (root.grouped ? "Values & classes" : "Classes") : ResultsState.list-panel-part;
     part-picked(part) => {
         ResultsState.list-panel-part = part;
     }
@@ -42,6 +44,31 @@ component ListPanel inherits ViewPanel {
             intensity-cells: ResultsState.list-intensity-cells;
             has-coloc: ResultsState.list-coloc-partner-items.length > 0;
             coloc-groups: ResultsState.list-coloc-groups;
+            coloc-title: ResultsState.list-coloc-title;
+            coloc-open: ResultsState.list-coloc-open;
+            coloc-partner-items: ResultsState.list-coloc-partner-items;
+            coloc-partner-summary: ResultsState.list-coloc-partner-summary;
+            coloc-partner-order: ResultsState.list-coloc-partner-order;
+            coloc-count: ResultsState.list-coloc-count;
+            coloc-only-occurring: ResultsState.list-coloc-only-occurring;
+            coloc-box-toggled(open) => {
+                ResultsState.list-coloc-open = open;
+                ResultsState.list-coloc-toggled(open);
+            }
+            coloc-partner-toggled(key) => {
+                ResultsState.list-coloc-partner-toggled(key);
+            }
+            coloc-partners-all(on) => {
+                ResultsState.list-coloc-partners-all(on);
+            }
+            coloc-count-picked(index) => {
+                ResultsState.list-coloc-count = index;
+                ResultsState.list-coloc-count-picked(index);
+            }
+            coloc-only-occurring-changed(on) => {
+                ResultsState.list-coloc-only-occurring = on;
+                ResultsState.list-coloc-only-occurring-changed(on);
+            }
             filter-edited(text) => {
                 ResultsState.list-columns-filter = text;
                 ResultsState.list-columns-filter-changed(text);
@@ -69,44 +96,27 @@ component ListPanel inherits ViewPanel {
                 ResultsState.list-columns-preset(key);
             }
         }
-        if ResultsState.list-children-items.length > 0: InkCheckList {
-            title: "CHILDREN · " + ResultsState.list-children-summary;
-            items <=> ResultsState.list-children-items;
-            list-height: 120px;
-            collapsible: true;
-            item-selected(key, value, selected) => {
+        RelatedPart {
+            children <=> ResultsState.list-children-items;
+            children-summary: ResultsState.list-children-summary;
+            aggregations <=> ResultsState.list-child-aggregation-items;
+            aggregate-summary: ResultsState.list-child-aggregate;
+            parents <=> ResultsState.list-parent-items;
+            parent-summary: ResultsState.list-parent-summary;
+            child-selected(key, selected) => {
                 ResultsState.list-children-selected(key, selected);
             }
-            select-all => {
-                ResultsState.list-children-select-all(true);
+            children-all(all) => {
+                ResultsState.list-children-select-all(all);
             }
-            select-none => {
-                ResultsState.list-children-select-all(false);
-            }
-        }
-        if ResultsState.list-children-items.length > 0: InkMultiSelect {
-            label: "Of the columns";
-            summary-text: ResultsState.list-child-aggregate;
-            items <=> ResultsState.list-child-aggregation-items;
-            multi-select: true;
-            pill-width: 372px;
-            item-selected(key, value, selected) => {
+            aggregation-selected(key, selected) => {
                 ResultsState.list-child-aggregation-selected(key, selected);
             }
-        }
-        if ResultsState.list-parent-items.length > 0: InkCheckList {
-            title: "LINKED OBJECTS · " + ResultsState.list-parent-summary;
-            items <=> ResultsState.list-parent-items;
-            list-height: 120px;
-            collapsible: true;
-            item-selected(key, value, selected) => {
+            parent-selected(key, selected) => {
                 ResultsState.list-parent-selected(key, selected);
             }
-            select-all => {
-                ResultsState.list-parent-select-all(true);
-            }
-            select-none => {
-                ResultsState.list-parent-select-all(false);
+            parents-all(all) => {
+                ResultsState.list-parent-select-all(all);
             }
         }
     }
@@ -143,52 +153,35 @@ component ListPanel inherits ViewPanel {
         }
     }
 
-    if root.current == "Classes": VerticalLayout {
-        spacing: 12px;
-        InkCheckList {
-            title: "CLASSES · " + ResultsState.list-class-summary;
-            items <=> ResultsState.list-class-items;
-            list-height: self.items.length * 24px + 4px;
-            item-selected(key, value, selected) => {
-                ResultsState.list-class-selected(key, selected);
-            }
-            select-all => {
-                ResultsState.list-class-select-all();
-            }
-            select-none => {
-                ResultsState.list-class-select-none();
-            }
+    // Values, then classes (design canvas "Exports - table panel parts",
+    // S2); a row per object: the classes alone.
+    if root.current == "Values & classes" || root.current == "Classes": ValuesClassesPart {
+        grouped: root.grouped;
+        values <=> ResultsState.list-aggregation-items;
+        classes-title: "CLASSES · " + ResultsState.list-class-summary;
+        classes <=> ResultsState.list-class-items;
+        empty-classes: ResultsState.list-empty-classes;
+        value-selected(key, selected) => {
+            ResultsState.list-aggregation-item-selected(key, selected);
         }
-        // A row per image, well or folder: a class without objects there
-        // is a row of zeros, or none.
-        if root.grouped: InkSwitch {
-            text: "Show classes without objects";
-            checked: ResultsState.list-empty-classes;
-            toggled(on) => {
-                ResultsState.list-empty-classes = on;
-                ResultsState.list-empty-classes-changed(on);
-            }
+        values-all => {
+            ResultsState.list-aggregation-select-all();
         }
-    }
-
-    if root.current == "Values": VerticalLayout {
-        spacing: 12px;
-        InkHint {
-            text: "Each column summed up over the objects of a row - a column per value.";
+        values-none => {
+            ResultsState.list-aggregation-select-none();
         }
-        InkCheckList {
-            title: "OF THE OBJECTS IN EACH ROW";
-            items <=> ResultsState.list-aggregation-items;
-            list-height: 240px;
-            item-selected(key, value, selected) => {
-                ResultsState.list-aggregation-item-selected(key, selected);
-            }
-            select-all => {
-                ResultsState.list-aggregation-select-all();
-            }
-            select-none => {
-                ResultsState.list-aggregation-select-none();
-            }
+        class-selected(key, selected) => {
+            ResultsState.list-class-selected(key, selected);
+        }
+        classes-all => {
+            ResultsState.list-class-select-all();
+        }
+        classes-none => {
+            ResultsState.list-class-select-none();
+        }
+        empty-classes-toggled(on) => {
+            ResultsState.list-empty-classes = on;
+            ResultsState.list-empty-classes-changed(on);
         }
     }
 }
@@ -253,11 +246,11 @@ component ListBar inherits ViewBar {
 
     BarMore {
         menu-width: 300px;
-        // Per image, per object: each class's values side by side.
+        // Per object, image, well and folder: each class's values side by
+        // side.
         InkMenuItem {
             text: "Classes as columns";
             checked: ResultsState.list-transpond;
-            enabled: root.rows != "Wells" && root.rows != "Folders";
             clicked => {
                 ResultsState.list-transpond = !ResultsState.list-transpond;
                 ResultsState.list-transpond-changed(ResultsState.list-transpond);

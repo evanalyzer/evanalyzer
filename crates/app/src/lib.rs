@@ -4,7 +4,7 @@
 //!
 //! - Features that do the work, each with what travels (types), the trait
 //!   a backend offers and the code that runs here (`local`): [`results`],
-//!   [`images`], [`files`], [`jobs`], [`training`].
+//!   [`images`], [`files`], [`jobs`], [`training`], [`exports`].
 //! - Features of the open project, which reach the work only through the
 //!   `Backend` trait: [`project`], [`modules`], [`templates`],
 //!   [`annotations`], [`ai`], [`user`].
@@ -28,6 +28,7 @@ pub mod ai;
 pub mod annotations;
 pub mod backend;
 pub mod charts;
+pub mod exports;
 pub mod files;
 pub mod images;
 pub mod jobs;

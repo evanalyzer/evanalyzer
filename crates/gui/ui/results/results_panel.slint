@@ -8,7 +8,7 @@
 // starting sets, the groups, intensity as a channels × values grid and the
 // coloc builder; a list to pick one item from.
 
-import { Ink, InkIcons, InkHint, InkCheckList, InkOptionCard, InkSearchField, InkSwitch, InkTipZone, MultiSelectItem } from "../ink/ink.slint";
+import { Ink, InkIcons, InkHint, InkCheckList, InkMultiSelect, InkOptionCard, InkSearchField, InkSwitch, InkTipZone, MultiSelectItem } from "../ink/ink.slint";
 import { ColumnSection, ColumnPreset, ColocColumnItem, ColocGroup, ColocKind, IntensityCell, ResultsState } from "../api/results.slint";
 import { CheckBox, LineEdit } from "../ink/std_compat.slint";
 
@@ -84,12 +84,14 @@ export component PartHead inherits HorizontalLayout {
 component Mark inherits Rectangle {
     in property <bool> on;
     in property <bool> single;
+    // Greyed: always on, not to change.
+    in property <bool> dim;
     width: 13px;
     height: 13px;
     border-radius: root.single ? 6.5px : Ink.radius-xs;
     border-width: root.on && !root.single ? 0px : root.on ? 4px : 1px;
-    border-color: root.on ? Ink.primary : Ink.text-faint;
-    background: root.on && !root.single ? Ink.primary : Ink.field;
+    border-color: root.dim ? Ink.text-faint : root.on ? Ink.primary : Ink.text-faint;
+    background: root.on && !root.single ? (root.dim ? Ink.text-faint : Ink.primary) : Ink.field;
     if root.on && !root.single: Image {
         source: InkIcons.check;
         width: 9px;
@@ -104,18 +106,24 @@ component PickRow inherits Rectangle {
     in property <bool> on;
     in property <bool> single;
     in property <color> swatch: transparent;
+    // Always on and greyed: not to untick.
+    in property <bool> locked;
     callback clicked;
     height: 24px;
-    background: ta.has-hover ? Ink.hover : transparent;
+    background: ta.has-hover && !root.locked ? Ink.hover : transparent;
     border-radius: Ink.radius-xs;
     accessible-role: checkbox;
     accessible-label: root.text;
-    accessible-checked: root.on;
+    accessible-checked: root.on || root.locked;
+    accessible-enabled: !root.locked;
     accessible-action-default => {
-        root.clicked();
+        if !root.locked {
+            root.clicked();
+        }
     }
     ta := TouchArea {
-        mouse-cursor: pointer;
+        enabled: !root.locked;
+        mouse-cursor: root.locked ? default : pointer;
         clicked => {
             root.clicked();
         }
@@ -132,8 +140,9 @@ component PickRow inherits Rectangle {
         VerticalLayout {
             alignment: center;
             Mark {
-                on: root.on;
+                on: root.on || root.locked;
                 single: root.single;
+                dim: root.locked;
             }
         }
         if root.swatch != transparent: VerticalLayout {
@@ -150,9 +159,15 @@ component PickRow inherits Rectangle {
             min-width: 0px;
             text: root.text;
             font-size: Ink.fs-secondary;
-            color: Ink.text;
+            color: root.locked ? Ink.text-dim : Ink.text;
             vertical-alignment: center;
             overflow: elide;
+        }
+        if root.locked: Text {
+            text: "always written";
+            font-size: Ink.fs-caption;
+            color: Ink.text-mute;
+            vertical-alignment: center;
         }
         if root.note != "": Text {
             text: root.note;
@@ -377,10 +392,11 @@ component SectionList inherits VerticalLayout {
         border-color: Ink.border-soft;
         VerticalLayout {
             padding: 2px;
-            for item in root.section.items: PickRow {
+            for item[i] in root.section.items: PickRow {
                 text: item.value;
                 on: item.selected;
                 single: root.single;
+                locked: root.section.locked[i];
                 clicked => {
                     root.picked(item.key, root.single || !item.selected);
                 }
@@ -580,23 +596,36 @@ component ColocBuilder inherits VerticalLayout {
     in property <bool> single;
     in property <bool> grouped;
     in property <[ColocGroup]> groups;
+    // The coloc settings (the List's: shared by its pickers) - given, and
+    // changed through the callbacks below.
+    in property <string> title;
+    in property <bool> open;
+    in property <[MultiSelectItem]> partner-items;
+    in property <string> partner-summary;
+    in property <string> partner-order;
+    in property <int> count;
+    in property <bool> only-occurring;
     callback picked(string, bool);
     callback select(string, bool);
     // A group's block folded (false) or opened.
     callback toggled(string, bool);
+    callback box-toggled(bool);
+    callback partner-toggled(string);
+    callback partners-all(bool);
+    callback count-picked(int);
+    callback only-occurring-changed(bool);
     spacing: 10px;
 
     PartHead {
-        title: root.single ? "COLOC" : ResultsState.list-coloc-title;
-        open: ResultsState.list-coloc-open;
+        title: root.single ? "COLOC" : root.title;
+        open: root.open;
         all-none: false;
         toggled => {
-            ResultsState.list-coloc-open = !ResultsState.list-coloc-open;
-            ResultsState.list-coloc-toggled(ResultsState.list-coloc-open);
+            root.box-toggled(!root.open);
         }
     }
 
-    if ResultsState.list-coloc-open: VerticalLayout {
+    if root.open: VerticalLayout {
         padding-left: 20px;
         spacing: 12px;
 
@@ -607,17 +636,17 @@ component ColocBuilder inherits VerticalLayout {
                 text: "Overlap with";
             }
             InkCheckList {
-                title: "PARTNER CLASSES · " + ResultsState.list-coloc-partner-summary;
-                items <=> ResultsState.list-coloc-partner-items;
+                title: "PARTNER CLASSES · " + root.partner-summary;
+                items: root.partner-items;
                 list-height: self.items.length * 24px + 4px;
                 item-selected(key, value, selected) => {
-                    ResultsState.list-coloc-partner-toggled(key);
+                    root.partner-toggled(key);
                 }
                 select-all => {
-                    ResultsState.list-coloc-partners-all(true);
+                    root.partners-all(true);
                 }
                 select-none => {
-                    ResultsState.list-coloc-partners-all(false);
+                    root.partners-all(false);
                 }
             }
         }
@@ -634,20 +663,18 @@ component ColocBuilder inherits VerticalLayout {
                     horizontal-stretch: 1;
                     title: root.grouped ? "Objects that overlap" : "Yes / no";
                     description: root.grouped ? "How many objects overlap" : "1 if the object overlaps, else 0";
-                    checked: ResultsState.list-coloc-count == 0;
+                    checked: root.count == 0;
                     picked => {
-                        ResultsState.list-coloc-count = 0;
-                        ResultsState.list-coloc-count-picked(0);
+                        root.count-picked(0);
                     }
                 }
                 InkOptionCard {
                     horizontal-stretch: 1;
                     title: root.grouped ? "Partner objects" : "How many partners";
                     description: root.grouped ? "How many partners lie on them" : "How many partners the object overlaps";
-                    checked: ResultsState.list-coloc-count == 1;
+                    checked: root.count == 1;
                     picked => {
-                        ResultsState.list-coloc-count = 1;
-                        ResultsState.list-coloc-count-picked(1);
+                        root.count-picked(1);
                     }
                 }
             }
@@ -756,18 +783,148 @@ component ColocBuilder inherits VerticalLayout {
             }
             InkSwitch {
                 text: "Only combinations some object has";
-                checked: ResultsState.list-coloc-only-occurring;
+                checked: root.only-occurring;
                 toggled(on) => {
-                    ResultsState.list-coloc-only-occurring = on;
-                    ResultsState.list-coloc-only-occurring-changed(on);
+                    root.only-occurring-changed(on);
                 }
             }
             InkHint {
                 text: (root.groups.length > 0 && root.groups[0].name != ""
                     ? "● overlaps · ○ must not · · either - per class in the order of its group's head. Combinations only within a group: a Colocalize step's classes."
-                    : "● overlaps · ○ must not · · either - per class in this order: " + ResultsState.list-coloc-partner-order + ".")
+                    : "● overlaps · ○ must not · · either - per class in this order: " + root.partner-order + ".")
                     + " \"Exactly\" columns add up to the count. One row per overlapping pair: List, a row per Coloc pair.";
             }
+        }
+    }
+}
+
+/// The children (Relate Objects' links) and the linked objects (parents)
+/// of a table - the Results List's and an export table's lists alike;
+/// shown only where the results have links.
+export component RelatedPart inherits VerticalLayout {
+    in-out property <[MultiSelectItem]> children;
+    in property <string> children-summary;
+    in-out property <[MultiSelectItem]> aggregations;
+    in property <string> aggregate-summary;
+    in-out property <[MultiSelectItem]> parents;
+    in property <string> parent-summary;
+    in property <length> pill-width: 372px;
+    callback child-selected(string, bool);
+    callback children-all(bool);
+    callback aggregation-selected(string, bool);
+    callback parent-selected(string, bool);
+    callback parents-all(bool);
+    spacing: 12px;
+
+    if root.children.length > 0: InkCheckList {
+        title: "CHILDREN · " + root.children-summary;
+        items <=> root.children;
+        list-height: 120px;
+        collapsible: true;
+        item-selected(key, value, selected) => {
+            root.child-selected(key, selected);
+        }
+        select-all => {
+            root.children-all(true);
+        }
+        select-none => {
+            root.children-all(false);
+        }
+    }
+    if root.children.length > 0: InkMultiSelect {
+        label: "Of the columns";
+        summary-text: root.aggregate-summary;
+        items <=> root.aggregations;
+        multi-select: true;
+        pill-width: root.pill-width;
+        item-selected(key, value, selected) => {
+            root.aggregation-selected(key, selected);
+        }
+    }
+    if root.parents.length > 0: InkCheckList {
+        title: "LINKED OBJECTS · " + root.parent-summary;
+        items <=> root.parents;
+        list-height: 120px;
+        collapsible: true;
+        item-selected(key, value, selected) => {
+            root.parent-selected(key, selected);
+        }
+        select-all => {
+            root.parents-all(true);
+        }
+        select-none => {
+            root.parents-all(false);
+        }
+    }
+}
+
+/// The values and the classes of a table, one after the other (design
+/// canvas "Exports - table panel parts", S1/S2) - the Results List's and an
+/// export table's part alike. `grouped`: a row per image, well or folder -
+/// with values and the switch for classes without objects; else the classes
+/// alone.
+export component ValuesClassesPart inherits VerticalLayout {
+    in property <bool> grouped;
+    in property <string> values-title: "OF THE OBJECTS IN EACH ROW";
+    in-out property <[MultiSelectItem]> values;
+    in property <string> classes-title;
+    in-out property <[MultiSelectItem]> classes;
+    in property <string> empty-text: "Show classes without objects";
+    in property <bool> empty-classes;
+    // The switch for classes without objects (grouped rows of a table).
+    in property <bool> show-empty: true;
+    callback value-selected(string, bool);
+    callback values-all();
+    callback values-none();
+    callback class-selected(string, bool);
+    callback classes-all();
+    callback classes-none();
+    callback empty-classes-toggled(bool);
+    spacing: 12px;
+
+    if root.grouped: InkHint {
+        text: "Each column summed up over the objects of a row - a column per value.";
+        wrap: word-wrap;
+    }
+    if root.grouped: InkCheckList {
+        title: root.values-title;
+        items <=> root.values;
+        list-height: self.items.length * 24px + 4px;
+        item-selected(key, value, selected) => {
+            root.value-selected(key, selected);
+        }
+        select-all => {
+            root.values-all();
+        }
+        select-none => {
+            root.values-none();
+        }
+    }
+    if root.grouped: Rectangle {
+        height: 1px;
+        background: Ink.border-soft;
+    }
+    InkCheckList {
+        title: root.classes-title;
+        items <=> root.classes;
+        list-height: self.items.length * 24px + 4px;
+        item-selected(key, value, selected) => {
+            root.class-selected(key, selected);
+        }
+        select-all => {
+            root.classes-all();
+        }
+        select-none => {
+            root.classes-none();
+        }
+    }
+    // A row per image, well or folder: a class without objects there is a
+    // row of zeros, or none.
+    if root.grouped && root.show-empty: InkSwitch {
+        text: root.empty-text;
+        checked: root.empty-classes;
+        toggled(on) => {
+            root.empty-classes-toggled(on);
         }
     }
 }
@@ -789,6 +946,19 @@ export component ColumnPicker inherits VerticalLayout {
     in property <[IntensityCell]> intensity-cells;
     in property <bool> has-coloc;
     in property <[ColocGroup]> coloc-groups;
+    // The coloc settings (see `ColocBuilder`).
+    in property <string> coloc-title;
+    in property <bool> coloc-open;
+    in property <[MultiSelectItem]> coloc-partner-items;
+    in property <string> coloc-partner-summary;
+    in property <string> coloc-partner-order;
+    in property <int> coloc-count;
+    in property <bool> coloc-only-occurring;
+    callback coloc-box-toggled(bool);
+    callback coloc-partner-toggled(string);
+    callback coloc-partners-all(bool);
+    callback coloc-count-picked(int);
+    callback coloc-only-occurring-changed(bool);
     callback filter-edited(string);
     // A column on (true) or off - `single`: always on, the others off.
     callback picked(string, bool);
@@ -864,6 +1034,28 @@ export component ColumnPicker inherits VerticalLayout {
         single: root.single;
         grouped: root.grouped;
         groups: root.coloc-groups;
+        title: root.coloc-title;
+        open: root.coloc-open;
+        partner-items: root.coloc-partner-items;
+        partner-summary: root.coloc-partner-summary;
+        partner-order: root.coloc-partner-order;
+        count: root.coloc-count;
+        only-occurring: root.coloc-only-occurring;
+        box-toggled(open) => {
+            root.coloc-box-toggled(open);
+        }
+        partner-toggled(key) => {
+            root.coloc-partner-toggled(key);
+        }
+        partners-all(on) => {
+            root.coloc-partners-all(on);
+        }
+        count-picked(index) => {
+            root.coloc-count-picked(index);
+        }
+        only-occurring-changed(on) => {
+            root.coloc-only-occurring-changed(on);
+        }
         picked(key, on) => {
             root.picked(key, on);
         }

@@ -23,11 +23,44 @@
 //
 // Usage: cargo run --release -p evanalyzer_app --example bench_time_course -- <db.evadb> [--iters N] [--case N] [--with-parents]
 
+use evanalyzer_app::backend::Backend;
+use evanalyzer_app::backend::local::LocalBackend;
+use evanalyzer_app::exports::{ExportRun, ScriptPermission};
 use evanalyzer_app::results::{
-    Column, ExportFormat, Grouping, ImageTracksFilter, LocalResultsGenerator, ResultExport,
-    TimeCourseExport, TimeCourseFilter, TimeCourseLayout, TimeCourseLines, TimeCourseNormalize,
-    TimeCourseStat, TrackHistory, TrackSummaryFilter,
+    Column, Grouping, ImageTracksFilter, LocalResultsGenerator, TimeCourseFilter, TimeCourseLines,
+    TimeCourseNormalize, TimeCourseStat, TrackHistory, TrackSummaryFilter,
 };
+
+/// A project export (`run_export`) of `entry` into `out_dir`.
+fn run_export(
+    results: &dyn evanalyzer_app::results::ResultsSource,
+    entry: serde_json::Value,
+    out_dir: &std::path::Path,
+) -> Result<(), String> {
+    let export = serde_json::from_value(serde_json::json!({
+        "id": 1, "name": "bench", "entries": [entry]
+    }))
+    .map_err(|e| e.to_string())?;
+    let report = results
+        .run_export(
+            &ExportRun {
+                export,
+                project_dir: out_dir.to_path_buf(),
+                results_dir: out_dir.to_path_buf(),
+                output: Some(out_dir.to_path_buf()),
+                scripts: ScriptPermission::Skip,
+                interpreters: Default::default(),
+                drawing: None,
+            },
+            &AtomicBool::new(false),
+            &mut |_, _, _| {},
+        )
+        .map_err(|e| e.to_string())?;
+    match report.all_written() {
+        true => Ok(()),
+        false => Err(format!("{report:?}")),
+    }
+}
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
@@ -167,40 +200,37 @@ fn main() {
         "evanalyzer_bench_time_course_{}",
         std::process::id()
     ));
+    let results = LocalBackend::default()
+        .open_results(&db_path)
+        .expect("open results");
+    let columns = [
+        "area_px",
+        "intensity_mean_gray_ch0",
+        "intensity_mean_gray_ch1",
+    ];
+    let with_parents = history == TrackHistory::WithParents;
     let mut n_export = queries.len();
     let mut export =
-        // `None`: the List - a row per object.
-        |label: &str, format: ExportFormat, time_course: Option<(TimeCourseLines, TimeCourseLayout)>| {
+        // `None`: the objects - a row per object; else the time course's
+        // lines and layout.
+        |label: &str, format: &str, time_course: Option<(&str, &str)>| {
             n_export += 1;
             if !runs(n_export - 1) {
                 return;
             }
             let out_dir = out_root.join(label.replace(' ', "_"));
             std::fs::create_dir_all(&out_dir).unwrap();
-            let settings = ResultExport {
-                output_dir: out_dir.clone(),
-                format,
-                columns: vec![
-                    Column::AreaSizePx,
-                    Column::IntensityAvg(0),
-                    Column::IntensityAvg(1),
-                ],
-                with_list_view: time_course.is_none(),
-                with_time_course: time_course.is_some(),
-                time_course: time_course.map_or_else(TimeCourseExport::default, |(lines, layout)| {
-                    TimeCourseExport {
-                        lines,
-                        layout,
-                        history,
-                        ..Default::default()
-                    }
-                }),
-                ..Default::default()
+            let entry = match time_course {
+                None => serde_json::json!({ "kind": "DATA", "outputs": ["OBJECTS"],
+                    "format": format, "columns": columns, "images": "ALL" }),
+                Some((lines, layout)) => serde_json::json!({ "kind": "DATA",
+                    "outputs": ["TIME_COURSE"], "format": format, "columns": columns,
+                    "aggregations": ["AVG", "STDDEV"], "images": "ALL",
+                    "timeCourse": { "lines": lines, "layout": layout,
+                        "withParents": with_parents } }),
             };
             let start = Instant::now();
-            if let Err(e) =
-                settings.start_export(&database, &AtomicBool::new(false), &mut |_, _, _| {})
-            {
+            if let Err(e) = run_export(results.as_ref(), entry, &out_dir) {
                 println!("{label:<42} failed: {e}");
             }
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
@@ -218,26 +248,22 @@ fn main() {
     println!("\n{:<42} {:>10}", "export (3 values, mean + SD)", "ms");
     export(
         "CSV long+wide, line per class",
-        ExportFormat::CSV,
-        Some((TimeCourseLines::Class, TimeCourseLayout::Both)),
+        "CSV",
+        Some(("CLASS", "BOTH")),
     );
     export(
         "CSV long+wide, line per well",
-        ExportFormat::CSV,
-        Some((TimeCourseLines::Well, TimeCourseLayout::Both)),
+        "CSV",
+        Some(("WELL", "BOTH")),
     );
     export(
         "XLSX long+wide, line per image",
-        ExportFormat::XLSX,
-        Some((TimeCourseLines::Image, TimeCourseLayout::Both)),
+        "XLSX",
+        Some(("IMAGE", "BOTH")),
     );
-    export(
-        "CSV long, line per track",
-        ExportFormat::CSV,
-        Some((TimeCourseLines::Track, TimeCourseLayout::Long)),
-    );
-    export("List CSV, a row per object", ExportFormat::CSV, None);
-    export("List XLSX, a row per object", ExportFormat::XLSX, None);
+    export("CSV long, line per track", "CSV", Some(("TRACK", "LONG")));
+    export("Objects CSV, a row per object", "CSV", None);
+    export("Objects XLSX, a row per object", "XLSX", None);
     let _ = std::fs::remove_dir_all(&out_root);
 
     if runs(n_export) {
@@ -275,21 +301,14 @@ fn main() {
     if runs(n_export + 1) {
         let out_dir = out_root.join("tracks");
         std::fs::create_dir_all(&out_dir).unwrap();
-        let settings = ResultExport {
-            output_dir: out_dir.clone(),
-            format: ExportFormat::CSV,
-            columns: vec![
-                Column::AreaSizePx,
-                Column::IntensityAvg(0),
-                Column::IntensityAvg(1),
-            ],
-            with_track_summary: true,
-            ..Default::default()
-        };
         let start = Instant::now();
-        settings
-            .start_export(&database, &AtomicBool::new(false), &mut |_, _, _| {})
-            .expect("tracks export");
+        run_export(
+            results.as_ref(),
+            serde_json::json!({ "kind": "DATA", "outputs": ["TRACKS"], "columns": columns,
+                "images": "ALL" }),
+            &out_dir,
+        )
+        .expect("tracks export");
         let elapsed = start.elapsed().as_secs_f64() * 1000.0;
         let csv = std::fs::read_to_string(out_dir.join("tracks.csv")).unwrap();
         println!(

@@ -59,7 +59,7 @@ reads (14 MB more generated code, and the work at runtime).
 | `marker.slint` | `InkChip`, `InkBadge`, `InkNewTag`, `InkSwatch`, `InkKbd`, `InkDot` |
 | `panel.slint` | `InkPanel`, `InkPanelHead`, `InkDialog`, `InkDialogFooter`, labels, captions, hints, dividers |
 | `menu.slint` | `InkMenuFrame` (scrolls when the window is too short - give it `open-y`), items, captions, separators |
-| `feedback.slint` | `InkProgressBar`, `InkBusy`, `InkBanner`, `InkTooltip`, `InkStatusItem` |
+| `feedback.slint` | `InkProgressBar` (tone `info`: a run going on), `InkBusy`, `InkBanner`, `InkTooltip`, `InkStatusItem`, `InkToast` (a run ended: analysis, export) |
 | `row.slint` | `InkListRow` |
 | `settings.slint` | settings dialogs: `InkNavItem`, `InkSettingsHead`, `InkSettingsCard`, `InkSettingRow`, `InkSettingBlock` |
 | `picker.slint` | the closed "pick one" field and its popup rows: `InkPickerField`, `InkPickerRow`, `InkSwatchName` |

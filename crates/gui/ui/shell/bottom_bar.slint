@@ -96,7 +96,9 @@ component SlowDrawingItem inherits Rectangle {
 
 export component BottomBar inherits Rectangle {
     property <bool> secure: ConnectionState.encrypted && ConnectionState.verified;
-    property <bool> running: PipelineRunningState.active && !PipelineRunningState.done;
+    property <bool> running: PipelineRunningState.active && (!PipelineRunningState.done || PipelineRunningState.exporting);
+    // Over the image (Images, Pipelines) - not Results or Exports.
+    property <bool> on-image: LayoutState.mode == WorkspaceMode.images || LayoutState.mode == WorkspaceMode.pipelines;
 
     height: Ink.status-h;
     background: Ink.panel;
@@ -145,6 +147,14 @@ export component BottomBar inherits Rectangle {
                         LayoutState.mode = WorkspaceMode.results;
                     }
                 }
+                InkModeTab {
+                    text: "Exports";
+                    enabled: !StartState.active;
+                    active: !StartState.active && LayoutState.mode == WorkspaceMode.exports;
+                    clicked => {
+                        LayoutState.mode = WorkspaceMode.exports;
+                    }
+                }
             }
         }
 
@@ -163,13 +173,13 @@ export component BottomBar inherits Rectangle {
                 if root.running: InkStatusItem {
                     icon: InkIcons.busy;
                     mono: true;
-                    text: "Analyzing"
+                    text: PipelineRunningState.exporting ? "Exporting · " + PipelineRunningState.export-text : "Analyzing"
                         + (PipelineRunningState.current-image != "" ? " · " + PipelineRunningState.current-image : "")
                         + (PipelineRunningState.images-total <= 1 && PipelineRunningState.tiles-total > 0 ? " · tile " + PipelineRunningState.tiles-done + " / " + PipelineRunningState.tiles-total : "")
                         + (PipelineRunningState.images-total > 0 ? " · image " + PipelineRunningState.images-done + " / " + PipelineRunningState.images-total : "");
                 }
                 // Idle over the image: how the panels go away.
-                if !root.running && !StartState.active && LayoutState.mode != WorkspaceMode.results && ImagePixelInfo.position == "": HorizontalLayout {
+                if !root.running && !StartState.active && root.on-image && ImagePixelInfo.position == "": HorizontalLayout {
                     spacing: 4px;
                     padding-right: 6px;
                     HintText { text: "Click a panel's title to fold it ·"; }
@@ -197,7 +207,7 @@ export component BottomBar inherits Rectangle {
                 }
                 // The viewport: drawing, zoom. What lies under the pointer
                 // is in the bar at the bottom of the image.
-                if !StartState.active && LayoutState.mode != WorkspaceMode.results: HorizontalLayout {
+                if !StartState.active && root.on-image: HorizontalLayout {
                     alignment: end;
                     spacing: 2px;
                     InkBarSeparator { }

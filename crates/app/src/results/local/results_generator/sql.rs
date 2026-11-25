@@ -187,11 +187,14 @@ pub(in crate::results::local) enum ImageSelection<'a> {
 }
 
 impl<'a> ImageSelection<'a> {
-    /// A filter's `images`: `None` is every image.
-    pub(in crate::results::local) fn of(images: &'a Option<Vec<String>>) -> Self {
+    /// A filter's images.
+    pub(in crate::results::local) fn of(images: &'a crate::results::ImageSet) -> Self {
+        use crate::results::ImageSet;
         match images {
-            Some(rel_paths) => Self::Listed(rel_paths),
-            None => Self::All,
+            ImageSet::All => Self::All,
+            ImageSet::Enabled => Self::Enabled,
+            ImageSet::Listed(rel_paths) => Self::Listed(rel_paths),
+            ImageSet::EnabledRange { first, last } => Self::EnabledRange { first, last },
         }
     }
 

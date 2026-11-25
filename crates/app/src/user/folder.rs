@@ -41,6 +41,7 @@ pub fn get_user_folder() -> PathBuf {
 /// ```text
 /// <home>/.evanalyzer/        (evanalyzer/ on macOS and Windows)
 /// ├── settings.json          app settings, incl. pinned server fingerprints
+/// ├── trust.json             the exports' scripts this user allows to run
 /// ├── templates/             the user's templates and modules
 /// └── logs/crash.log
 /// ```
@@ -51,6 +52,11 @@ pub fn user_folder_in(home: &Path) -> PathBuf {
 /// The settings file inside a user folder (`<user folder>/settings.json`).
 pub fn settings_file_in(user_folder: &Path) -> PathBuf {
     user_folder.join("settings.json")
+}
+
+/// The trusted scripts file inside a user folder (`<user folder>/trust.json`).
+pub fn trust_file_in(user_folder: &Path) -> PathBuf {
+    user_folder.join("trust.json")
 }
 
 #[cfg(test)]

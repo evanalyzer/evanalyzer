@@ -1,0 +1,181 @@
+// Copyright 2026 Joachim Danmayr.
+// Licensed under the PolyForm Noncommercial License 1.0.0.
+
+// dialogs/quick_export_dialog.slint — "Export this view" (design canvas
+// "Quick export, open folder, run on", boards 1 A and 2): format, folder,
+// name; Export writes it now, Add to project exports keeps it as an export.
+// After Export the done step: what was written, Open exported folder.
+// Floats over Results: blurred like every dialog (InkDialog).
+
+import { Ink, InkButton, InkButtonKind, InkDialog, InkDialogFooter, InkSegmented, InkTextField, InkBanner, InkTone, InkIcons } from "../ink/ink.slint";
+import { QuickExportState } from "../api/quick_export.slint";
+
+// A labelled row: the label at the left, the control beside it.
+component Row inherits HorizontalLayout {
+    in property <string> label;
+    spacing: 12px;
+    Text {
+        width: 70px;
+        text: root.label;
+        font-size: Ink.fs-body;
+        color: Ink.text-dim;
+        vertical-alignment: center;
+    }
+    @children
+}
+
+export component QuickExportDialog inherits InkDialog {
+    title: "Export this view";
+    subtitle: "“" + QuickExportState.view-name + "” as it is shown now: " + QuickExportState.what;
+    card-width: 540px;
+    modal: true;
+    close => {
+        if !QuickExportState.busy {
+            QuickExportState.cancel();
+        }
+    }
+
+    if !QuickExportState.done: VerticalLayout {
+        spacing: 12px;
+
+        if QuickExportState.table: Row {
+            label: "Format";
+            InkSegmented {
+                width: 160px;
+                label: "Format";
+                model: ["CSV", "XLSX"];
+                selected: QuickExportState.format;
+                picked(i) => {
+                    QuickExportState.format = i;
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+        }
+        Row {
+            label: "Folder";
+            InkTextField {
+                label: "Folder";
+                mono: true;
+                text <=> QuickExportState.folder;
+            }
+            InkButton {
+                text: "Choose…";
+                clicked => {
+                    QuickExportState.choose-folder();
+                }
+            }
+        }
+        Row {
+            label: "Prefix";
+            InkTextField {
+                label: "A prefix in front of the file name";
+                mono: true;
+                placeholder: "(optional) e.g. ctrl → ctrl_" + QuickExportState.file-placeholder;
+                text <=> QuickExportState.file;
+            }
+        }
+        // What it writes, with the prefix as typed.
+        Row {
+            label: "Writes";
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                for name in QuickExportState.file-names: Text {
+                    text: (QuickExportState.file == "" ? "" : QuickExportState.file + "_") + name;
+                    font-size: Ink.fs-secondary;
+                    font-family: Ink.font-mono;
+                    color: Ink.text-dim;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+        }
+
+        if QuickExportState.error != "": InkBanner {
+            tone: InkTone.warn;
+            text: QuickExportState.error;
+        }
+
+        InkDialogFooter {
+            InkButton {
+                text: "Cancel";
+                enabled: !QuickExportState.busy;
+                clicked => {
+                    QuickExportState.cancel();
+                }
+            }
+            InkButton {
+                text: "Add to project exports";
+                tip: "Adds it as a new export of the project - nothing is written now";
+                enabled: !QuickExportState.busy;
+                clicked => {
+                    QuickExportState.add-to-project();
+                }
+            }
+            InkButton {
+                kind: InkButtonKind.primary;
+                text: QuickExportState.busy ? "Exporting…" : "Export";
+                enabled: !QuickExportState.busy;
+                clicked => {
+                    QuickExportState.export();
+                }
+            }
+        }
+    }
+
+    // -- Written --
+    if QuickExportState.done: VerticalLayout {
+        spacing: 12px;
+        HorizontalLayout {
+            spacing: 10px;
+            VerticalLayout {
+                alignment: center;
+                Image {
+                    width: 16px;
+                    source: InkIcons.check;
+                    colorize: Ink.ok;
+                    image-fit: contain;
+                }
+            }
+            Text {
+                text: QuickExportState.done-text;
+                font-size: Ink.fs-body;
+                font-weight: 600;
+                color: Ink.text;
+                vertical-alignment: center;
+            }
+        }
+        Text {
+            text: QuickExportState.done-path;
+            font-family: Ink.font-mono;
+            font-size: Ink.fs-secondary;
+            color: Ink.text-dim;
+            wrap: word-wrap;
+        }
+        InkDialogFooter {
+            InkButton {
+                text: "Add to project exports";
+                tip: "Adds it as a new export of the project";
+                clicked => {
+                    QuickExportState.add-to-project();
+                }
+            }
+            if QuickExportState.can-open-folder: InkButton {
+                text: "Open exported folder";
+                icon: InkIcons.folder;
+                clicked => {
+                    QuickExportState.open-folder();
+                }
+            }
+            InkButton {
+                kind: InkButtonKind.primary;
+                text: "Done";
+                clicked => {
+                    QuickExportState.cancel();
+                }
+            }
+        }
+    }
+}

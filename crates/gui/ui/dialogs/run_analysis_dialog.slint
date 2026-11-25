@@ -3,9 +3,11 @@
 
 import { PipelinesPanelState } from "../api/pipelines.slint";
 import { ImagesListState } from "../api/images_list.slint";
-import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
+import { InkButton, InkButtonKind, InkDialog, InkDialogFooter, InkSwitch, InkHint } from "../ink/ink.slint";
+import { LayoutState, WorkspaceMode } from "../api/layout.slint";
 import { DialogType, GlobalAppState } from "../api/state.slint";
-import { RunAnalysisState } from "../api/run_analysis.slint";
+import { RunAnalysisState, RunExportRow } from "../api/run_analysis.slint";
+import { ExportsState } from "../api/exports.slint";
 import { CheckBox, ComboBox, LineEdit } from "../ink/std_compat.slint";
 
 import { Ink } from "../ink/palette.slint";
@@ -16,7 +18,7 @@ export component RunAnalysisDialog inherits InkDialog {
     anchor-y: 46px;
     title: "Run analysis";
     subtitle: PipelinesPanelState.enabled-pipeline-count + (PipelinesPanelState.enabled-pipeline-count == 1 ? " pipeline · " : " pipelines · ") + (ImagesListState.run-images < ImagesListState.total-images ? ImagesListState.run-images + " of " + ImagesListState.total-images : ImagesListState.total-images) + " images";
-    card-width: 360px;
+    card-width: 380px;
     close => {
         RunAnalysisState.cancel();
     }
@@ -77,6 +79,78 @@ export component RunAnalysisDialog inherits InkDialog {
             }
         }
 
+        // Afterwards: the exports set to run after analysis - switched
+        // off here for this run only.
+        if RunAnalysisState.exports.length > 0: VerticalLayout {
+            spacing: 6px;
+            Rectangle {
+                height: 1px;
+                background: Ink.border;
+            }
+            HorizontalLayout {
+                Text {
+                    text: "Afterwards";
+                    font-size: Ink.fs-body;
+                    font-weight: 600;
+                    color: Ink.text;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                }
+                open-ta := TouchArea {
+                    width: open-text.preferred-width;
+                    mouse-cursor: pointer;
+                    accessible-role: button;
+                    accessible-label: open-text.text;
+                    accessible-action-default => {
+                        self.clicked();
+                    }
+                    clicked => {
+                        RunAnalysisState.cancel();
+                        LayoutState.mode = WorkspaceMode.exports;
+                    }
+                    open-text := Text {
+                        text: "Open the Exports tab";
+                        font-size: Ink.fs-secondary;
+                        color: open-ta.has-hover ? Ink.focus : Ink.text-dim;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+            InkHint {
+                text: "Exports set to run after analysis - part of this run. Switched off here: for this run only.";
+                wrap: word-wrap;
+            }
+            for row[i] in RunAnalysisState.exports: HorizontalLayout {
+                spacing: 10px;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    Text {
+                        text: row.name;
+                        font-size: Ink.fs-body;
+                        color: row.on ? Ink.text : Ink.text-dim;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: row.summary;
+                        font-size: Ink.fs-secondary;
+                        color: Ink.text-dim;
+                        overflow: elide;
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    InkSwitch {
+                        checked: row.on;
+                        accessible-label: row.name;
+                        toggled(on) => {
+                            RunAnalysisState.export-toggled(i, on);
+                        }
+                    }
+                }
+            }
+        }
+
         InkDialogFooter {
 
             InkButton {
@@ -89,6 +163,9 @@ export component RunAnalysisDialog inherits InkDialog {
             InkButton {
                 kind: InkButtonKind.primary;
                 text: "Run";
+                // One at a time: an export running holds the analysis.
+                enabled: !ExportsState.running;
+                disabled-reason: "An export is running - wait for it or stop it in the Exports tab";
                 clicked => {
                     RunAnalysisState.confirm();
                 }

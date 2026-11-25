@@ -54,6 +54,34 @@ fn intensity_channel(column: &Column) -> Option<u32> {
     }
 }
 
+/// A whole row (a channel, `by_channel`) or column (a value) of the
+/// intensity grid at `index`: its columns among `available` (none: no such
+/// line).
+pub(crate) fn intensity_line(
+    available: &[ColumnEntry],
+    index: usize,
+    by_channel: bool,
+) -> Vec<Column> {
+    let channels = intensity_channels(available);
+    let line: Vec<Column> = if by_channel {
+        let Some(channel) = channels.get(index) else {
+            return Vec::new();
+        };
+        INTENSITY_VALUES
+            .iter()
+            .map(|(_, make)| make(*channel))
+            .collect()
+    } else {
+        let Some((_, make)) = INTENSITY_VALUES.get(index) else {
+            return Vec::new();
+        };
+        channels.iter().map(|channel| make(*channel)).collect()
+    };
+    line.into_iter()
+        .filter(|c| available.iter().any(|entry| entry.key == *c))
+        .collect()
+}
+
 /// The channels the results measured intensities in, in order.
 fn intensity_channels(available: &[ColumnEntry]) -> Vec<u32> {
     let mut channels: Vec<u32> = available
@@ -67,7 +95,7 @@ fn intensity_channels(available: &[ColumnEntry]) -> Vec<u32> {
 
 /// The intensity grid: the channels' names and a cell per channel and
 /// value (row by row) - a value the results lack has no key.
-pub(super) fn intensity_grid(
+pub(crate) fn intensity_grid(
     available: &[ColumnEntry],
     selected: &[Column],
     classes: &[Class],
@@ -93,7 +121,7 @@ pub(super) fn intensity_grid(
 }
 
 /// The intensity grid's heads.
-pub(super) fn intensity_heads() -> Vec<SharedString> {
+pub(crate) fn intensity_heads() -> Vec<SharedString> {
     INTENSITY_VALUES
         .iter()
         .map(|(head, _)| (*head).into())
@@ -102,7 +130,7 @@ pub(super) fn intensity_heads() -> Vec<SharedString> {
 
 /// A chart value's name: "Objects per image" for the count per image, the
 /// column's (µm) else - "Area [µm²] · mean per image" per image.
-pub(super) fn chart_value_label(column: &Column, per_image: bool, classes: &[Class]) -> String {
+pub(crate) fn chart_value_label(column: &Column, per_image: bool, classes: &[Class]) -> String {
     let name = picker_label(&column.display_label(classes));
     match (per_image, column) {
         (true, Column::Count) => "Objects per image".to_string(),
@@ -121,7 +149,7 @@ struct SinglePicker {
 }
 
 /// A starting set: its key, name, what it holds and its columns.
-pub(super) struct Preset {
+pub(crate) struct Preset {
     pub key: &'static str,
     pub title: &'static str,
     pub description: &'static str,
@@ -130,7 +158,7 @@ pub(super) struct Preset {
 
 /// The starting sets the results offer - Coloc only with coloc partners.
 /// Their columns among `available`, in the order they are listed.
-pub(super) fn presets(available: &[ColumnEntry], raw: &[ColumnEntry]) -> Vec<Preset> {
+pub(crate) fn presets(available: &[ColumnEntry], raw: &[ColumnEntry]) -> Vec<Preset> {
     let offered = |columns: Vec<Column>| -> Vec<Column> {
         columns
             .into_iter()
@@ -209,7 +237,7 @@ pub(super) fn presets(available: &[ColumnEntry], raw: &[ColumnEntry]) -> Vec<Pre
 
 /// The starting sets for the panel - the one whose columns are exactly the
 /// shown ones marked.
-pub(super) fn preset_cards(sets: &[Preset], selected: &[Column]) -> Vec<ColumnPreset> {
+pub(crate) fn preset_cards(sets: &[Preset], selected: &[Column]) -> Vec<ColumnPreset> {
     sets.iter()
         .map(|set| ColumnPreset {
             key: set.key.into(),
@@ -224,7 +252,7 @@ pub(super) fn preset_cards(sets: &[Preset], selected: &[Column]) -> Vec<ColumnPr
 
 /// What a coloc column needs of each partner class (`partners`, in
 /// order): ● overlaps it, ○ must not, · either.
-pub(super) fn coloc_glyph(column: &Column, partners: &[ObjectClass]) -> String {
+pub(crate) fn coloc_glyph(column: &Column, partners: &[ObjectClass]) -> String {
     let (how, with) = match column {
         Column::ColocCount(class) => (ColocMatch::AtLeast, vec![*class]),
         Column::Coloc(c) => (c.how, c.with.clone()),
@@ -245,7 +273,7 @@ pub(super) fn coloc_glyph(column: &Column, partners: &[ObjectClass]) -> String {
 }
 
 /// A kind of coloc columns, made off the UI thread (a model isn't `Send`).
-pub(super) struct ColocKindUi {
+pub(crate) struct ColocKindUi {
     group: String,
     title: &'static str,
     description: &'static str,
@@ -254,7 +282,7 @@ pub(super) struct ColocKindUi {
 }
 
 impl ColocKindUi {
-    pub(super) fn into_slint(self) -> ColocKind {
+    pub(crate) fn into_slint(self) -> ColocKind {
         ColocKind {
             group: self.group.into(),
             title: self.title.into(),
@@ -267,10 +295,10 @@ impl ColocKindUi {
 
 /// Between a kind's section group and its coloc block in a kind's `group`
 /// key ("Coloc · at least\u{1}2") - what All / None of a block's kind tick.
-pub(super) const BLOCK_SEPARATOR: char = '\u{1}';
+pub(crate) const BLOCK_SEPARATOR: char = '\u{1}';
 
 /// The classes a coloc column is about (empty: "with no class").
-pub(super) fn coloc_with(column: &Column) -> Option<Vec<ObjectClass>> {
+pub(crate) fn coloc_with(column: &Column) -> Option<Vec<ObjectClass>> {
     match column {
         Column::ColocCount(class) => Some(vec![*class]),
         Column::Coloc(c) => Some(c.with.clone()),
@@ -279,7 +307,7 @@ pub(super) fn coloc_with(column: &Column) -> Option<Vec<ObjectClass>> {
 }
 
 /// A coloc group's block of the builder, made off the UI thread.
-pub(super) struct ColocGroupUi {
+pub(crate) struct ColocGroupUi {
     key: String,
     name: String,
     classes: String,
@@ -288,7 +316,7 @@ pub(super) struct ColocGroupUi {
 }
 
 impl ColocGroupUi {
-    pub(super) fn into_slint(self) -> crate::ColocGroup {
+    pub(crate) fn into_slint(self) -> crate::ColocGroup {
         crate::ColocGroup {
             key: self.key.into(),
             name: self.name.into(),
@@ -340,7 +368,7 @@ fn block_names(block: &[ObjectClass], classes: &[Class], number: usize) -> (Stri
 /// columns of that group's classes with marks over them; "with no class"
 /// in a block of its own. Those the search `filter` (lower case) matches;
 /// empty kinds and blocks left out. With one group its block has no name.
-pub(super) fn coloc_group_blocks(
+pub(crate) fn coloc_group_blocks(
     available: &[ColumnEntry],
     groups: &[Vec<ObjectClass>],
     selected: &[Column],
@@ -457,18 +485,11 @@ impl ResultsStateController {
     /// Shows `columns` (`on`) or hides them - the others stay as they are;
     /// new ones go to the end.
     fn show_columns(self: &Arc<Self>, columns: &[Column], on: bool) {
-        {
-            let mut list = self.list_filter.lock().expect("Poisoned");
-            if on {
-                for column in columns {
-                    if !list.columns.contains(column) {
-                        list.columns.push(column.clone());
-                    }
-                }
-            } else {
-                list.columns.retain(|c| !columns.contains(c));
-            }
-        }
+        crate::editor::column_picker::show(
+            &mut self.list_filter.lock().expect("Poisoned").columns,
+            columns,
+            on,
+        );
         self.push_list_columns();
         self.refresh_list();
     }
@@ -477,25 +498,10 @@ impl ResultsStateController {
     /// intensity grid: all shown already - hidden, else shown.
     fn toggle_intensity_line(self: &Arc<Self>, index: usize, by_channel: bool) {
         let available = self.available_columns.lock().expect("Poisoned").clone();
-        let channels = intensity_channels(&available);
-        let line: Vec<Column> = if by_channel {
-            let Some(channel) = channels.get(index) else {
-                return;
-            };
-            INTENSITY_VALUES
-                .iter()
-                .map(|(_, make)| make(*channel))
-                .collect()
-        } else {
-            let Some((_, make)) = INTENSITY_VALUES.get(index) else {
-                return;
-            };
-            channels.iter().map(|channel| make(*channel)).collect()
-        };
-        let line: Vec<Column> = line
-            .into_iter()
-            .filter(|c| available.iter().any(|entry| entry.key == *c))
-            .collect();
+        let line = intensity_line(&available, index, by_channel);
+        if line.is_empty() {
+            return;
+        }
         let all_shown = {
             let list = self.list_filter.lock().expect("Poisoned");
             line.iter().all(|c| list.columns.contains(c))
@@ -574,7 +580,7 @@ impl ResultsStateController {
 
     /// The Plate's value picker - the columns a Plate can show (not an
     /// object's identity), its one column chosen.
-    pub(super) fn push_matrix_picker(&self) {
+    pub(crate) fn push_matrix_picker(&self) {
         let available: Vec<ColumnEntry> = self
             .available_columns
             .lock()
@@ -621,7 +627,7 @@ impl ResultsStateController {
 
     /// The Charts' value picker - the columns a chart can draw - with the
     /// column of the slot being picked (X, or scatter's Y) chosen.
-    pub(super) fn push_chart_picker(&self) {
+    pub(crate) fn push_chart_picker(&self) {
         // A boxplot per image offers the objects' count too.
         let per_image = {
             let chart = self.chart_filter.lock().expect("Poisoned");
@@ -676,7 +682,7 @@ impl ResultsStateController {
     }
 
     /// The value's name on the bar: "Objects per image" for the count.
-    pub(super) fn push_chart_value_summary(&self) {
+    pub(crate) fn push_chart_value_summary(&self) {
         let label = {
             let classes = self.classes.lock().expect("Poisoned");
             let chart = self.chart_filter.lock().expect("Poisoned");
@@ -779,7 +785,7 @@ impl ResultsStateController {
         .ok();
     }
 
-    pub(super) fn attach_column_panel_callbacks(self: &Arc<Self>, ui: &AppWindow) {
+    pub(crate) fn attach_column_panel_callbacks(self: &Arc<Self>, ui: &AppWindow) {
         let state = ui.global::<ResultsState>();
         let manager = self.clone();
         state.on_matrix_value_picked(move |key| manager.pick_matrix_column(key.as_str()));
