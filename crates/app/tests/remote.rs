@@ -736,31 +736,54 @@ fn non_finite_chart_values_survive_the_trip() {
     }
 }
 
+/// A project's export on remote results: run on the server, next to them;
+/// its progress streams back.
+fn remote_run(out: &std::path::Path) -> evanalyzer_app::exports::ExportRun {
+    evanalyzer_app::exports::ExportRun {
+        export: serde_json::from_value(serde_json::json!({
+            "id": 1, "name": "x", "entries": [
+                { "kind": "DATA", "outputs": ["OBJECTS"], "columns": ["area_px"], "images": "ALL" }
+            ]
+        }))
+        .unwrap(),
+        project_dir: out.to_path_buf(),
+        results_dir: out.to_path_buf(),
+        output: Some(out.to_path_buf()),
+        scripts: evanalyzer_app::exports::ScriptPermission::Skip,
+        interpreters: Default::default(),
+        drawing: None,
+    }
+}
+
 #[test]
 fn a_remote_export_writes_its_files_on_the_server_and_reports_progress() {
     let remote = connect();
     let (dir, db_path) = analyzed_database(&remote);
     let remote_db = remote.open_results(&db_path).unwrap();
     let out = dir.path().join("export");
-    let export = evanalyzer_app::results::ResultExport {
-        output_dir: out.clone(),
-        format: evanalyzer_app::results::ExportFormat::CSV,
-        z_stacks: None,
-        t_stacks: None,
-        columns: vec![evanalyzer_app::results::Column::AreaSizePx],
-        with_list_view: true,
-        ..Default::default()
-    };
     let mut progress_calls = 0;
-    remote_db
-        .export(
-            &export,
+    let report = remote_db
+        .run_export(
+            &remote_run(&out),
             &std::sync::atomic::AtomicBool::new(false),
             &mut |_, _, _| progress_calls += 1,
         )
         .unwrap();
-    assert!(out.join("list.csv").exists());
+    assert!(report.all_written(), "{report:?}");
+    assert!(out.join("objects.csv").exists());
     assert!(progress_calls > 0);
+
+    // The raw tables as Parquet, on the server too.
+    let parquet = dir.path().join("parquet");
+    std::fs::create_dir_all(&parquet).unwrap();
+    remote_db
+        .export_parquet(
+            &parquet,
+            &std::sync::atomic::AtomicBool::new(false),
+            &mut |_, _, _| {},
+        )
+        .unwrap();
+    assert!(parquet.join("objects.parquet").exists());
 }
 
 #[test]
@@ -768,19 +791,14 @@ fn a_cancelled_remote_export_reports_cancelled() {
     let remote = connect();
     let (dir, db_path) = analyzed_database(&remote);
     let remote_db = remote.open_results(&db_path).unwrap();
-    let export = evanalyzer_app::results::ResultExport {
-        output_dir: dir.path().join("export"),
-        format: evanalyzer_app::results::ExportFormat::CSV,
-        with_list_view: true,
-        ..Default::default()
-    };
-    let result = remote_db.export(
-        &export,
+    let result = remote_db.run_export(
+        &remote_run(&dir.path().join("export")),
         &std::sync::atomic::AtomicBool::new(true),
         &mut |_, _, _| {},
     );
     assert!(
-        matches!(result, Err(InternalErrors::Cancelled) | Ok(())),
+        matches!(result, Err(InternalErrors::Cancelled))
+            || result.as_ref().is_ok_and(|report| !report.all_written()),
         "{result:?}"
     );
 }

@@ -1,5 +1,10 @@
 //! # export
 //!
+//! `cli results export`: the flags as one data export, run by the same
+//! runner as the project's exports (`ResultsSource::run_export`) - the
+//! command line, the app and a project export can never write a table
+//! differently. `--out` is one file; the runner's file goes there.
+//!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-06-26
 //!
@@ -7,23 +12,21 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use crate::args::{ExportArgs, ExportCommand, ParquetExportArgs, SpeedUnitKind, TableExportArgs};
-use crate::commands::common::{
-    ResolvedGrouping, resolve_grouping, resolve_image_rel_paths, resolve_object_classes,
-    to_time_course_stat,
+use crate::args::{
+    AggKind, ExportArgs, ExportCommand, GroupByKind, LayoutKind, LengthUnitKind, NormalizeKind,
+    ParquetExportArgs, SpeedUnitKind, TableExportArgs,
 };
+use crate::commands::common::{resolve_image_rel_paths, resolve_object_classes};
 use evanalyzer_app::backend::Backend;
+use evanalyzer_app::exports::{EntryStatus, ExportRun, ScriptPermission, entry_from_view};
 use evanalyzer_app::project::load_project;
-use evanalyzer_app::results::ExportFormat;
-use evanalyzer_app::results::ResultExport;
-use evanalyzer_app::results::SpeedUnit;
-use evanalyzer_app::results::view_settings::{
-    DEFAULT_LIST_COLUMNS, ListView, ViewSettings, resolve_columns, with_related_columns,
+use evanalyzer_app::results::ResultsSource;
+use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
+use evanalyzer_cfg::settings::export_settings::{
+    DataExport, DataOutput, ExportAggregation, ExportEntry, ExportSettings, ImageScope, LengthUnit,
+    PlaneRange, SpeedUnit, TableFileFormat, TimeCourseLineKind, TimeCourseOptions,
+    TimeCourseTableLayout, TrackOptions,
 };
-use evanalyzer_app::results::{ChildValue, Column};
-use evanalyzer_cfg::core_types::InternalErrors;
-use evanalyzer_cfg::core_types::ObjectClass;
-use evanalyzer_cfg::settings::project_settings::ResultsViewKind;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
@@ -31,17 +34,16 @@ use std::sync::atomic::AtomicBool;
 /// and `--out` are paths on that machine.
 pub fn run(args: ExportArgs, backend: &dyn Backend) -> Result<(), InternalErrors> {
     match args.command {
-        ExportCommand::Csv(table) => export_table(backend, table, ExportFormat::CSV),
-        ExportCommand::Xlsx(table) => export_table(backend, table, ExportFormat::XLSX),
+        ExportCommand::Csv(table) => export_table(backend, table, TableFileFormat::Csv),
+        ExportCommand::Xlsx(table) => export_table(backend, table, TableFileFormat::Xlsx),
         ExportCommand::Parquet(args) => export_parquet(backend, args),
     }
 }
 
-/// A private folder next to `out` for `ResultExport` to write into (it
-/// always writes its own fixed filenames into a directory it owns, which
-/// would otherwise collide with anything already next to `--out`). Next to
-/// `out` rather than in the temp folder so the final move never crosses
-/// file systems.
+/// A private folder next to `out` for the export to write into (its own
+/// file names, which would otherwise collide with anything next to
+/// `--out`). Next to `out` rather than in the temp folder so the final move
+/// never crosses file systems.
 fn scratch_dir_next_to(out: &Path) -> PathBuf {
     let parent = out
         .parent()
@@ -57,63 +59,73 @@ fn scratch_dir_next_to(out: &Path) -> PathBuf {
     ))
 }
 
-/// Moves the one file an export produced to `out`, then removes the scratch
-/// folder - both on the backend's machine.
+/// Moves the files an export wrote into `scratch_dir` to their places -
+/// `main` to `out`, each other `<main's stem>_<rest>` next to it as
+/// `<out's stem>_<rest>` - then removes the scratch folder, all on the
+/// backend's machine. The files where they went, sorted.
 fn move_into_place(
     backend: &dyn Backend,
-    produced: &Path,
-    out: &Path,
     scratch_dir: &Path,
+    main: &str,
+    out: &Path,
     outcome: Result<(), InternalErrors>,
-) -> Result<(), InternalErrors> {
+) -> Result<Vec<PathBuf>, InternalErrors> {
     let files = backend.files();
-    let outcome = outcome.and_then(|_| {
-        files.rename(produced, out).map_err(|e| {
-            InternalErrors::Internal(format!("could not move export output into place: {e}"))
-        })
+    let stem = out
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| main.to_string());
+    let moved = outcome.and_then(|_| {
+        let mut moved = Vec::new();
+        for entry in files.list_dir(scratch_dir)? {
+            let name = entry.name.as_str();
+            let file_stem = Path::new(name)
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let to = if file_stem == main {
+                out.to_path_buf()
+            } else if let Some(rest) = name.strip_prefix(&format!("{main}_")) {
+                out.with_file_name(format!("{stem}_{rest}"))
+            } else {
+                continue;
+            };
+            files.rename(&entry.path, &to).map_err(|e| {
+                InternalErrors::Internal(format!("could not move export output into place: {e}"))
+            })?;
+            moved.push(to);
+        }
+        Ok(moved)
     });
     let _ = files.remove_all(scratch_dir);
-    outcome
+    let mut moved = moved?;
+    moved.sort();
+    Ok(moved)
 }
 
-/// `objects.parquet`: the raw `objects` table, every column, unfiltered
-/// (see `ResultExport::export_as_parquet`) — unlike `export_table`, there's
-/// no column/filter/grouping resolution to do first, so this is a much
-/// thinner wrapper around `start_export`.
+/// The raw `objects` table (and `measurements`, where there are any) as
+/// Parquet: `objects` to `--out`, `measurements` next to it.
 fn export_parquet(backend: &dyn Backend, args: ParquetExportArgs) -> Result<(), InternalErrors> {
     let db = backend.open_results(&args.db)?;
-
     let scratch_dir = scratch_dir_next_to(&args.out);
-    let export = ResultExport {
-        output_dir: scratch_dir.clone(),
-        format: ExportFormat::Parquet,
-        ..Default::default()
-    };
-
     let mut no_progress = |_message: &str, _current: usize, _total: usize| {};
     let cancel = AtomicBool::new(false);
-    let outcome = db.export(&export, &cancel, &mut no_progress);
-    move_into_place(
-        backend,
-        &scratch_dir.join("objects.parquet"),
-        &args.out,
-        &scratch_dir,
-        outcome,
-    )?;
-    println!("Exported to {}", args.out.display());
+    let outcome = backend
+        .files()
+        .create_dir_all(&scratch_dir)
+        .and_then(|_| db.export_parquet(&scratch_dir, &cancel, &mut no_progress));
+    for path in move_into_place(backend, &scratch_dir, "objects", &args.out, outcome)? {
+        println!("Exported to {}", path.display());
+    }
     Ok(())
 }
 
-/// Builds a `ResultExport` from `args` and runs it — all the actual
-/// List/Grouped-by-Image fetching and CSV/XLSX writing logic lives in
-/// `evanalyzer_app`'s `ResultExport::start_export`, shared with the GUI's
-/// export dialog, so the CLI and the GUI can never produce different output
-/// for the same settings. This function's only job is translating CLI args
-/// into that shared config and moving the one file it produces into place.
+/// Builds the data export `args` ask for and runs it, then moves its file
+/// to `--out` (a wide time course's files per value next to it).
 fn export_table(
     backend: &dyn Backend,
     args: TableExportArgs,
-    format: ExportFormat,
+    format: TableFileFormat,
 ) -> Result<(), InternalErrors> {
     if args.tracks.tracks && args.group.group_by.is_some() {
         return Err(InternalErrors::InvalidArgument(
@@ -122,187 +134,189 @@ fn export_table(
     }
     let db = backend.open_results(&args.db)?;
     let db = db.as_ref();
-    let mut grouping = resolve_grouping(&args.group)?;
-    let mut image_rel_paths = resolve_image_rel_paths(db, &args.filter.images)?;
-    let mut object_classes = resolve_object_classes(db, &args.filter.classes)?;
-    let mut columns: Vec<Column> = db
-        .get_available_columns()?
-        .into_iter()
-        .map(|entry| entry.key)
-        .collect();
-    // A row per pair of overlapping objects (a view's "Coloc pairs").
-    let mut overlapping_pairs = false;
-    // --view: as that List view of the project shows these results; the
-    // explicit flags win.
-    if let (Some(project), Some(name)) = (&args.project, &args.view) {
-        let list = list_view_of(backend, project, name)?;
-        let classes = db.get_object_classes()?;
-        let available = db.get_available_columns()?;
-        let keys = list.columns.clone().unwrap_or_else(|| {
-            DEFAULT_LIST_COLUMNS
-                .iter()
-                .map(|column| column.as_key(&classes))
-                .collect()
-        });
-        let (found, missing) = resolve_columns(&keys, &classes, &available);
-        if !missing.is_empty() {
-            eprintln!(
-                "Not in these results, left out of the view: {}",
-                missing.join(", ")
-            );
-        }
-        // The view's Children and Linked objects groups, as far as these
-        // results have the links.
-        let links: Vec<(ObjectClass, ObjectClass)> = available
-            .iter()
-            .filter_map(|entry| match &entry.key {
-                Column::Children(c) if c.value == ChildValue::Count => {
-                    Some((c.parent_class, c.child_class))
-                }
-                _ => None,
-            })
-            .collect();
-        let children: Vec<(ObjectClass, ObjectClass)> = list
-            .children
-            .iter()
-            .map(|(p, c)| (ObjectClass::Global(*p), ObjectClass::Global(*c)))
-            .filter(|link| links.contains(link))
-            .collect();
-        let parents: Vec<ObjectClass> = list
-            .parents
-            .iter()
-            .map(|p| ObjectClass::Global(*p))
-            .filter(|p| links.iter().any(|(parent, _)| parent == p))
-            .collect();
-        columns = with_related_columns(&found, &children, &list.child_aggregations, &parents);
-        overlapping_pairs = list.coloc_details;
-        if args.filter.classes.is_empty()
-            && let Some(ids) = &list.classes
-        {
-            object_classes = ids
-                .iter()
-                .map(|id| ObjectClass::Global(*id))
-                .filter(|class| classes.iter().any(|known| known.global() == *class))
-                .collect();
-        }
-        if args.filter.images.is_empty() && list.images == "disabled" {
-            image_rel_paths = db
-                .get_images()?
-                .into_iter()
-                .filter(|image| image.disabled)
-                .map(|image| image.rel_path.to_string_lossy().into_owned())
-                .collect();
-            if image_rel_paths.is_empty() {
-                return Err(InternalErrors::InvalidArgument(format!(
-                    "view \"{name}\" shows only the left-out images - these results have none"
-                )));
-            }
-        }
-        if args.group.group_by.is_none() && list.rows_per_image {
-            grouping = ResolvedGrouping::PerImage(list.aggregations.clone());
-        }
-    }
-
-    // `ResultExport` writes `list.{ext}`/`grouped_by_image.{ext}`/
-    // `time_course*.{ext}` into a directory it owns - see
-    // `scratch_dir_next_to`.
+    let data = data_export(backend, db, &args, format)?;
+    let output = data.outputs[0];
+    let export = ExportSettings {
+        id: 0,
+        name: "cli".into(),
+        prefix: String::new(),
+        length_unit: match args.length_unit {
+            LengthUnitKind::Um => LengthUnit::Um,
+            LengthUnitKind::Nm => LengthUnit::Nm,
+        },
+        output: Default::default(),
+        run_after_analysis: false,
+        table_format: evanalyzer_cfg::settings::export_settings::CURRENT_TABLE_FORMAT,
+        entries: vec![ExportEntry::Data(data)],
+    };
     let scratch_dir = scratch_dir_next_to(&args.out);
-    let mut export = ResultExport {
-        output_dir: scratch_dir.clone(),
-        format,
-        // `None`: every plane - the export adds "T"/"Z" columns when the
-        // results have several.
-        z_stacks: args.filter.z_stacks,
-        t_stacks: args.filter.t_stacks,
-        image_rel_paths,
-        columns,
-        object_classes,
-        with_list_coloc_details: overlapping_pairs,
-        ..Default::default()
-    };
-    let document = match grouping {
-        // A row per track: --agg's statistics (default avg), --group-regex
-        // the well column's pattern.
-        _ if args.tracks.tracks => {
-            export.with_track_summary = true;
-            if let Some(regex) = &args.group.group_regex {
-                export.grouping = evanalyzer_app::results::Grouping::Regex(regex.clone());
-            }
-            export.track_summary = evanalyzer_app::results::TrackSummaryExport {
-                statistics: match args.group.agg.is_empty() {
-                    true => vec![evanalyzer_app::results::TimeCourseStat::Mean],
-                    false => args
-                        .group
-                        .agg
-                        .iter()
-                        .map(|kind| to_time_course_stat(*kind))
-                        .collect(),
-                },
-                min_points: args.tracks.min_points,
-                from_start: args.tracks.from_start,
-                no_edge: args.tracks.no_edge,
-                speed_unit: match args.tracks.speed_unit {
-                    SpeedUnitKind::PxFrame => SpeedUnit::PxPerFrame,
-                    SpeedUnitKind::UmMin => SpeedUnit::UmPerMin,
-                    SpeedUnitKind::UmS => SpeedUnit::UmPerS,
-                },
-            };
-            "tracks"
-        }
-        _ if args.measurements => {
-            export.with_measurements = true;
-            "measurements"
-        }
-        ResolvedGrouping::List => {
-            export.with_list_view = true;
-            "list"
-        }
-        ResolvedGrouping::PerImage(aggregations) => {
-            export.with_grouped_by_image_list = true;
-            export.aggregations = aggregations;
-            "grouped_by_image"
-        }
-        ResolvedGrouping::TimeCourse { grouping, settings } => {
-            export.with_time_course = true;
-            export.grouping = grouping;
-            export.time_course = settings;
-            "time_course"
-        }
-    };
-
-    // `export_table` is only ever called with CSV/XLSX from `run()` above -
-    // Parquet goes through `export_parquet` instead, since it needs none of
-    // the column/filter/grouping resolution this function does.
-    let extension = match format {
-        ExportFormat::CSV => "csv",
-        ExportFormat::XLSX => "xlsx",
-        ExportFormat::Parquet => {
-            return Err(InternalErrors::Internal(
-                "export_table doesn't support Parquet — use export_parquet".to_string(),
-            ));
-        }
+    let run = ExportRun {
+        export,
+        project_dir: scratch_dir.clone(),
+        results_dir: args.db.parent().map(Path::to_path_buf).unwrap_or_default(),
+        output: Some(scratch_dir.clone()),
+        scripts: ScriptPermission::Skip,
+        interpreters: Default::default(),
+        drawing: None,
     };
     let mut no_progress = |_message: &str, _current: usize, _total: usize| {};
     let cancel = AtomicBool::new(false);
-    let outcome = db.export(&export, &cancel, &mut no_progress);
-    // A wide time course in CSV: a file per value next to `--out`
-    // (`<name>_<value>.csv`), the long table (if any) at `--out`.
-    if document == "time_course" && matches!(format, ExportFormat::CSV) {
-        return move_time_course_csv_into_place(backend, &args.out, &scratch_dir, outcome);
+    let outcome = db
+        .run_export(&run, &cancel, &mut no_progress)
+        .and_then(|report| {
+            let Some(entry) = report.entries.first() else {
+                return Err(InternalErrors::Internal("the export wrote nothing".into()));
+            };
+            for note in &entry.notes {
+                eprintln!("Note: {note}");
+            }
+            match &entry.status {
+                EntryStatus::Written => Ok(()),
+                EntryStatus::Skipped(why) | EntryStatus::Failed(why) => {
+                    Err(InternalErrors::Internal(why.clone()))
+                }
+            }
+        });
+    let main = evanalyzer_app::exports::naming::rows_name(table_rows(output));
+    for path in move_into_place(backend, &scratch_dir, main, &args.out, outcome)? {
+        println!("Exported to {}", path.display());
     }
-    let produced = scratch_dir.join(format!("{document}.{extension}"));
-    move_into_place(backend, &produced, &args.out, &scratch_dir, outcome)?;
-    println!("Exported to {}", args.out.display());
     Ok(())
 }
 
-/// The List settings of view `name` (case aside) of the project at
-/// `project` - an error for no such view, or one that isn't a List.
-fn list_view_of(
+/// What `args` ask for as one data export of one output: `--view`'s, if
+/// given, with the flags winning; else the flags' - every column these
+/// results have.
+fn data_export(
+    backend: &dyn Backend,
+    db: &dyn ResultsSource,
+    args: &TableExportArgs,
+    format: TableFileFormat,
+) -> Result<DataExport, InternalErrors> {
+    let mut data = match (&args.project, &args.view) {
+        (Some(project), Some(name)) => view_export(backend, project, name)?,
+        _ => {
+            let classes = db.get_object_classes()?;
+            let mut data: DataExport = serde_json::from_value(serde_json::json!({}))
+                .map_err(|e| InternalErrors::Internal(e.to_string()))?;
+            data.outputs = vec![DataOutput::Objects];
+            data.columns = Some(
+                db.get_available_columns()?
+                    .iter()
+                    .filter(|entry| !evanalyzer_app::exports::is_fixed_column(&entry.key))
+                    .map(|entry| entry.key.as_key(&classes))
+                    .collect(),
+            );
+            data
+        }
+    };
+    data.format = format;
+    data.name = String::new();
+    data.split = Default::default();
+    if !args.filter.images.is_empty() {
+        data.images = ImageScope::All;
+        data.only_images = Some(resolve_image_rel_paths(db, &args.filter.images)?);
+    }
+    if !args.filter.classes.is_empty() {
+        let ids = resolve_object_classes(db, &args.filter.classes)?
+            .into_iter()
+            .filter_map(|class| match class {
+                ObjectClass::Global(id) => Some(id),
+                _ => None,
+            })
+            .collect();
+        data.classes = Some(ids);
+    }
+    let range = |r: std::range::Range<u32>| PlaneRange {
+        from: r.start,
+        to: r.end.saturating_sub(1),
+    };
+    if let Some(t) = args.filter.t_stacks {
+        data.planes.t = Some(range(t));
+    }
+    if let Some(z) = args.filter.z_stacks {
+        data.planes.z = Some(range(z));
+    }
+    let group = &args.group;
+    let statistics = |default: &[ExportAggregation]| match group.agg.is_empty() {
+        true => default.to_vec(),
+        false => group.agg.iter().copied().map(aggregation).collect(),
+    };
+    if args.tracks.tracks {
+        data.outputs = vec![DataOutput::Tracks];
+        data.aggregations = statistics(&[ExportAggregation::Avg]);
+        data.group_regex = group.group_regex.clone().filter(|r| !r.is_empty());
+        data.tracks = Some(TrackOptions {
+            min_points: args.tracks.min_points,
+            from_start: args.tracks.from_start,
+            no_edge: args.tracks.no_edge,
+            speed_unit: match args.tracks.speed_unit {
+                SpeedUnitKind::PxFrame => SpeedUnit::PxFrame,
+                SpeedUnitKind::UmMin => SpeedUnit::UmMin,
+                SpeedUnitKind::UmS => SpeedUnit::UmS,
+            },
+        });
+    } else if args.measurements {
+        data.outputs = vec![DataOutput::Measurements];
+        data.columns = None;
+    } else if let Some(kind) = group.group_by {
+        let lines = match kind {
+            GroupByKind::Image => {
+                if group
+                    .agg
+                    .iter()
+                    .any(|a| matches!(a, AggKind::Q1 | AggKind::Q3))
+                {
+                    return Err(InternalErrors::InvalidArgument(
+                        "q1/q3 are only for a time course (--group-by class, well, group, \
+                         folder, regex or track)"
+                            .to_string(),
+                    ));
+                }
+                data.outputs = vec![DataOutput::Images];
+                data.aggregations = statistics(&[ExportAggregation::Avg]);
+                return Ok(data);
+            }
+            GroupByKind::Class => TimeCourseLineKind::Class,
+            GroupByKind::Well => TimeCourseLineKind::Well,
+            GroupByKind::Folder => TimeCourseLineKind::Folder,
+            GroupByKind::Track => TimeCourseLineKind::Track,
+            GroupByKind::Group | GroupByKind::Regex => {
+                let regex = group.group_regex.clone().filter(|r| !r.is_empty());
+                if regex.is_none() {
+                    return Err(InternalErrors::InvalidArgument(
+                        "--group-by group / regex needs --group-regex (its first capture group \
+                         is the group), or use --group-by folder"
+                            .to_string(),
+                    ));
+                }
+                data.group_regex = regex;
+                TimeCourseLineKind::Well
+            }
+        };
+        data.outputs = vec![DataOutput::TimeCourse];
+        data.aggregations = statistics(&[ExportAggregation::Avg, ExportAggregation::Stddev]);
+        data.time_course = Some(TimeCourseOptions {
+            lines,
+            layout: match group.layout {
+                LayoutKind::Long => TimeCourseTableLayout::Long,
+                LayoutKind::Wide => TimeCourseTableLayout::Wide,
+                LayoutKind::Both => TimeCourseTableLayout::Both,
+            },
+            relative: matches!(group.normalize, Some(NormalizeKind::T0)),
+            with_parents: group.with_parents,
+        });
+    }
+    Ok(data)
+}
+
+/// The data export view `name` (case aside) of the project at `project`
+/// writes - an error for no such view, or one that isn't one table.
+fn view_export(
     backend: &dyn Backend,
     project: &Path,
     name: &str,
-) -> Result<ListView, InternalErrors> {
+) -> Result<DataExport, InternalErrors> {
     let project = load_project(backend.files(), &project.to_path_buf())?;
     let views = &project.results_views.views;
     let Some(view) = views
@@ -315,70 +329,93 @@ fn list_view_of(
             names.join(", ")
         )));
     };
-    if view.kind != ResultsViewKind::List {
-        return Err(InternalErrors::InvalidArgument(format!(
-            "view \"{}\" is a {:?} view - --view exports List views",
+    match entry_from_view(view) {
+        Some(ExportEntry::Data(data)) if data.outputs.len() == 1 && is_table(data.outputs[0]) => {
+            Ok(data)
+        }
+        _ => Err(InternalErrors::InvalidArgument(format!(
+            "view \"{}\" is a {:?} view - --view exports views that are a table",
             view.name, view.kind
-        )));
+        ))),
     }
-    Ok(ViewSettings::read(&view.settings).list)
 }
 
-/// The time course's CSV files to their places: `time_course.csv` to `out`,
-/// each `time_course_<value>.csv` next to it as `<out's name>_<value>.csv` -
-/// then the scratch folder goes.
-fn move_time_course_csv_into_place(
-    backend: &dyn Backend,
-    out: &Path,
-    scratch_dir: &Path,
-    outcome: Result<(), InternalErrors>,
-) -> Result<(), InternalErrors> {
-    let files = backend.files();
-    let stem = out
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "time_course".to_string());
-    let moved = outcome.and_then(|_| {
-        let mut moved = Vec::new();
-        for entry in files.list_dir(scratch_dir)? {
-            let to = match entry.name.as_str() {
-                "time_course.csv" => out.to_path_buf(),
-                name => match name.strip_prefix("time_course_") {
-                    Some(value) => out.with_file_name(format!("{stem}_{value}")),
-                    None => continue,
-                },
-            };
-            files.rename(&entry.path, &to).map_err(|e| {
-                InternalErrors::Internal(format!("could not move export output into place: {e}"))
-            })?;
-            moved.push(to);
-        }
-        Ok(moved)
-    });
-    let _ = files.remove_all(scratch_dir);
-    let mut moved = moved?;
-    moved.sort();
-    for path in moved {
-        println!("Exported to {}", path.display());
+/// Whether `output` is a table (not a heatmap).
+fn is_table(output: DataOutput) -> bool {
+    !matches!(
+        output,
+        DataOutput::Plate | DataOutput::WellGrid | DataOutput::WellList | DataOutput::ImageHeatmap
+    )
+}
+
+/// The rows of a table output.
+fn table_rows(output: DataOutput) -> evanalyzer_app::exports::jobs::TableRows {
+    use evanalyzer_app::exports::jobs::TableRows;
+    match output {
+        DataOutput::Images => TableRows::Image,
+        DataOutput::Wells => TableRows::Well,
+        DataOutput::Folders => TableRows::Folder,
+        DataOutput::ColocPairs => TableRows::ColocPair,
+        DataOutput::Measurements => TableRows::Measurement,
+        DataOutput::Tracks => TableRows::Track,
+        DataOutput::TimeCourse => TableRows::TimePoint,
+        DataOutput::Profile => TableRows::ProfilePosition,
+        _ => TableRows::Object,
     }
-    Ok(())
+}
+
+fn aggregation(kind: AggKind) -> ExportAggregation {
+    match kind {
+        AggKind::Min => ExportAggregation::Min,
+        AggKind::Max => ExportAggregation::Max,
+        AggKind::Avg => ExportAggregation::Avg,
+        AggKind::Median => ExportAggregation::Median,
+        AggKind::Stdev => ExportAggregation::Stddev,
+        AggKind::Sum => ExportAggregation::Sum,
+        AggKind::Q1 => ExportAggregation::Q1,
+        AggKind::Q3 => ExportAggregation::Q3,
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use evanalyzer_app::backend::local::LocalBackend;
-
     use super::*;
+    use crate::args::{FilterArgs, GroupArgs, TrackArgs};
+    use crate::commands::test_support::TempResultsDb;
+    use evanalyzer_app::backend::local::LocalBackend;
+    use evanalyzer_cfg::settings::project_settings::ResultsViewKind;
 
     fn export_parquet(args: ParquetExportArgs) -> Result<(), InternalErrors> {
         super::export_parquet(&LocalBackend::default(), args)
     }
 
-    fn export_table(args: TableExportArgs, format: ExportFormat) -> Result<(), InternalErrors> {
+    fn export_table(args: TableExportArgs, format: TableFileFormat) -> Result<(), InternalErrors> {
         super::export_table(&LocalBackend::default(), args, format)
     }
-    use crate::args::{FilterArgs, GroupArgs};
-    use crate::commands::test_support::TempResultsDb;
+
+    fn table_args(db: &Path, out: &Path) -> TableExportArgs {
+        TableExportArgs {
+            db: db.to_path_buf(),
+            out: out.to_path_buf(),
+            filter: FilterArgs::default(),
+            group: GroupArgs::default(),
+            tracks: Default::default(),
+            length_unit: Default::default(),
+            measurements: false,
+            project: None,
+            view: None,
+        }
+    }
+
+    /// The names in `dir`, sorted.
+    fn names_in(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
 
     #[test]
     fn export_parquet_writes_a_valid_parquet_file() {
@@ -394,48 +431,84 @@ mod tests {
 
         let bytes = std::fs::read(&out).expect("read parquet back");
         // Every Parquet file starts and ends with the 4-byte "PAR1" magic.
-        assert!(
-            bytes.len() > 8,
-            "parquet file is too small: {} bytes",
-            bytes.len()
-        );
+        assert!(bytes.len() > 8, "too small: {} bytes", bytes.len());
         assert_eq!(&bytes[..4], b"PAR1", "missing leading PAR1 magic");
         assert_eq!(
             &bytes[bytes.len() - 4..],
             b"PAR1",
             "missing trailing PAR1 magic"
         );
+        assert_eq!(
+            names_in(out_dir.path()),
+            ["out.parquet"],
+            "no scratch folder left"
+        );
     }
 
+    /// A row per object, every column these results have, in format 1.
     #[test]
     fn export_table_writes_a_csv_file_with_the_expected_rows() {
         let db = TempResultsDb::seeded();
         let out_dir = tempfile::tempdir().expect("tempdir");
         let out = out_dir.path().join("out.csv");
 
-        export_table(
-            TableExportArgs {
-                db: db.path.clone(),
-                out: out.clone(),
-                filter: FilterArgs::default(),
-                group: GroupArgs::default(),
-                tracks: Default::default(),
-                measurements: false,
-                project: None,
-                view: None,
-            },
-            ExportFormat::CSV,
-        )
-        .expect("csv export should succeed");
+        export_table(table_args(&db.path, &out), TableFileFormat::Csv)
+            .expect("csv export should succeed");
 
         let content = std::fs::read_to_string(&out).expect("read csv back");
         let mut lines = content.lines();
         let header = lines.next().expect("header row present");
-        assert!(header.contains("Class"), "header: {header}");
+        assert!(header.starts_with("image,"), "header: {header}");
+        assert!(header.contains(",class,"), "header: {header}");
+        assert!(header.contains("area_px"), "header: {header}");
         let body: Vec<&str> = lines.collect();
         assert_eq!(body.len(), 2, "expected 2 data rows, got: {body:?}");
         assert!(content.contains("ClassA"));
         assert!(content.contains("ClassB"));
+        assert_eq!(
+            names_in(out_dir.path()),
+            ["out.csv"],
+            "no scratch folder left"
+        );
+    }
+
+    /// `--image` and `--class`: only those; an unknown name is an error.
+    #[test]
+    fn export_table_keeps_to_the_images_and_classes_asked_for() {
+        let db = TempResultsDb::seeded();
+        let out_dir = tempfile::tempdir().expect("tempdir");
+        let out = out_dir.path().join("out.csv");
+        let mut args = table_args(&db.path, &out);
+        args.filter.classes = vec!["ClassB".into()];
+        export_table(args, TableFileFormat::Csv).expect("export");
+        let content = std::fs::read_to_string(&out).unwrap();
+        assert_eq!(content.lines().count(), 2, "{content}");
+        assert!(!content.contains("ClassA"), "{content}");
+
+        let mut args = table_args(&db.path, &out);
+        args.filter.images = vec!["nope.tif".into()];
+        assert!(export_table(args, TableFileFormat::Csv).is_err());
+    }
+
+    /// `--length-unit nm`: lengths in nm, named so.
+    #[test]
+    fn export_table_writes_lengths_in_the_unit_asked_for() {
+        let db = TempResultsDb::seeded();
+        let out_dir = tempfile::tempdir().expect("tempdir");
+        let header = |unit: LengthUnitKind| {
+            let out = out_dir.path().join("out.csv");
+            let mut args = table_args(&db.path, &out);
+            args.length_unit = unit;
+            export_table(args, TableFileFormat::Csv).expect("export");
+            std::fs::read_to_string(&out)
+                .unwrap()
+                .lines()
+                .next()
+                .unwrap()
+                .to_string()
+        };
+        assert!(header(LengthUnitKind::Um).contains("area_um2"));
+        assert!(header(LengthUnitKind::Nm).contains("area_nm2"));
     }
 
     /// A project with a List view "QC" (two columns, a row per image) and
@@ -454,24 +527,22 @@ mod tests {
                 "aggregations": ["Max"]
             }}),
         });
+        settings.results_views.views.push(ResultsView {
+            id: 10,
+            name: "Plate".into(),
+            kind: ResultsViewKind::Plate,
+            split: false,
+            settings: serde_json::json!({}),
+        });
         crate::commands::test_support::TempProjectFile::new(&settings)
     }
 
     fn view_export(view: &str, project: &Path, out: &Path) -> Result<(), InternalErrors> {
         let db = TempResultsDb::seeded();
-        export_table(
-            TableExportArgs {
-                db: db.path.clone(),
-                out: out.to_path_buf(),
-                filter: FilterArgs::default(),
-                group: GroupArgs::default(),
-                tracks: Default::default(),
-                measurements: false,
-                project: Some(project.to_path_buf()),
-                view: Some(view.into()),
-            },
-            ExportFormat::CSV,
-        )
+        let mut args = table_args(&db.path, out);
+        args.project = Some(project.to_path_buf());
+        args.view = Some(view.into());
+        export_table(args, TableFileFormat::Csv)
     }
 
     /// `--view`: as the List view shows it - its columns (one these results
@@ -484,9 +555,9 @@ mod tests {
         view_export("qc", &project.path, &out).expect("export as the view");
         let content = std::fs::read_to_string(&out).expect("read csv back");
         let header = content.lines().next().unwrap();
-        assert!(header.contains("Area [px] (MAX)"), "{header}");
+        assert!(header.contains("area_px_max"), "{header}");
         assert!(
-            !header.contains("Circularity"),
+            !header.contains("circularity"),
             "only the view's columns: {header}"
         );
 
@@ -500,7 +571,7 @@ mod tests {
         let err = view_export("Plate", &project.path, &out)
             .unwrap_err()
             .to_string();
-        assert!(err.contains("exports List views"), "{err}");
+        assert!(err.contains("views that are a table"), "{err}");
     }
 
     /// `--tracks`: a row per track (here each object its own, of one time
@@ -515,34 +586,18 @@ mod tests {
         let out_dir = tempfile::tempdir().expect("tempdir");
         let export = |min_points: u32| {
             let out = out_dir.path().join(format!("tracks_{min_points}.csv"));
-            export_table(
-                TableExportArgs {
-                    db: db.path.clone(),
-                    out: out.clone(),
-                    filter: FilterArgs::default(),
-                    group: GroupArgs::default(),
-                    tracks: crate::args::TrackArgs {
-                        tracks: true,
-                        min_points,
-                        ..Default::default()
-                    },
-                    measurements: false,
-                    project: None,
-                    view: None,
-                },
-                ExportFormat::CSV,
-            )
-            .expect("tracks export");
+            let mut args = table_args(&db.path, &out);
+            args.tracks = TrackArgs {
+                tracks: true,
+                min_points,
+                ..Default::default()
+            };
+            export_table(args, TableFileFormat::Csv).expect("tracks export");
             std::fs::read_to_string(&out).expect("read csv back")
         };
         let all = export(1);
         let lines: Vec<&str> = all.lines().collect();
-        // Several z-planes in this database: a Z column after the well.
-        assert!(
-            lines[0].starts_with("Image,Well,Z,Class,Track,"),
-            "{}",
-            lines[0]
-        );
+        assert!(lines[0].contains("track_id"), "{}", lines[0]);
         assert_eq!(lines.len(), 3, "{all}");
         assert_eq!(export(2).lines().count(), 1, "the header only");
     }
@@ -553,29 +608,13 @@ mod tests {
         let out_dir = tempfile::tempdir().expect("tempdir");
         let out = out_dir.path().join("out.xlsx");
 
-        export_table(
-            TableExportArgs {
-                db: db.path.clone(),
-                out: out.clone(),
-                filter: FilterArgs::default(),
-                group: GroupArgs::default(),
-                tracks: Default::default(),
-                measurements: false,
-                project: None,
-                view: None,
-            },
-            ExportFormat::XLSX,
-        )
-        .expect("xlsx export should succeed");
+        export_table(table_args(&db.path, &out), TableFileFormat::Xlsx)
+            .expect("xlsx export should succeed");
 
-        let bytes = std::fs::read(&out).expect("read xlsx back");
-        // XLSX files are zip archives - "PK\x03\x04" is the local-file-header magic.
-        assert!(
-            bytes.len() > 4,
-            "xlsx file is too small: {} bytes",
-            bytes.len()
-        );
-        assert_eq!(&bytes[..4], b"PK\x03\x04", "not a zip/xlsx file");
+        use calamine::Reader;
+        let mut workbook: calamine::Xlsx<_> = calamine::open_workbook(&out).expect("an xlsx");
+        let range = workbook.worksheet_range("Table").expect("Table sheet");
+        assert_eq!(range.rows().count(), 1 + 2, "a header, a row per object");
     }
 
     #[test]
@@ -583,74 +622,134 @@ mod tests {
         let db = TempResultsDb::seeded();
         let out_dir = tempfile::tempdir().expect("tempdir");
         let out = out_dir.path().join("grouped.csv");
-
-        export_table(
-            TableExportArgs {
-                db: db.path.clone(),
-                out: out.clone(),
-                filter: FilterArgs::default(),
-                group: GroupArgs {
-                    group_by: Some(crate::args::GroupByKind::Image),
-                    ..Default::default()
-                },
-                tracks: Default::default(),
-                measurements: false,
-                project: None,
-                view: None,
-            },
-            ExportFormat::CSV,
-        )
-        .expect("grouped csv export should succeed");
+        let mut args = table_args(&db.path, &out);
+        args.group.group_by = Some(GroupByKind::Image);
+        export_table(args, TableFileFormat::Csv).expect("grouped csv export should succeed");
 
         let content = std::fs::read_to_string(&out).expect("read csv back");
-        assert!(
-            content.lines().count() >= 2,
-            "expected a header and at least one data row"
-        );
+        let header = content.lines().next().unwrap();
+        assert!(header.contains("area_px_avg"), "{header}");
+        assert!(header.ends_with("marker,note"), "{header}");
+        assert!(content.lines().count() >= 2, "a header and a row at least");
+    }
+
+    /// What the grouping flags ask for, as the data export.
+    fn data_of(group: GroupArgs) -> Result<DataExport, InternalErrors> {
+        let db = TempResultsDb::seeded();
+        let backend = LocalBackend::default();
+        let results = backend.open_results(&db.path)?;
+        let mut args = table_args(&db.path, Path::new("out.csv"));
+        args.group = group;
+        data_export(&backend, results.as_ref(), &args, TableFileFormat::Csv)
     }
 
     #[test]
-    fn export_table_rejects_group_by_group_without_its_regex() {
-        let db = TempResultsDb::seeded();
-        let out_dir = tempfile::tempdir().expect("tempdir");
-        let out = out_dir.path().join("out.csv");
-
-        let result = export_table(
-            TableExportArgs {
-                db: db.path.clone(),
-                out,
-                filter: FilterArgs::default(),
-                group: GroupArgs {
-                    group_by: Some(crate::args::GroupByKind::Group),
-                    ..Default::default()
-                },
-                tracks: Default::default(),
-                measurements: false,
-                project: None,
-                view: None,
-            },
-            ExportFormat::CSV,
+    fn group_by_image_is_a_row_per_image_with_its_statistics() {
+        let data = data_of(GroupArgs {
+            group_by: Some(GroupByKind::Image),
+            agg: vec![AggKind::Min, AggKind::Max, AggKind::Sum],
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(data.outputs, [DataOutput::Images]);
+        assert_eq!(
+            data.aggregations,
+            [
+                ExportAggregation::Min,
+                ExportAggregation::Max,
+                ExportAggregation::Sum
+            ]
         );
-
-        assert!(result.is_err());
+        let data = data_of(GroupArgs {
+            group_by: Some(GroupByKind::Image),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(data.aggregations, [ExportAggregation::Avg]);
+        assert!(
+            data_of(GroupArgs {
+                group_by: Some(GroupByKind::Image),
+                agg: vec![AggKind::Q1],
+                ..Default::default()
+            })
+            .is_err(),
+            "q1 only for a time course"
+        );
     }
 
-    fn time_course(group: GroupArgs, out: &std::path::Path) -> String {
+    /// class / well / group / folder / regex / track: the time course -
+    /// mean and SD unless asked otherwise.
+    #[test]
+    fn the_time_course_groupings() {
+        let resolve = |group_by, group_regex: Option<&str>| {
+            data_of(GroupArgs {
+                group_by: Some(group_by),
+                group_regex: group_regex.map(str::to_string),
+                ..Default::default()
+            })
+        };
+        let lines = |data: DataExport| (data.time_course.unwrap().lines, data.group_regex);
+        assert_eq!(
+            lines(resolve(GroupByKind::Class, None).unwrap()),
+            (TimeCourseLineKind::Class, None)
+        );
+        assert_eq!(
+            lines(resolve(GroupByKind::Well, None).unwrap()),
+            (TimeCourseLineKind::Well, None)
+        );
+        assert_eq!(
+            lines(resolve(GroupByKind::Folder, None).unwrap()),
+            (TimeCourseLineKind::Folder, None)
+        );
+        assert_eq!(
+            lines(resolve(GroupByKind::Group, Some("^(.*)_")).unwrap()),
+            (TimeCourseLineKind::Well, Some("^(.*)_".into()))
+        );
+        assert_eq!(
+            lines(resolve(GroupByKind::Track, None).unwrap()),
+            (TimeCourseLineKind::Track, None)
+        );
+        assert!(
+            resolve(GroupByKind::Group, None).is_err(),
+            "needs --group-regex"
+        );
+        assert!(resolve(GroupByKind::Regex, Some("")).is_err());
+
+        let data = resolve(GroupByKind::Class, None).unwrap();
+        assert_eq!(
+            data.aggregations,
+            [ExportAggregation::Avg, ExportAggregation::Stddev]
+        );
+        let course = data.time_course.unwrap();
+        assert!(!course.relative);
+        assert_eq!(course.layout, TimeCourseTableLayout::Long);
+
+        let data = data_of(GroupArgs {
+            group_by: Some(GroupByKind::Class),
+            agg: vec![AggKind::Median, AggKind::Q1, AggKind::Q3],
+            normalize: Some(NormalizeKind::T0),
+            layout: LayoutKind::Both,
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(
+            data.aggregations,
+            [
+                ExportAggregation::Median,
+                ExportAggregation::Q1,
+                ExportAggregation::Q3
+            ]
+        );
+        let course = data.time_course.unwrap();
+        assert!(course.relative);
+        assert_eq!(course.layout, TimeCourseTableLayout::Both);
+    }
+
+    fn time_course(group: GroupArgs, out: &Path) -> String {
         let db = TempResultsDb::seeded();
-        export_table(
-            TableExportArgs {
-                db: db.path.clone(),
-                out: out.to_path_buf(),
-                filter: FilterArgs::default(),
-                group,
-                tracks: Default::default(),
-                measurements: false,
-                project: None,
-                view: None,
-            },
-            ExportFormat::CSV,
-        )
-        .expect("time course export");
+        let mut args = table_args(&db.path, out);
+        args.group = group;
+        export_table(args, TableFileFormat::Csv).expect("time course export");
         std::fs::read_to_string(out).unwrap_or_default()
     }
 
@@ -662,27 +761,41 @@ mod tests {
         let out = out_dir.path().join("course.csv");
         let csv = time_course(
             GroupArgs {
-                group_by: Some(crate::args::GroupByKind::Class),
+                group_by: Some(GroupByKind::Class),
                 ..Default::default()
             },
             &out,
         );
         let header = csv.lines().next().unwrap();
         assert!(
-            header.starts_with("T,Z,Class,N images,N objects,"),
+            header.starts_with("class,t,z,time_s,n_images,n_objects,"),
             "{header}"
         );
-        assert!(header.contains("Area [px] mean,Area [px] SD"), "{header}");
+        assert!(header.contains("area_px_avg,area_px_stddev"), "{header}");
         assert_eq!(csv.lines().count(), 1 + 2 * 2, "2 planes x 2 classes");
-        let names: Vec<_> = std::fs::read_dir(out_dir.path())
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
         assert_eq!(
-            names,
+            names_in(out_dir.path()),
             ["course.csv"],
-            "only --out, the scratch folder is gone"
+            "the scratch folder is gone"
         );
+    }
+
+    /// q1/q3 and folder lines: the runner has them for the command line.
+    #[test]
+    fn export_table_time_course_per_folder_with_quartiles() {
+        let out_dir = tempfile::tempdir().expect("tempdir");
+        let out = out_dir.path().join("course.csv");
+        let csv = time_course(
+            GroupArgs {
+                group_by: Some(GroupByKind::Folder),
+                agg: vec![AggKind::Q1, AggKind::Q3],
+                ..Default::default()
+            },
+            &out,
+        );
+        let header = csv.lines().next().unwrap();
+        assert!(header.starts_with("folder,class,"), "{header}");
+        assert!(header.contains("area_px_q1,area_px_q3"), "{header}");
     }
 
     /// `--layout both` in CSV: the long table at `--out`, a file per value
@@ -693,21 +806,25 @@ mod tests {
         let out = out_dir.path().join("course.csv");
         time_course(
             GroupArgs {
-                group_by: Some(crate::args::GroupByKind::Well),
-                agg: vec![crate::args::AggKind::Avg],
-                layout: crate::args::LayoutKind::Both,
+                group_by: Some(GroupByKind::Well),
+                agg: vec![AggKind::Avg],
+                layout: LayoutKind::Both,
                 ..Default::default()
             },
             &out,
         );
-        assert!(out.exists());
-        assert!(out_dir.path().join("course_Area__px__mean.csv").exists());
-        let leftovers: Vec<_> = std::fs::read_dir(out_dir.path())
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .filter(|name| name.starts_with(".evanalyzer_cli_export"))
-            .collect();
-        assert!(leftovers.is_empty(), "{leftovers:?}");
+        let names = names_in(out_dir.path());
+        assert!(names.contains(&"course.csv".to_string()), "{names:?}");
+        assert!(
+            names
+                .iter()
+                .any(|n| n.starts_with("course_wide_area_px_avg")),
+            "{names:?}"
+        );
+        assert!(
+            names.iter().all(|n| n.starts_with("course")),
+            "no scratch folder left: {names:?}"
+        );
     }
 
     #[test]
@@ -716,32 +833,20 @@ mod tests {
         let out_dir = tempfile::tempdir().expect("tempdir");
         let out = out_dir.path().join("out.csv");
 
-        export_table(
-            TableExportArgs {
-                db: db.path.clone(),
-                out: out.clone(),
-                filter: FilterArgs::default(),
-                group: GroupArgs::default(),
-                tracks: Default::default(),
-                measurements: false,
-                project: None,
-                view: None,
-            },
-            ExportFormat::CSV,
-        )
-        .expect("csv export should succeed");
+        export_table(table_args(&db.path, &out), TableFileFormat::Csv)
+            .expect("csv export should succeed");
 
         let content = std::fs::read_to_string(&out).expect("read csv back");
         let header = content.lines().next().expect("header row present");
         for ch in 0..3 {
             assert!(
-                header.contains(&format!("Avg Intensity (Ch {ch})")),
+                header.contains(&format!("intensity_mean_gray_ch{ch}")),
                 "header missing channel {ch}'s intensity column: {header}"
             );
         }
         assert!(
-            !header.contains("Ch 3)"),
-            "header should not report a 4th channel that was never measured: {header}"
+            !header.contains("_ch3"),
+            "no 4th channel that was never measured: {header}"
         );
     }
 }

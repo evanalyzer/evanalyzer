@@ -12,19 +12,16 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use super::Output;
+use super::plate::PlateExport;
 use super::table::scope_images;
 use crate::exports::jobs::{PlateGrid, PlateLayoutExport};
 use crate::exports::naming;
 use crate::exports::types::EntryReport;
 use crate::results::view_settings::resolve_columns;
-use crate::results::{
-    Aggregation, Column, DrawBrightness, DrawStyle, DrawnImages, ExportFormat, ResultExport,
-    ResultsSource,
-};
+use crate::results::{Column, DrawBrightness, DrawStyle, DrawnImages, ResultsSource};
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use evanalyzer_cfg::settings::export_settings::{
-    DrawnBrightness, DrawnImagesExport, DrawnStyle, ExportAggregation, ExportEntry, ExportSettings,
-    HeatmapColors,
+    DrawnBrightness, DrawnImagesExport, DrawnStyle, ExportEntry, ExportSettings, HeatmapColors,
 };
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -54,29 +51,33 @@ pub(super) fn plate_layout(
             columns
         }
     };
-    let images = scope_images(results, plate.images)?;
+    let images = scope_images(results, plate.images, plate.only_images.as_deref())?;
     if plate.grid == PlateGrid::Image {
         return image_heatmaps(
             results, export, plate, columns, images, output, report, cancel,
         );
     }
     let scratch = Scratch::new(output)?;
-    let job = ResultExport {
+    let job = PlateExport {
         output_dir: scratch.dir.clone(),
-        format: ExportFormat::XLSX,
         image_rel_paths: images,
         columns,
         object_classes: classes(&plate.classes),
-        aggregations: plate.aggregations.iter().map(|a| aggregation(*a)).collect(),
+        aggregations: plate
+            .aggregations
+            .iter()
+            .filter_map(|a| super::table::aggregation(*a))
+            .collect(),
         color_schema: color_schema(plate.colors),
         z_stacks: super::plane_range(plate.planes.z),
         t_stacks: super::plane_range(plate.planes.t),
         with_plate_view_heatmap: plate.grid == PlateGrid::Plate,
         with_well_view_heatmap: plate.grid == PlateGrid::Well,
         with_well_view_list: plate.grid == PlateGrid::WellList,
+        grouping: super::wells(&plate.group_regex),
         ..Default::default()
     };
-    results.export(&job, cancel, &mut |_, _, _| {})?;
+    job.write(results, cancel)?;
     let written = match plate.grid {
         PlateGrid::Plate => "plate.xlsx",
         PlateGrid::WellList => "well_list.xlsx",
@@ -111,13 +112,16 @@ fn image_heatmaps(
             return Err(InternalErrors::Cancelled);
         }
         let scratch = Scratch::new(output)?;
-        let job = ResultExport {
+        let job = PlateExport {
             output_dir: scratch.dir.clone(),
-            format: ExportFormat::XLSX,
             image_rel_paths: vec![image.clone()],
             columns: columns.clone(),
             object_classes: classes(&plate.classes),
-            aggregations: plate.aggregations.iter().map(|a| aggregation(*a)).collect(),
+            aggregations: plate
+                .aggregations
+                .iter()
+                .filter_map(|a| super::table::aggregation(*a))
+                .collect(),
             color_schema: color_schema(plate.colors),
             z_stacks: super::plane_range(plate.planes.z),
             t_stacks: super::plane_range(plate.planes.t),
@@ -125,7 +129,7 @@ fn image_heatmaps(
             square_size: Some(plate.square_size.unwrap_or(64).max(1) as usize),
             ..Default::default()
         };
-        results.export(&job, cancel, &mut |_, _, _| {})?;
+        job.write(results, cancel)?;
         let Some(written) = files_below(&scratch.dir)?.into_iter().next() else {
             continue;
         };
@@ -151,30 +155,40 @@ pub(super) fn drawn_images(
     report: &mut EntryReport,
     cancel: &AtomicBool,
 ) -> Result<(), InternalErrors> {
-    let images = scope_images(results, drawn.images)?;
+    let images = scope_images(results, drawn.images, None)?;
     let scratch = Scratch::new(output)?;
-    let job = ResultExport {
-        output_dir: scratch.dir.clone(),
-        image_rel_paths: images.clone(),
-        object_classes: classes(&drawn.classes),
+    let settings = DrawnImages {
+        max_side: drawn.max_side,
+        style: match drawn.style {
+            DrawnStyle::Outline => DrawStyle::Outline,
+            DrawnStyle::Filled => DrawStyle::Filled,
+            DrawnStyle::Box => DrawStyle::Box,
+        },
+        brightness: match drawn.brightness {
+            DrawnBrightness::Viewer => DrawBrightness::Viewer,
+            DrawnBrightness::Auto => DrawBrightness::Auto,
+        },
+        ..drawing.clone()
+    };
+    // Within what this backend may reach: the images are read from there.
+    // The plane goes into the names only where the results have several.
+    let all = results.get_planes()?;
+    let planes = super::drawn_images::DrawnPlanes {
         z_stacks: super::plane_range(drawn.planes.z),
         t_stacks: super::plane_range(drawn.planes.t),
-        drawn_images: Some(DrawnImages {
-            max_side: drawn.max_side,
-            style: match drawn.style {
-                DrawnStyle::Outline => DrawStyle::Outline,
-                DrawnStyle::Filled => DrawStyle::Filled,
-                DrawnStyle::Box => DrawStyle::Box,
-            },
-            brightness: match drawn.brightness {
-                DrawnBrightness::Viewer => DrawBrightness::Viewer,
-                DrawnBrightness::Auto => DrawBrightness::Auto,
-            },
-            ..drawing.clone()
-        }),
-        ..Default::default()
+        by_z: all.iter().any(|p| p.z_stack != all[0].z_stack),
+        by_t: all.iter().any(|p| p.t_stack != all[0].t_stack),
     };
-    results.export(&job, cancel, &mut |_, _, _| {})?;
+    super::drawn_images::export_drawn_images(
+        results,
+        &settings,
+        &classes(&drawn.classes),
+        &images,
+        &scratch.dir,
+        planes,
+        cancel,
+        &mut |_, _, _| {},
+    )?;
 
     // The export wrote `images/<folder>/<stem>[_z…][_t…].png`: the image is
     // the longest path the file starts with.
@@ -244,18 +258,6 @@ fn color_schema(colors: HeatmapColors) -> crate::results::ColorSchema {
         HeatmapColors::Haline => ColorSchema::Haline,
         HeatmapColors::Algae => ColorSchema::Algae,
         HeatmapColors::Thermal => ColorSchema::Thermal,
-    }
-}
-
-fn aggregation(aggregation: ExportAggregation) -> Aggregation {
-    match aggregation {
-        ExportAggregation::Avg => Aggregation::Avg,
-        ExportAggregation::Median => Aggregation::Median,
-        ExportAggregation::Stddev => Aggregation::Stddev,
-        ExportAggregation::Sum => Aggregation::Sum,
-        ExportAggregation::Min => Aggregation::Min,
-        ExportAggregation::Max => Aggregation::Max,
-        ExportAggregation::Skewness => Aggregation::Skewness,
     }
 }
 

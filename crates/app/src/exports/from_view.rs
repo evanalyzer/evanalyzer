@@ -21,8 +21,8 @@ use crate::results::view_settings::ViewSettings;
 use crate::results::{Aggregation, ProfileLines, TimeCourseLines, TrackHistory};
 use evanalyzer_cfg::settings::export_settings::{
     ChildLink, DataExport, DataOutput, ExportAggregation, ExportEntry, HeatmapColors,
-    HeatmapOptions,
-    ImageScope, ProfileLineKind, ProfileOptions, TimeCourseLineKind, TimeCourseOptions,
+    HeatmapOptions, ImageScope, ProfileLineKind, ProfileOptions, TimeCourseLineKind,
+    TimeCourseOptions,
 };
 use evanalyzer_cfg::settings::project_settings::{ResultsView, ResultsViewKind};
 
@@ -83,6 +83,8 @@ pub fn entry_from_view(view: &ResultsView) -> Option<ExportEntry> {
                 columns: plate.column.clone().map(|column| vec![column]),
                 aggregations: vec![export_aggregation(&plate.aggregation)],
                 images: ImageScope::Included,
+                only_images: None,
+                group_regex: None,
                 square_size: None,
                 colors: colors(&plate.color_schema),
                 planes: Default::default(),
@@ -187,6 +189,8 @@ fn data_of_table(table: TableExport) -> DataExport {
         columns: table.columns,
         aggregations: table.aggregations,
         images: table.images,
+        only_images: table.only_images,
+        group_regex: table.group_regex,
         planes: table.planes,
         empty_classes: table.empty_classes,
         transposed: table.transposed,
@@ -222,6 +226,8 @@ fn data_of_plate(plate: PlateLayoutExport) -> DataExport {
     data.columns = plate.columns;
     data.aggregations = plate.aggregations;
     data.images = plate.images;
+    data.only_images = plate.only_images;
+    data.group_regex = plate.group_regex;
     data.planes = plate.planes;
     data.heatmap = HeatmapOptions {
         colors: plate.colors,

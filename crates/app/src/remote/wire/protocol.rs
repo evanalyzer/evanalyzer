@@ -43,7 +43,7 @@ use std::sync::Arc;
 ///   a renamed, removed or retyped variant or field. They travel as JSON, so
 ///   a new field with `#[serde(default)]` is compatible;
 /// - any type that travels as postcard - [`ResultsQuery`](crate::remote::results::ResultsQuery), [`ResultsAnswer`](crate::remote::results::ResultsAnswer)
-///   and `ResultExport` with everything in them. Postcard isn't
+///   with everything in them. Postcard isn't
 ///   self-describing: *any* change there is incompatible, and the other side
 ///   misreads it instead of failing. The test
 ///   `the_binary_wire_format_only_changes_with_the_protocol_version` (with
@@ -76,7 +76,9 @@ use std::sync::Arc;
 // 59: `ListFilter::images` / `GroupedByImageFilter::images` are an
 // `ImageSet` (all, enabled, listed, a block of enabled images) - an export
 // of all images sends no list of paths per page.
-pub const PROTOCOL_VERSION: u32 = 59;
+// 60: `ExportResults` (the old results export, a `ResultExport`) is
+// `ExportParquet` (a folder): the tables are written by `RunExport`.
+pub const PROTOCOL_VERSION: u32 = 60;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -143,9 +145,10 @@ pub(crate) enum Request {
     QueryResults {
         handle: u64,
     },
-    /// A postcard-encoded `ResultExport` follows as blob 0; progress
-    /// streams back until `ExportDone`.
-    ExportResults {
+    /// A postcard-encoded `PathBuf` (the folder to write into) follows as
+    /// blob 0: the results' raw tables as Parquet; progress streams back
+    /// until `ExportDone`.
+    ExportParquet {
         handle: u64,
     },
     /// A JSON-encoded `exports::ExportRun` follows as blob 0 (its entries
@@ -742,9 +745,6 @@ mod tests {
             .trace_simple_type::<crate::results::Column>()
             .unwrap();
         tracer
-            .trace_simple_type::<crate::results::ExportFormat>()
-            .unwrap();
-        tracer
             .trace_simple_type::<evanalyzer_cfg::core_types::ObjectClass>()
             .unwrap();
         tracer
@@ -779,9 +779,6 @@ mod tests {
             .trace_simple_type::<crate::results::ProfileLines>()
             .unwrap();
         tracer
-            .trace_simple_type::<crate::results::ProfileExportContent>()
-            .unwrap();
-        tracer
             .trace_simple_type::<crate::results::DrawStyle>()
             .unwrap();
         tracer
@@ -801,9 +798,6 @@ mod tests {
             .unwrap();
         tracer.trace_type::<ResultsQuery>(&samples).unwrap();
         tracer.trace_type::<ResultsAnswer>(&samples).unwrap();
-        tracer
-            .trace_type::<crate::results::ResultExport>(&samples)
-            .unwrap();
         let registry = tracer.registry().unwrap();
         let current = serde_json::to_string_pretty(&serde_json::json!({
             "protocol_version": PROTOCOL_VERSION,
@@ -827,8 +821,8 @@ mod tests {
             .and_then(|stored| stored["protocol_version"].as_u64());
         if stored_version == Some(u64::from(PROTOCOL_VERSION)) {
             panic!(
-                "The binary wire format changed (a type in ResultsQuery, ResultsAnswer or \
-                 ResultExport) without a new protocol version: clients and workers of \
+                "The binary wire format changed (a type in ResultsQuery or ResultsAnswer) \
+                 without a new protocol version: clients and workers of \
                  different builds would misread each other. Bump PROTOCOL_VERSION in \
                  protocol.rs, then update {} with\n  \
                  UPDATE_WIRE_FORMAT=1 cargo test -p evanalyzer_app --lib wire_format",

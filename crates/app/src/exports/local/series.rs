@@ -65,6 +65,8 @@ pub(super) struct TimeCourseRows {
     values: Vec<ValueColumn>,
     several_z: bool,
     planes: evanalyzer_cfg::settings::export_settings::Planes,
+    /// How well lines find their images' well.
+    wells: Grouping,
 }
 
 impl TimeCourseRows {
@@ -122,7 +124,7 @@ impl TimeCourseRows {
             options.relative,
         );
         Ok(Self {
-            images: scope_images(results, table.images)?,
+            images: scope_images(results, table.images, table.only_images.as_deref())?,
             classes: classes_of(table),
             statistics: pairs.iter().map(|(s, _)| *s).collect(),
             columns,
@@ -130,6 +132,7 @@ impl TimeCourseRows {
             options,
             several_z: results.get_nr_of_z_stacks() > 1,
             planes: table.planes,
+            wells: super::wells(&table.group_regex),
         })
     }
 
@@ -143,9 +146,13 @@ impl TimeCourseRows {
                 TimeCourseLineKind::Class => TimeCourseLines::Class,
                 TimeCourseLineKind::Image => TimeCourseLines::Image,
                 TimeCourseLineKind::Well => TimeCourseLines::Well,
+                TimeCourseLineKind::Folder => TimeCourseLines::Group,
                 TimeCourseLineKind::Track => TimeCourseLines::Track,
             },
-            grouping: Grouping::Auto,
+            grouping: match self.options.lines {
+                TimeCourseLineKind::Folder => Grouping::Folder,
+                _ => self.wells.clone(),
+            },
             columns: self.columns.clone(),
             statistics: self.statistics.clone(),
             normalize: if self.options.relative {
@@ -172,6 +179,7 @@ impl TimeCourseRows {
             TimeCourseLineKind::Class => vec![],
             TimeCourseLineKind::Image => vec![("image", "Image (relative path)")],
             TimeCourseLineKind::Well => vec![("well", "Well")],
+            TimeCourseLineKind::Folder => vec![("folder", "Image folder")],
             TimeCourseLineKind::Track => {
                 vec![("track_id", "Track"), ("image", "Image (relative path)")]
             }
@@ -198,7 +206,7 @@ impl TimeCourseRows {
         match self.options.lines {
             TimeCourseLineKind::Class => {}
             TimeCourseLineKind::Image => out.push(text(&point.image)),
-            TimeCourseLineKind::Well => out.push(text(&point.line)),
+            TimeCourseLineKind::Well | TimeCourseLineKind::Folder => out.push(text(&point.line)),
             TimeCourseLineKind::Track => {
                 out.push(
                     point
@@ -448,7 +456,7 @@ impl ProfileRows {
     ) -> Result<Self, InternalErrors> {
         let options = table.profile.clone().unwrap_or_default();
         Ok(Self {
-            images: scope_images(results, table.images)?,
+            images: scope_images(results, table.images, table.only_images.as_deref())?,
             classes: classes_of(table),
             key: options.key,
             lines: options.lines,

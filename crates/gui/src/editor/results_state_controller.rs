@@ -5564,12 +5564,8 @@ fn in_micrometers(sub: &str) -> (String, f64) {
     let (unit, rest) = sub
         .split_once(" · ")
         .map_or((sub, None), |(u, r)| (u, Some(r)));
-    let (unit, scale) = match unit {
-        "nm" => ("µm", 1e-3),
-        "nm²" => ("µm²", 1e-6),
-        "nm³" => ("µm³", 1e-9),
-        other => (other, 1.0),
-    };
+    // The same conversion as every export's (`results::present`).
+    let (unit, scale) = evanalyzer_app::results::present::in_micrometres(unit);
     let sub = match rest {
         Some(rest) => format!("{unit} · {rest}"),
         None => unit.to_string(),

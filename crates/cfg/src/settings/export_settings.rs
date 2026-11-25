@@ -164,6 +164,15 @@ pub struct DataExport {
     /// Which images of the run.
     #[serde(default)]
     pub images: ImageScope,
+    /// Of `images`, only these (relative paths, `/` separated); `None`:
+    /// all of them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub only_images: Option<Vec<String>>,
+    /// Where the images' wells come from (rows per well, a time course's
+    /// well lines, the tracks' well): the first capture group of this
+    /// regex on the image name; `None`: the results' plate grouping.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_regex: Option<String>,
     /// Which z-planes and time points (not for tracks and profiles).
     #[serde(default)]
     pub planes: Planes,
@@ -279,6 +288,9 @@ pub enum ExportAggregation {
     Min,
     Max,
     Skewness,
+    /// The first and third quartile - time courses and tracks only.
+    Q1,
+    Q3,
 }
 
 /// Which images of a run.
@@ -340,7 +352,10 @@ pub enum TimeCourseLineKind {
     #[default]
     Class,
     Image,
+    /// The images of a well - see [`DataExport::group_regex`].
     Well,
+    /// The images of a folder.
+    Folder,
     Track,
 }
 
@@ -638,6 +653,8 @@ mod tests {
                     columns: Some(vec!["count".into()]),
                     aggregations: vec![ExportAggregation::Median],
                     images: ImageScope::All,
+                    only_images: Some(vec!["a/b.tif".into()]),
+                    group_regex: Some("^(.+)_".into()),
                     planes: Planes::default(),
                     empty_classes: true,
                     transposed: false,

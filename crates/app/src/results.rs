@@ -16,6 +16,7 @@ mod column;
 mod folders;
 pub(crate) mod local;
 pub(crate) mod plate_grouping;
+pub mod present;
 mod source;
 mod types;
 pub mod view;

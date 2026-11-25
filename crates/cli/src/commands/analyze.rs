@@ -223,7 +223,6 @@ fn apply_progress_event(event: ProgressEvent, total: &mut usize, failed: &mut us
 mod tests {
     use super::*;
     use crate::commands::test_support::TempProjectFile;
-    use calamine::DataType as _;
     use evanalyzer_app::backend::local::LocalBackend;
     use evanalyzer_app::results::LocalResultsGenerator;
     use evanalyzer_app::results::{Cell, CellValue, Column, ListFilter, Pagination, PlaneFilter};
@@ -566,12 +565,15 @@ mod tests {
         // keyed by object id so row *order* differences between the direct
         // query and the exported files can't cause a false mismatch.
         let database = LocalResultsGenerator::open_database(evadb.clone()).expect("open evadb");
-        let expected_columns: Vec<Column> = database
+        // The list's cells come in `Column`'s order.
+        let mut expected_columns: Vec<Column> = database
             .get_available_columns()
             .expect("available columns")
             .into_iter()
             .map(|entry| entry.key)
             .collect();
+        expected_columns.sort();
+        expected_columns.dedup();
         let mut expected_by_id: std::collections::HashMap<String, Vec<String>> =
             std::collections::HashMap::new();
         for z in 0..=database.get_nr_of_z_stacks() {
@@ -605,6 +607,52 @@ mod tests {
             "thresholding the whole pixel range should have detected at least one object"
         );
 
+        // Each exported row against the ground truth, column by column by
+        // its format 1 name (lengths in µm: the stored nm times the factor).
+        let classes = database.get_object_classes().expect("classes");
+        let check = |header: &[String], rows: &[Vec<String>], format: &str| {
+            assert_eq!(header[0], "image", "{format} header: {header:?}");
+            let at = |name: &str| {
+                header
+                    .iter()
+                    .position(|h| h == name)
+                    .unwrap_or_else(|| panic!("{format}: no column {name}: {header:?}"))
+            };
+            let object_id_col = at("object_id");
+            for row in rows {
+                assert_eq!(row.len(), header.len(), "{format} row: {row:?}");
+                let id = row[object_id_col]
+                    .parse::<f64>()
+                    .map(|id| (id as i64).to_string())
+                    .unwrap_or_else(|_| row[object_id_col].clone());
+                let expected_row = expected_by_id
+                    .get(&id)
+                    .unwrap_or_else(|| panic!("{format} row for object {id} has no ground truth"));
+                for (column, expected) in expected_columns.iter().zip(expected_row) {
+                    // The count is always 1 for an object: not in its rows.
+                    if evanalyzer_app::exports::is_fixed_column(column) || *column == Column::Count
+                    {
+                        continue;
+                    }
+                    let shown = evanalyzer_app::results::present::present(
+                        column,
+                        evanalyzer_app::results::present::LengthUnit::Um,
+                        &classes,
+                    );
+                    let expected = match expected.parse::<f64>() {
+                        Ok(v) if shown.factor != 1.0 => (v * shown.factor).to_string(),
+                        _ => expected.clone(),
+                    };
+                    assert_values_match(&row[at(&shown.name)], &expected, &shown.name, format);
+                }
+            }
+            assert_eq!(
+                rows.len(),
+                expected_by_id.len(),
+                "{format}: exactly one row per detected object"
+            );
+        };
+
         let csv_out = out_dir.path().join("out.csv");
         crate::commands::export::run(
             ExportArgs {
@@ -614,6 +662,7 @@ mod tests {
                     filter: FilterArgs::default(),
                     group: GroupArgs::default(),
                     tracks: Default::default(),
+                    length_unit: Default::default(),
                     measurements: false,
                     project: None,
                     view: None,
@@ -624,40 +673,16 @@ mod tests {
         .expect("csv export should succeed");
         let csv_content = std::fs::read_to_string(&csv_out).expect("read exported csv");
         let mut csv_lines = csv_content.lines();
-        let csv_header: Vec<&str> = csv_lines
+        let csv_header: Vec<String> = csv_lines
             .next()
             .expect("csv header row")
             .split(',')
+            .map(str::to_string)
             .collect();
-        // The image first, as in the results list; then the object's id.
-        assert_eq!(csv_header[0], "Image", "header: {csv_header:?}");
-        let object_id_col = csv_header
-            .iter()
-            .position(|h| *h == "Object ID")
-            .unwrap_or_else(|| panic!("no Object ID column: {csv_header:?}"));
-
-        let mut csv_row_count = 0;
-        for line in csv_lines {
-            csv_row_count += 1;
-            let fields: Vec<&str> = line.split(',').collect();
-            assert_eq!(
-                fields.len(),
-                expected_columns.len(),
-                "csv row has a different column count than expected: {line}"
-            );
-            let id = fields[object_id_col];
-            let expected_row = expected_by_id
-                .get(id)
-                .unwrap_or_else(|| panic!("csv row for object {id} has no ground-truth match"));
-            for (col_idx, (field, expected)) in fields.iter().zip(expected_row).enumerate() {
-                assert_values_match(field, expected, &csv_header[col_idx], "csv");
-            }
-        }
-        assert_eq!(
-            csv_row_count,
-            expected_by_id.len(),
-            "csv must contain exactly one row per detected object"
-        );
+        let csv_rows: Vec<Vec<String>> = csv_lines
+            .map(|line| line.split(',').map(str::to_string).collect())
+            .collect();
+        check(&csv_header, &csv_rows, "csv");
 
         let xlsx_out = out_dir.path().join("out.xlsx");
         crate::commands::export::run(
@@ -668,6 +693,7 @@ mod tests {
                     filter: FilterArgs::default(),
                     group: GroupArgs::default(),
                     tracks: Default::default(),
+                    length_unit: Default::default(),
                     measurements: false,
                     project: None,
                     view: None,
@@ -680,44 +706,24 @@ mod tests {
         use calamine::Reader;
         let mut workbook: calamine::Xlsx<_> =
             calamine::open_workbook(&xlsx_out).expect("open exported xlsx");
-        let range = workbook.worksheet_range("List").expect("List sheet");
+        let range = workbook.worksheet_range("Table").expect("Table sheet");
+        let text = |cell: &calamine::Data| match cell {
+            calamine::Data::String(s) => s.clone(),
+            calamine::Data::Float(f) => f.to_string(),
+            calamine::Data::Int(i) => i.to_string(),
+            calamine::Data::Empty => String::new(),
+            other => panic!("unexpected xlsx cell type: {other:?}"),
+        };
         let mut rows = range.rows();
-        let xlsx_header = rows.next().expect("xlsx header row");
-        assert_eq!(
-            xlsx_header.first().and_then(|c| c.get_string()),
-            Some("Image")
-        );
-        assert_eq!(
-            xlsx_header.get(object_id_col).and_then(|c| c.get_string()),
-            Some("Object ID"),
-            "the same columns as the CSV"
-        );
-
-        let mut xlsx_row_count = 0;
-        for row in rows {
-            xlsx_row_count += 1;
-            let id = row[object_id_col]
-                .get_string()
-                .expect("object id cell should be a string");
-            let expected_row = expected_by_id
-                .get(id)
-                .unwrap_or_else(|| panic!("xlsx row for object {id} has no ground-truth match"));
-            for (col_idx, (cell, expected)) in row.iter().zip(expected_row).enumerate() {
-                let got = match cell {
-                    calamine::Data::String(s) => s.clone(),
-                    calamine::Data::Float(f) => f.to_string(),
-                    calamine::Data::Int(i) => i.to_string(),
-                    calamine::Data::Empty => String::new(),
-                    other => panic!("unexpected xlsx cell type: {other:?}"),
-                };
-                assert_values_match(&got, expected, &xlsx_header[col_idx].to_string(), "xlsx");
-            }
-        }
-        assert_eq!(
-            xlsx_row_count,
-            expected_by_id.len(),
-            "xlsx must contain exactly one row per detected object"
-        );
+        let xlsx_header: Vec<String> = rows
+            .next()
+            .expect("xlsx header row")
+            .iter()
+            .map(text)
+            .collect();
+        assert_eq!(xlsx_header, csv_header, "the same columns as the CSV");
+        let xlsx_rows: Vec<Vec<String>> = rows.map(|row| row.iter().map(text).collect()).collect();
+        check(&xlsx_header, &xlsx_rows, "xlsx");
     }
 
     /// Canonical text form of a ground-truth `Cell`, matching what CSV/XLSX

@@ -2630,7 +2630,7 @@ build of 34bb18e1, one run each).
   the 100,000 images, 234 on the real file), every XLSX sheet's content.
 - The same values as the old exporter (`ResultsSource::export`) on both
   files, compared cell by cell with the throwaway app example
-  `compare_exporters`: objects 4M + 5.5M rows, per image 2.2M + 37,212
+  `compare_exporters` (removed with the old exporter): objects 4M + 5.5M rows, per image 2.2M + 37,212
   rows - all equal.
 - Small results stay as they were (the real file's per-image tables:
   0.2-0.3 s).

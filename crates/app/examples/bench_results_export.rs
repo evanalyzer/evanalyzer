@@ -9,15 +9,16 @@
 
 // Benchmark: one export of every image of an existing `.evadb` (e.g. made
 // with core's `bench_export --images 4000 --objects-per-image 1000`) through
-// `ResultExport::start_export`, as the results window starts it. Reports
+// a project export (`ResultsSource::run_export`: OBJECTS / IMAGES / PLATE),
+// or the raw tables as Parquet (`export_parquet`). Reports
 // wall time and peak RSS - one export per process, so the peak is its own.
 //
 // Usage: cargo run --release -p evanalyzer_app --example bench_results_export -- \
-//     <path.evadb> <out dir> --mode list_csv|list_xlsx|grouped_xlsx|grouped_csv
+//     <path.evadb> <out dir> --mode list_csv|list_xlsx|grouped_xlsx|grouped_csv|plate|parquet
 
-use evanalyzer_app::results::{
-    Aggregation, Column, ExportFormat, LocalResultsGenerator, ResultExport,
-};
+use evanalyzer_app::backend::Backend;
+use evanalyzer_app::backend::local::LocalBackend;
+use evanalyzer_app::exports::{ExportRun, ScriptPermission};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
@@ -50,35 +51,53 @@ fn main() {
     let _ = std::fs::remove_dir_all(&out);
     std::fs::create_dir_all(&out).unwrap();
 
-    let database = LocalResultsGenerator::open_database(db).expect("open database");
-    let (format, list, grouped) = match mode.as_str() {
-        "list_csv" => (ExportFormat::CSV, true, false),
-        "list_xlsx" => (ExportFormat::XLSX, true, false),
-        "grouped_csv" => (ExportFormat::CSV, false, true),
-        "grouped_xlsx" => (ExportFormat::XLSX, false, true),
-        // The whole objects table as Parquet (DuckDB's parquet extension).
-        "parquet" => (ExportFormat::Parquet, false, false),
+    let results = LocalBackend::default()
+        .open_results(&db)
+        .expect("open results");
+    let (output, format) = match mode.as_str() {
+        "list_csv" => ("OBJECTS", "CSV"),
+        "list_xlsx" => ("OBJECTS", "XLSX"),
+        "grouped_csv" => ("IMAGES", "CSV"),
+        "grouped_xlsx" => ("IMAGES", "XLSX"),
+        "plate" => ("PLATE", "XLSX"),
+        "parquet" => ("", ""),
         other => panic!("unknown mode {other}"),
-    };
-    let export = ResultExport {
-        output_dir: out.clone(),
-        format,
-        columns: vec![
-            Column::Count,
-            Column::AreaSizePx,
-            Column::IntensityAvg(0),
-            Column::Circularity,
-        ],
-        aggregations: vec![Aggregation::Avg, Aggregation::Median],
-        with_list_view: list,
-        with_list_one_file_per_image: false,
-        with_grouped_by_image_list: grouped,
-        ..Default::default()
     };
     let cancel = AtomicBool::new(false);
     let start = Instant::now();
     let mut steps = 0usize;
-    let result = export.start_export(&database, &cancel, &mut |_msg, _cur, _total| steps += 1);
+    let result = if output.is_empty() {
+        // The whole objects table as Parquet (DuckDB's parquet extension).
+        results.export_parquet(&out, &cancel, &mut |_, _, _| steps += 1)
+    } else {
+        let export = serde_json::from_value(serde_json::json!({
+            "id": 1, "name": "bench", "entries": [{ "kind": "DATA", "outputs": [output],
+                "format": format, "images": "INCLUDED",
+                "columns": ["count", "area_px", "intensity_mean_gray_ch0", "circularity"],
+                "aggregations": ["AVG", "MEDIAN"] }]
+        }))
+        .expect("an export");
+        results
+            .run_export(
+                &ExportRun {
+                    export,
+                    project_dir: out.clone(),
+                    results_dir: out.clone(),
+                    output: Some(out.clone()),
+                    scripts: ScriptPermission::Skip,
+                    interpreters: Default::default(),
+                    drawing: None,
+                },
+                &cancel,
+                &mut |_, _, _| steps += 1,
+            )
+            .and_then(|report| match report.all_written() {
+                true => Ok(()),
+                false => Err(evanalyzer_cfg::core_types::InternalErrors::Internal(
+                    format!("{report:?}"),
+                )),
+            })
+    };
     let size: u64 = std::fs::read_dir(&out)
         .unwrap()
         .flatten()

@@ -836,6 +836,13 @@
           "$ref": "#/$defs/TableFileFormat",
           "default": "CSV"
         },
+        "groupRegex": {
+          "description": "Where the images' wells come from (rows per well, a time course's\nwell lines, the tracks' well): the first capture group of this\nregex on the image name; `None`: the results' plate grouping.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "heatmap": {
           "description": "The heatmaps' colours and the image heatmap's squares.",
           "$ref": "#/$defs/HeatmapOptions",
@@ -853,6 +860,16 @@
           "description": "A name part in front of the files' automatic names\n(`ctrl_objects.csv`); `\"\"`: the automatic names alone.",
           "type": "string",
           "default": ""
+        },
+        "onlyImages": {
+          "description": "Of `images`, only these (relative paths, `/` separated); `None`:\nall of them.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
         },
         "outputs": {
           "description": "What it writes - at least one.",
@@ -1281,15 +1298,25 @@
     },
     "ExportAggregation": {
       "description": "How grouped rows sum up their objects' values.",
-      "type": "string",
-      "enum": [
-        "AVG",
-        "MEDIAN",
-        "STDDEV",
-        "SUM",
-        "MIN",
-        "MAX",
-        "SKEWNESS"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "AVG",
+            "MEDIAN",
+            "STDDEV",
+            "SUM",
+            "MIN",
+            "MAX",
+            "SKEWNESS",
+            "Q3"
+          ]
+        },
+        {
+          "description": "The first and third quartile - time courses and tracks only.",
+          "type": "string",
+          "const": "Q1"
+        }
       ]
     },
     "ExportEntry": {
@@ -7816,7 +7843,6 @@
           "type": "string",
           "enum": [
             "IMAGE",
-            "WELL",
             "TRACK"
           ]
         },
@@ -7824,6 +7850,16 @@
           "description": "The objects of a class.",
           "type": "string",
           "const": "CLASS"
+        },
+        {
+          "description": "The images of a well - see [`DataExport::group_regex`].",
+          "type": "string",
+          "const": "WELL"
+        },
+        {
+          "description": "The images of a folder.",
+          "type": "string",
+          "const": "FOLDER"
         }
       ]
     },

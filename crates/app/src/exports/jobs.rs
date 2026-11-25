@@ -71,6 +71,8 @@ fn job_of(data: &DataExport, output: DataOutput) -> Job {
             columns: data.columns.clone(),
             aggregations: data.aggregations.clone(),
             images: data.images,
+            only_images: data.only_images.clone(),
+            group_regex: data.group_regex.clone(),
             empty_classes: data.empty_classes
                 && matches!(rows, TableRows::Image | TableRows::Well | TableRows::Folder),
             transposed: data.transposed
@@ -120,6 +122,8 @@ fn job_of(data: &DataExport, output: DataOutput) -> Job {
         columns: data.columns.clone(),
         aggregations: data.aggregations.clone(),
         images: data.images,
+        only_images: data.only_images.clone(),
+        group_regex: data.group_regex.clone(),
         square_size: data.heatmap.square_size,
         colors: data.heatmap.colors,
         planes: data.planes,
@@ -152,6 +156,13 @@ pub struct TableExport {
     /// Which images of the run.
     #[serde(default)]
     pub images: ImageScope,
+    /// Of `images`, only these (relative paths); `None`: all of them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub only_images: Option<Vec<String>>,
+    /// The wells by this regex's first capture group on the image name;
+    /// `None`: the results' plate grouping.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_regex: Option<String>,
     /// Grouped rows: a row also for classes without objects.
     #[serde(default)]
     pub empty_classes: bool,
@@ -239,6 +250,13 @@ pub struct PlateLayoutExport {
     pub aggregations: Vec<ExportAggregation>,
     #[serde(default)]
     pub images: ImageScope,
+    /// Of `images`, only these (relative paths); `None`: all of them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub only_images: Option<Vec<String>>,
+    /// The wells by this regex's first capture group on the image name;
+    /// `None`: the results' plate grouping.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_regex: Option<String>,
     /// `grid: Image`: the side of a square in pixels (`None`: 64).
     #[serde(default)]
     pub square_size: Option<u32>,

@@ -12,7 +12,9 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+mod drawn_images;
 mod measurements;
+mod plate;
 mod reused;
 mod script;
 mod series;
@@ -26,7 +28,9 @@ use crate::backend::ExportProgressFn;
 use crate::modules::Severity;
 use crate::results::ResultsSource;
 use evanalyzer_cfg::core_types::InternalErrors;
-use evanalyzer_cfg::settings::export_settings::{ExportEntry, IfExists, OutputLocation, PlaneRange};
+use evanalyzer_cfg::settings::export_settings::{
+    ExportEntry, IfExists, OutputLocation, PlaneRange,
+};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -234,6 +238,15 @@ pub(crate) fn in_planes(
         range.is_none_or(|range| range.from <= value && value <= range.to)
     };
     within(planes.z, z) && within(planes.t, t)
+}
+
+/// How the images' wells are found: by `group_regex`'s first capture
+/// group where given, else as the results group them.
+pub(crate) fn wells(group_regex: &Option<String>) -> crate::results::Grouping {
+    match group_regex {
+        Some(regex) if !regex.is_empty() => crate::results::Grouping::Regex(regex.clone()),
+        _ => crate::results::Grouping::Auto,
+    }
 }
 
 /// `planes`' range of `axis` as the results' export takes it (end

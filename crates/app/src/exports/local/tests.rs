@@ -91,13 +91,16 @@ fn image_rows_aggregate_and_count_once() {
     let report = run(&results, &run_);
     assert!(report.all_written(), "{report:?}");
     let lines = lines(&dir.path().join("images.csv"));
-    assert_eq!(lines[0], "image,class,count,area_px_avg,area_px_max");
+    assert_eq!(
+        lines[0],
+        "image,class,count,area_px_avg,area_px_max,marker,note"
+    );
     assert!(
-        lines.contains(&"A1/img.tif,Nucleus,2,200,300".to_string()),
+        lines.contains(&"A1/img.tif,Nucleus,2,200,300,,".to_string()),
         "{lines:?}"
     );
     assert!(
-        lines.contains(&"B1/img.tif,Nucleus,1,200,200".to_string()),
+        lines.contains(&"B1/img.tif,Nucleus,1,200,200,,".to_string()),
         "{lines:?}"
     );
     assert_eq!(lines.len(), 3, "only the asked-for class: {lines:?}");
@@ -126,19 +129,19 @@ fn transposed_image_rows_have_a_column_per_value_and_class() {
     assert_eq!(
         lines[0],
         "image,count_nucleus,area_px_avg_nucleus,area_px_max_nucleus,\
-         count_spot,area_px_avg_spot,area_px_max_spot"
+         count_spot,area_px_avg_spot,area_px_max_spot,marker,note"
     );
     assert_eq!(lines.len(), 4, "a row per image: {lines:?}");
     assert!(
-        lines.contains(&"A1/img.tif,2,200,300,1,5,5".to_string()),
+        lines.contains(&"A1/img.tif,2,200,300,1,5,5,,".to_string()),
         "{lines:?}"
     );
     assert!(
-        lines.contains(&"B1/img.tif,1,200,200,0,,".to_string()),
+        lines.contains(&"B1/img.tif,1,200,200,0,,,,".to_string()),
         "{lines:?}"
     );
     assert!(
-        lines.contains(&"other.tif,0,,,1,7,7".to_string()),
+        lines.contains(&"other.tif,0,,,1,7,7,,".to_string()),
         "{lines:?}"
     );
 }
@@ -218,9 +221,9 @@ fn transposed_without_classes_picked_matches_the_query() {
     assert_eq!(
         images[0],
         "image,count_nucleus,area_px_avg_nucleus,count_spot,area_px_avg_spot,\
-         count_cell,area_px_avg_cell"
+         count_cell,area_px_avg_cell,marker,note"
     );
-    assert_eq!(images[1], "A1/img.tif,1,100,1,5,0,");
+    assert_eq!(images[1], "A1/img.tif,1,100,1,5,0,,,");
     let objects = lines(&dir.path().join("objects.csv"));
     assert_eq!(
         objects[0],
@@ -1168,7 +1171,7 @@ fn a_data_export_writes_each_output_with_one_filter() {
         "class 1 only: {objects:?}"
     );
     let images = lines(&dir.path().join("ctrl_images.csv"));
-    assert_eq!(images[0], "image,class,area_px_avg");
+    assert_eq!(images[0], "image,class,area_px_avg,marker,note");
 }
 
 /// An output that fails fails alone: the others are written, the entry
@@ -1200,4 +1203,48 @@ fn a_failing_output_leaves_the_others_written() {
             .any(|n| n.starts_with("images: ") && n.contains("no_such_column")),
         "{entry:?}"
     );
+}
+
+/// Rows per image end with the image's marker and note - empty where an
+/// image has none; objects and wells have neither.
+#[test]
+fn image_rows_have_the_marker_and_note() {
+    let dir = tempfile::tempdir().unwrap();
+    let results = results(dir.path());
+    use crate::results::ResultsSource;
+    results
+        .change_image_review(
+            "A1/img.tif",
+            crate::results::ImageReviewChange::Note("check focus, row 2".into()),
+        )
+        .unwrap();
+    results
+        .change_image_review(
+            "A1/img.tif",
+            crate::results::ImageReviewChange::Marker(Some(
+                evanalyzer_cfg::settings::images_settings::ImageMarker::Red,
+            )),
+        )
+        .unwrap();
+    let run_ = run_of(
+        dir.path(),
+        json!({ "id": 1, "name": "Reviewed", "entries": [
+            { "kind": "DATA", "outputs": ["IMAGES", "OBJECTS", "WELLS"], "columns": ["count"],
+              "classes": [1], "images": "ALL" }
+        ]}),
+    );
+    let report = run(&results, &run_);
+    assert!(report.all_written(), "{report:?}");
+    let images = lines(&dir.path().join("images.csv"));
+    assert_eq!(images[0], "image,class,count,marker,note");
+    assert!(
+        images.contains(&"A1/img.tif,Nucleus,2,red,\"check focus, row 2\"".to_string()),
+        "{images:?}"
+    );
+    assert!(
+        images.contains(&"B1/img.tif,Nucleus,1,,".to_string()),
+        "{images:?}"
+    );
+    assert!(!lines(&dir.path().join("objects.csv"))[0].contains("marker"));
+    assert!(!lines(&dir.path().join("wells.csv"))[0].contains("marker"));
 }

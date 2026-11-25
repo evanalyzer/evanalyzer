@@ -16,7 +16,6 @@ use crate::backend::ExportProgressFn;
 use crate::remote::results::{ResultsAnswer, ResultsQuery};
 use crate::remote::wire::frame::Frame;
 use crate::remote::wire::protocol::{ClientMsg, Reply, Request, from_postcard, to_postcard};
-use crate::results::ResultExport;
 use evanalyzer_cfg::core_types::InternalErrors;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -81,17 +80,18 @@ impl RemoteResults {
         }
     }
 
-    /// `ResultsSource::export`: the worker writes the files and streams its
-    /// progress; `cancel` stops it.
-    pub(in crate::remote) fn export_results(
+    /// `ResultsSource::export_parquet`: the worker writes the files and
+    /// streams its progress; `cancel` stops it.
+    pub(in crate::remote) fn export_parquet_remote(
         &self,
-        export: &ResultExport,
+        out_dir: &std::path::Path,
         cancel: &AtomicBool,
         on_progress: ExportProgressFn,
     ) -> Result<(), InternalErrors> {
         let (session, handle) = self.session()?;
-        let request = Request::ExportResults { handle };
-        let (id, rx) = session.request_with_blobs(request, vec![to_postcard(export)?])?;
+        let request = Request::ExportParquet { handle };
+        let (id, rx) =
+            session.request_with_blobs(request, vec![to_postcard(&out_dir.to_path_buf())?])?;
         let mut cancel_sent = false;
         let result = loop {
             if !cancel_sent && cancel.load(std::sync::atomic::Ordering::SeqCst) {
@@ -606,11 +606,8 @@ mod tests {
         };
         lost(remote_db.get_images().map(drop));
         lost(remote_db.run_status().map(drop));
-        lost(remote_db.export(
-            &ResultExport {
-                output_dir: dir.path().join("export"),
-                ..Default::default()
-            },
+        lost(remote_db.export_parquet(
+            &dir.path().join("export"),
             &AtomicBool::new(false),
             &mut |_, _, _| {},
         ));
@@ -773,14 +770,14 @@ mod tests {
         fn image_tracks(&self, _: &ImageTracksFilter) -> Result<ImageTracks, InternalErrors> {
             Err(broken("image tracks"))
         }
-        fn export(
+        fn export_parquet(
             &self,
-            export: &ResultExport,
+            out_dir: &Path,
             cancel: &AtomicBool,
             on_progress: ExportProgressFn,
         ) -> Result<(), InternalErrors> {
             on_progress("halfway", 1, 2);
-            if export.output_dir != Path::new(WAIT_FOR_CANCEL) {
+            if out_dir != Path::new(WAIT_FOR_CANCEL) {
                 return Err(broken("export"));
             }
             let deadline = Instant::now() + Duration::from_secs(10);
@@ -1028,8 +1025,8 @@ mod tests {
         let db = remote.open_results(Path::new("/data/any.evadb")).unwrap();
         let mut progress = Vec::new();
 
-        let result = db.export(
-            &ResultExport::default(),
+        let result = db.export_parquet(
+            Path::new("/data/out"),
             &AtomicBool::new(false),
             &mut |message, current, total| progress.push((message.to_string(), current, total)),
         );
@@ -1044,14 +1041,7 @@ mod tests {
         cancel: &AtomicBool,
         on_progress: ExportProgressFn,
     ) -> Result<(), InternalErrors> {
-        db.export(
-            &ResultExport {
-                output_dir: PathBuf::from(WAIT_FOR_CANCEL),
-                ..Default::default()
-            },
-            cancel,
-            on_progress,
-        )
+        db.export_parquet(Path::new(WAIT_FOR_CANCEL), cancel, on_progress)
     }
 
     #[test]
@@ -1167,7 +1157,7 @@ mod tests {
                                 };
                                 (Reply::ResultsAnswer, vec![to_postcard(&wrong).unwrap()])
                             }
-                            (Request::ExportResults { .. }, Odd::WrongReply) => (
+                            (Request::ExportParquet { .. }, Odd::WrongReply) => (
                                 Reply::Failed(WireError::message("no space left")),
                                 Vec::new(),
                             ),
@@ -1296,8 +1286,8 @@ mod tests {
         assert_eq!(db.get_nr_of_z_stacks(), 1);
         assert_eq!(db.get_nr_of_t_stacks(), 1);
         unexpected(
-            db.export(
-                &ResultExport::default(),
+            db.export_parquet(
+                Path::new("/data/out"),
                 &AtomicBool::new(false),
                 &mut |_, _, _| {},
             ),
@@ -1315,8 +1305,8 @@ mod tests {
         unexpected(db.get_images(), "images");
         unexpected(db.enable_image("a.tif", true), "enable image");
         assert_eq!(db.get_nr_of_z_stacks(), 1, "a failed count falls back");
-        let result = db.export(
-            &ResultExport::default(),
+        let result = db.export_parquet(
+            Path::new("/data/out"),
             &AtomicBool::new(false),
             &mut |_, _, _| {},
         );

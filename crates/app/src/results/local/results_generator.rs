@@ -52,10 +52,12 @@ pub struct ResultsGenerator {
 }
 
 mod columns;
+mod drawing;
 mod grouped;
 mod images;
 mod list;
 mod measurement_rows;
+mod parquet;
 mod plate;
 mod sql;
 #[cfg(test)]

@@ -203,7 +203,9 @@ pub const NEEDS_NEWER: &str = "needs a newer version of EVAnalyzer";
 
 /// The `kind` of an entry this version can't read - one a newer version
 /// wrote (`None`: it reads). `""`: it has none.
-pub fn unknown_kind(entry: &evanalyzer_cfg::settings::export_settings::ExportEntry) -> Option<&str> {
+pub fn unknown_kind(
+    entry: &evanalyzer_cfg::settings::export_settings::ExportEntry,
+) -> Option<&str> {
     match entry {
         evanalyzer_cfg::settings::export_settings::ExportEntry::Unknown(raw) => {
             Some(raw.get("kind").and_then(|kind| kind.as_str()).unwrap_or(""))

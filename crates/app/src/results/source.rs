@@ -13,8 +13,8 @@
 use super::{
     BoxplotFilter, BoxplotResult, ColumnEntry, DatabaseResult, GroupedByImageFilter,
     HistogramFilter, HistogramResult, ImageEntry, ImageHeatmapFilter, ImageReviewChange,
-    ListFilter, PlateFilter, ResultExport, RunStatus, ScatterFilter, ScatterResult,
-    TimeCourseFilter, TimeCourseResult, View, WellFilter,
+    ListFilter, PlateFilter, RunStatus, ScatterFilter, ScatterResult, TimeCourseFilter,
+    TimeCourseResult, View, WellFilter,
 };
 use crate::backend::ExportProgressFn;
 use evanalyzer_cfg::core_types::InternalErrors;
@@ -156,14 +156,50 @@ pub trait ResultsSource: Send + Sync {
         &self,
         filter: &crate::results::ImageTracksFilter,
     ) -> Result<crate::results::ImageTracks, InternalErrors>;
-    /// Writes the export's files into `export.output_dir` (on the backend's
-    /// machine). Blocks; stops early with `Cancelled` once `cancel` is set.
-    fn export(
+    /// Writes the raw tables as Parquet files into `out_dir` (on the
+    /// backend's machine - see `ResultsGenerator::export_parquet`). Blocks;
+    /// stops early with `Cancelled` once `cancel` is set.
+    fn export_parquet(
         &self,
-        export: &ResultExport,
+        out_dir: &std::path::Path,
         cancel: &AtomicBool,
         on_progress: ExportProgressFn,
     ) -> Result<(), InternalErrors>;
+    // -- Only where the results are: what an export (which always runs
+    // there, see `run_export`) needs beyond the views' queries --
+
+    /// The plate's wells for several (class, column) combinations at once.
+    fn get_group_by_plate_multi(
+        &self,
+        _filter: &super::PlateFilterMulti,
+        _view: &View,
+    ) -> Result<Vec<DatabaseResult>, InternalErrors> {
+        Err(only_where_the_results_are())
+    }
+    /// Every well's fields for several (class, column) combinations at once.
+    fn get_wells_for_plate_multi(
+        &self,
+        _filter: &super::WellsBatchFilterMulti,
+        _view: &View,
+    ) -> Result<Vec<std::collections::HashMap<String, DatabaseResult>>, InternalErrors> {
+        Err(only_where_the_results_are())
+    }
+    /// The planes `(z, t)` an image's analysis ran on (see
+    /// `ResultsGenerator::analysed_planes`).
+    fn analysed_planes(&self, _rel_path: &str) -> Result<Vec<(u32, u32)>, InternalErrors> {
+        Err(only_where_the_results_are())
+    }
+    /// Each object of an image's plane, one at a time, for its picture.
+    fn for_each_drawn_object(
+        &self,
+        _rel_path: &str,
+        _plane: (u32, u32),
+        _wanted: Option<&[u32]>,
+        _each: &mut dyn FnMut(super::DrawnObject) -> Result<(), InternalErrors>,
+    ) -> Result<(), InternalErrors> {
+        Err(only_where_the_results_are())
+    }
+
     /// Runs a project's export on these results (on the backend's
     /// machine, next to them - see `crate::exports`). Blocks; stops early
     /// with `Cancelled` once `cancel` is set.
@@ -177,4 +213,10 @@ pub trait ResultsSource: Send + Sync {
             "exports can't run on these results here yet".into(),
         ))
     }
+}
+
+/// A query only the results themselves answer (an export's, which runs
+/// where they are) asked of results elsewhere.
+fn only_where_the_results_are() -> InternalErrors {
+    InternalErrors::Internal("this runs only where the results are".into())
 }

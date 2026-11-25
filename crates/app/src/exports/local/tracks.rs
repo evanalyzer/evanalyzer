@@ -18,8 +18,8 @@ use super::table::{Out, Part, Rows, Sink, column_name, scope_images, unit_label}
 use crate::exports::jobs::TableExport;
 use crate::results::view_settings::resolve_columns;
 use crate::results::{
-    Column, Grouping, MotionKind, ResultsSource, SpeedUnit, TimeCourseStat, TrackMotion,
-    TrackSummary, TrackSummaryFilter,
+    Column, MotionKind, ResultsSource, SpeedUnit, TimeCourseStat, TrackMotion, TrackSummary,
+    TrackSummaryFilter,
 };
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use evanalyzer_cfg::settings::export_settings::{
@@ -52,7 +52,7 @@ impl TrackRows {
         table: &TableExport,
         notes: &mut Vec<String>,
     ) -> Result<Self, InternalErrors> {
-        let images = scope_images(results, table.images)?;
+        let images = scope_images(results, table.images, table.only_images.as_deref())?;
         let classes: Option<Vec<ObjectClass>> = table
             .classes
             .as_ref()
@@ -96,7 +96,7 @@ impl TrackRows {
             ..TrackOptions::default()
         });
         let tracks = results.track_summary(&TrackSummaryFilter {
-            grouping: Grouping::Auto,
+            grouping: super::wells(&table.group_regex),
             columns: columns.clone(),
             statistics: statistics.iter().map(|(stat, _)| *stat).collect(),
             images: Some(images.clone()),
@@ -369,6 +369,8 @@ pub(super) fn statistic(aggregation: ExportAggregation) -> Option<TimeCourseStat
         ExportAggregation::Sum => TimeCourseStat::Sum,
         ExportAggregation::Min => TimeCourseStat::Min,
         ExportAggregation::Max => TimeCourseStat::Max,
+        ExportAggregation::Q1 => TimeCourseStat::Q1,
+        ExportAggregation::Q3 => TimeCourseStat::Q3,
         ExportAggregation::Skewness => return None,
     })
 }
@@ -382,5 +384,7 @@ pub(super) fn suffix(aggregation: ExportAggregation) -> &'static str {
         ExportAggregation::Min => "min",
         ExportAggregation::Max => "max",
         ExportAggregation::Skewness => "skewness",
+        ExportAggregation::Q1 => "q1",
+        ExportAggregation::Q3 => "q3",
     }
 }

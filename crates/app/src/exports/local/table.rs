@@ -19,9 +19,8 @@ use crate::exports::naming;
 use crate::exports::types::EntryReport;
 use crate::results::view_settings::resolve_columns;
 use crate::results::{
-    Aggregation, Cell, CellValue, ChildValue, Column, GroupedByImageFilter, Grouping, ImageSet,
-    ListFilter,
-    Pagination, ParentValue, PlaneFilter, ResultsSource,
+    Aggregation, Cell, CellValue, Column, GroupedByImageFilter, Grouping, ImageSet, ListFilter,
+    Pagination, PlaneFilter, ResultsSource,
 };
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use evanalyzer_cfg::settings::classification_settings::Class;
@@ -31,7 +30,7 @@ use evanalyzer_cfg::settings::export_settings::{
     TableSplit,
 };
 use rust_xlsxwriter::{Workbook, Worksheet};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -224,7 +223,7 @@ fn parts(
         TableSplit::Well => {
             // The well as the results group their images: the grouping's
             // pattern on the image's name (its first capture group).
-            let pattern = results.grouping_regex(&Grouping::Auto)?;
+            let pattern = results.grouping_regex(&super::wells(&table.group_regex))?;
             let regex = regex::Regex::new(&pattern).map_err(|e| {
                 InternalErrors::Internal(format!("the well pattern “{pattern}” doesn't work: {e}"))
             })?;
@@ -266,6 +265,10 @@ struct Plan {
     /// Which images `images` are: all of a scope are asked for by a
     /// condition, never by a list of every path with each page.
     scope: ImageScope,
+    /// How a row per well finds its images' well.
+    wells: Grouping,
+    /// Only some images of the scope (`only_images`): read by their list.
+    listed: bool,
     planes: Vec<PlaneFilter>,
     several_z: bool,
     several_t: bool,
@@ -276,6 +279,10 @@ struct Plan {
     /// Object rows with their track (`track_id` ticked): a `track_id`
     /// column after `object_id`.
     track_id: bool,
+    /// Rows per image end with the image's marker and note (by relative
+    /// path, `/` separated) - only images that have one; `None`: not rows
+    /// per image.
+    reviews: Option<HashMap<String, (String, String)>>,
     /// Per class id its name part for the transposed column names.
     class_parts: BTreeMap<u32, String>,
 }
@@ -326,7 +333,7 @@ impl Plan {
             let child_aggregations: Vec<Aggregation> = table
                 .child_aggregations
                 .iter()
-                .map(|a| aggregation(*a))
+                .filter_map(|a| aggregation(*a))
                 .collect();
             let parents: Vec<ObjectClass> = table
                 .parents
@@ -349,7 +356,7 @@ impl Plan {
         values.sort();
         values.dedup();
 
-        let images = scope_images(results, table.images)?;
+        let images = scope_images(results, table.images, table.only_images.as_deref())?;
         let mut planes = results.get_planes()?;
         planes.retain(|p| super::in_planes(&table.planes, p.z_stack, p.t_stack));
         if planes.is_empty() && table.planes == Default::default() {
@@ -362,13 +369,19 @@ impl Plan {
             rows: table.rows,
             unit: export.length_unit,
             values,
-            aggregations: table.aggregations.iter().map(|a| aggregation(*a)).collect(),
+            aggregations: table
+                .aggregations
+                .iter()
+                .filter_map(|a| aggregation(*a))
+                .collect(),
             classes: table
                 .classes
                 .as_ref()
                 .map(|ids| ids.iter().map(|id| ObjectClass::Global(*id)).collect()),
             images,
             scope: table.images,
+            listed: table.only_images.is_some(),
+            wells: super::wells(&table.group_regex),
             planes,
             several_z: results.get_nr_of_z_stacks() > 1,
             several_t: results.get_nr_of_t_stacks() > 1,
@@ -379,6 +392,25 @@ impl Plan {
                     TableRows::Object | TableRows::Image | TableRows::Well | TableRows::Folder
                 ),
             track_id,
+            reviews: match table.rows {
+                TableRows::Image => Some(
+                    results
+                        .get_images()?
+                        .into_iter()
+                        .filter(|image| image.marker.is_some() || !image.note.is_empty())
+                        .map(|image| {
+                            (
+                                image.rel_path.to_string_lossy().replace('\\', "/"),
+                                (
+                                    image.marker.map_or("", |m| m.name()).to_string(),
+                                    image.note,
+                                ),
+                            )
+                        })
+                        .collect(),
+                ),
+                _ => None,
+            },
             class_parts: naming::unique_parts(
                 &db_classes
                     .iter()
@@ -521,7 +553,7 @@ impl Plan {
     /// images by block, each read whole: a cursor over the rows would
     /// aggregate every object after it again with each page.
     fn units(&self, part: &Part) -> Vec<(ImageSet, i32)> {
-        let whole = part.images.len() == self.images.len();
+        let whole = !self.listed && part.images.len() == self.images.len();
         if self.rows != TableRows::Image {
             let images = match (whole, self.scope) {
                 (true, ImageScope::All) => ImageSet::All,
@@ -553,6 +585,33 @@ impl Plan {
             .collect()
     }
 
+    /// The columns a row per image ends with: its marker and note.
+    fn review_header(&self) -> Vec<String> {
+        match self.reviews {
+            Some(_) => vec!["marker".into(), "note".into()],
+            None => Vec::new(),
+        }
+    }
+
+    /// The marker and note of the image at `rel_path` at the end of `line`
+    /// (empty without) - rows per image only.
+    fn push_review(&self, rel_path: &str, line: &mut Vec<Out>) {
+        let Some(reviews) = &self.reviews else {
+            return;
+        };
+        let text = |text: &str| match text {
+            "" => Out::Empty,
+            text => Out::Text(text.to_string()),
+        };
+        match reviews.get(rel_path) {
+            Some((marker, note)) => {
+                line.push(text(marker));
+                line.push(text(note));
+            }
+            None => line.extend([Out::Empty, Out::Empty]),
+        }
+    }
+
     /// [`Plan::write_part`] with the classes side by side.
     fn write_part_transposed(
         &self,
@@ -567,6 +626,7 @@ impl Plan {
             .transposed_leading_header()
             .into_iter()
             .chain(placed.iter().map(|p| p.column.name.clone()))
+            .chain(self.review_header())
             .map(Out::Text)
             .collect();
         sink.row(&header)?;
@@ -596,10 +656,7 @@ impl Plan {
                         object_classes: classes.clone(),
                         columns: self.values.clone(),
                         aggregation: self.aggregations.clone(),
-                        page: Pagination {
-                            limit,
-                            after,
-                        },
+                        page: Pagination { limit, after },
                         transpond_table: true,
                         grouping: self.grouping(),
                         empty_classes: true,
@@ -613,10 +670,7 @@ impl Plan {
                         columns: self.list_columns(),
                         with_coloc_details: false,
                         related_to: None,
-                        page: Pagination {
-                            limit,
-                            after,
-                        },
+                        page: Pagination { limit, after },
                         transpond_table: true,
                         sort: None,
                     })?
@@ -652,6 +706,9 @@ impl Plan {
                                 .map_or(Out::Empty, |cell| value(cell, p.column.factor)),
                         );
                     }
+                    if let Some((path, _)) = page.row_locations.get(i) {
+                        self.push_review(&path.replace('\\', "/"), &mut line);
+                    }
                     sink.row(&line)?;
                 }
                 if page.source_object_count < limit as usize {
@@ -669,7 +726,7 @@ impl Plan {
     /// How well and folder rows are grouped (none for the others).
     fn grouping(&self) -> Option<Grouping> {
         match self.rows {
-            TableRows::Well => Some(Grouping::Auto),
+            TableRows::Well => Some(self.wells.clone()),
             TableRows::Folder => Some(Grouping::Folder),
             _ => None,
         }
@@ -763,6 +820,7 @@ impl Plan {
             .leading_header()
             .into_iter()
             .chain(values.iter().filter(|v| v.keep).map(|v| v.name.clone()))
+            .chain(self.review_header())
             .map(Out::Text)
             .collect();
         sink.row(&header)?;
@@ -791,10 +849,7 @@ impl Plan {
                         object_classes: part.classes.clone(),
                         columns: self.values.clone(),
                         aggregation: self.aggregations.clone(),
-                        page: Pagination {
-                            limit,
-                            after,
-                        },
+                        page: Pagination { limit, after },
                         transpond_table: false,
                         grouping: self.grouping(),
                         empty_classes: self.empty_classes,
@@ -808,10 +863,7 @@ impl Plan {
                         columns: self.list_columns(),
                         with_coloc_details: self.rows == TableRows::ColocPair,
                         related_to: None,
-                        page: Pagination {
-                            limit,
-                            after,
-                        },
+                        page: Pagination { limit, after },
                         transpond_table: false,
                         sort: None,
                     })?
@@ -830,6 +882,12 @@ impl Plan {
                     // Coloc details: the partners' values after the columns.
                     for cell in row.iter().skip(layout.extras_from) {
                         line.push(value(cell, 1.0));
+                    }
+                    if self.reviews.is_some()
+                        && let Some(Out::Text(path)) = line.first()
+                    {
+                        let path = path.clone();
+                        self.push_review(&path, &mut line);
                     }
                     sink.row(&line)?;
                 }
@@ -958,10 +1016,17 @@ impl Plan {
                 let column = placed.column;
                 rows.push([column.name, column.label, column.unit]);
             }
-            return rows;
+        } else {
+            for column in self.value_columns().into_iter().filter(|v| v.keep) {
+                rows.push([column.name, column.label, column.unit]);
+            }
         }
-        for column in self.value_columns().into_iter().filter(|v| v.keep) {
-            rows.push([column.name, column.label, column.unit]);
+        for name in self.review_header() {
+            let label = match name.as_str() {
+                "marker" => "The image's marker (colour)",
+                _ => "The image's note",
+            };
+            rows.push([name, label.to_string(), String::new()]);
         }
         rows
     }
@@ -996,8 +1061,10 @@ pub(crate) fn is_leading(column: &Column) -> bool {
     )
 }
 
-fn aggregation(aggregation: ExportAggregation) -> Aggregation {
-    match aggregation {
+/// How grouped rows (per image, well, folder; heatmap cells) sum up with
+/// `aggregation` - none for the quartiles (time courses and tracks only).
+pub(super) fn aggregation(aggregation: ExportAggregation) -> Option<Aggregation> {
+    Some(match aggregation {
         ExportAggregation::Avg => Aggregation::Avg,
         ExportAggregation::Median => Aggregation::Median,
         ExportAggregation::Stddev => Aggregation::Stddev,
@@ -1005,7 +1072,8 @@ fn aggregation(aggregation: ExportAggregation) -> Aggregation {
         ExportAggregation::Min => Aggregation::Min,
         ExportAggregation::Max => Aggregation::Max,
         ExportAggregation::Skewness => Aggregation::Skewness,
-    }
+        ExportAggregation::Q1 | ExportAggregation::Q3 => return None,
+    })
 }
 
 fn aggregation_suffix(aggregation: &Aggregation) -> &'static str {
@@ -1020,86 +1088,17 @@ fn aggregation_suffix(aggregation: &Aggregation) -> &'static str {
     }
 }
 
-/// What kind of length a column holds (also through a child's or parent's
-/// value) - the results store them in nm.
-#[derive(Clone, Copy, PartialEq)]
-enum Length {
-    Line,
-    Area,
-    Volume,
-}
-
-fn length_of(column: &Column) -> Option<Length> {
-    match column {
-        Column::PerimeterNm => Some(Length::Line),
-        Column::AreaSizeNm | Column::SurfaceAreaNm => Some(Length::Area),
-        Column::VolumeNm => Some(Length::Volume),
-        Column::Children(child) => match &child.value {
-            ChildValue::Of(_, inner) => length_of(inner),
-            ChildValue::Count => None,
-        },
-        Column::Parent(parent) => match &parent.value {
-            ParentValue::Of(inner) => length_of(inner),
-            ParentValue::Id => None,
-        },
-        _ => None,
-    }
-}
-
-/// A column's format 1 name and the factor its values are multiplied by:
-/// its key with anything but `a-z`, `0-9` and `_` turned into `_`, lengths
-/// in the export's unit.
+/// A column's format 1 name and the factor its values are multiplied by
+/// (see [`crate::results::present`]).
 pub(super) fn column_name(column: &Column, unit: LengthUnit, classes: &[Class]) -> (String, f64) {
-    let mut name: String = column
-        .as_key(classes)
-        .to_lowercase()
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let Some(length) = length_of(column) else {
-        return (name, 1.0);
-    };
-    if unit == LengthUnit::Nm {
-        return (name, 1.0);
-    }
-    let (from, to, factor) = match length {
-        Length::Line => ("perimeter_nm", "perimeter_um", 1e-3),
-        Length::Area => ("_nm2", "_um2", 1e-6),
-        Length::Volume => ("_nm3", "_um3", 1e-9),
-    };
-    if let Some(at) = name.rfind(from) {
-        name.replace_range(at..at + from.len(), to);
-    }
-    (name, factor)
+    let presented = crate::results::present::present(column, unit, classes);
+    (presented.name, presented.factor)
 }
 
-/// The unit of a column's values for the About sheet.
+/// The unit of a column's values for the About sheet (see
+/// [`crate::results::present`]).
 pub(super) fn unit_label(column: &Column, unit: LengthUnit) -> String {
-    let base = match unit {
-        LengthUnit::Um => "µm",
-        LengthUnit::Nm => "nm",
-    };
-    match length_of(column) {
-        Some(Length::Line) => base.to_string(),
-        Some(Length::Area) => format!("{base}²"),
-        Some(Length::Volume) => format!("{base}³"),
-        None => {
-            let key = column.as_key(&[]);
-            if key.ends_with("_px") {
-                "px".into()
-            } else if key.contains("_gray") {
-                "gray value".into()
-            } else {
-                String::new()
-            }
-        }
-    }
+    crate::results::present::present(column, unit, &[]).unit
 }
 
 /// One written value.
@@ -1317,11 +1316,15 @@ fn sheet_name(wanted: &str, used: &mut Vec<String>) -> String {
     name
 }
 
-/// The images of a run in `scope` (relative paths, `/` separated).
+/// The images of a run in `scope` (relative paths, `/` separated) - of
+/// them only those in `only`, where given.
 pub(super) fn scope_images(
     results: &dyn ResultsSource,
     scope: ImageScope,
+    only: Option<&[String]>,
 ) -> Result<Vec<String>, InternalErrors> {
+    let only: Option<std::collections::HashSet<String>> =
+        only.map(|paths| paths.iter().map(|p| p.replace('\\', "/")).collect());
     Ok(results
         .get_images()?
         .into_iter()
@@ -1331,6 +1334,7 @@ pub(super) fn scope_images(
             ImageScope::LeftOut => image.disabled,
         })
         .map(|image| image.rel_path.to_string_lossy().replace('\\', "/"))
+        .filter(|path| only.as_ref().is_none_or(|only| only.contains(path)))
         .collect())
 }
 

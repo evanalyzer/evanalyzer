@@ -278,7 +278,7 @@ fn native_paths(request: Request) -> Request {
         },
         other @ (Request::ReadTile { .. }
         | Request::QueryResults { .. }
-        | Request::ExportResults { .. }
+        | Request::ExportParquet { .. }
         | Request::RunExport { .. }
         | Request::ListJobs
         | Request::AttachJob { .. }
@@ -456,7 +456,7 @@ impl Session {
                 // known here already, where a `Cancel` is handled.
                 let export_cancel = matches!(
                     request,
-                    Request::ExportResults { .. } | Request::RunExport { .. }
+                    Request::ExportParquet { .. } | Request::RunExport { .. }
                 )
                 .then(|| {
                     let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -618,14 +618,11 @@ impl Session {
                     Err(e) => self.fail(id, &e),
                 }
             }
-            Request::ExportResults { handle } => {
-                let prepared = self.results_for(handle).and_then(|source| {
-                    Ok((
-                        source,
-                        from_postcard::<crate::results::ResultExport>(blobs.first())?,
-                    ))
-                });
-                let (source, export) = match prepared {
+            Request::ExportParquet { handle } => {
+                let prepared = self
+                    .results_for(handle)
+                    .and_then(|source| Ok((source, from_postcard::<PathBuf>(blobs.first())?)));
+                let (source, out_dir) = match prepared {
                     Ok(prepared) => prepared,
                     Err(e) => {
                         self.running.lock().unwrap().remove(&id);
@@ -633,14 +630,15 @@ impl Session {
                     }
                 };
                 let flag = export_cancel.unwrap_or_default();
-                let result = source.export(&export, &flag, &mut |message, current, total| {
-                    let progress = Reply::ExportProgress {
-                        message: message.to_string(),
-                        current,
-                        total,
-                    };
-                    self.reply(id, progress, Vec::new());
-                });
+                let result =
+                    source.export_parquet(&out_dir, &flag, &mut |message, current, total| {
+                        let progress = Reply::ExportProgress {
+                            message: message.to_string(),
+                            current,
+                            total,
+                        };
+                        self.reply(id, progress, Vec::new());
+                    });
                 self.running.lock().unwrap().remove(&id);
                 self.reply(
                     id,
@@ -1295,7 +1293,7 @@ mod session_tests {
         let (session, rx) = failing_session();
         for request in [
             Request::QueryResults { handle: 42 },
-            Request::ExportResults { handle: 42 },
+            Request::ExportParquet { handle: 42 },
         ] {
             let (_, reply) = reply_to(&session, &rx, request);
             assert!(

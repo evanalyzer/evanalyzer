@@ -775,7 +775,9 @@ fn get_object_list_image_filter_finds_images_in_subfolders() {
         generator
             .get_object_list(&ListFilter {
                 plane: plane(),
-                images: crate::results::ImageSet::Listed(images.into_iter().map(String::from).collect()),
+                images: crate::results::ImageSet::Listed(
+                    images.into_iter().map(String::from).collect(),
+                ),
                 object_classes: None,
                 columns: vec![Column::ImageName],
                 with_coloc_details: false,
@@ -5508,4 +5510,42 @@ fn an_empty_run_table_is_unknown_and_an_unreadable_one_an_error() {
         .execute_batch("CREATE TABLE run (status VARCHAR);")
         .unwrap();
     assert!(matches!(broken.run_status(), Err(InternalErrors::Io(_))));
+}
+
+/// Results from before the intensity spread (SD, median, quartiles, MAD)
+/// don't offer those columns - a query of them would fail on the file.
+#[test]
+fn an_older_file_offers_only_the_intensity_columns_it_stores() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("results.evadb");
+    seed_db(
+        &path,
+        &[ObjectSpec::new("img1.tif", "A", 1, 10).with_intensities(r#"{"0":{"mean":5.0}}"#)],
+    );
+    let offered = |path: &std::path::Path| -> Vec<Column> {
+        ResultsGenerator::open_database(path.into())
+            .unwrap()
+            .get_available_columns()
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.key)
+            .collect()
+    };
+    assert!(
+        offered(&path).contains(&Column::IntensityStd(0)),
+        "a file that has it"
+    );
+    {
+        let conn = duckdb::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "ALTER TABLE objects DROP COLUMN intensity_std_gray;
+             ALTER TABLE objects DROP COLUMN intensity_mad_gray;",
+        )
+        .unwrap();
+    }
+    let columns = offered(&path);
+    assert!(!columns.contains(&Column::IntensityStd(0)));
+    assert!(!columns.contains(&Column::IntensityMad(0)));
+    assert!(columns.contains(&Column::IntensityAvg(0)));
+    assert!(columns.contains(&Column::IntensityMedian(0)));
 }

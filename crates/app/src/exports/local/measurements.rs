@@ -57,7 +57,7 @@ impl MeasurementTable {
                 .collect()
         });
         Ok(Self {
-            images: scope_images(results, table.images)?,
+            images: scope_images(results, table.images, table.only_images.as_deref())?,
             classes: table
                 .classes
                 .as_ref()

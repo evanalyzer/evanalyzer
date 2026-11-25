@@ -276,15 +276,14 @@ struct TrustAsk {
     then: Box<dyn FnOnce(Vec<TrustedScript>) + Send>,
 }
 
-/// The exports running after an analysis: the note's text, its tone (0
-/// running, 1 done, 2 a problem), the export to open, the cancel flag.
+/// An export's note (run by hand, added from Results): its text, its tone
+/// (1 done, 2 a problem), the export to open.
 #[derive(Default)]
 struct AfterRun {
     shown: bool,
     text: String,
     tone: i32,
     open: Option<u32>,
-    cancel: Option<Arc<AtomicBool>>,
     /// The folder the exports wrote into (Open folder) - on this computer.
     folder: Option<PathBuf>,
 }
@@ -670,9 +669,6 @@ impl ExportsController {
 
         let this = self.clone();
         state.on_after_close(move || {
-            if let Some(cancel) = &this.shown.lock().expect("Poisoned").after.cancel {
-                cancel.store(true, Ordering::Relaxed);
-            }
             this.shown.lock().expect("Poisoned").after.shown = false;
             this.push_after();
         });
@@ -1575,7 +1571,6 @@ impl ExportsController {
                 text: format!("Added to Exports as “{name}”"),
                 tone: 1,
                 open: Some(id),
-                cancel: None,
                 folder: None,
             };
         });
@@ -1988,7 +1983,6 @@ impl ExportsController {
         state.set_after_shown(shown.after.shown);
         state.set_after_text(shown.after.text.as_str().into());
         state.set_after_tone(shown.after.tone);
-        state.set_after_busy(shown.after.cancel.is_some());
         state.set_after_folder(shown.after.folder.is_some());
     }
 
@@ -2070,7 +2064,6 @@ impl ExportsController {
             text,
             tone,
             open: Some(id),
-            cancel: None,
             folder,
         };
         self.push_after();
@@ -2871,7 +2864,7 @@ fn push_picker(state: &ExportsState, table: &TableExport, shown: &Shown) {
         &table
             .child_aggregations
             .iter()
-            .map(|a| results_aggregation(*a))
+            .filter_map(|a| results_aggregation(*a))
             .collect::<Vec<_>>(),
         &table
             .parents
@@ -2887,10 +2880,13 @@ fn push_picker(state: &ExportsState, table: &TableExport, shown: &Shown) {
     state.set_related_parent_summary(related.parent_summary.into());
 }
 
-/// An export's aggregation as the results name it, and back.
-fn results_aggregation(aggregation: ExportAggregation) -> evanalyzer_app::results::Aggregation {
+/// An export's aggregation as the results name it (none for the
+/// quartiles: time courses and tracks only), and back.
+fn results_aggregation(
+    aggregation: ExportAggregation,
+) -> Option<evanalyzer_app::results::Aggregation> {
     use evanalyzer_app::results::Aggregation;
-    match aggregation {
+    Some(match aggregation {
         ExportAggregation::Avg => Aggregation::Avg,
         ExportAggregation::Median => Aggregation::Median,
         ExportAggregation::Stddev => Aggregation::Stddev,
@@ -2898,7 +2894,8 @@ fn results_aggregation(aggregation: ExportAggregation) -> evanalyzer_app::result
         ExportAggregation::Min => Aggregation::Min,
         ExportAggregation::Max => Aggregation::Max,
         ExportAggregation::Skewness => Aggregation::Skewness,
-    }
+        ExportAggregation::Q1 | ExportAggregation::Q3 => return None,
+    })
 }
 
 fn export_aggregation_of(aggregation: &evanalyzer_app::results::Aggregation) -> ExportAggregation {

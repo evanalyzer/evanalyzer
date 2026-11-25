@@ -1,5 +1,5 @@
 {
-  "protocol_version": 59,
+  "protocol_version": 60,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -220,23 +220,6 @@
           }
         }
       }
-    },
-    "ChannelDisplay": {
-      "STRUCT": [
-        {
-          "visible": "BOOL"
-        },
-        {
-          "range": {
-            "OPTION": {
-              "TUPLEARRAY": {
-                "CONTENT": "F32",
-                "SIZE": 2
-              }
-            }
-          }
-        }
-      ]
     },
     "ChildColumn": {
       "STRUCT": [
@@ -636,78 +619,6 @@
         }
       }
     },
-    "DrawnImages": {
-      "STRUCT": [
-        {
-          "image_root": "STR"
-        },
-        {
-          "series": "I32"
-        },
-        {
-          "max_side": "U32"
-        },
-        {
-          "colors": {
-            "MAP": {
-              "KEY": "I32",
-              "VALUE": {
-                "TUPLEARRAY": {
-                  "CONTENT": "F32",
-                  "SIZE": 3
-                }
-              }
-            }
-          }
-        },
-        {
-          "style": {
-            "TYPENAME": "DrawStyle"
-          }
-        },
-        {
-          "brightness": {
-            "TYPENAME": "DrawBrightness"
-          }
-        },
-        {
-          "display": {
-            "TYPENAME": "ImageDisplay"
-          }
-        },
-        {
-          "image_display": {
-            "MAP": {
-              "KEY": "STR",
-              "VALUE": {
-                "TYPENAME": "ImageDisplay"
-              }
-            }
-          }
-        },
-        {
-          "image_paths": {
-            "MAP": {
-              "KEY": "STR",
-              "VALUE": "STR"
-            }
-          }
-        }
-      ]
-    },
-    "ExportFormat": {
-      "ENUM": {
-        "0": {
-          "XLSX": "UNIT"
-        },
-        "1": {
-          "CSV": "UNIT"
-        },
-        "2": {
-          "Parquet": "UNIT"
-        }
-      }
-    },
     "GroupedByImageFilter": {
       "STRUCT": [
         {
@@ -850,25 +761,6 @@
         },
         {
           "data_max": "F64"
-        }
-      ]
-    },
-    "ImageDisplay": {
-      "STRUCT": [
-        {
-          "z_projection": {
-            "TYPENAME": "ZProjection"
-          }
-        },
-        {
-          "channels": {
-            "MAP": {
-              "KEY": "I32",
-              "VALUE": {
-                "TYPENAME": "ChannelDisplay"
-              }
-            }
-          }
         }
       ]
     },
@@ -1405,38 +1297,6 @@
         }
       }
     },
-    "ProfileExport": {
-      "STRUCT": [
-        {
-          "key": "STR"
-        },
-        {
-          "lines": {
-            "TYPENAME": "ProfileLines"
-          }
-        },
-        {
-          "content": {
-            "TYPENAME": "ProfileExportContent"
-          }
-        },
-        {
-          "layout": {
-            "TYPENAME": "TimeCourseLayout"
-          }
-        }
-      ]
-    },
-    "ProfileExportContent": {
-      "ENUM": {
-        "0": {
-          "Lines": "UNIT"
-        },
-        "1": {
-          "Objects": "UNIT"
-        }
-      }
-    },
     "ProfileFilter": {
       "STRUCT": [
         {
@@ -1654,172 +1514,6 @@
           }
         }
       }
-    },
-    "ResultExport": {
-      "STRUCT": [
-        {
-          "output_dir": "STR"
-        },
-        {
-          "outputfile_prefix": {
-            "OPTION": "STR"
-          }
-        },
-        {
-          "format": {
-            "TYPENAME": "ExportFormat"
-          }
-        },
-        {
-          "t_stacks": {
-            "OPTION": {
-              "TUPLEARRAY": {
-                "CONTENT": "U32",
-                "SIZE": 2
-              }
-            }
-          }
-        },
-        {
-          "z_stacks": {
-            "OPTION": {
-              "TUPLEARRAY": {
-                "CONTENT": "U32",
-                "SIZE": 2
-              }
-            }
-          }
-        },
-        {
-          "image_rel_paths": {
-            "SEQ": "STR"
-          }
-        },
-        {
-          "columns": {
-            "SEQ": {
-              "TYPENAME": "Column"
-            }
-          }
-        },
-        {
-          "color_schema": {
-            "TYPENAME": "ColorSchema"
-          }
-        },
-        {
-          "color_scale": {
-            "TYPENAME": "ColorScale"
-          }
-        },
-        {
-          "grouping": {
-            "TYPENAME": "Grouping"
-          }
-        },
-        {
-          "object_classes": {
-            "SEQ": {
-              "TYPENAME": "ObjectClass"
-            }
-          }
-        },
-        {
-          "aggregations": {
-            "SEQ": {
-              "TYPENAME": "Aggregation"
-            }
-          }
-        },
-        {
-          "plate_size": {
-            "TYPENAME": "PlateSize"
-          }
-        },
-        {
-          "well_size": {
-            "OPTION": {
-              "TYPENAME": "WellSize"
-            }
-          }
-        },
-        {
-          "well_order": {
-            "OPTION": {
-              "SEQ": "U32"
-            }
-          }
-        },
-        {
-          "square_size": {
-            "OPTION": "U64"
-          }
-        },
-        {
-          "with_list_view": "BOOL"
-        },
-        {
-          "with_list_coloc_details": "BOOL"
-        },
-        {
-          "with_list_one_file_per_image": "BOOL"
-        },
-        {
-          "with_grouped_by_image_list": "BOOL"
-        },
-        {
-          "with_time_course": "BOOL"
-        },
-        {
-          "time_course": {
-            "TYPENAME": "TimeCourseExport"
-          }
-        },
-        {
-          "with_track_summary": "BOOL"
-        },
-        {
-          "with_measurements": "BOOL"
-        },
-        {
-          "with_profile": "BOOL"
-        },
-        {
-          "profile": {
-            "TYPENAME": "ProfileExport"
-          }
-        },
-        {
-          "track_summary": {
-            "TYPENAME": "TrackSummaryExport"
-          }
-        },
-        {
-          "with_plate_view_heatmap": "BOOL"
-        },
-        {
-          "with_well_view_heatmap": "BOOL"
-        },
-        {
-          "with_plate_view_list": "BOOL"
-        },
-        {
-          "with_well_view_list": "BOOL"
-        },
-        {
-          "with_heatmap": "BOOL"
-        },
-        {
-          "transpond_table": "BOOL"
-        },
-        {
-          "drawn_images": {
-            "OPTION": {
-              "TYPENAME": "DrawnImages"
-            }
-          }
-        }
-      ]
     },
     "ResultObject": {
       "STRUCT": [
@@ -2602,37 +2296,6 @@
         }
       }
     },
-    "TimeCourseExport": {
-      "STRUCT": [
-        {
-          "lines": {
-            "TYPENAME": "TimeCourseLines"
-          }
-        },
-        {
-          "statistics": {
-            "SEQ": {
-              "TYPENAME": "TimeCourseStat"
-            }
-          }
-        },
-        {
-          "normalize": {
-            "TYPENAME": "TimeCourseNormalize"
-          }
-        },
-        {
-          "layout": {
-            "TYPENAME": "TimeCourseLayout"
-          }
-        },
-        {
-          "history": {
-            "TYPENAME": "TrackHistory"
-          }
-        }
-      ]
-    },
     "TimeCourseFilter": {
       "STRUCT": [
         {
@@ -3129,31 +2792,6 @@
         {
           "lineage": {
             "TYPENAME": "TrackLineage"
-          }
-        }
-      ]
-    },
-    "TrackSummaryExport": {
-      "STRUCT": [
-        {
-          "statistics": {
-            "SEQ": {
-              "TYPENAME": "TimeCourseStat"
-            }
-          }
-        },
-        {
-          "min_points": "U32"
-        },
-        {
-          "from_start": "BOOL"
-        },
-        {
-          "no_edge": "BOOL"
-        },
-        {
-          "speed_unit": {
-            "TYPENAME": "SpeedUnit"
           }
         }
       ]

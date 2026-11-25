@@ -95,8 +95,7 @@ export global ExportsState {
 
     // -- The entry picked (entry), by its kind --
     in property <string> entry-kind;
-    // Table: rows, format, split, split into, images (indexes into the models below).
-    in property <int> rows;
+    // Format, split, split into, images (indexes into the models below).
     in property <int> format;
     in property <int> split;
     in property <int> split-into;
@@ -179,8 +178,6 @@ export global ExportsState {
     in-out property <[MultiSelectItem]> aggregations: [];
     // The results views columns can be taken from.
     in property <[string]> views: [];
-    // Plate layout.
-    in property <int> grid;
     // Drawn images.
     in property <int> style;
     in property <int> brightness;
@@ -203,8 +200,6 @@ export global ExportsState {
     in property <string> after-text;
     // 0 running, 1 done, 2 a problem.
     in property <int> after-tone;
-    // Running (Stop instead of close).
-    in property <bool> after-busy;
     callback after-close();
     callback after-open();
     // Where the exports wrote is on this computer: Open folder.

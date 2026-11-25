@@ -17,8 +17,8 @@ use crate::modules::Severity;
 use crate::results::Column;
 use evanalyzer_cfg::core_types::{is_contained_rel_path, is_file_name_part};
 use evanalyzer_cfg::settings::export_settings::{
-    CURRENT_TABLE_FORMAT, ExportEntry, ExportSettings, OutputLocation, SplitInto, TableFileFormat,
-    TableSplit, TimeCourseLineKind, TimeCourseTableLayout,
+    CURRENT_TABLE_FORMAT, ExportAggregation, ExportEntry, ExportSettings, OutputLocation,
+    SplitInto, TableFileFormat, TableSplit, TimeCourseLineKind, TimeCourseTableLayout,
 };
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 use std::collections::{BTreeMap, BTreeSet};
@@ -370,6 +370,28 @@ fn check_table(table: &TableExport, at: &mut impl FnMut(Severity, String)) {
                 "a wide time course is one file - no split".into(),
             );
         }
+    }
+    if table
+        .aggregations
+        .iter()
+        .any(|a| matches!(a, ExportAggregation::Q1 | ExportAggregation::Q3))
+        && matches!(
+            table.rows,
+            TableRows::Image | TableRows::Well | TableRows::Folder
+        )
+    {
+        at(
+            Severity::Warning,
+            "q1/q3 are for time courses and tracks - left out of these rows".into(),
+        );
+    }
+    if let Some(regex) = &table.group_regex
+        && let Err(e) = regex::Regex::new(regex)
+    {
+        at(
+            Severity::Error,
+            format!("the group regex “{regex}” doesn't work: {e}"),
+        );
     }
     if table.tracks.is_some() && table.rows != TableRows::Track {
         at(

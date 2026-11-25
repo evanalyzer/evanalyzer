@@ -24,9 +24,8 @@ impl ResultsGenerator {
     ///
     /// One output column per (`filter.columns` entry) x (`filter.aggregation`
     /// entry) — e.g. 2 columns x 3 aggregations = 6 output columns, one row
-    /// per (image, class) — mirroring `ResultExport`'s flat-list export
-    /// (results_exporter.rs), just exposed here as a live, paginated List
-    /// view mode instead of a one-shot export. No `grouping_regex` (unlike
+    /// per (image, class) — the Results List's rows per image, and the
+    /// exports' `images` table (read block by block). No `grouping_regex` (unlike
     /// `get_group_by_plate`/`get_group_by_well`): grouped directly by each
     /// object's own `image_rel_path`, nothing derived from it.
     pub fn get_grouped_by_image(

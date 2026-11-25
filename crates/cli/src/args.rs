@@ -326,13 +326,11 @@ pub enum ExportCommand {
     Csv(TableExportArgs),
     /// Export rows as an XLSX workbook
     Xlsx(TableExportArgs),
-    /// Export the raw `objects` table as a single Parquet file
+    /// Export the raw `objects` table as a Parquet file
     ///
-    /// Unlike `csv`/`xlsx`, this is an unfiltered, every-column dump of the
-    /// database's `objects` table (via DuckDB's own `COPY ... TO ...
-    /// (FORMAT parquet)`) — there's no column selection or image/class/z/t
-    /// filtering to apply, so it takes a plainer set of arguments than
-    /// `TableExportArgs`.
+    /// Unlike `csv`/`xlsx`, an unfiltered dump of every column of the
+    /// results' `objects` table, as stored (lengths in nm). Results with
+    /// measurements also get `<name>_measurements.parquet` next to it.
     Parquet(ParquetExportArgs),
     // Chart image export (histogram/scatter/heatmap PNGs) isn't wired up
     // yet: the current results backend (ResultCharts) only computes chart
@@ -364,6 +362,11 @@ pub struct TableExportArgs {
     #[command(flatten)]
     pub tracks: TrackArgs,
 
+    /// The unit of lengths, areas and volumes (also in the column names:
+    /// area_um2, area_nm2)
+    #[arg(long, value_enum, default_value = "um")]
+    pub length_unit: LengthUnitKind,
+
     /// One row per measurement value
     ///
     /// Image, plane, object or region, step, measurement, value - the
@@ -383,6 +386,13 @@ pub struct TableExportArgs {
     /// over it.
     #[arg(long, requires = "project", conflicts_with_all = ["tracks", "measurements"])]
     pub view: Option<String>,
+}
+
+#[derive(Copy, Clone, Default, ValueEnum)]
+pub enum LengthUnitKind {
+    #[default]
+    Um,
+    Nm,
 }
 
 /// `--tracks`: a row per track instead of per object.

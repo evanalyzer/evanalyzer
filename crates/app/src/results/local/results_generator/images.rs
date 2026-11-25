@@ -41,24 +41,6 @@ impl ResultsGenerator {
         map
     }
 
-    /// Every enabled image's `image_rel_path`, in the order the list and
-    /// grouped-by-image queries sort by.
-    pub(in crate::results::local) fn enabled_image_rel_paths(
-        &self,
-    ) -> Result<Vec<String>, InternalErrors> {
-        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
-        let mut stmt = self
-            .database
-            .prepare("SELECT image_rel_path FROM images WHERE NOT disabled ORDER BY image_rel_path")
-            .map_err(err)?;
-        let paths = stmt
-            .query_map([], |row| row.get(0))
-            .map_err(err)?
-            .collect::<Result<Vec<String>, _>>()
-            .map_err(err);
-        paths
-    }
-
     /// Enables or disables `image_rel_path` (the `images` table's primary
     /// key) for statistics: a disabled image's own value is still shown
     /// everywhere it appears, but is excluded from any aggregate combining

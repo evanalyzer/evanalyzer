@@ -89,8 +89,10 @@ for different outputs: a second `data` entry.
 | `format` | `"CSV"` \| `"XLSX"` | `"CSV"` | The tables' format; heatmaps are always `xlsx`. |
 | `classes` | list of class ids | all classes | |
 | `columns` | list of column keys | each output's default columns | The value columns, by the column keys the results views use (`count`, `area_nm2`, `intensity_mean_gray_ch1`, `measurement:<key>`, `coloc:…`). The keys name the value; the unit in the written file follows `lengthUnit`. Measurements take only measurement columns, the time course only values (not the count). |
-| `aggregations` | list of `"AVG"`, `"MEDIAN"`, `"STDDEV"`, `"SUM"`, `"MIN"`, `"MAX"`, `"SKEWNESS"` | `["AVG"]` | Where rows group objects: per image, well, folder, track, time point, heatmap cell (a sheet each). The time course has no skewness. |
+| `aggregations` | list of `"AVG"`, `"MEDIAN"`, `"STDDEV"`, `"SUM"`, `"MIN"`, `"MAX"`, `"SKEWNESS"`, `"Q1"`, `"Q3"` | `["AVG"]` | Where rows group objects: per image, well, folder, track, time point, heatmap cell (a sheet each). The time course and tracks have no skewness; the quartiles are for them only. |
 | `images` | `"ALL"` \| `"INCLUDED"` \| `"LEFT_OUT"` | `"INCLUDED"` | Which images of the run. |
+| `onlyImages` | list of relative paths (`/`) | all of `images` | Of `images`, only these (the command line's `--image`). |
+| `groupRegex` | regex | the results' plate grouping | The wells by this regex's first capture group on the image name - rows per well, a time course's well lines, the tracks' well. |
 | `planes` | `{ "z": { "from": 0, "to": 4 }, "t": { "from": 0, "to": 10 } }` | all | Which z-planes and time points (both ends included, from 0). Not for tracks and profiles (they span them). |
 | `emptyClasses` | bool | `false` | Per image, well, folder: a row also for classes without objects. |
 | `transposed` | bool | `false` | Objects, images, wells and folders: the classes side by side (§3.2). |
@@ -126,7 +128,7 @@ for different outputs: a second `data` entry.
 `noEdge` (bool, `false`), `speedUnit` (`"PX_FRAME"` \| `"UM_MIN"` \| `"UM_S"`,
 default `"UM_MIN"`).
 
-`timeCourse`: `lines` (`"CLASS"` \| `"IMAGE"` \| `"WELL"` \| `"TRACK"`,
+`timeCourse`: `lines` (`"CLASS"` \| `"IMAGE"` \| `"WELL"` \| `"FOLDER"` \| `"TRACK"`,
 default `"CLASS"`), `layout` (`"LONG"` \| `"WIDE"` \| `"BOTH"`, default
 `"LONG"`; wide: a table per value - a row per time point, a column per line
 - in `<name>_wide.xlsx` or `<name>_wide_<value>.csv`; not per track, not
@@ -383,6 +385,9 @@ separators.
 2. `t` and `z` (counted from 0), only where the results have several.
 3. The value columns, in the format's fixed order of column types (not the
    order they were ticked in).
+4. Rows per image only: `marker` (the image's marker colour: `red`,
+   `orange`, `yellow`, `green`, `blue`, `purple`) and `note` - empty where
+   the image has none.
 
 `transposed`: no `class` column - the classes are side by side, in the
 order of their ids, each with all value columns. The classes are those
@@ -413,6 +418,12 @@ Made for scripts: lower case, only `a-z`, `0-9` and `_`.
 - A profile: the line (`class`, `image` or `well`), `position`,
   `n_objects`, `mean`, `sd`, `median`, `q1`, `q3`; of objects: `image`,
   `class`, `object_id`, `position`, `value`.
+- Colocalization by its classes' names (name parts as above, with the
+  class id where two classes give the same): `coloc_with_nucleus` (the
+  number of partner objects of the class), `coloc_at_least_nucleus_spot`
+  and `coloc_exactly_nucleus_spot` with `_objects` (1 for an object that
+  matches, else 0 - its sum the number of objects) or `_partners` (its
+  partner objects counted), `coloc_with_no_class_objects`.
 - Children and linked objects are named by their key, class ids
   included: `children_1_2_count`, `children_1_2_max_area_um2`,
   `parent_1_id`, `parent_1_area_um2`.
