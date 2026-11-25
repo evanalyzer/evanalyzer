@@ -18,6 +18,7 @@ mod table;
 
 pub use args::{
     CliCommand, ExportSubCommand, JobsSubCommand, ProjectSubCommand, ResultsSubCommand,
+    TrustSubCommand,
 };
 
 use evanalyzer_app::backend::Backend;
@@ -67,6 +68,7 @@ pub fn run(command: CliCommand, backend: &dyn Backend) -> Result<(), InternalErr
                 commands::exports::run_view(view_args, backend)
             }
             args::ExportSubCommand::Run(run_args) => commands::exports::run_run(run_args, backend),
+            args::ExportSubCommand::Trust(trust) => commands::trust::run(trust, backend),
         },
         CliCommand::TrainClassifier(train_classifier_args) => {
             commands::train_classifier::run(train_classifier_args, backend)

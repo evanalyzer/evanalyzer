@@ -287,7 +287,9 @@ fn native_paths(request: Request) -> Request {
         | Request::Places
         | Request::SystemInfo
         | Request::LoadAppSettings
-        | Request::SaveAppSettings(_)) => other,
+        | Request::SaveAppSettings(_)
+        | Request::LoadScriptTrust
+        | Request::SaveScriptTrust(_)) => other,
     }
 }
 
@@ -710,6 +712,14 @@ impl Session {
                 Ok(()) => self.reply(id, Reply::Done, none()),
                 Err(e) => self.fail(id, &e),
             },
+            Request::LoadScriptTrust => match self.backend.load_script_trust() {
+                Ok(trust) => self.reply(id, Reply::ScriptTrust(trust), none()),
+                Err(e) => self.fail(id, &e),
+            },
+            Request::SaveScriptTrust(trust) => match self.backend.save_script_trust(&trust) {
+                Ok(()) => self.reply(id, Reply::Done, none()),
+                Err(e) => self.fail(id, &e),
+            },
             Request::ListDir { path } => match files.list_dir(&path) {
                 Ok(entries) => self.reply(id, Reply::DirEntries(entries), none()),
                 Err(e) => self.fail(id, &e),
@@ -1045,6 +1055,7 @@ mod session_tests {
     use crate::jobs::{AnalysisRequest, PreviewRequest, RunningJob};
     use crate::training::{RunningTraining, TrainingRequest};
     use crate::user::settings::AppSettings;
+    use crate::user::trust::ScriptTrust;
     use evanalyzer_cfg::settings::ai_learning_settings::{
         AiLearningBackendSettings, AiLearningClassifierSettings, AiLearningSettings,
     };
@@ -1146,6 +1157,12 @@ mod session_tests {
         fn save_app_settings(&self, _: &AppSettings) -> Result<(), InternalErrors> {
             Err(broken("save_app_settings"))
         }
+        fn load_script_trust(&self) -> Result<ScriptTrust, InternalErrors> {
+            Err(broken("load_script_trust"))
+        }
+        fn save_script_trust(&self, _: &ScriptTrust) -> Result<(), InternalErrors> {
+            Err(broken("save_script_trust"))
+        }
     }
 
     fn session_with(backend: FailingBackend) -> (Arc<Session>, Receiver<Vec<u8>>) {
@@ -1206,6 +1223,11 @@ mod session_tests {
             (
                 Request::SaveAppSettings(AppSettings::default()),
                 "save_app_settings",
+            ),
+            (Request::LoadScriptTrust, "load_script_trust"),
+            (
+                Request::SaveScriptTrust(ScriptTrust::default()),
+                "save_script_trust",
             ),
             (Request::ListDir { path: path() }, "list_dir"),
             (Request::Stat { path: path() }, "stat"),

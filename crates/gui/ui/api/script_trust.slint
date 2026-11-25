@@ -2,9 +2,11 @@
 // Licensed under the PolyForm Noncommercial License 1.0.0.
 
 // api/script_trust.slint — asks before an export runs a script the user
-// hasn't allowed yet (a project from someone else brings its scripts): its
-// content shown, run once, always allow this version (its content's hash,
-// kept in the user's settings), or don't run it.
+// doesn't trust yet (a project from someone else brings its scripts): its
+// content shown, then don't run it, run it once, allow this script (while
+// unchanged) or trust the project's folder (every script in it) - kept in
+// the user folder's trust.json. And the list of trusted folders and scripts
+// in Settings › Trusted scripts.
 
 export global ScriptTrustState {
     in property <bool> shown;
@@ -21,7 +23,48 @@ export global ScriptTrustState {
     in property <bool> can-open;
     // More scripts to ask about after this one.
     in property <int> more;
-    // 0 don't run, 1 run once, 2 always allow this version.
+    // "It changed since you allowed it on 2026-11-20." ("": never allowed).
+    in property <string> changed-since;
+    // The project's folder, and its own name - "Trust the folder “kidney”".
+    in property <string> folder;
+    in property <string> folder-name;
+    // 0 don't run, 1 run once, 2 allow this script, 3 trust the folder.
     callback answer(int);
     callback open-in-editor();
+}
+
+// A trusted folder in Settings › Trusted scripts.
+export struct TrustedFolderRow {
+    // "liver-study" - the folder's own name.
+    name: string,
+    path: string,
+    // "since 2026-11-25 · /home/anna/liver-study".
+    detail: string,
+    // On a network share: others' changes run too.
+    network: bool,
+}
+
+// A trusted script in Settings › Trusted scripts.
+export struct TrustedScriptRow {
+    name: string,
+    path: string,
+    // 0 matches, 1 changed, 2 file missing, -1 not checked yet.
+    status: int,
+}
+
+// Settings › Trusted scripts: what the user folder's trust.json holds, with
+// revokes kept until Apply (Cancel forgets them).
+export global TrustedScriptsState {
+    in property <[TrustedFolderRow]> folders;
+    in property <[TrustedScriptRow]> scripts;
+    // Where they are kept: "this computer" or the server's name.
+    in property <string> place: "this computer";
+    // Reads the list anew (the dialog opened).
+    callback load();
+    callback revoke-folder(int);
+    callback revoke-script(int);
+    callback remove-missing();
+    callback revoke-all();
+    // Saves the revokes (Apply); Cancel just closes.
+    callback apply();
 }

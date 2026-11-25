@@ -2,14 +2,118 @@
 // Licensed under the PolyForm Noncommercial License 1.0.0.
 
 import { InkButton, InkButtonKind, InkDialog, InkDialogFooter, InkDialogPlacement, InkDivider } from "../ink/ink.slint";
-import { DialogType, GlobalAppState } from "../api/state.slint";
+import { ConnectionState, DialogType, GlobalAppState } from "../api/state.slint";
 import { ProjectSettingsState, ViewportMemoryState } from "../api/project_settings.slint";
+import { TrustedScriptsState } from "../api/script_trust.slint";
 import { ScrollView } from "std-widgets.slint";
 import { LineEdit, ComboBox, SpinBox, Switch } from "../ink/std_compat.slint";
 
 import { Ink } from "../ink/palette.slint";
 import { MultiClassDropdown } from "../editor/pipelines_panel.slint";
-import { InkSettingsCard, InkSettingRow, InkSettingBlock, InkSearchField, InkCaption, InkIcons } from "../ink/ink.slint";
+import { InkSettingsCard, InkSettingRow, InkSettingBlock, InkSearchField, InkCaption, InkIcons, InkBadge, InkTone, InkHint } from "../ink/ink.slint";
+
+// The head of a group of sections: where its settings are kept (design
+// canvas "Settings dialog - project vs. this computer, trusted scripts",
+// board A) - an icon, the group's name, one line.
+component ScopeHeader inherits HorizontalLayout {
+    in property <image> icon;
+    in property <string> title;
+    in property <string> line;
+
+    padding-left: 4px;
+    padding-top: 4px;
+    spacing: 10px;
+    VerticalLayout {
+        alignment: start;
+        padding-top: 1px;
+        Image {
+            source: root.icon;
+            width: 16px;
+            height: 16px;
+            colorize: Ink.text-dim;
+        }
+    }
+    VerticalLayout {
+        horizontal-stretch: 1;
+        spacing: 2px;
+        InkCaption {
+            text: root.title;
+        }
+        Text {
+            text: root.line;
+            font-size: Ink.fs-secondary;
+            color: Ink.text-mute;
+            wrap: word-wrap;
+        }
+    }
+}
+
+// A trusted folder or script: icon, name, a line below, maybe its state,
+// Revoke.
+component TrustRow inherits VerticalLayout {
+    in property <image> icon;
+    in property <string> title;
+    in property <string> detail;
+    in property <bool> warn-detail;
+    in property <string> badge;
+    in property <InkTone> tone: InkTone.neutral;
+    in property <bool> faded;
+    callback revoke;
+
+    Rectangle {
+        height: 1px;
+        background: Ink.border-soft;
+    }
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 12px;
+        padding-top: 9px;
+        padding-bottom: 9px;
+        spacing: 10px;
+        Image {
+            y: (parent.height - self.height) / 2;
+            source: root.icon;
+            width: 16px;
+            height: 16px;
+            colorize: root.faded ? Ink.text-faint : Ink.text-dim;
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 1px;
+            Text {
+                text: root.title;
+                font-size: Ink.fs-body;
+                font-weight: 500;
+                color: root.faded ? Ink.text-dim : Ink.text;
+                overflow: elide;
+            }
+            if root.detail != "": Text {
+                text: root.detail;
+                font-size: Ink.fs-secondary;
+                color: root.warn-detail ? Ink.warn : Ink.text-mute;
+                overflow: elide;
+            }
+        }
+        if root.badge != "": VerticalLayout {
+            alignment: center;
+            InkBadge {
+                text: root.badge;
+                tone: root.tone;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            InkButton {
+                small: true;
+                text: "Revoke";
+                clicked => {
+                    root.revoke();
+                }
+            }
+        }
+    }
+}
 // A section's head: its title, a short summary, ▸ / ▾ - a click opens or
 // closes it.
 component SectionToggle inherits Rectangle {
@@ -68,8 +172,9 @@ component SectionToggle inherits Rectangle {
 // -- Dialog --------------------------------------------------------------------
 
 // All settings in one place: the project's (saved with the project) and this
-// computer's (viewport memory). A section list on the left, or - while
-// searching - every matching setting of all sections.
+// computer's (viewport memory, trusted scripts - the server's in remote
+// mode), each group headed by where it is kept. Sections that open and
+// close, or - while searching - every matching setting of all sections.
 export component ProjectSettingsDialog inherits InkDialog {
     // Docked on the right; the image stays usable.
     placement: InkDialogPlacement.sheet;
@@ -81,12 +186,13 @@ export component ProjectSettingsDialog inherits InkDialog {
     }
     private property <length> well_size: (ProjectSettingsState.settings.well_rows > 5 || ProjectSettingsState.settings.well_columns > 5) ? 30px : 45px;
 
-    // Sections: 0 General, 1 Plate & grouping, 2 Object merging, 3 Viewport -
-    // each opened or closed by its head.
+    // Sections: 0 General, 1 Plate & grouping, 2 Object merging, 3 Viewport,
+    // 4 Trusted scripts - each opened or closed by its head.
     property <bool> open-0: true;
     property <bool> open-1: false;
     property <bool> open-2: false;
     property <bool> open-3: false;
+    property <bool> open-4: false;
     property <string> query;
     property <bool> searching: root.query.replace-all(" ", "") != "";
 
@@ -121,6 +227,7 @@ export component ProjectSettingsDialog inherits InkDialog {
     property <string> kw-reduce-motion: "Reduce motion animation fly move accessibility";
     property <string> kw-auto-scale: "Auto-scale new images histogram open first time brightness contrast";
     property <string> kw-channel-colors: "Color channels without wavelength emission colour white open image";
+    property <string> kw-trust: "Trusted scripts trust allow allowed revoke folders R Python export security permission run";
 
     // Whether `words` contain the search text (ignoring case).
     pure function matches(words: string) -> bool {
@@ -129,7 +236,7 @@ export component ProjectSettingsDialog inherits InkDialog {
 
     // Section `section` is open (searching: all are).
     pure function is-open(section: int) -> bool {
-        root.searching || (section == 0 ? root.open-0 : section == 1 ? root.open-1 : section == 2 ? root.open-2 : root.open-3)
+        root.searching || (section == 0 ? root.open-0 : section == 1 ? root.open-1 : section == 2 ? root.open-2 : section == 3 ? root.open-3 : root.open-4)
     }
 
     function toggle(section: int) {
@@ -139,8 +246,10 @@ export component ProjectSettingsDialog inherits InkDialog {
             root.open-1 = !root.open-1;
         } else if section == 2 {
             root.open-2 = !root.open-2;
-        } else {
+        } else if section == 3 {
             root.open-3 = !root.open-3;
+        } else {
+            root.open-4 = !root.open-4;
         }
     }
 
@@ -154,6 +263,7 @@ export component ProjectSettingsDialog inherits InkDialog {
         section == 0 ? (root.matches(root.kw-name) || root.matches(root.kw-author) || root.matches(root.kw-org))
         : section == 1 ? (root.matches(root.kw-grouping) || (ProjectSettingsState.settings.grouping_mode == 1 && root.matches(root.kw-regex)) || root.matches(root.kw-plate) || root.matches(root.kw-well-size) || (!ProjectSettingsState.settings.well_auto && root.matches(root.kw-well-images)))
         : section == 2 ? (root.matches(root.kw-merge) || root.matches(root.kw-masks) || (ProjectSettingsState.settings.tile_merge_enabled && (root.matches(root.kw-exclude) || root.matches(root.kw-connectivity) || root.matches(root.kw-fragments))))
+        : section == 4 ? root.matches(root.kw-trust)
         : (root.matches(root.kw-history) || root.matches(root.kw-budget) || root.matches(root.kw-margin) || root.matches(root.kw-cache-auto) || root.matches(root.kw-tile-cache) || root.matches(root.kw-overview-cache) || root.matches(root.kw-preview-tiles) || root.matches(root.kw-breakpoint-tiles) || root.matches(root.kw-undo-history) || root.matches(root.kw-renderer) || root.matches(root.kw-max-threads) || root.matches(root.kw-max-ram) || root.matches(root.kw-free-caches) || root.matches(root.kw-objects-table) || root.matches(root.kw-reduce-motion) || root.matches(root.kw-auto-scale) || root.matches(root.kw-channel-colors))
     }
 
@@ -168,6 +278,7 @@ export component ProjectSettingsDialog inherits InkDialog {
 
     init => {
         ViewportMemoryState.load();
+        TrustedScriptsState.load();
         search-input.focus-input();
     }
 
@@ -207,7 +318,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                             padding-top: 10px;
                             spacing: 12px;
 
-                            if root.searching && !root.section-matches(0) && !root.section-matches(1) && !root.section-matches(2) && !root.section-matches(3): VerticalLayout {
+                            if root.searching && !root.section-matches(0) && !root.section-matches(1) && !root.section-matches(2) && !root.section-matches(3) && !root.section-matches(4): VerticalLayout {
                                 padding-top: 60px;
                                 spacing: 6px;
                                 Text {
@@ -227,8 +338,10 @@ export component ProjectSettingsDialog inherits InkDialog {
                             }
 
                             // -- General -----------------------------------
-                            InkCaption {
-                                text: "PROJECT";
+                            ScopeHeader {
+                                icon: InkIcons.project;
+                                title: "THIS PROJECT";
+                                line: ProjectSettingsState.project-file != "" ? "Saved in " + ProjectSettingsState.project-file + " - goes wherever the project goes." : "Saved with the project - goes wherever it goes.";
                             }
                             if root.shows-section(0): VerticalLayout {
                                 spacing: 14px;
@@ -485,14 +598,21 @@ export component ProjectSettingsDialog inherits InkDialog {
                             }
 
                             // -- Viewport ----------------------------------
-                            InkCaption {
-                                text: "THIS COMPUTER";
+                            Rectangle {
+                                height: 1px;
+                                background: Ink.border-soft;
+                            }
+
+                            ScopeHeader {
+                                icon: InkIcons.computer;
+                                title: ConnectionState.remote ? "THE SERVER" : "THIS COMPUTER";
+                                line: ConnectionState.remote ? "Saved for you on " + ConnectionState.label + " - used by every project." : "Saved for you on this computer - used by every project.";
                             }
                             if root.shows-section(3): VerticalLayout {
                                 spacing: 14px;
                                 SectionToggle {
                                     title: "Viewport";
-                                    summary: "Memory the image viewport may use for smoother panning and zooming. Kept on this computer, for every project.";
+                                    summary: "Memory the image viewport may use for smoother panning and zooming.";
                                     open: root.is-open(3);
                                     toggled => {
                                         root.toggle(3);
@@ -757,6 +877,111 @@ export component ProjectSettingsDialog inherits InkDialog {
                                     }
                                 }
                             }
+
+                            // -- Trusted scripts ---------------------------
+                            if root.shows-section(4): VerticalLayout {
+                                spacing: 14px;
+                                SectionToggle {
+                                    title: "Trusted scripts";
+                                    summary: "Folders and scripts exports may run without asking.";
+                                    open: root.is-open(4);
+                                    toggled => {
+                                        root.toggle(4);
+                                    }
+                                }
+
+                                if root.is-open(4) && TrustedScriptsState.folders.length == 0 && TrustedScriptsState.scripts.length == 0: InkHint {
+                                    text: "Nothing trusted - an export asks before it runs a script.";
+                                }
+
+                                if root.is-open(4) && TrustedScriptsState.folders.length > 0: InkSettingsCard {
+                                    VerticalLayout {
+                                        padding-left: 16px;
+                                        padding-right: 16px;
+                                        padding-top: 12px;
+                                        padding-bottom: 8px;
+                                        spacing: 2px;
+                                        Text {
+                                            text: "Folders";
+                                            font-size: Ink.fs-body;
+                                            font-weight: 600;
+                                            color: Ink.text;
+                                        }
+                                        Text {
+                                            text: "Every script in these folders runs without asking, also after it changes.";
+                                            font-size: Ink.fs-secondary;
+                                            color: Ink.text-dim;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+                                    for folder[i] in TrustedScriptsState.folders: TrustRow {
+                                        icon: InkIcons.folder;
+                                        title: folder.name;
+                                        detail: folder.network ? "Network folder - other people's changes run too · " + folder.path : folder.detail;
+                                        warn-detail: folder.network;
+                                        revoke => {
+                                            TrustedScriptsState.revoke-folder(i);
+                                        }
+                                    }
+                                }
+
+                                if root.is-open(4) && TrustedScriptsState.scripts.length > 0: InkSettingsCard {
+                                    VerticalLayout {
+                                        padding-left: 16px;
+                                        padding-right: 16px;
+                                        padding-top: 12px;
+                                        padding-bottom: 8px;
+                                        spacing: 2px;
+                                        Text {
+                                            text: "Scripts";
+                                            font-size: Ink.fs-body;
+                                            font-weight: 600;
+                                            color: Ink.text;
+                                        }
+                                        Text {
+                                            text: "Run without asking while unchanged. Allowing a changed script again replaces its entry.";
+                                            font-size: Ink.fs-secondary;
+                                            color: Ink.text-dim;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+                                    for script[i] in TrustedScriptsState.scripts: TrustRow {
+                                        icon: InkIcons.project;
+                                        title: script.name;
+                                        detail: script.path;
+                                        faded: script.status == 2;
+                                        badge: script.status == 0 ? "matches" : script.status == 1 ? "changed" : script.status == 2 ? "missing" : "";
+                                        tone: script.status == 0 ? InkTone.ok : script.status == 1 ? InkTone.warn : InkTone.neutral;
+                                        revoke => {
+                                            TrustedScriptsState.revoke-script(i);
+                                        }
+                                    }
+                                }
+
+                                if root.is-open(4) && (TrustedScriptsState.folders.length > 0 || TrustedScriptsState.scripts.length > 0): HorizontalLayout {
+                                    alignment: end;
+                                    spacing: 6px;
+                                    if TrustedScriptsState.scripts.length > 0: InkButton {
+                                        small: true;
+                                        text: "Remove missing";
+                                        clicked => {
+                                            TrustedScriptsState.remove-missing();
+                                        }
+                                    }
+                                    InkButton {
+                                        small: true;
+                                        kind: InkButtonKind.danger;
+                                        text: "Revoke all";
+                                        clicked => {
+                                            TrustedScriptsState.revoke-all();
+                                        }
+                                    }
+                                }
+
+                                if root.is-open(4) && (TrustedScriptsState.folders.length > 0 || TrustedScriptsState.scripts.length > 0): InkHint {
+                                    text: "“changed”: the file differs from the version allowed - the next export asks again. Revoking takes effect when you press Apply; what was revoked asks again before it runs.";
+                                }
+                            }
                         }
                     }
                 }
@@ -778,7 +1003,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                     padding-bottom: 10px;
 
                     Text {
-                        text: "Project: saved with it. This computer: here.";
+                        text: "Project settings are saved with the project.";
                         font-size: Ink.fs-body;
                         color: Ink.text-dim;
                         vertical-alignment: center;
@@ -799,6 +1024,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                         clicked => {
                             ProjectSettingsState.trigger_project_settings_accepted();
                             ViewportMemoryState.apply();
+                            TrustedScriptsState.apply();
                             GlobalAppState.active-dialog = DialogType.none;
                         }
                     }

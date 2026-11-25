@@ -2,11 +2,13 @@
 // Licensed under the PolyForm Noncommercial License 1.0.0.
 
 // dialogs/script_trust_dialog.slint — "Run the script …?" before an export
-// runs a script not allowed yet (design canvas "Result exports",
-// TrustPrompt). Floats over the window: blurred like every dialog
-// (InkDialog). Don't run has the safe place on the left.
+// runs a script not trusted yet (design canvas "Result exports",
+// TrustPrompt; "Settings dialog - project vs. this computer, trusted
+// scripts", board Prompt): allow this script or trust the project's
+// folder, then Run once or Allow and run. Floats over the window: blurred
+// like every dialog (InkDialog). Don't run has the safe place on the left.
 
-import { Ink, InkButton, InkButtonKind, InkDialog, InkDialogFooter, InkHint } from "../ink/ink.slint";
+import { Ink, InkButton, InkButtonKind, InkDialog, InkDialogFooter, InkHint, InkOptionCard } from "../ink/ink.slint";
 import { ScriptTrustState } from "../api/script_trust.slint";
 
 export component ScriptTrustDialog inherits InkDialog {
@@ -14,6 +16,13 @@ export component ScriptTrustDialog inherits InkDialog {
     subtitle: ScriptTrustState.more > 0 ? (ScriptTrustState.more + 1) + " scripts to allow" : "";
     card-width: 560px;
     modal: true;
+    // What "Allow and run" keeps: false this script, true its folder -
+    // back to the script for each one asked about.
+    property <bool> whole-folder: false;
+    property <string> asked: ScriptTrustState.folder + "/" + ScriptTrustState.about;
+    changed asked => {
+        root.whole-folder = false;
+    }
     close => {
         ScriptTrustState.answer(0);
     }
@@ -26,6 +35,21 @@ export component ScriptTrustDialog inherits InkDialog {
             wrap: word-wrap;
             color: Ink.text;
             font-size: Ink.fs-body;
+        }
+
+        if ScriptTrustState.changed-since != "": Rectangle {
+            background: Ink.warn-tint;
+            border-radius: Ink.radius-md;
+            HorizontalLayout {
+                padding: 8px;
+                padding-left: 12px;
+                Text {
+                    text: ScriptTrustState.changed-since;
+                    color: Ink.text;
+                    font-size: Ink.fs-secondary;
+                    wrap: word-wrap;
+                }
+            }
         }
 
         HorizontalLayout {
@@ -66,8 +90,29 @@ export component ScriptTrustDialog inherits InkDialog {
             }
         }
 
+        VerticalLayout {
+            spacing: 6px;
+            InkOptionCard {
+                title: "Allow this script";
+                description: "Asks again when the file changes.";
+                checked: !root.whole-folder;
+                picked => {
+                    root.whole-folder = false;
+                }
+            }
+            InkOptionCard {
+                title: "Trust the folder “" + ScriptTrustState.folder-name + "”";
+                description: "Every script in it runs without asking, also after changes.";
+                accessible-description: ScriptTrustState.folder;
+                checked: root.whole-folder;
+                picked => {
+                    root.whole-folder = true;
+                }
+            }
+        }
+
         InkHint {
-            text: "“This version” is the script's content: when the file changes, you are asked again. The export's tables and images are written either way.";
+            text: root.whole-folder ? "Trusts " + ScriptTrustState.folder + " - on a shared folder, other people's changes run too. The export's tables and images are written either way." : "The export's tables and images are written either way.";
             wrap: word-wrap;
         }
 
@@ -89,9 +134,9 @@ export component ScriptTrustDialog inherits InkDialog {
             }
             InkButton {
                 kind: InkButtonKind.primary;
-                text: "Always allow this version";
+                text: "Allow and run";
                 clicked => {
-                    ScriptTrustState.answer(2);
+                    ScriptTrustState.answer(root.whole-folder ? 3 : 2);
                 }
             }
         }

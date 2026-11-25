@@ -14,6 +14,7 @@ pub mod crash_log;
 pub mod folder;
 pub mod recent;
 pub mod settings;
+pub mod trust;
 
 pub use folder::USER_FOLDER_NAME;
 pub use recent::{RecentProject, RecentServer};
@@ -22,3 +23,4 @@ pub use settings::{
     PredictionOverlayPrefs, ResultsSplitSettings, TrailMode, UserInformation,
     ViewportMemorySettings,
 };
+pub use trust::{ScriptTrust, TrustCheck, TrustedFolder, TrustedScript};

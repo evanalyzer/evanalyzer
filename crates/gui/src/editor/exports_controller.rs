@@ -30,6 +30,7 @@ use evanalyzer_app::exports::{
 use evanalyzer_app::modules::Severity;
 use evanalyzer_app::results::view_settings::ViewSettings;
 use evanalyzer_app::results::{Column, ColumnEntry};
+use evanalyzer_app::user::trust::{TrustCheck, TrustedScript, today};
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_cfg::settings::export_settings::TimeCourseOptions;
@@ -257,14 +258,19 @@ struct Untrusted {
     hash: String,
     content: String,
     language: ScriptLanguage,
+    /// The project's folder - "Trust this folder" trusts it.
+    folder: PathBuf,
+    /// Allowed before, changed since: the day it was allowed.
+    changed_since: Option<String>,
 }
 
-/// The scripts still to ask about before a run, those allowed for it once,
-/// and the run to start then.
+/// The scripts still to ask about before a run, those allowed for it (once
+/// or for good: the run doesn't read the trust again), and the run to
+/// start then.
 struct TrustAsk {
     queue: Vec<Untrusted>,
-    once: Vec<String>,
-    then: Box<dyn FnOnce(Vec<String>) + Send>,
+    once: Vec<TrustedScript>,
+    then: Box<dyn FnOnce(Vec<TrustedScript>) + Send>,
 }
 
 /// The exports running after an analysis: the note's text, its tone (0
@@ -1049,7 +1055,7 @@ impl ExportsController {
         export: ExportSettings,
         project_dir: PathBuf,
         analyses: Vec<Target>,
-        once: Vec<String>,
+        once: Vec<TrustedScript>,
     ) {
         let cancel = Arc::new(AtomicBool::new(false));
         {
@@ -1120,7 +1126,7 @@ impl ExportsController {
         project_dir: &Path,
         export: &ExportSettings,
         database: &Path,
-        once: &[String],
+        once: &[TrustedScript],
         cancel: &AtomicBool,
         progress: impl Fn(String, f32),
     ) -> Result<ExportReport, String> {
@@ -1135,16 +1141,15 @@ impl ExportsController {
         export: &ExportSettings,
         database: &Path,
         output: Option<PathBuf>,
-        once: &[String],
+        once: &[TrustedScript],
         cancel: &AtomicBool,
         progress: impl Fn(String, f32),
     ) -> Result<ExportReport, String> {
         let backend = self.app_state.backend();
-        let mut trusted = backend
-            .load_app_settings()
-            .unwrap_or_default()
-            .trusted_scripts;
-        trusted.extend(once.iter().cloned());
+        let mut trusted = backend.load_script_trust().unwrap_or_default();
+        for script in once {
+            trusted.allow_script(Path::new(&script.path), &script.hash, &script.since);
+        }
         let (results, run) = {
             let project = self.app_state.get_project();
             prepare_run(
@@ -1243,7 +1248,7 @@ impl ExportsController {
         exports: Vec<ExportSettings>,
         project_dir: PathBuf,
         output_dir: PathBuf,
-        once: Vec<String>,
+        once: Vec<TrustedScript>,
     ) {
         let cancel = Arc::new(AtomicBool::new(false));
         {
@@ -1682,14 +1687,11 @@ impl ExportsController {
         }
     }
 
-    /// The scripts `exports` run that the user hasn't allowed yet (by their
-    /// content), each once.
+    /// The scripts `exports` run that the user doesn't trust (not in a
+    /// trusted folder, not this content of them), each once.
     fn untrusted_scripts(&self, project_dir: &Path, exports: &[ExportSettings]) -> Vec<Untrusted> {
         let backend = self.app_state.backend();
-        let trusted = backend
-            .load_app_settings()
-            .unwrap_or_default()
-            .trusted_scripts;
+        let trusted = backend.load_script_trust().unwrap_or_default();
         let mut found: Vec<Untrusted> = Vec::new();
         for export in exports {
             for entry in &export.entries {
@@ -1699,13 +1701,15 @@ impl ExportsController {
                 if script.file.is_empty() {
                     continue;
                 }
-                let path = project_dir.join(&script.file);
+                // As the run finds it.
+                let path = project_dir.join(script.file.trim().replace('\\', "/"));
                 // Missing or unreadable: the run says so.
                 let Ok(bytes) = backend.files().read_file(&path) else {
                     continue;
                 };
                 let hash = evanalyzer_app::exports::script_hash(&bytes);
-                if trusted.contains(&hash) || found.iter().any(|u| u.hash == hash) {
+                let check = trusted.check(&path, &hash);
+                if check.allowed() || found.iter().any(|u| u.path == path) {
                     continue;
                 }
                 found.push(Untrusted {
@@ -1715,6 +1719,11 @@ impl ExportsController {
                     hash,
                     content: String::from_utf8_lossy(&bytes).into_owned(),
                     language: script.language,
+                    folder: project_dir.to_path_buf(),
+                    changed_since: match check {
+                        TrustCheck::Changed(since) => Some(since),
+                        _ => None,
+                    },
                 });
             }
         }
@@ -1728,7 +1737,7 @@ impl ExportsController {
         self: &Arc<Self>,
         project_dir: &Path,
         exports: &[ExportSettings],
-        then: impl FnOnce(Vec<String>) + Send + 'static,
+        then: impl FnOnce(Vec<TrustedScript>) + Send + 'static,
     ) {
         let queue = self.untrusted_scripts(project_dir, exports);
         if queue.is_empty() {
@@ -1742,14 +1751,14 @@ impl ExportsController {
                 let earlier = ask.then;
                 let mut queue = ask.queue;
                 for script in self.untrusted_scripts(project_dir, exports) {
-                    if !queue.iter().any(|u| u.hash == script.hash) {
+                    if !queue.iter().any(|u| u.path == script.path) {
                         queue.push(script);
                     }
                 }
                 shown.trust = Some(TrustAsk {
                     queue,
                     once: ask.once,
-                    then: Box::new(move |once: Vec<String>| {
+                    then: Box::new(move |once: Vec<TrustedScript>| {
                         earlier(once.clone());
                         then(once);
                     }),
@@ -1798,6 +1807,29 @@ impl ExportsController {
         let preview: Vec<&str> = script.content.lines().take(40).collect();
         state.set_preview(preview.join("\n").into());
         state.set_can_open(!self.app_state.backend().is_remote());
+        state.set_changed_since(
+            script
+                .changed_since
+                .as_ref()
+                .map(|since| {
+                    if since.is_empty() {
+                        "It changed since you allowed it.".to_string()
+                    } else {
+                        format!("It changed since you allowed it on {since}.")
+                    }
+                })
+                .unwrap_or_default()
+                .into(),
+        );
+        state.set_folder(script.folder.to_string_lossy().as_ref().into());
+        state.set_folder_name(
+            script
+                .folder
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| script.folder.to_string_lossy().into_owned())
+                .into(),
+        );
         state.set_more(
             shown
                 .trust
@@ -1807,8 +1839,9 @@ impl ExportsController {
         state.set_shown(true);
     }
 
-    /// The answer about the first script: 0 don't run, 1 run once, 2
-    /// always allow this version - then the next, or the run.
+    /// The answer about the first script: 0 don't run, 1 run once, 2 allow
+    /// this script (while unchanged), 3 trust its project folder - then the
+    /// next, or the run.
     fn trust_answer(&self, answer: i32) {
         let done = {
             let mut shown = self.shown.lock().expect("Poisoned");
@@ -1827,16 +1860,37 @@ impl ExportsController {
                 let Some(ask) = shown.trust.as_mut() else {
                     return;
                 };
+                let allowed = TrustedScript {
+                    path: script.path.to_string_lossy().into_owned(),
+                    hash: script.hash.clone(),
+                    since: today(),
+                };
                 match answer {
-                    1 => ask.once.push(script.hash),
+                    1 => ask.once.push(allowed),
                     2 => {
-                        let hash = script.hash;
-                        self.app_state.update_app_settings(|settings| {
-                            if !settings.trusted_scripts.contains(&hash) {
-                                settings.trusted_scripts.push(hash.clone());
-                            }
+                        self.change_trust(|trust| {
+                            trust.allow_script(&script.path, &script.hash, &allowed.since)
                         });
-                        ask.once.push(hash);
+                        ask.once.push(allowed);
+                    }
+                    3 => {
+                        self.change_trust(|trust| {
+                            trust.trust_folder(&script.folder, &allowed.since)
+                        });
+                        ask.once.push(allowed);
+                        // The folder's other scripts aren't asked about.
+                        let mut folder = evanalyzer_app::user::ScriptTrust::default();
+                        folder.trust_folder(&script.folder, "");
+                        let (covered, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut ask.queue)
+                            .into_iter()
+                            .partition(|other| folder.allows(&other.path, &other.hash));
+                        ask.queue = rest;
+                        ask.once
+                            .extend(covered.into_iter().map(|other| TrustedScript {
+                                path: other.path.to_string_lossy().into_owned(),
+                                hash: other.hash,
+                                since: String::new(),
+                            }));
                     }
                     _ => {}
                 }
@@ -1850,6 +1904,18 @@ impl ExportsController {
         self.push_trust();
         if let Some(ask) = done {
             (ask.then)(ask.once);
+        }
+    }
+
+    /// Changes the trusted folders and scripts and saves them (where the
+    /// scripts run: on the server in remote mode). A failed save is logged
+    /// - the run still has the answer.
+    fn change_trust(&self, change: impl FnOnce(&mut evanalyzer_app::user::ScriptTrust)) {
+        let backend = self.app_state.backend();
+        let mut trust = backend.load_script_trust().unwrap_or_default();
+        change(&mut trust);
+        if let Err(e) = backend.save_script_trust(&trust) {
+            log::warn!("Could not save the trusted scripts: {e}");
         }
     }
 

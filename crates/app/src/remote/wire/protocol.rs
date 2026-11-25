@@ -28,6 +28,7 @@ use crate::remote::wire::pixels::image_to_raw;
 use crate::training::TrainingItems;
 use crate::training::TrainingRequest;
 use crate::user::settings::AppSettings;
+use crate::user::trust::ScriptTrust;
 use evanalyzer_cfg::core_types::{InternalErrors, PipelineId, StepId, TrainingProgressEvent};
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 use serde::{Deserialize, Serialize};
@@ -69,7 +70,10 @@ use std::sync::Arc;
 // run).
 // 56: one query and one answer variant per results call, from the list in
 // `remote/results.rs` (the answers were shared: `Table`, `Count`, ...).
-pub const PROTOCOL_VERSION: u32 = 57;
+// 58: the trusted scripts (`LoadScriptTrust` / `SaveScriptTrust`, a
+// `ScriptTrust` in `ScriptPermission::Trusted`) - no longer hashes in the
+// app settings.
+pub const PROTOCOL_VERSION: u32 = 58;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -177,6 +181,9 @@ pub(crate) enum Request {
     /// The user's app preferences, stored in their user folder there.
     LoadAppSettings,
     SaveAppSettings(AppSettings),
+    /// The folders and scripts the user trusts, in their user folder there.
+    LoadScriptTrust,
+    SaveScriptTrust(ScriptTrust),
 }
 
 pub(crate) fn to_postcard<T: Serialize>(value: &T) -> Result<Vec<u8>, InternalErrors> {
@@ -255,6 +262,7 @@ pub(crate) enum Reply {
     TemplateFolders(TemplateFolders),
     SystemInfo(SystemInfo),
     AppSettings(AppSettings),
+    ScriptTrust(ScriptTrust),
     Places(Vec<Place>),
     DirEntries(Vec<DirEntry>),
     Stat(Option<DirEntry>),

@@ -19,7 +19,7 @@ use evanalyzer_cfg::settings::project_settings::TileMergeConnectivity;
 use slint::{ComponentHandle, Model, ModelRc, SharedString};
 use std::sync::{Arc, Mutex};
 
-/// `ProjectSettingsState`: the Project Settings dialog, and the plate
+/// `ProjectSettingsState`: the Settings dialog's project half, and the plate
 /// settings of the results' Matrix view (see `results_matrix_controller.rs`).
 pub struct ProjectSettingsController {
     pub(crate) ui: slint::Weak<AppWindow>,
@@ -164,6 +164,13 @@ impl ProjectSettingsController {
             }
         };
 
+        let project_file = project
+            .tmp_settings
+            .current_project
+            .as_ref()
+            .and_then(|path| path.file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let plate = project.plate.clone();
         let (well_auto, well_rows, well_cols) = match plate.well_layout {
             WellLayout::Auto => (true, 4, 4),
@@ -236,6 +243,7 @@ impl ProjectSettingsController {
             if let Some(ui) = ui_handle.upgrade() {
                 let state = ui.global::<ProjectSettingsState>();
                 state.set_plate_size_labels(labels());
+                state.set_project_file(project_file.as_str().into());
                 state.set_settings(build_settings());
             }
         })

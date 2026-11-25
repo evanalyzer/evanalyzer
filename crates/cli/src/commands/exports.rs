@@ -97,7 +97,7 @@ pub(crate) enum Scripts {
     All,
     /// None (`--no-scripts`).
     None,
-    /// Those the user allowed (the settings' trusted scripts).
+    /// Those the user trusts (`trust.json`: folders and scripts).
     Allowed,
 }
 
@@ -119,12 +119,7 @@ pub(crate) fn run_export_on(
     let scripts = match scripts {
         Scripts::All => ScriptPermission::All,
         Scripts::None => ScriptPermission::Skip,
-        Scripts::Allowed => ScriptPermission::Trusted(
-            backend
-                .load_app_settings()
-                .unwrap_or_default()
-                .trusted_scripts,
-        ),
+        Scripts::Allowed => ScriptPermission::Trusted(backend.load_script_trust()?),
     };
     let (results, run) = evanalyzer_app::exports::prepare_run(
         backend,

@@ -200,6 +200,7 @@ mod tests {
     use crate::results::*;
     use crate::training::*;
     use crate::user::settings::AppSettings;
+    use crate::user::trust::ScriptTrust;
     use evanalyzer_cfg::core_types::InternalErrors;
     use evanalyzer_cfg::settings::classification_settings::Class;
     use std::path::{Path, PathBuf};
@@ -839,6 +840,12 @@ mod tests {
         }
         fn save_app_settings(&self, settings: &AppSettings) -> Result<(), InternalErrors> {
             self.0.save_app_settings(settings)
+        }
+        fn load_script_trust(&self) -> Result<ScriptTrust, InternalErrors> {
+            self.0.load_script_trust()
+        }
+        fn save_script_trust(&self, trust: &ScriptTrust) -> Result<(), InternalErrors> {
+            self.0.save_script_trust(trust)
         }
     }
 

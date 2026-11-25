@@ -78,6 +78,40 @@ pub enum ExportSubCommand {
     /// Scripts someone else wrote need --allow-scripts - there is nobody
     /// to ask; --no-scripts leaves them out.
     Run(ExportRunArgs),
+    /// The folders and scripts exports may run without asking (the same
+    /// list as the app's Settings › Trusted scripts)
+    #[command(subcommand)]
+    Trust(TrustSubCommand),
+}
+
+#[derive(Subcommand)]
+pub enum TrustSubCommand {
+    /// List the trusted folders and scripts and whether each script still
+    /// matches what was allowed
+    List,
+    /// Trust every script in a folder (e.g. a project's), also after it
+    /// changes
+    Folder(TrustPathArgs),
+    /// Allow a script as it is now - it asks again once it changes
+    Allow(TrustPathArgs),
+    /// Take the trust of a folder or script back
+    Revoke(TrustRevokeArgs),
+}
+
+#[derive(Args)]
+pub struct TrustPathArgs {
+    /// The folder or script (absolute on a --remote server)
+    pub path: PathBuf,
+}
+
+#[derive(Args)]
+pub struct TrustRevokeArgs {
+    /// The folder or script, as `trust list` shows it
+    #[arg(required_unless_present = "all")]
+    pub path: Option<PathBuf>,
+    /// Every folder and script
+    #[arg(long, conflicts_with = "path")]
+    pub all: bool,
 }
 
 #[derive(Args)]

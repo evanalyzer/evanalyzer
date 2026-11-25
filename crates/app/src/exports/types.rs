@@ -46,9 +46,9 @@ pub enum ScriptPermission {
     /// Not at all (skipped, the tables are written).
     #[default]
     Skip,
-    /// Those whose content (its hash)
-    /// is among these - the ones the user allowed.
-    Trusted(Vec<String>),
+    /// Those the user trusts: in a trusted folder, or this very content of
+    /// the script (allowed for good or for this run).
+    Trusted(crate::user::ScriptTrust),
     /// All of them (`--allow-scripts`).
     All,
     /// None, and why (a server that doesn't allow scripts).

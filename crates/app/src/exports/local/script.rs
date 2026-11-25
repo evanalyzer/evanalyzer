@@ -42,7 +42,7 @@ pub(super) fn run(
     let hash = script_hash(&content);
     let allowed = match &run.scripts {
         ScriptPermission::All => true,
-        ScriptPermission::Trusted(hashes) => hashes.contains(&hash),
+        ScriptPermission::Trusted(trust) => trust.allows(&file, &hash),
         ScriptPermission::Skip => {
             report.status = EntryStatus::Skipped("scripts are off for this run".into());
             return Ok(());

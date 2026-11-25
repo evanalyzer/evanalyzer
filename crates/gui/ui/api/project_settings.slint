@@ -94,6 +94,9 @@ export global ProjectSettingsState {
 
     // Every plate size choice, set from Rust (`PlateSize::label`).
     in property <[string]> plate-size-labels: ["Auto"];
+    // The project file's name ("Liver study.evaproj"; "": not saved yet)
+    // - the settings dialog says the project's settings are saved in it.
+    in property <string> project-file;
 
     callback project_settings_changed(ProjectSettingsSlint);
     callback project_settings_canceled();

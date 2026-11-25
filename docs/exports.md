@@ -181,14 +181,21 @@ of this export were just written. The script's working folder is the
 project folder. Nothing else is passed.
 
 **Trust.** A script from a project someone else made never runs without the
-user's OK. The OK is kept per script content (a hash) in the user settings,
-never in the project - a project can't declare itself trusted. A changed
-script asks again. Tables and images are written either way.
+user's OK. Before it runs, the app asks: don't run, run once, allow this
+script, or trust the project's folder. An allowed script is kept by its path
+and its content (a hash): once it changes it asks again, and allowing it
+again replaces the old entry. A trusted folder runs every script below it,
+also after changes. Both are kept in `trust.json` in the user folder (not in
+the settings, which get copied to other computers, and never in the project
+- a project can't declare itself trusted). Settings › Trusted scripts lists
+them, with whether each script still matches, and takes them back. Tables
+and images are written either way.
 
 **Remote.** With `--remote` the export runs on the server, next to the
 results. Scripts run there only if the server's administrator allows it in
 the server configuration, with the interpreters' paths there; off by
-default. The user's OKs are kept in their settings on the server.
+default. The user's trusted folders and scripts are kept in their user folder
+on the server.
 
 ### 1.4 Checks (`project validate`, and when the project is loaded)
 
@@ -230,7 +237,11 @@ Warnings:
 |---|---|
 | `export list --project <file.evaproj>` | Lists the exports: id, name, entries, output, run after analysis. |
 | `export view <id or name> --project <file.evaproj>` | Shows one export's settings. |
-| `export run <id or name> --project <file.evaproj> [--results <.evadb or its folder>] [--output <folder>] [--allow-scripts \| --no-scripts]` | Runs the export on a run's results - the newest run of the project without `--results`. `--output` writes into that folder for this once instead of the export's `output`. A script someone else wrote needs `--allow-scripts` (there is nobody to ask); `--no-scripts` leaves scripts out. |
+| `export run <id or name> --project <file.evaproj> [--results <.evadb or its folder>] [--output <folder>] [--allow-scripts \| --no-scripts]` | Runs the export on a run's results - the newest run of the project without `--results`. `--output` writes into that folder for this once instead of the export's `output`. Trusted folders and scripts run; any other script needs `--allow-scripts` (there is nobody to ask); `--no-scripts` leaves scripts out. |
+| `export trust list` | Lists the trusted folders and scripts and whether each script still matches what was allowed. |
+| `export trust folder <folder>` | Trusts every script in the folder, also after it changes. |
+| `export trust allow <script>` | Allows the script as it is now - it asks again once it changes. |
+| `export trust revoke <folder or script> \| --all` | Takes the trust back. |
 
 `analyze` runs the exports with `runAfterAnalysis` when it is done, into
 its results folder; `--export <id or name>` (repeatable) runs those

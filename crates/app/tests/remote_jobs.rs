@@ -192,6 +192,17 @@ impl Backend for GatedBackend {
     ) -> Result<(), InternalErrors> {
         self.local.save_app_settings(settings)
     }
+
+    fn load_script_trust(&self) -> Result<evanalyzer_app::user::ScriptTrust, InternalErrors> {
+        self.local.load_script_trust()
+    }
+
+    fn save_script_trust(
+        &self,
+        trust: &evanalyzer_app::user::ScriptTrust,
+    ) -> Result<(), InternalErrors> {
+        self.local.save_script_trust(trust)
+    }
 }
 
 /// A worker serving [`GatedBackend`]; returns its address and the gate.

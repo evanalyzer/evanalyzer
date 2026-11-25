@@ -55,14 +55,39 @@ pub fn find_export<'a>(
         })
 }
 
-/// What a script's OK is kept by (`ScriptPermission::Trusted`): its
-/// content's SHA-256, as hex - a changed script asks again.
+/// What a script's OK is kept by (`ScriptPermission::Trusted`, beside its
+/// path): its content's SHA-256, as hex - a changed script asks again.
 pub fn script_hash(content: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     Sha256::digest(content)
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+/// Whether a trusted script is still the one allowed - for the list of
+/// trusted scripts (app and command line).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrustedScriptStatus {
+    /// Its content is the one allowed: it runs.
+    Matches,
+    /// It changed since: the next run asks again.
+    Changed,
+    /// No file there (any more), or it can't be read.
+    Missing,
+}
+
+/// Reads the trusted script `script` (through `files`: on the server in
+/// remote mode) and tells whether it is still the one allowed.
+pub fn trusted_script_status(
+    files: &dyn crate::files::FileSystem,
+    script: &crate::user::TrustedScript,
+) -> TrustedScriptStatus {
+    match files.read_file(std::path::Path::new(&script.path)) {
+        Ok(bytes) if script_hash(&bytes) == script.hash => TrustedScriptStatus::Matches,
+        Ok(_) => TrustedScriptStatus::Changed,
+        Err(_) => TrustedScriptStatus::Missing,
+    }
 }
 
 /// How the project draws the images of the results `results_db`

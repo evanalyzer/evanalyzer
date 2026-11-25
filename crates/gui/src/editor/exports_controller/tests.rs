@@ -647,18 +647,14 @@ fn project_with_a_script(
     (ui, ui_state, controller)
 }
 
-fn trusted(ui_state: &UiState) -> Vec<String> {
-    ui_state
-        .app_settings
-        .lock()
-        .unwrap()
-        .trusted_scripts
-        .clone()
+fn trusted(ui_state: &UiState) -> evanalyzer_app::user::ScriptTrust {
+    ui_state.backend().load_script_trust().unwrap()
 }
 
 /// A script not allowed yet: asked before the run. Don't run skips it (and
-/// asks again next time), always allow keeps its content's hash - not asked
-/// again; run once allows it for that run only.
+/// asks again next time), allow this script keeps it by path and content -
+/// not asked again until it changes, then said so; allowing it again
+/// replaces its entry; run once allows it for that run only.
 #[test]
 fn a_script_not_allowed_yet_is_asked_about_before_the_run() {
     use crate::ScriptTrustState;
@@ -698,23 +694,65 @@ fn a_script_not_allowed_yet_is_asked_about_before_the_run() {
     assert!(!report.iter().any(|l| l.contains("not run")), "{report:?}");
     assert!(trusted(&ui_state).is_empty());
 
-    // Always allow this version: kept, not asked again.
+    // Allow this script: kept, not asked again.
     state.invoke_run();
     drain_ui_queue();
+    assert_eq!(trust.get_changed_since(), "", "never allowed before");
     trust.invoke_answer(2);
     drain_ui_queue();
-    assert_eq!(trusted(&ui_state).len(), 1);
+    assert_eq!(trusted(&ui_state).scripts.len(), 1);
+    assert!(trusted(&ui_state).folders.is_empty());
     state.invoke_run();
     drain_ui_queue();
     assert!(!trust.get_shown(), "this version is allowed");
 
-    // A changed script is another version: asked again.
+    // A changed script: asked again, saying so; allowed again it replaces
+    // its entry.
     std::fs::write(dir.path().join("scripts/stats.py"), "print('changed')\n").unwrap();
     state.invoke_run();
     drain_ui_queue();
     assert!(trust.get_shown());
-    trust.invoke_answer(0);
+    assert!(
+        trust
+            .get_changed_since()
+            .contains("changed since you allowed it"),
+        "{}",
+        trust.get_changed_since()
+    );
+    trust.invoke_answer(2);
     drain_ui_queue();
+    assert_eq!(trusted(&ui_state).scripts.len(), 1, "one entry per script");
+    state.invoke_run();
+    drain_ui_queue();
+    assert!(!trust.get_shown());
+}
+
+/// Trust the folder: the project's folder is kept, every script in it runs
+/// - also after it changes.
+#[test]
+fn trusting_the_folder_runs_its_scripts_also_after_changes() {
+    use crate::ScriptTrustState;
+    let dir = tempfile::tempdir().unwrap();
+    let (ui, ui_state, _controller) = project_with_a_script(dir.path());
+    let state = ui.global::<ExportsState>();
+    let trust = ui.global::<ScriptTrustState>();
+
+    state.invoke_run();
+    drain_ui_queue();
+    assert!(trust.get_shown());
+    assert_eq!(trust.get_folder(), dir.path().to_string_lossy().as_ref());
+    trust.invoke_answer(3);
+    drain_ui_queue();
+    let kept = trusted(&ui_state);
+    assert_eq!(kept.folders.len(), 1);
+    assert!(kept.scripts.is_empty());
+    let report: Vec<String> = report_of(&state);
+    assert!(!report.iter().any(|l| l.contains("not run")), "{report:?}");
+
+    std::fs::write(dir.path().join("scripts/stats.py"), "print('changed')\n").unwrap();
+    state.invoke_run();
+    drain_ui_queue();
+    assert!(!trust.get_shown(), "the folder is trusted");
 }
 
 /// After an analysis: the exports wait for the answer, then run.
@@ -1029,7 +1067,7 @@ fn the_export_dialogs_fit_the_smallest_window() {
     ui.global::<ExportsState>().invoke_run();
     drain_ui_queue();
     assert!(ui.global::<ScriptTrustState>().get_shown());
-    inside("Always allow this version");
+    inside("Allow and run");
     inside("Don't run");
     inside("Run once");
     ui.global::<ScriptTrustState>().invoke_answer(0);

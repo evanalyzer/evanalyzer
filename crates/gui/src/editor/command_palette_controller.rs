@@ -28,7 +28,7 @@ const ACTIONS: &[(&str, &str, &str)] = &[
     ("save", "Save project", "Ctrl S"),
     ("open", "Open project…", "Ctrl O"),
     ("new", "New project", ""),
-    ("settings", "Project settings…", ""),
+    ("settings", "Settings…", ""),
     ("run", "Run analysis…", ""),
     ("preview", "Refresh preview", "F5"),
     ("preview-whole", "Preview the whole image", "Shift F5"),

@@ -740,8 +740,9 @@ fn an_allowed_script_runs_on_the_tables_before_it() {
     );
 }
 
-/// The OK is per content: the hash allows it, a changed script asks again;
-/// not allowed or scripts off, it is skipped - the table is still written.
+/// The OK is per script and content: its path with that hash allows it, a
+/// changed script asks again, the hash alone allows no other script; not
+/// allowed or scripts off, it is skipped - the table is still written.
 #[test]
 fn a_script_runs_only_with_the_ok_for_its_content() {
     if python().is_none() {
@@ -750,29 +751,69 @@ fn a_script_runs_only_with_the_ok_for_its_content() {
     let dir = tempfile::tempdir().unwrap();
     let results = results(dir.path());
     let hash = crate::exports::script_hash(COUNT_LINES.as_bytes());
+    let allowing = |name: &str| {
+        let mut trust = crate::user::ScriptTrust::default();
+        let path = dir.path().join("project/scripts").join(name);
+        trust.allow_script(&path, &hash, "2026-11-25");
+        ScriptPermission::Trusted(trust)
+    };
 
-    let trusted = script_run(
-        dir.path(),
-        "count.py",
-        COUNT_LINES,
-        ScriptPermission::Trusted(vec![hash.clone()]),
-    );
+    let trusted = script_run(dir.path(), "count.py", COUNT_LINES, allowing("count.py"));
     assert!(run(&results, &trusted).all_written());
 
     let changed = script_run(
         dir.path(),
         "count.py",
         &format!("{COUNT_LINES}\n# changed"),
-        ScriptPermission::Trusted(vec![hash]),
+        allowing("count.py"),
     );
     let report = run(&results, &changed);
     assert_eq!(report.entries[0].status, EntryStatus::Written);
     assert!(matches!(report.entries[1].status, EntryStatus::Skipped(_)));
     assert!(report.entries[1].notes[0].starts_with("script hash "));
 
+    let other = script_run(dir.path(), "copy.py", COUNT_LINES, allowing("count.py"));
+    assert!(matches!(
+        run(&results, &other).entries[1].status,
+        EntryStatus::Skipped(_)
+    ));
+
     let off = script_run(dir.path(), "count.py", COUNT_LINES, ScriptPermission::Skip);
     assert!(matches!(
         run(&results, &off).entries[1].status,
+        EntryStatus::Skipped(_)
+    ));
+}
+
+/// A trusted folder runs every script in it, also after it changed - and
+/// none outside it.
+#[test]
+fn a_trusted_folder_runs_its_scripts_whatever_their_content() {
+    if python().is_none() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let results = results(dir.path());
+    let mut trust = crate::user::ScriptTrust::default();
+    trust.trust_folder(&dir.path().join("project"), "2026-11-25");
+    let changed = script_run(
+        dir.path(),
+        "count.py",
+        &format!("{COUNT_LINES}\n# changed"),
+        ScriptPermission::Trusted(trust),
+    );
+    assert!(run(&results, &changed).all_written());
+
+    let mut elsewhere = crate::user::ScriptTrust::default();
+    elsewhere.trust_folder(&dir.path().join("other"), "2026-11-25");
+    let outside = script_run(
+        dir.path(),
+        "count.py",
+        COUNT_LINES,
+        ScriptPermission::Trusted(elsewhere),
+    );
+    assert!(matches!(
+        run(&results, &outside).entries[1].status,
         EntryStatus::Skipped(_)
     ));
 }
