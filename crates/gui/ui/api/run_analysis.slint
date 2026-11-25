@@ -4,7 +4,7 @@
 // api/run_analysis.slint — the Rust interface of dialogs/run_analysis_dialog.slint: the state Rust
 // sets, the callbacks it answers.
 
-// An export set to run after every run, as the run dialog lists it.
+// An export set to run after analysis, as the run dialog lists it.
 export struct RunExportRow {
     id: int,
     name: string,
@@ -28,7 +28,7 @@ export global RunAnalysisState {
     in property <[string]> base_paths: [];
     in-out property <int> base_index: 0;
 
-    /// Afterwards: the exports set to run after every run.
+    /// Afterwards: the exports set to run after analysis.
     in-out property <[RunExportRow]> exports: [];
 
     callback confirm();

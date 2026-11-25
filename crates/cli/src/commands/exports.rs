@@ -205,7 +205,7 @@ pub(crate) fn no_such_export(exports: &[ExportSettings], wanted: &str) -> Intern
     })
 }
 
-/// A line per export: id, name, what it writes, where to, after every run.
+/// A line per export: id, name, what it writes, where to, after analysis.
 fn list_text(exports: &[ExportSettings]) -> String {
     if exports.is_empty() {
         return "The project has no exports.\n".to_string();
@@ -232,7 +232,7 @@ fn list_text(exports: &[ExportSettings]) -> String {
             "{:>id_width$}  {:<name_width$}  {:<5}  {} → {}\n",
             export.id,
             export.name,
-            if export.run_after_every_run {
+            if export.run_after_analysis {
                 "yes"
             } else {
                 "no"
@@ -324,7 +324,7 @@ fn view_text(export: &ExportSettings) -> String {
     ));
     out.push_str(&format!(
         "  After every run: {}\n",
-        if export.run_after_every_run {
+        if export.run_after_analysis {
             "yes"
         } else {
             "no"
@@ -411,7 +411,7 @@ mod tests {
 
     fn exports() -> Vec<ExportSettings> {
         serde_json::from_value(json!([
-            { "id": 3, "name": "Per image for R", "prefix": "exp1", "runAfterEveryRun": true,
+            { "id": 3, "name": "Per image for R", "prefix": "exp1", "runAfterAnalysis": true,
               "entries": [
                 { "kind": "DATA", "outputs": ["OBJECTS"], "split": "IMAGE" },
                 { "kind": "DRAWN_IMAGES" },

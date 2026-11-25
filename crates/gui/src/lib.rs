@@ -107,7 +107,7 @@ pub struct UiState {
     /// Called with a finished analysis' folder (not a preview's).
     analysis_finished_listener: Mutex<Option<AnalysisFinishedListener>>,
     /// The exports the run dialog left on for the run going on (`None`:
-    /// those set to run after every run).
+    /// those set to run after analysis).
     exports_for_run: Mutex<Option<Vec<u32>>>,
     /// Called once another image (or series) is shown - see `image_opened`.
     image_opened_listeners: Mutex<Vec<Box<dyn Fn() + Send + Sync>>>,

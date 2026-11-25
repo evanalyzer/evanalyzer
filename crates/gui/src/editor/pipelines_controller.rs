@@ -3368,14 +3368,14 @@ impl PipelinesController {
         state.set_base_names(ModelRc::new(VecModel::from(names)));
         state.set_base_paths(ModelRc::new(VecModel::from(paths)));
         state.set_base_index(open as i32);
-        // Afterwards: the exports set to run after every run, all on.
+        // Afterwards: the exports set to run after analysis, all on.
         let exports: Vec<crate::RunExportRow> = self
             .app_state
             .get_project()
             .settings
             .exports
             .iter()
-            .filter(|export| export.run_after_every_run)
+            .filter(|export| export.run_after_analysis)
             .map(|export| crate::RunExportRow {
                 id: export.id as i32,
                 name: export.name.as_str().into(),
@@ -12754,7 +12754,7 @@ mod tests {
         );
     }
 
-    /// Afterwards: the exports set to run after every run, all on; one
+    /// Afterwards: the exports set to run after analysis, all on; one
     /// switched off stays off for this run only - what is left on goes
     /// with the run.
     #[test]
@@ -12764,10 +12764,10 @@ mod tests {
             let mut project = ui_state.get_project_write();
             project.tmp_settings.current_project = Some(PathBuf::from("/data/exp/project.evaproj"));
             project.settings.exports = serde_json::from_value(serde_json::json!([
-                { "id": 1, "name": "Per image", "runAfterEveryRun": true,
+                { "id": 1, "name": "Per image", "runAfterAnalysis": true,
                   "entries": [{ "kind": "DATA", "outputs": ["IMAGES"] }] },
                 { "id": 2, "name": "By hand only" },
-                { "id": 3, "name": "Tracks", "runAfterEveryRun": true }
+                { "id": 3, "name": "Tracks", "runAfterAnalysis": true }
             ]))
             .unwrap();
         }
@@ -12786,7 +12786,7 @@ mod tests {
         // Asked once.
         assert_eq!(ui_state.take_exports_for_run(), None);
         // The project's setting is untouched.
-        assert!(ui_state.get_project().settings.exports[2].run_after_every_run);
+        assert!(ui_state.get_project().settings.exports[2].run_after_analysis);
     }
 
     #[test]

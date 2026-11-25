@@ -68,7 +68,7 @@ pub fn run(args: AnalyzeArgs, backend: &dyn Backend) -> Result<(), InternalError
     run_exports_after(&args, backend, &project, &output_path)
 }
 
-/// The exports after a run: those set to run after every run, or the
+/// The exports after a run: those set to run after analysis, or the
 /// `--export`s, none with `--no-exports`. Fails if one of them does.
 fn run_exports_after(
     args: &AnalyzeArgs,
@@ -83,7 +83,7 @@ fn run_exports_after(
     } else if args.exports.is_empty() {
         exports
             .iter()
-            .filter(|e| e.run_after_every_run)
+            .filter(|e| e.run_after_analysis)
             .cloned()
             .collect()
     } else {
@@ -508,7 +508,7 @@ mod tests {
         }];
         // Runs after the analysis, into its results folder.
         settings.exports = serde_json::from_value(serde_json::json!([
-            { "id": 1, "name": "After", "runAfterEveryRun": true, "entries": [
+            { "id": 1, "name": "After", "runAfterAnalysis": true, "entries": [
                 { "kind": "DATA", "outputs": ["IMAGES"] },
                 { "kind": "DRAWN_IMAGES", "maxSide": 128 }
             ] },
@@ -548,7 +548,7 @@ mod tests {
 
         let results_root = file.path.parent().unwrap().join("results");
         let evadb = find_evadb(&results_root).expect("analyze should have produced a .evadb file");
-        // The export set to run after every run wrote next to the results,
+        // The export set to run after analysis wrote next to the results,
         // the other one didn't.
         let run_folder = evadb.parent().unwrap();
         let images_csv = std::fs::read_to_string(run_folder.join("images.csv")).unwrap();

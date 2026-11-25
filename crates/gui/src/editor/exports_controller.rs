@@ -516,7 +516,7 @@ impl ExportsController {
             let Ok(id) = u32::try_from(id) else {
                 return;
             };
-            this.edit(id, |export| export.run_after_every_run = on);
+            this.edit(id, |export| export.run_after_analysis = on);
         });
 
         let this = self.clone();
@@ -837,8 +837,8 @@ impl ExportsController {
             exports.push(ExportSettings {
                 id: copy,
                 name,
-                // Two of the same after every run write into each other.
-                run_after_every_run: false,
+                // Two of the same after analysis write into each other.
+                run_after_analysis: false,
                 ..original
             });
             copy
@@ -1190,7 +1190,7 @@ impl ExportsController {
             .iter()
             .filter(|export| match &wanted {
                 Some(ids) => ids.contains(&export.id),
-                None => export.run_after_every_run,
+                None => export.run_after_analysis,
             })
             .cloned()
             .collect();
@@ -1649,7 +1649,7 @@ impl ExportsController {
             let id = exports.iter().map(|e| e.id).max().map_or(1, |max| max + 1);
             let wanted = if name.is_empty() { view_name } else { name };
             let mut export = new_export(id, free_export_name(exports, wanted));
-            export.run_after_every_run = after;
+            export.run_after_analysis = after;
             export.entries.push(entry);
             exports.push(export);
             id
@@ -2096,7 +2096,7 @@ impl ExportsController {
                     id: export.id as i32,
                     name: export.name.as_str().into(),
                     summary: summary(export).into(),
-                    after: export.run_after_every_run,
+                    after: export.run_after_analysis,
                     status: status.into(),
                     status_tone: tone,
                 }
@@ -2106,7 +2106,7 @@ impl ExportsController {
             settings
                 .exports
                 .iter()
-                .filter(|e| e.run_after_every_run)
+                .filter(|e| e.run_after_analysis)
                 .count() as i32,
         );
         state.set_exports(model(rows));
@@ -2202,7 +2202,7 @@ impl ExportsController {
             LengthUnit::Um => 0,
             LengthUnit::Nm => 1,
         });
-        state.set_after(export.run_after_every_run);
+        state.set_after(export.run_after_analysis);
         state.set_problems(problems_text(export).into());
         state.set_entries(model(
             export
@@ -2885,7 +2885,7 @@ fn set_export_field(export: &mut ExportSettings, key: &str, value: &str) {
                 export.length_unit = unit;
             }
         }
-        "after" => export.run_after_every_run = value == "1",
+        "after" => export.run_after_analysis = value == "1",
         _ => log::warn!("Unknown export setting {key}"),
     }
 }

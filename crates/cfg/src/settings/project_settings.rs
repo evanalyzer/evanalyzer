@@ -160,7 +160,7 @@ pub struct ProjectSettings {
     #[serde(default)]
     pub results_views: ResultsViews,
     /// The project's exports: the tables, images and scripts written from
-    /// a run's results, where to and whether after every run - see
+    /// a run's results, where to and whether after analysis - see
     /// `docs/exports.md`. Absent in projects before schema 5.
     #[serde(default)]
     pub exports: Vec<ExportSettings>,

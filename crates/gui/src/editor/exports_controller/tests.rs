@@ -210,7 +210,7 @@ fn a_python_script_is_python() {
     assert_eq!(state.get_language(), 1);
 }
 
-/// Duplicate: a copy that doesn't run after every run; delete takes it
+/// Duplicate: a copy that doesn't run after analysis; delete takes it
 /// away and the pick with it.
 #[test]
 fn duplicate_and_delete() {
@@ -223,8 +223,8 @@ fn duplicate_and_delete() {
     let all = exports(&ui_state);
     assert_eq!(all.len(), 2);
     assert_eq!(all[1].name, "Export copy");
-    assert!(all[0].run_after_every_run);
-    assert!(!all[1].run_after_every_run);
+    assert!(all[0].run_after_analysis);
+    assert!(!all[1].run_after_analysis);
     assert_eq!(all[1].entries, all[0].entries);
     assert_eq!(state.get_selected_id(), all[1].id as i32);
     state.invoke_delete(all[1].id as i32);
@@ -562,7 +562,7 @@ fn the_exports_run_after_an_analysis() {
     let (ui, ui_state, _controller) = setup(project);
     let state = ui.global::<ExportsState>();
     let running = ui.global::<crate::PipelineRunningState>();
-    state.invoke_new_export(); // "Export": images.csv, not after every run
+    state.invoke_new_export(); // "Export": images.csv, not after analysis
     state.invoke_set_entry_field("images".into(), "0".into());
     let run = dir.path().join("results").join("20261124T090000Z__run");
 
@@ -838,7 +838,7 @@ fn export_this_view_adds_it_to_the_project() {
     let all = exports(&ui_state);
     assert_eq!(all.len(), 1);
     assert_eq!(all[0].name, "Plate");
-    assert!(!all[0].run_after_every_run);
+    assert!(!all[0].run_after_analysis);
     match &all[0].entries[0] {
         ExportEntry::Data(data) => assert_eq!(data.name, "ctrl"),
         _ => panic!("a data export"),
@@ -1324,7 +1324,7 @@ fn classes_side_by_side_from_the_tab() {
     );
 }
 
-/// The list like every list: the eye runs it after every run (the head
+/// The list like every list: the eye runs it after analysis (the head
 /// counts them), ⋯ › Move up / down reorders - at an end it stays.
 #[test]
 fn the_list_eye_and_order() {
@@ -1405,8 +1405,7 @@ fn the_run_pills_show_on_every_tab() {
     ui.window().set_size(slint::LogicalSize::new(1280.0, 680.0));
     ui.global::<StartState>().set_active(false);
     let shown = |label: &str| {
-        ElementHandle::find_by_accessible_label(&ui, label)
-            .any(|e| e.size().width > 0.0)
+        ElementHandle::find_by_accessible_label(&ui, label).any(|e| e.size().width > 0.0)
     };
     let state = ui.global::<ExportsState>();
     for mode in [
@@ -1438,6 +1437,9 @@ fn the_run_pills_show_on_every_tab() {
     running.set_active(true);
     for mode in [WorkspaceMode::Results, WorkspaceMode::Exports] {
         ui.global::<LayoutState>().set_mode(mode);
-        assert!(shown("Analyzing, starting"), "the analysis' pill in {mode:?}");
+        assert!(
+            shown("Analyzing, starting"),
+            "the analysis' pill in {mode:?}"
+        );
     }
 }

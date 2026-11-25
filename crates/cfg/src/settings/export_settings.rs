@@ -2,7 +2,7 @@
 //
 // The project's exports (`ProjectSettings::exports`): named recipes of the
 // tables, images and scripts to write from a run's results, where to and
-// whether after every run. The reference for every key, its values, its
+// whether after analysis. The reference for every key, its values, its
 // default and the files written is `docs/exports.md` - keep both in step.
 //
 // These are part of the project file and must keep reading: a new key or
@@ -20,7 +20,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// One export: what it writes (`entries`, in this order), where to
-/// (`output`) and whether after every run.
+/// (`output`) and whether after analysis.
 #[derive(Serialize, Deserialize, Debug, JsonSchema, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportSettings {
@@ -40,9 +40,10 @@ pub struct ExportSettings {
     /// Where the files go.
     #[serde(default)]
     pub output: ExportOutput,
-    /// Run the export when an analysis run finishes.
+    /// Run the export as the last step of every analysis ("Run after
+    /// analysis"); the run dialog can switch it off for one run.
     #[serde(default)]
-    pub run_after_every_run: bool,
+    pub run_after_analysis: bool,
     /// The table format the files are written in - pinned, so a newer app
     /// keeps writing it until the user changes it.
     #[serde(default = "default_table_format")]
@@ -523,7 +524,7 @@ mod tests {
             "prefix": "exp1",
             "lengthUnit": "UM",
             "output": { "location": "RESULTS_FOLDER", "folder": "", "ifExists": "OVERWRITE" },
-            "runAfterEveryRun": true,
+            "runAfterAnalysis": true,
             "tableFormat": 1,
             "entries": [
                 { "kind": "DATA", "outputs": ["OBJECTS", "IMAGES", "PLATE"],
@@ -579,7 +580,7 @@ mod tests {
         assert_eq!(export.output, ExportOutput::default());
         assert_eq!(export.output.location, OutputLocation::ResultsFolder);
         assert_eq!(export.output.if_exists, IfExists::Overwrite);
-        assert!(!export.run_after_every_run);
+        assert!(!export.run_after_analysis);
         assert_eq!(export.table_format, CURRENT_TABLE_FORMAT);
         assert!(export.entries.is_empty());
     }
@@ -597,7 +598,7 @@ mod tests {
                 folder: "exports".into(),
                 if_exists: IfExists::Rename,
             },
-            run_after_every_run: true,
+            run_after_analysis: true,
             table_format: 1,
             entries: vec![
                 ExportEntry::Data(DataExport {

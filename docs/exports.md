@@ -4,7 +4,7 @@ Status: specification, agreed 2026-11-24. Not built yet.
 
 An **export** is a named recipe kept in the project file: which tables,
 images and scripts to produce from a run's results, where to write them and
-whether to do it after every run. Whoever gets the project gets the same
+whether to do it after every analysis. Whoever gets the project gets the same
 files after their run, so an R or Python script written against them keeps
 working.
 
@@ -33,7 +33,7 @@ SCREAMING_SNAKE_CASE, like the rest of the project file.
     "prefix": "exp1",
     "lengthUnit": "UM",
     "output": { "location": "RESULTS_FOLDER", "folder": "", "ifExists": "OVERWRITE" },
-    "runAfterEveryRun": true,
+    "runAfterAnalysis": true,
     "tableFormat": 1,
     "entries": [
       { "kind": "DATA", "outputs": ["OBJECTS", "IMAGES", "PLATE"],
@@ -56,7 +56,7 @@ SCREAMING_SNAKE_CASE, like the rest of the project file.
 | `prefix` | text | none | Put in front of every file and folder the export writes: `{prefix}_{name}`. Sanitized like every name part (§2.1). |
 | `lengthUnit` | `"UM"` \| `"NM"` | `"UM"` | Unit of lengths, areas and volumes in the tables. Shows in the column names (§3.3). |
 | `output` | object | see 1.2 | Where the files go. |
-| `runAfterEveryRun` | bool | `false` | Run the export as the last step of every analysis ("Run after analysis" in the app). The run dialog can switch it off for one run. |
+| `runAfterAnalysis` | bool | `false` | Run the export as the last step of every analysis ("Run after analysis" in the app). The run dialog can switch it off for one run. |
 | `tableFormat` | integer | `1` | The table format the files are written in (§3). Pinned: a newer app keeps writing this format until the user changes it. |
 | `entries` | list | `[]` | What to write, in this order. A script entry sees everything written by the entries before it. |
 
@@ -228,11 +228,11 @@ Warnings:
 
 | Command | Does |
 |---|---|
-| `export list --project <file.evaproj>` | Lists the exports: id, name, entries, output, run after every run. |
+| `export list --project <file.evaproj>` | Lists the exports: id, name, entries, output, run after analysis. |
 | `export view <id or name> --project <file.evaproj>` | Shows one export's settings. |
 | `export run <id or name> --project <file.evaproj> [--results <.evadb or its folder>] [--output <folder>] [--allow-scripts \| --no-scripts]` | Runs the export on a run's results - the newest run of the project without `--results`. `--output` writes into that folder for this once instead of the export's `output`. A script someone else wrote needs `--allow-scripts` (there is nobody to ask); `--no-scripts` leaves scripts out. |
 
-`analyze` runs the exports with `runAfterEveryRun` when it is done, into
+`analyze` runs the exports with `runAfterAnalysis` when it is done, into
 its results folder; `--export <id or name>` (repeatable) runs those
 instead, `--no-exports` none, `--allow-scripts` lets their scripts run
 without asking. The analysis is kept even where an export fails; the
@@ -242,7 +242,7 @@ command then fails, naming the export.
 
 - **Exports tab** (Ctrl+4): the project's exports, the one picked and the
   settings of its entry. The list's rows are like every list's: the eye
-  is `runAfterEveryRun` (crossed: only by hand), ⋯ (also on the picked
+  is `runAfterAnalysis` (crossed: only by hand), ⋯ (also on the picked
   export's head) has Run, Run on…, Duplicate, Move up / down (the order
   they run in) and Delete export… (asked first). Run runs it on the
   project's newest analysis, the ▾ beside it on the analyses ticked there
@@ -251,7 +251,7 @@ command then fails, naming the export.
   wrote, a folder button (not for results on a server), its report lines
   folded while all went well.
 - **Run after analysis**: the run dialog lists the exports with
-  `runAfterEveryRun` under "Afterwards"; one switched off there stays off
+  `runAfterAnalysis` under "Afterwards"; one switched off there stays off
   for that run only. They are the analysis' last step: its progress in the
   top bar says "Exporting" while they run (its Stop stops them), its note
   comes once they are done and says what they wrote - "Open in Exports"

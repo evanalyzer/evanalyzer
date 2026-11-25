@@ -16,7 +16,7 @@
       }
     },
     "exports": {
-      "description": "The project's exports: the tables, images and scripts written from\na run's results, where to and whether after every run - see\n`docs/exports.md`. Absent in projects before schema 5.",
+      "description": "The project's exports: the tables, images and scripts written from\na run's results, where to and whether after analysis - see\n`docs/exports.md`. Absent in projects before schema 5.",
       "type": "array",
       "default": [],
       "items": {
@@ -1351,7 +1351,7 @@
       }
     },
     "ExportSettings": {
-      "description": "One export: what it writes (`entries`, in this order), where to\n(`output`) and whether after every run.",
+      "description": "One export: what it writes (`entries`, in this order), where to\n(`output`) and whether after analysis.",
       "type": "object",
       "properties": {
         "entries": {
@@ -1391,8 +1391,8 @@
           "type": "string",
           "default": ""
         },
-        "runAfterEveryRun": {
-          "description": "Run the export when an analysis run finishes.",
+        "runAfterAnalysis": {
+          "description": "Run the export as the last step of every analysis (\"Run after\nanalysis\"); the run dialog can switch it off for one run.",
           "type": "boolean",
           "default": false
         },

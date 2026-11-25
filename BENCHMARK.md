@@ -2564,6 +2564,36 @@ benchmark ran on different rows in the two builds (page 1 vs page 26, other
 images to show), so their times aren't comparable; across a page end an
 arrow step costs one page read (~30 ms).
 
+## Classes side by side per well and per folder (2026-11-24)
+
+New: `get_grouped_by_image` with `transpond_table` and a grouping (Results
+List "Classes as columns" per well / folder, the data export's Wells /
+Folders side by side) - the normal per-(well, class) query, its rows put
+side by side per well (`get_grouped_by_group_transposed`). Before, that
+filter returned the normal rows. App example `bench_empty_groups --only
+per-` (cases per-well / per-folder added), old = `9251cfde`, new = the
+change, same dependencies, both alternated (old, new, new, old) with 10 s
+between runs, median of 5 per query (22 cores). Columns Count, Area,
+aggregations Avg + Sum, every class.
+
+| Query (ms) | 1776 images, 21 classes (1.7 GB) old / new | 2 images × 1.5M objects (1.2 GB) old / new |
+|---|---|---|
+| per well, normal, first page | 43.3, 41.2 / 44.9, 41.5 | 35.9, 35.7 / 35.0, 37.0 |
+| per well, normal, every page | 45.3, 42.6 / 45.7, 45.2 | 35.3, 35.6 / 35.3, 34.9 |
+| per well, side by side, every page | (normal rows) 45.9, 44.5 / 45.0, 44.8 | (normal rows) 35.7, 35.8 / 36.5, 35.4 |
+| per folder, side by side, every page | (normal rows) 41.0, 40.1 / 41.0, 42.2 | (normal rows) 34.2, 34.5 / 36.8, 35.4 |
+| per image, normal, every page | 85.3, 86.2 / 83.1, 88.0 | 24.6, 25.0 / 24.8, 23.9 |
+| per image, side by side, every page | 48.5, 48.5 / 48.1, 50.7 | 28.2, 26.5 / 27.3, 26.6 |
+| peak RSS of the process (all queries) | 358, 370 / 344, 355 MB | 259, 270 / 258, 266 MB |
+
+- The unchanged queries (normal per well / folder / image, per image side
+  by side) take the same time - differences within the run-to-run spread.
+- Side by side per well costs what the normal per-well query costs (111
+  wells instead of 2331 well-class rows; 2 instead of 44): the placing
+  side by side is free next to the query.
+- Not covered: the GUI's List and the export writer around the query
+  (the query is their work); a weak computer.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -2584,6 +2614,7 @@ graphics driver).
 | List export (a row per object), 6.6M objects, CSV | ~790 MB (query process) | 2026-10-21 | List export |
 | List export, all objects of 100,000 images (4M), CSV | 1.20-1.22 GB (query process) | 2026-11-18 | Exports of 100,000 images |
 | Grouped-by-image export, 100,000 images (2.2M rows), CSV / XLSX | 556-612 MB (query process; was 4.6 / 5.2 GB) | 2026-11-18 | Exports of 100,000 images |
+| Per well / folder / image, classes side by side (1776 images; 2 images × 1.5M objects) | 344-370 / 258-270 MB (query process) | 2026-11-24 | Classes side by side per well and per folder |
 | Tracks: one image's tracks (1500 tracks) | ~60 MB (query process), ~1 MB kept | 2026-10-21 | Results › Tracks |
 | Track export, a row per track (144,000 tracks) | ~410 MB (query process) | 2026-10-21 | Results › Tracks |
 | Tracks, Full: every track's row (144,000 tracks) | ~300 MB (query process) | 2026-10-21 | Results › Tracks |

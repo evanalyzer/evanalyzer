@@ -14,7 +14,7 @@ export struct ExportRow {
     name: string,
     // "2 tables · drawn images · script".
     summary: string,
-    // Runs after every run.
+    // Runs after analysis.
     after: bool,
     // The last run here: "", "✓ 09:14", "⚠ script failed".
     status: string,
@@ -226,7 +226,7 @@ export global ExportsState {
     // Moves the export (its id) by a place up (-1) or down (1): the order
     // they run in after an analysis.
     callback move-export(int, int);
-    // How many run after every run (the list's head).
+    // How many run after analysis (the list's head).
     in property <int> after-count;
     // The trash asked about this export (its id, -1 none): the confirm.
     in-out property <int> delete-asked: -1;
