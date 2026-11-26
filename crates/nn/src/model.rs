@@ -116,23 +116,6 @@ pub enum Normalization {
     None,
 }
 
-/// The model interface before pre- and post-processing moved into nn -
-/// StarDist and Cellpose-SAM until they move too (then it goes). Run with
-/// [`crate::infer_raw`].
-pub trait RawModel: Sized + Send + Sync + 'static {
-    /// What a step chooses per run.
-    type Settings;
-    /// What the model gives back - plain data.
-    type Output;
-
-    /// Builds the architecture from the file's metadata and loads the
-    /// weights onto `device` - a GPU when `gpu`.
-    fn load(file: &Path, device: &Device, gpu: bool) -> Result<Self, NnError>;
-
-    /// Runs the model on `image`.
-    fn infer(&self, image: Image<'_>, settings: &Self::Settings) -> Result<Self::Output, NnError>;
-}
-
 /// A model that can be trained from new weights or fine-tuned from a file.
 /// A later track (after `tch` is gone: training needs burn's `std` +
 /// `optim`); the targets are computed from [`Trainable::Target`] by each

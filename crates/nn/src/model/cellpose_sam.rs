@@ -8,39 +8,70 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 //!
 //! Cellpose-SAM (Cellpose BSD-3 + SAM ViT-L encoder Apache-2.0) as the
-//! libtorch engine ran it (removed `crates/ai/src/torch/cellpose.rs`): the image's
-//! first channel resized (bilinear) to the size the model runs at, its
-//! channels filled up (zeros, or the image repeated), run in overlapping
-//! 256 x 256 tiles blended with Cellpose's taper (`transforms.average_tiles`)
-//! into the flows and the cell probability (after a sigmoid). The network
-//! takes exactly one tile size: its positional embedding is fixed to it.
+//! libtorch engine ran it (removed `crates/ai/src/torch/cellpose.rs`), in
+//! three steps ([`Model`]):
+//!
+//! - `pre`: the image's first channel normalized like Cellpose's
+//!   `normalize99` (its percentiles computed here, applied in `infer`) and
+//!   resized (bilinear) to the size the model runs at ([`pre`]);
+//! - `infer`: its channels filled up (zeros, or the image repeated), run in
+//!   overlapping 256 x 256 tiles blended with Cellpose's taper
+//!   (`transforms.average_tiles`) into the flows and the cell probability
+//!   (after a sigmoid) ([`infer`]). The network takes exactly one tile
+//!   size: its positional embedding is fixed to it;
+//! - `post`: Cellpose's dynamics and mask building, its flow-error check,
+//!   the masks scaled back to the image and objects below the minimum size
+//!   removed ([`post`]).
 //!
 //! The model file (`crate::weights`): architecture `cellpose_sam`, see
 //! `config.rs`.
+//!
+//! Portions of `post` ported from Cellpose, Copyright © 2020 Howard Hughes
+//! Medical Institute, BSD-3-Clause - see the third-party notices (About >
+//! Licenses).
 
 use crate::errors::NnError;
-use crate::model::{Image, RawModel};
-use crate::weights::ModelFile;
-use burn::tensor::module::interpolate;
-use burn::tensor::ops::{InterpolateMode, InterpolateOptions};
+use crate::model::{Image, Model, Normalization, Written};
+use crate::weights::{ModelFile, ModelMetadata};
 use burn::tensor::{Device, Tensor, TensorData};
+use std::borrow::Cow;
 use std::path::Path;
 
 mod config;
+mod infer;
 mod network;
+mod post;
+mod pre;
 
 pub use config::{ARCH, ARCH_VERSION, CellposeSamConfig};
 
 /// The only input side the published network takes.
 pub const TILE_SIDE: usize = 256;
 
-/// Fraction of a tile that overlaps its neighbour - Cellpose's own default
-/// (`tile_overlap=0.1` in `CellposeModel.eval`).
-const TILE_OVERLAP: f32 = 0.1;
+/// The percentiles [`Normalization::ModelDefault`] stands for: Cellpose's
+/// `normalize99` defaults, which its models were trained with.
+pub const DEFAULT_PERCENTILES: (f64, f64) = (1.0, 99.0);
+
+/// What a Cellpose-SAM's model file says without its weights.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CellposeSamHeader {
+    pub config: CellposeSamConfig,
+}
+
+impl CellposeSamHeader {
+    fn from_metadata(metadata: &ModelMetadata) -> Result<Self, NnError> {
+        metadata.expect_arch(ARCH, ARCH_VERSION)?;
+        let config: CellposeSamConfig = serde_json::from_str(&metadata.config)
+            .map_err(|e| NnError::InvalidModelFile(format!("Cellpose-SAM config: {e}")))?;
+        config.check()?;
+        Ok(Self { config })
+    }
+}
 
 /// What a step chooses per run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CellposeSamSettings {
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CellposeSamParams {
+    pub normalization: Normalization,
     /// The size the model runs at (the image is resized to it).
     pub net_width: usize,
     pub net_height: usize,
@@ -48,15 +79,50 @@ pub struct CellposeSamSettings {
     pub input_channels: usize,
     /// Copy the gray image into every channel instead of zero-filling.
     pub replicate_gray_channel: bool,
+    /// Cell probability from which a pixel takes part in the dynamics.
+    pub probability_threshold: f32,
+    /// Euler steps along the flows (Cellpose: 200).
+    pub flow_iterations: usize,
+    /// Objects whose flows differ more from the predicted ones (mean
+    /// squared error) are removed; 0 disables the check (Cellpose: 0.4).
+    pub flow_threshold: f32,
+    /// Objects of fewer pixels (at the image's size) are removed.
+    pub min_object_size: usize,
+    /// Cellpose's own dynamics and mask building (interpolated flows, seeds
+    /// of more than 10 pixels) instead of every sink starting an object.
+    pub cellpose_dynamics: bool,
 }
 
+/// The image as the network gets it - made by `pre` only.
+pub struct CellposeSamInput<'a> {
+    /// The first channel at the network's size.
+    gray: Cow<'a, [f32]>,
+    width: usize,
+    height: usize,
+    /// Channels handed to the network.
+    channels: usize,
+    replicate_gray_channel: bool,
+    /// Applied while each tile is filled.
+    normalization: Option<pre::Affine>,
+}
+
+/// What the network gives back, at the size it ran at.
 #[derive(Debug, Clone, PartialEq)]
-pub struct CellposeSamOutput {
+pub struct CellposeSamRaw {
     /// Each `net_width * net_height`.
     pub flow_y: Vec<f32>,
     pub flow_x: Vec<f32>,
     /// After the sigmoid.
     pub cell_prob: Vec<f32>,
+}
+
+/// The image's size and the size the model ran at, for `post`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CellposeSamPlan {
+    /// `(width, height)`.
+    pub image: (usize, usize),
+    /// `(width, height)`.
+    pub net: (usize, usize),
 }
 
 pub struct CellposeSam {
@@ -79,10 +145,7 @@ impl CellposeSam {
     /// A Cellpose-SAM from a model file's bytes (see `config.rs`).
     pub fn from_bytes(bytes: &[u8], device: &Device) -> Result<Self, NnError> {
         let file = ModelFile::parse(bytes)?;
-        let metadata = file.expect_arch(ARCH, ARCH_VERSION)?;
-        let config: CellposeSamConfig = serde_json::from_str(&metadata.config)
-            .map_err(|e| NnError::InvalidModelFile(format!("Cellpose-SAM config: {e}")))?;
-        config.check()?;
+        let CellposeSamHeader { config } = CellposeSamHeader::from_metadata(&file.metadata)?;
         let network = network::CellposeSamNet::load(&file.tensors, &config, device)?;
         Ok(Self {
             config,
@@ -108,50 +171,45 @@ impl CellposeSam {
         );
         crate::errors::read_f32(self.network.forward(x))
     }
-}
 
-/// Start offsets of the `tile`-wide tiles covering `len` pixels with
-/// [`TILE_OVERLAP`] - Cellpose's `transforms.make_tiles` (in f32, as the
-/// libtorch engine computed them). One tile at 0 when `len <= tile`.
-fn tile_starts(len: usize, tile: usize) -> Vec<usize> {
-    if len <= tile {
-        return vec![0];
-    }
-    let overlap = TILE_OVERLAP.clamp(0.05, 0.5);
-    let n = (((1.0 + 2.0 * overlap) * len as f32) / tile as f32).ceil() as usize;
-    if n <= 1 {
-        return vec![0];
-    }
-    let span = (len - tile) as f32;
-    (0..n)
-        .map(|i| (span * i as f32 / (n - 1) as f32) as usize)
-        .collect()
-}
-
-/// Cellpose's blend weight per pixel of a `tile`² tile
-/// (`transforms._taper_mask`): ~1 in the middle, a sigmoid falling toward
-/// (never to) 0 at the edges.
-fn taper_mask(tile: usize) -> Vec<f32> {
-    const SIG: f32 = 7.5;
-    let center = (tile as f32 - 1.0) / 2.0;
-    let mask1d: Vec<f32> = (0..tile)
-        .map(|i| {
-            let xm = (i as f32 - center).abs();
-            1.0 / (1.0 + ((xm - (tile as f32 / 2.0 - 20.0)) / SIG).exp())
-        })
-        .collect();
-    let mut mask = Vec::with_capacity(tile * tile);
-    for y in 0..tile {
-        for x in 0..tile {
-            mask.push(mask1d[y] * mask1d[x]);
+    /// What this Cellpose-SAM's model file says without its weights.
+    pub fn to_header(&self) -> CellposeSamHeader {
+        CellposeSamHeader {
+            config: self.config.clone(),
         }
     }
-    mask
 }
 
-impl RawModel for CellposeSam {
-    type Settings = CellposeSamSettings;
-    type Output = CellposeSamOutput;
+/// `file`'s name in front of an invalid-file message.
+fn in_file(file: &Path) -> impl Fn(NnError) -> NnError + '_ {
+    move |e| match e {
+        NnError::InvalidModelFile(m) => {
+            NnError::InvalidModelFile(format!("{}: {m}", file.display()))
+        }
+        other => other,
+    }
+}
+
+impl Model for CellposeSam {
+    type Header = CellposeSamHeader;
+    type Params = CellposeSamParams;
+    type Input<'a> = CellposeSamInput<'a>;
+    type Raw = CellposeSamRaw;
+    type Plan = CellposeSamPlan;
+
+    /// The tiles' outputs blended over the image (sums and weights): 46
+    /// bytes per pixel measured with a stand-in (766 MB at 4096²). The ViT
+    /// on one 256² tile is a fixed amount on top (core's `shared_ram_bytes`).
+    const NET_BYTES_PER_PIXEL: f64 = 48.0;
+    /// The flows and the cell probability, and the dynamics' planes - 42
+    /// bytes per pixel (core's `tests::tile_ram`; the image is only scaled
+    /// down, so per tile pixel at most).
+    const POST_BYTES_PER_PIXEL: f64 = 42.0;
+
+    fn header(file: &Path) -> Result<CellposeSamHeader, NnError> {
+        let metadata = crate::weights::read_header(file)?;
+        CellposeSamHeader::from_metadata(&metadata).map_err(in_file(file))
+    }
 
     /// On the GPU the matrix products and convolutions in f16 (its tensor
     /// cores; 4.9x faster than f32 at 1024², as close to Cellpose's f32
@@ -159,117 +217,54 @@ impl RawModel for CellposeSam {
     /// on the CPU f32.
     fn load(file: &Path, device: &Device, gpu: bool) -> Result<Self, NnError> {
         let bytes = std::fs::read(file)?;
-        let mut net = Self::from_bytes(&bytes, device).map_err(|e| match e {
-            NnError::InvalidModelFile(m) => {
-                NnError::InvalidModelFile(format!("{}: {m}", file.display()))
-            }
-            other => other,
-        })?;
+        let mut net = Self::from_bytes(&bytes, device).map_err(in_file(file))?;
         net.set_half(gpu);
         Ok(net)
     }
 
     /// Uses the image's first channel, as the libtorch engine did.
-    fn infer(
-        &self,
-        image: Image<'_>,
-        settings: &CellposeSamSettings,
-    ) -> Result<CellposeSamOutput, NnError> {
-        let (width, height) = (image.width, image.height);
-        let (w, h) = (settings.net_width, settings.net_height);
-        if width == 0 || height == 0 || w == 0 || h == 0 || image.channels == 0 {
-            return Err(NnError::InvalidInput("Cellpose: an empty image".into()));
-        }
-        if image.data.len() < width * height {
-            return Err(NnError::InvalidInput(format!(
-                "Cellpose: the image has {} values, {} expected",
-                image.data.len(),
-                width * height
-            )));
-        }
-        let channels = settings.input_channels.clamp(1, self.config.in_channels);
-        // The first channel at the network's size (bilinear,
-        // align_corners = false - PyTorch's `upsample_bilinear2d`).
-        let gray = &image.data[..width * height];
-        let gray: Vec<f32> = if (w, h) == (width, height) {
-            gray.to_vec()
-        } else {
-            let x = Tensor::<4>::from_data(
-                TensorData::new(gray.to_vec(), [1, 1, height, width]),
-                &self.device,
-            );
-            let y = interpolate(
-                x,
-                InterpolateOptions::new(InterpolateMode::Bilinear)
-                    .with_align_corners(false)
-                    .with_output_size([h, w]),
-            );
-            y.into_data()
-                .try_to_vec::<f32>()
-                .map_err(|e| NnError::Internal(format!("{e:?}")))?
+    fn pre<'a>(
+        header: &CellposeSamHeader,
+        image: Image<'a>,
+        params: &CellposeSamParams,
+    ) -> Result<(CellposeSamInput<'a>, CellposeSamPlan), NnError> {
+        let first = pre::first_channel(&image, params)?;
+        let normalization = pre::normalization(first, params.normalization);
+        let net = (params.net_width, params.net_height);
+        let gray = pre::resize_bilinear(first, (image.width, image.height), net);
+        let input = CellposeSamInput {
+            gray,
+            width: net.0,
+            height: net.1,
+            channels: params.input_channels.clamp(1, header.config.in_channels),
+            replicate_gray_channel: params.replicate_gray_channel,
+            normalization,
         };
+        let plan = CellposeSamPlan {
+            image: (image.width, image.height),
+            net,
+        };
+        Ok((input, plan))
+    }
 
-        // Padded at the bottom and right to at least one tile (zeros), in
-        // tiles; each tile's output weighted by the taper, summed, divided by
-        // the summed weights.
-        let s = self.config.tile_size;
-        let (ph, pw) = (h.max(s), w.max(s));
-        let (ys, xs) = (tile_starts(ph, s), tile_starts(pw, s));
-        let mask = taper_mask(s);
-        let n_out = self.config.out_channels;
-        let mut sum = vec![0.0f32; n_out * ph * pw];
-        let mut weight = vec![0.0f32; ph * pw];
-        let mut tile = vec![0.0f32; channels * s * s];
-        for &y0 in &ys {
-            for &x0 in &xs {
-                tile.fill(0.0);
-                for ty in 0..s {
-                    let y = y0 + ty;
-                    if y >= h {
-                        break;
-                    }
-                    for tx in 0..s.min(w.saturating_sub(x0)) {
-                        let v = gray[y * w + x0 + tx];
-                        tile[ty * s + tx] = v;
-                        if settings.replicate_gray_channel {
-                            for c in 1..channels {
-                                tile[(c * s + ty) * s + tx] = v;
-                            }
-                        }
-                    }
-                }
-                let out = self.try_forward_tile(&tile, channels)?;
-                for o in 0..n_out {
-                    for ty in 0..s {
-                        let row = ((o * ph) + y0 + ty) * pw + x0;
-                        let src = (o * s + ty) * s;
-                        for tx in 0..s {
-                            sum[row + tx] += out[src + tx] * mask[ty * s + tx];
-                        }
-                    }
-                }
-                for ty in 0..s {
-                    let row = (y0 + ty) * pw + x0;
-                    for tx in 0..s {
-                        weight[row + tx] += mask[ty * s + tx];
-                    }
-                }
-            }
-        }
-        let plane = |o: usize, f: fn(f32) -> f32| -> Vec<f32> {
-            let mut out = Vec::with_capacity(w * h);
-            for y in 0..h {
-                for x in 0..w {
-                    out.push(f(sum[(o * ph + y) * pw + x] / weight[y * pw + x]));
-                }
-            }
-            out
-        };
-        Ok(CellposeSamOutput {
-            flow_y: plane(0, |v| v),
-            flow_x: plane(1, |v| v),
-            cell_prob: plane(2, |v| 1.0 / (1.0 + (-v).exp())),
-        })
+    fn infer(&self, input: &CellposeSamInput<'_>) -> Result<CellposeSamRaw, NnError> {
+        infer::in_tiles(self, input)
+    }
+
+    fn post(
+        raw: CellposeSamRaw,
+        plan: CellposeSamPlan,
+        params: &CellposeSamParams,
+        out: &mut [u32],
+    ) -> Result<Written, NnError> {
+        post::check_size(out, plan.image)?;
+        let cells = post::cell_pixels(&raw.cell_prob, params.probability_threshold);
+        let mut labels = post::masks(&raw, &cells, plan.net, params);
+        post::remove_bad_flow_masks(&mut labels, &raw, plan.net, params.flow_threshold);
+        drop(raw);
+        post::resize_nearest(&labels, plan.net, plan.image, out);
+        let objects = post::remove_small_and_renumber(out, params.min_object_size);
+        Ok(Written::Instances(objects))
     }
 }
 

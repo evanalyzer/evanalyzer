@@ -24,9 +24,9 @@
 //!     tests/cellpose-sam cells300x200-replicate 6 dgpu f16 [cache folder]
 
 use burn::tensor::{Device, DeviceKind};
-use evanalyzer_nn::RawModel;
 use evanalyzer_nn::model::Image;
-use evanalyzer_nn::model::cellpose_sam::{CellposeSam, CellposeSamSettings};
+use evanalyzer_nn::model::cellpose_sam::{CellposeSam, CellposeSamParams};
+use evanalyzer_nn::{Model, Normalization};
 use std::path::Path;
 use std::time::Instant;
 
@@ -64,11 +64,18 @@ fn main() {
     eprintln!("loaded in {:.1} s", start.elapsed().as_secs_f64());
 
     let input = read_f32(&dir.join("reference-f32").join(format!("{case}.input.f32")));
-    let settings = CellposeSamSettings {
+    // The reference inputs were run as they are: no normalization.
+    let settings = CellposeSamParams {
+        normalization: Normalization::None,
         net_width: w,
         net_height: h,
         input_channels: 3,
         replicate_gray_channel: replicate,
+        probability_threshold: 0.5,
+        flow_iterations: 200,
+        flow_threshold: 0.4,
+        min_object_size: 15,
+        cellpose_dynamics: true,
     };
     let image = Image {
         width: w,
@@ -79,7 +86,8 @@ fn main() {
     let mut times = Vec::new();
     for i in 0..repeats {
         let start = Instant::now();
-        let out = net.infer(image, &settings).unwrap();
+        let (input, _) = CellposeSam::pre(&net.to_header(), image, &settings).unwrap();
+        let out = net.infer(&input).unwrap();
         let secs = start.elapsed().as_secs_f64();
         times.push(secs);
         eprintln!("image {}: {secs:.2} s", i + 1);

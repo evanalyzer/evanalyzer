@@ -12,7 +12,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use evanalyzer_cfg::core_types::InternalErrors;
-use evanalyzer_nn::{DeviceSelection, EngineConfig, Image, Model, RawModel, Written};
+use evanalyzer_nn::{DeviceSelection, EngineConfig, Image, Model, Written};
 use std::fmt;
 use std::str::FromStr;
 use std::sync::OnceLock;
@@ -91,21 +91,6 @@ pub(crate) fn run<M: Model>(
     out: &mut [u32],
 ) -> Result<Written, InternalErrors> {
     evanalyzer_nn::run::<M>(file, image, params, out, engine_config)
-        .map_err(|e| InternalErrors::Generic(e.to_string()))
-}
-
-/// Like [`run`] for the models whose pre- and post-processing are still in
-/// core (StarDist, Cellpose-SAM): their raw output.
-pub(crate) fn infer_raw<M: RawModel>(
-    file: &std::path::Path,
-    image: Image<'_>,
-    settings: &M::Settings,
-) -> Result<M::Output, InternalErrors>
-where
-    M::Settings: Sync,
-    M::Output: Send,
-{
-    evanalyzer_nn::infer_raw::<M>(file, image, settings, engine_config)
         .map_err(|e| InternalErrors::Generic(e.to_string()))
 }
 

@@ -976,6 +976,7 @@ impl From<CellposeSettings> for Cellpose {
             flow_threshold: _s.flow_threshold.clamp(0.0, 10.0),
             cellpose_postprocessing: _s.cellpose_postprocessing,
             replicate_gray_channel: _s.replicate_gray_channel,
+            normalization: InputNormalization::from(_s.normalization),
         }
     }
 }

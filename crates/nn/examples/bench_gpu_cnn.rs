@@ -21,9 +21,9 @@
 
 use burn::tensor::{Device, DeviceKind};
 use evanalyzer_nn::model::Image;
-use evanalyzer_nn::model::stardist::{StarDist, StarDistSettings};
+use evanalyzer_nn::model::stardist::{StarDist, StarDistParams};
 use evanalyzer_nn::model::unet::{UNet, UNetParams};
-use evanalyzer_nn::{Model, Normalization, Pieces, RawModel};
+use evanalyzer_nn::{Model, Normalization, Pieces};
 use std::path::Path;
 use std::time::Instant;
 
@@ -87,7 +87,15 @@ fn main() {
             };
             for i in 0..repeats {
                 let start = Instant::now();
-                let out = net.infer(image, &StarDistSettings { pieces }).unwrap();
+                // The reference input was run as it is: no normalization.
+                let params = StarDistParams {
+                    normalization: Normalization::None,
+                    pieces,
+                    probability_threshold: 0.5,
+                    nms_threshold: 0.3,
+                };
+                let (input, _) = StarDist::pre(&net.to_header(), image, &params).unwrap();
+                let out = net.infer(&input).unwrap();
                 times.push(start.elapsed().as_secs_f64());
                 if i == 0 && !big {
                     let expected = read_f32(&r.join("cells1100x600.output.f32"));

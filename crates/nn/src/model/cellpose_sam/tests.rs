@@ -7,6 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use super::infer::{taper_mask, tile_starts};
 use super::*;
 use crate::weights::{ModelMetadata, NamedTensor};
 
@@ -26,13 +27,30 @@ fn cells(width: usize, height: usize) -> Vec<f32> {
         .collect()
 }
 
-fn settings(w: usize, h: usize) -> CellposeSamSettings {
-    CellposeSamSettings {
+/// The network at `w x h`, the pixels as they are (as before the move).
+fn settings(w: usize, h: usize) -> CellposeSamParams {
+    CellposeSamParams {
+        normalization: Normalization::None,
         net_width: w,
         net_height: h,
         input_channels: 3,
         replicate_gray_channel: false,
+        probability_threshold: 0.5,
+        flow_iterations: 200,
+        flow_threshold: 0.4,
+        min_object_size: 15,
+        cellpose_dynamics: true,
     }
+}
+
+/// `pre` and `infer`, as the engine runs them (here without a slot).
+fn raw(
+    net: &CellposeSam,
+    image: Image<'_>,
+    params: &CellposeSamParams,
+) -> Result<CellposeSamRaw, NnError> {
+    let (input, _) = CellposeSam::pre(&net.to_header(), image, params)?;
+    net.infer(&input)
 }
 
 fn image(data: &[f32], width: usize, height: usize) -> Image<'_> {
@@ -62,9 +80,7 @@ fn tiles_cover_the_side_as_cellpose_makes_them() {
 fn one_tile_is_the_network_output() {
     let net = tiny_model();
     let pixels = cells(32, 32);
-    let out = net
-        .infer(image(&pixels, 32, 32), &settings(32, 32))
-        .unwrap();
+    let out = raw(&net, image(&pixels, 32, 32), &settings(32, 32)).unwrap();
     let mut tile = vec![0.0; 3 * 32 * 32];
     tile[..32 * 32].copy_from_slice(&pixels);
     let raw = net.forward_tile(&tile, 3);
@@ -86,12 +102,12 @@ fn zero_filled_channels_add_nothing_and_replicated_ones_do() {
     let net = tiny_model();
     let pixels = cells(32, 32);
     let run = |input_channels, replicate_gray_channel| {
-        let s = CellposeSamSettings {
+        let s = CellposeSamParams {
             input_channels,
             replicate_gray_channel,
             ..settings(32, 32)
         };
-        net.infer(image(&pixels, 32, 32), &s).unwrap()
+        raw(&net, image(&pixels, 32, 32), &s).unwrap()
     };
     let one = run(1, false);
     let three = run(3, false);
@@ -122,14 +138,14 @@ fn any_size_gives_the_net_size() {
         (40, 40, 64, 50),
     ] {
         let pixels = cells(w, h);
-        let out = net.infer(image(&pixels, w, h), &settings(nw, nh)).unwrap();
+        let out = raw(&net, image(&pixels, w, h), &settings(nw, nh)).unwrap();
         for plane in [&out.flow_y, &out.flow_x, &out.cell_prob] {
             assert_eq!(plane.len(), nw * nh, "{w}x{h} -> {nw}x{nh}");
             assert!(plane.iter().all(|v| v.is_finite()));
         }
         assert!(out.cell_prob.iter().all(|p| (0.0..=1.0).contains(p)));
     }
-    assert!(net.infer(image(&[], 0, 0), &settings(1, 1)).is_err());
+    assert!(raw(&net, image(&[], 0, 0), &settings(1, 1)).is_err());
 }
 
 /// A wrong shape in the file is refused.
@@ -241,14 +257,15 @@ fn real_cpsam_infer_gives_the_libtorch_engines_output() {
         ("cells1024-replicate", 1024, 1024, 1024, 1024, true),
     ] {
         let input = read_f32(&dir.join("reference-f32").join(format!("{name}.input.f32")));
-        let s = CellposeSamSettings {
+        let s = CellposeSamParams {
             net_width: nw,
             net_height: nh,
             input_channels: 3,
             replicate_gray_channel: replicate,
+            ..settings(0, 0)
         };
         let start = std::time::Instant::now();
-        let out = net.infer(image(&input, w, h), &s).unwrap();
+        let out = raw(&net, image(&input, w, h), &s).unwrap();
         let secs = start.elapsed().as_secs_f64();
         let ours = [out.flow_y, out.flow_x, out.cell_prob].concat();
         let n = nw * nh;
@@ -302,13 +319,14 @@ fn real_cpsam_in_f16_on_the_gpu_stays_within_the_bf16_rounding() {
         ("cells1024-replicate", 1024, 1024, true),
     ] {
         let input = read_f32(&dir.join("reference-f32").join(format!("{name}.input.f32")));
-        let s = CellposeSamSettings {
+        let s = CellposeSamParams {
             net_width: w,
             net_height: h,
             input_channels: 3,
             replicate_gray_channel: replicate,
+            ..settings(0, 0)
         };
-        let out = net.infer(image(&input, w, h), &s).unwrap();
+        let out = raw(&net, image(&input, w, h), &s).unwrap();
         let ours = [out.flow_y, out.flow_x, out.cell_prob].concat();
         let engine = read_f32(&dir.join("reference-f32").join(format!("{name}.engine.f32")));
         let n = w * h;
@@ -333,4 +351,104 @@ fn real_cpsam_in_f16_on_the_gpu_stays_within_the_bf16_rounding() {
             "{name}"
         );
     }
+}
+
+/// The resize to the network's size (now in `pre`, plain Rust) against
+/// burn's `interpolate` the network ran before (bilinear, align_corners =
+/// false) on the CPU: the same values, down and up.
+#[test]
+fn the_resize_is_burns_bilinear_interpolation() {
+    use burn::tensor::module::interpolate;
+    use burn::tensor::ops::{InterpolateMode, InterpolateOptions};
+    let (w, h) = (300, 200);
+    let pixels = cells(w, h);
+    for to in [(450, 300), (150, 100), (97, 211), (300, 200)] {
+        let ours = pre::resize_bilinear(&pixels, (w, h), to);
+        let x = Tensor::<4>::from_data(
+            TensorData::new(pixels.clone(), [1, 1, h, w]),
+            &Device::flex(),
+        );
+        let theirs: Vec<f32> = interpolate(
+            x,
+            InterpolateOptions::new(InterpolateMode::Bilinear)
+                .with_align_corners(false)
+                .with_output_size([to.1, to.0]),
+        )
+        .into_data()
+        .try_to_vec()
+        .unwrap();
+        assert_eq!(*ours, *theirs, "{to:?}");
+    }
+}
+
+/// `normalize99`: the 1st and 99th percentile become 0 and 1, applied while
+/// the tiles are filled - the same answer, to the bit, as the image
+/// normalized up front; a tile without contrast becomes 0.
+#[test]
+fn normalizing_on_the_way_equals_normalizing_up_front() {
+    let net = tiny_model();
+    let pixels: Vec<f32> = cells(64, 48).iter().map(|v| v * 0.02 + 0.003).collect();
+    let range = crate::libs::percentile::percentiles(&pixels, &[1.0, 99.0]).unwrap();
+    let affine = pre::Affine {
+        offset: range[0],
+        scale: 1.0 / (range[1] - range[0]),
+    };
+    let normalized: Vec<f32> = pixels.iter().map(|&v| affine.at(v)).collect();
+    let default = CellposeSamParams {
+        normalization: Normalization::ModelDefault,
+        ..settings(64, 48)
+    };
+    assert_eq!(
+        raw(&net, image(&pixels, 64, 48), &default).unwrap(),
+        raw(&net, image(&normalized, 64, 48), &settings(64, 48)).unwrap()
+    );
+    let flat = vec![0.25f32; 64 * 48];
+    assert_eq!(
+        raw(&net, image(&flat, 64, 48), &default).unwrap(),
+        raw(&net, image(&vec![0.0; 64 * 48], 64, 48), &settings(64, 48)).unwrap(),
+        "no contrast: all 0"
+    );
+}
+
+/// Through the engine: pre, infer in a slot, post - the labels of post on
+/// `infer`'s answer, at the image's size when the network ran smaller.
+#[test]
+fn the_engine_runs_pre_infer_and_post() {
+    use crate::runtime::{DeviceSelection, Engine, EngineConfig};
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("cellpose.safetensors");
+    std::fs::write(&path, cellpose_sam_file(&tiny_config())).unwrap();
+    assert_eq!(
+        CellposeSam::header(&path).unwrap(),
+        tiny_model().to_header()
+    );
+    let engine = Engine::new(&EngineConfig {
+        devices: DeviceSelection::Cpu,
+        gpu_slots: 1,
+        cores: 2,
+    });
+    let (w, h) = (80, 60);
+    let pixels = cells(w, h);
+    let params = CellposeSamParams {
+        probability_threshold: 0.0,
+        flow_threshold: 0.0,
+        min_object_size: 0,
+        ..settings(40, 30)
+    };
+    let mut out = vec![9u32; w * h];
+    let written = engine
+        .run::<CellposeSam>(&path, image(&pixels, w, h), &params, &mut out)
+        .unwrap();
+    let Written::Instances(n) = written else {
+        panic!("{written:?}")
+    };
+    assert!(out.iter().all(|&l| l <= n));
+    let answer = raw(&tiny_model(), image(&pixels, w, h), &params).unwrap();
+    let plan = CellposeSamPlan {
+        image: (w, h),
+        net: (40, 30),
+    };
+    let mut expected = vec![0u32; w * h];
+    CellposeSam::post(answer, plan, &params, &mut expected).unwrap();
+    assert_eq!(out, expected);
 }

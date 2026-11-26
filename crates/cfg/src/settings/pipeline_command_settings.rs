@@ -2802,6 +2802,10 @@ fn _serde_default_cellpose_cellpose_postprocessing() -> bool {
 fn _serde_default_cellpose_replicate_gray_channel() -> bool {
     true
 }
+fn _serde_default_cellpose_normalization()
+-> AiSegmentationInputNormalizationInputNormalizationSettings {
+    AiSegmentationInputNormalizationInputNormalizationSettings::ModelDefault
+}
 /// Instance segmentation using a Cellpose-SAM model
 ///
 /// [AI Cellpose Segmentation] -> [Extract Objects]
@@ -2878,6 +2882,10 @@ pub struct CellposeSettings {
     /// Cellpose run on an RGB image whose channels are (nearly) equal.
     #[serde(default = "_serde_default_cellpose_replicate_gray_channel")]
     pub replicate_gray_channel: bool,
+    /// How the image is scaled before the model sees it: by default the
+    /// tile's 1st and 99th percentile become 0 and 1, as Cellpose does.
+    #[serde(default = "_serde_default_cellpose_normalization")]
+    pub normalization: AiSegmentationInputNormalizationInputNormalizationSettings,
 }
 
 impl Default for CellposeSettings {
@@ -2893,6 +2901,7 @@ impl Default for CellposeSettings {
             flow_threshold: 0.4f32,
             cellpose_postprocessing: true,
             replicate_gray_channel: true,
+            normalization: AiSegmentationInputNormalizationInputNormalizationSettings::ModelDefault,
         }
     }
 }

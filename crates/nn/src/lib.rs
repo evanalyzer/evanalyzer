@@ -40,7 +40,7 @@ pub mod weights;
 pub use burn::tensor::Device;
 pub use classifier::{Classifier, Predictions, Samples, TrainedClassifier};
 pub use errors::NnError;
-pub use model::{Image, Model, Normalization, RawModel, Trainable, Written};
+pub use model::{Image, Model, Normalization, Trainable, Written};
 pub use pieces::Pieces;
 pub use runtime::{
     DeviceInfo, DeviceSelection, EngineConfig, EngineInfo, GpuInfo, configure_gpu, gpus,
@@ -71,21 +71,6 @@ pub fn run<M: Model>(
     config: impl FnOnce() -> EngineConfig,
 ) -> Result<Written, NnError> {
     engine(config).run::<M>(file, image, params, out)
-}
-
-/// Runs `M` (the interface before pre- and post-processing moved into nn:
-/// StarDist, Cellpose-SAM) from `file` on `image`, like [`run`].
-pub fn infer_raw<M: RawModel>(
-    file: &Path,
-    image: Image<'_>,
-    settings: &M::Settings,
-    config: impl FnOnce() -> EngineConfig,
-) -> Result<M::Output, NnError>
-where
-    M::Settings: Sync,
-    M::Output: Send,
-{
-    engine(config).infer_raw::<M>(file, image, settings)
 }
 
 /// What the engine runs on - `None` before the first model run.

@@ -28,7 +28,7 @@
 //!   whose model run would then wait for the slot this thread holds.
 
 use crate::errors::NnError;
-use crate::model::{Image, Model, RawModel, Written};
+use crate::model::{Image, Model, Written};
 use burn::tensor::{Device, DeviceType};
 use log::{info, warn};
 use std::any::{Any, TypeId};
@@ -76,7 +76,7 @@ pub struct EngineInfo {
     pub devices: Vec<DeviceInfo>,
 }
 
-/// How a model is loaded onto a device: `Model::load` or `RawModel::load`.
+/// How a model is loaded onto a device (`Model::load`).
 type Loader<M> = fn(&Path, &Device, bool) -> Result<M, NnError>;
 
 type ModelKey = (TypeId, PathBuf);
@@ -437,21 +437,6 @@ impl Engine {
         // A resized or padded copy of the image is gone before post.
         drop(input);
         M::post(raw, plan, params, out)
-    }
-
-    /// Runs `M` (the interface before pre- and post-processing moved into
-    /// nn) from `file` on `image` in a slot of a free device.
-    pub fn infer_raw<M: RawModel>(
-        &self,
-        file: &Path,
-        image: Image<'_>,
-        settings: &M::Settings,
-    ) -> Result<M::Output, NnError>
-    where
-        M::Settings: Sync,
-        M::Output: Send,
-    {
-        self.in_slot(file, M::load, |model: &M| model.infer(image, settings))
     }
 
     /// Runs `work` with the model from `path` (loaded with `load`) on a free
