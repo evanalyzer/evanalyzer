@@ -24,7 +24,7 @@
 //!     tests/cellpose-sam cells300x200-replicate 6 dgpu f16 [cache folder]
 
 use burn::tensor::{Device, DeviceKind};
-use evanalyzer_nn::Model;
+use evanalyzer_nn::RawModel;
 use evanalyzer_nn::model::Image;
 use evanalyzer_nn::model::cellpose_sam::{CellposeSam, CellposeSamSettings};
 use std::path::Path;

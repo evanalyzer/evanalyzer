@@ -28,7 +28,7 @@
 //!   whose model run would then wait for the slot this thread holds.
 
 use crate::errors::NnError;
-use crate::model::Model;
+use crate::model::{Image, Model, RawModel, Written};
 use burn::tensor::{Device, DeviceType};
 use log::{info, warn};
 use std::any::{Any, TypeId};
@@ -75,6 +75,9 @@ pub struct EngineInfo {
     pub name: String,
     pub devices: Vec<DeviceInfo>,
 }
+
+/// How a model is loaded onto a device: `Model::load` or `RawModel::load`.
+type Loader<M> = fn(&Path, &Device, bool) -> Result<M, NnError>;
 
 type ModelKey = (TypeId, PathBuf);
 type ModelCache = HashMap<ModelKey, (Option<SystemTime>, Arc<dyn Any + Send + Sync>)>;
@@ -393,7 +396,12 @@ impl Engine {
 
     /// The model `M` from `path` on device `index`, loaded once per device
     /// (again when the file changed).
-    fn model<M: Model>(&self, index: usize, path: &Path) -> Result<Arc<M>, NnError> {
+    fn model<M: Send + Sync + 'static>(
+        &self,
+        index: usize,
+        path: &Path,
+        load: Loader<M>,
+    ) -> Result<Arc<M>, NnError> {
         let device = &self.devices[index];
         let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
         let key = (TypeId::of::<M>(), path.to_path_buf());
@@ -404,7 +412,7 @@ impl Engine {
         {
             return Ok(model);
         }
-        let model = Arc::new(M::load(path, &device.device, device.gpu)?);
+        let model = Arc::new(load(path, &device.device, device.gpu)?);
         models.insert(
             key,
             (mtime, Arc::clone(&model) as Arc<dyn Any + Send + Sync>),
@@ -412,18 +420,53 @@ impl Engine {
         Ok(model)
     }
 
-    /// Runs `work` with the model `M` from `path` on a free device (see the
-    /// module docs). `work` must not have side effects before it succeeds:
-    /// a failed GPU run is repeated.
-    pub fn run<M: Model, T: Send>(
+    /// Runs model `M` from `file` on `image`: [`Model::pre`], then
+    /// [`Model::infer`] in a slot of a free device (see the module docs),
+    /// then [`Model::post`] into `out` - pre and post outside the slot.
+    /// Blocks while every device is busy.
+    pub fn run<M: Model>(
+        &self,
+        file: &Path,
+        image: Image<'_>,
+        params: &M::Params,
+        out: &mut [u32],
+    ) -> Result<Written, NnError> {
+        let header = M::header(file)?;
+        let (input, plan) = M::pre(&header, image, params)?;
+        let raw = self.in_slot(file, M::load, |model: &M| model.infer(&input))?;
+        // A resized or padded copy of the image is gone before post.
+        drop(input);
+        M::post(raw, plan, params, out)
+    }
+
+    /// Runs `M` (the interface before pre- and post-processing moved into
+    /// nn) from `file` on `image` in a slot of a free device.
+    pub fn infer_raw<M: RawModel>(
+        &self,
+        file: &Path,
+        image: Image<'_>,
+        settings: &M::Settings,
+    ) -> Result<M::Output, NnError>
+    where
+        M::Settings: Sync,
+        M::Output: Send,
+    {
+        self.in_slot(file, M::load, |model: &M| model.infer(image, settings))
+    }
+
+    /// Runs `work` with the model from `path` (loaded with `load`) on a free
+    /// device, holding its slot (see the module docs). `work` must not have
+    /// side effects before it succeeds: a failed GPU run is repeated.
+    fn in_slot<M: Send + Sync + 'static, T: Send>(
         &self,
         path: &Path,
+        load: Loader<M>,
         work: impl Fn(&M) -> Result<T, NnError> + Sync,
     ) -> Result<T, NnError> {
         loop {
             let lease = self.acquire();
             let index = lease.index;
-            let model = self.model::<M>(index, path)?;
+            let model = self.model::<M>(index, path, load)?;
             let result = std::thread::scope(|s| {
                 s.spawn(|| {
                     self.pool
@@ -436,7 +479,7 @@ impl Engine {
                 Ok(Ok(Err(NnError::GpuOutOfMemory(why)))) if gpu => {
                     drop(model);
                     drop(lease);
-                    return self.run_on_cpu_once(index, path, &work, &why);
+                    return self.run_on_cpu_once(index, path, load, &work, &why);
                 }
                 Ok(Ok(result)) => return result,
                 Ok(Err(panic)) | Err(panic) => panic,
@@ -448,7 +491,7 @@ impl Engine {
                 return Err(NnError::Internal(format!("the model run failed: {why}")));
             }
             if crate::errors::is_out_of_memory(&why) {
-                return self.run_on_cpu_once(index, path, &work, &why);
+                return self.run_on_cpu_once(index, path, load, &work, &why);
             }
             self.device_failed(index, &why);
         }
@@ -459,10 +502,11 @@ impl Engine {
     /// the same pieces, so the same result up to float rounding - and the
     /// GPU stays in use for the next runs (an image too large for it says
     /// nothing about the others).
-    fn run_on_cpu_once<M: Model, T: Send>(
+    fn run_on_cpu_once<M: Send + Sync + 'static, T: Send>(
         &self,
         gpu: usize,
         path: &Path,
+        load: Loader<M>,
         work: &(impl Fn(&M) -> Result<T, NnError> + Sync),
         why: &str,
     ) -> Result<T, NnError> {
@@ -476,7 +520,7 @@ impl Engine {
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         let cpu = self.devices.len() - 1;
-        let model = self.model::<M>(cpu, path)?;
+        let model = self.model::<M>(cpu, path, load)?;
         let result = std::thread::scope(|s| {
             s.spawn(|| {
                 self.pool
@@ -491,6 +535,12 @@ impl Engine {
                 panic_text(&panic)
             ))),
         }
+    }
+
+    /// Inferences running now, on all devices.
+    #[cfg(test)]
+    fn slots_in_use(&self) -> usize {
+        self.lock_slots().iter().map(|s| s.in_use).sum()
     }
 
     /// Lets go of every loaded model (a run using one keeps it until done).
@@ -558,7 +608,6 @@ pub fn gpus(selection: &DeviceSelection) -> Vec<GpuInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::Image;
 
     /// A "model" counting its loads per file - per file, so tests running
     /// at the same time don't count each other's.
@@ -570,9 +619,7 @@ mod tests {
         loads.iter().find(|(p, _)| p == path).map_or(0, |(_, n)| *n)
     }
 
-    impl Model for Counting {
-        type Settings = usize;
-        type Output = usize;
+    impl Counting {
         fn load(path: &Path, _: &Device, _: bool) -> Result<Self, NnError> {
             let mut loads = LOADS.lock().unwrap();
             match loads.iter_mut().find(|(p, _)| p == path) {
@@ -580,18 +627,6 @@ mod tests {
                 None => loads.push((path.to_path_buf(), 1)),
             }
             Ok(Self)
-        }
-        fn infer(&self, _: Image<'_>, settings: &usize) -> Result<usize, NnError> {
-            Ok(*settings * 2)
-        }
-    }
-
-    fn image() -> Image<'static> {
-        Image {
-            width: 1,
-            height: 1,
-            channels: 1,
-            data: &[0.0],
         }
     }
 
@@ -603,15 +638,13 @@ mod tests {
         std::fs::write(&path, b"x").unwrap();
         for i in 0..3 {
             let out = engine
-                .run::<Counting, _>(&path, |m| m.infer(image(), &i))
+                .in_slot(&path, Counting::load, |_| Ok(2 * i))
                 .unwrap();
             assert_eq!(out, 2 * i);
         }
         assert_eq!(loads(&path), 1);
         engine.release_models();
-        engine
-            .run::<Counting, _>(&path, |m| m.infer(image(), &1))
-            .unwrap();
+        engine.in_slot(&path, Counting::load, |_| Ok(())).unwrap();
         assert_eq!(loads(&path), 2);
         assert_eq!(
             engine.info().devices,
@@ -628,13 +661,11 @@ mod tests {
         gpu: bool,
     }
 
-    impl Model for TooBigForTheGpu {
-        type Settings = ();
-        type Output = &'static str;
+    impl TooBigForTheGpu {
         fn load(_: &Path, _: &Device, gpu: bool) -> Result<Self, NnError> {
             Ok(Self { gpu })
         }
-        fn infer(&self, _: Image<'_>, _: &()) -> Result<&'static str, NnError> {
+        fn infer(&self) -> Result<&'static str, NnError> {
             if self.gpu {
                 return Err(NnError::GpuOutOfMemory(
                     "out of device memory allocating 2216689664 bytes".into(),
@@ -653,7 +684,7 @@ mod tests {
         let path = PathBuf::from("too-big");
         for _ in 0..2 {
             let out = engine
-                .run::<TooBigForTheGpu, _>(&path, |m| m.infer(image(), &()))
+                .in_slot(&path, TooBigForTheGpu::load, TooBigForTheGpu::infer)
                 .unwrap();
             assert_eq!(out, "cpu");
         }
@@ -671,14 +702,76 @@ mod tests {
         let engine = Engine::with_devices(Vec::new(), 1, 1);
         let path = PathBuf::from("does-not-matter");
         let err = engine
-            .run::<Counting, usize>(&path, |_| panic!("boom"))
+            .in_slot::<_, usize>(&path, Counting::load, |_| panic!("boom"))
             .unwrap_err();
         assert!(err.to_string().contains("boom"), "{err}");
+        assert_eq!(engine.in_slot(&path, Counting::load, |_| Ok(6)).unwrap(), 6);
+        assert_eq!(engine.slots_in_use(), 0);
+    }
+
+    /// The engine every `Stages` run goes through, and what each stage saw.
+    static STAGES_ENGINE: std::sync::OnceLock<Engine> = std::sync::OnceLock::new();
+    static SEEN: Mutex<Vec<(&'static str, usize)>> = Mutex::new(Vec::new());
+
+    fn seen(stage: &'static str) {
+        let in_use = STAGES_ENGINE.get().expect("set up").slots_in_use();
+        SEEN.lock().unwrap().push((stage, in_use));
+    }
+
+    /// A model noting the slots in use in each of its stages.
+    struct Stages;
+
+    impl Model for Stages {
+        type Header = ();
+        type Params = u32;
+        type Input<'a> = &'a [f32];
+        type Raw = u32;
+        type Plan = usize;
+        const NET_BYTES_PER_PIXEL: f64 = 0.0;
+        const POST_BYTES_PER_PIXEL: f64 = 0.0;
+
+        fn header(_: &Path) -> Result<(), NnError> {
+            seen("header");
+            Ok(())
+        }
+        fn load(_: &Path, _: &Device, _: bool) -> Result<Self, NnError> {
+            Ok(Self)
+        }
+        fn pre<'a>(_: &(), image: Image<'a>, _: &u32) -> Result<(&'a [f32], usize), NnError> {
+            seen("pre");
+            Ok((image.data, image.width * image.height))
+        }
+        fn infer(&self, input: &&[f32]) -> Result<u32, NnError> {
+            seen("infer");
+            Ok(input.len() as u32)
+        }
+        fn post(raw: u32, plan: usize, params: &u32, out: &mut [u32]) -> Result<Written, NnError> {
+            seen("post");
+            out[..plan].fill(raw + params);
+            Ok(Written::Mask)
+        }
+    }
+
+    /// Only `infer` runs inside a slot: header, pre and post see none in
+    /// use, infer exactly one - and the answer of post lands in `out`.
+    #[test]
+    fn only_infer_holds_a_slot() {
+        let engine = STAGES_ENGINE.get_or_init(|| Engine::with_devices(Vec::new(), 1, 1));
+        let image = Image {
+            width: 2,
+            height: 2,
+            channels: 1,
+            data: &[0.0; 4],
+        };
+        let mut out = [0u32; 4];
+        let written = engine
+            .run::<Stages>(Path::new("stages"), image, &10, &mut out)
+            .unwrap();
+        assert_eq!(written, Written::Mask);
+        assert_eq!(out, [14; 4]);
         assert_eq!(
-            engine
-                .run::<Counting, _>(&path, |m| m.infer(image(), &3))
-                .unwrap(),
-            6
+            *SEEN.lock().unwrap(),
+            [("header", 0), ("pre", 0), ("infer", 1), ("post", 0)]
         );
     }
 
@@ -731,7 +824,7 @@ mod tests {
                 .into_par_iter()
                 .map(|i| {
                     engine
-                        .run::<Counting, _>(&path, |_| {
+                        .in_slot(&path, Counting::load, |_| {
                             Ok((0..100).into_par_iter().map(|j| j * 0 + i).sum::<usize>())
                         })
                         .unwrap()

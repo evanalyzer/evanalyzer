@@ -19,7 +19,7 @@
 //! `config.rs`.
 
 use crate::errors::NnError;
-use crate::model::{Image, Model};
+use crate::model::{Image, RawModel};
 use crate::weights::ModelFile;
 use burn::tensor::module::interpolate;
 use burn::tensor::ops::{InterpolateMode, InterpolateOptions};
@@ -149,7 +149,7 @@ fn taper_mask(tile: usize) -> Vec<f32> {
     mask
 }
 
-impl Model for CellposeSam {
+impl RawModel for CellposeSam {
     type Settings = CellposeSamSettings;
     type Output = CellposeSamOutput;
 

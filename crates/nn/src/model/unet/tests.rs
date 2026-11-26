@@ -7,7 +7,9 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+use super::infer::padding;
 use super::*;
+use crate::pieces::pad_plane;
 use std::collections::BTreeMap;
 
 fn config(norm: Norm, final_activation: FinalActivation) -> UNetConfig {
@@ -22,13 +24,23 @@ fn config(norm: Norm, final_activation: FinalActivation) -> UNetConfig {
     }
 }
 
-fn settings(pieces: Pieces) -> UNetSettings {
-    UNetSettings {
+fn settings(pieces: Pieces) -> UNetParams {
+    UNetParams {
+        normalization: Normalization::ModelDefault,
         foreground_channel: 0,
         softmax: false,
         boundary_channel: Some(1),
         pieces,
+        probability_threshold: 0.5,
+        boundary_threshold: 0.5,
+        foreground: 1,
     }
+}
+
+/// `pre` and `infer`, as the engine runs them (here without a slot).
+fn raw(net: &UNet, image: Image<'_>, params: &UNetParams) -> Result<UNetRaw, NnError> {
+    let (input, ()) = UNet::pre(&net.to_header(), image, params)?;
+    net.infer(&input)
 }
 
 /// Cells (bright discs) on a textured background.
@@ -143,8 +155,8 @@ fn a_saved_unet_loads_with_the_same_results() {
     let pixels = cells(40, 30);
     let s = settings(Pieces::fixed(2048));
     assert_eq!(
-        loaded.infer(image(&pixels, 40, 30), &s).unwrap(),
-        net.infer(image(&pixels, 40, 30), &s).unwrap()
+        raw(&loaded, image(&pixels, 40, 30), &s).unwrap(),
+        raw(&net, image(&pixels, 40, 30), &s).unwrap()
     );
 }
 
@@ -154,20 +166,18 @@ fn any_tile_size_gives_its_size_and_the_asked_channels() {
     let net = UNet::with_random_weights(config(Norm::Instance, FinalActivation::Sigmoid), &device);
     for (w, h) in [(1, 1), (5, 3), (37, 23), (64, 64)] {
         let pixels = cells(w, h);
-        let out = net
-            .infer(image(&pixels, w, h), &settings(Pieces::fixed(2048)))
-            .unwrap();
+        let out = raw(&net, image(&pixels, w, h), &settings(Pieces::fixed(2048))).unwrap();
         assert_eq!(out.probabilities.len(), w * h, "{w}x{h}");
         assert_eq!(out.boundary.as_ref().map(Vec::len), Some(w * h), "{w}x{h}");
         assert!(out.probabilities.iter().all(|v| (0.0..=1.0).contains(v)));
     }
     let pixels = cells(20, 20);
-    let no_boundary = UNetSettings {
+    let no_boundary = UNetParams {
         boundary_channel: Some(5),
         ..settings(Pieces::fixed(2048))
     };
     assert_eq!(
-        net.infer(image(&pixels, 20, 20), &no_boundary)
+        raw(&net, image(&pixels, 20, 20), &no_boundary)
             .unwrap()
             .boundary,
         None
@@ -178,7 +188,7 @@ fn any_tile_size_gives_its_size_and_the_asked_channels() {
         ..image(&pixels, 20, 20)
     };
     assert!(matches!(
-        net.infer(wrong, &settings(Pieces::fixed(2048))),
+        raw(&net, wrong, &settings(Pieces::fixed(2048))),
         Err(NnError::InvalidInput(_))
     ));
 }
@@ -191,13 +201,13 @@ fn softmax_classes_sum_to_one() {
     let net = UNet::with_random_weights(config(Norm::None, FinalActivation::None), &device);
     let pixels = cells(24, 20);
     let run = |foreground_channel| {
-        let s = UNetSettings {
+        let s = UNetParams {
             foreground_channel,
             softmax: true,
             boundary_channel: None,
-            pieces: Pieces::fixed(2048),
+            ..settings(Pieces::fixed(2048))
         };
-        net.infer(image(&pixels, 24, 20), &s).unwrap().probabilities
+        raw(&net, image(&pixels, 24, 20), &s).unwrap().probabilities
     };
     let (a, b) = (run(0), run(1));
     for (a, b) in a.iter().zip(&b) {
@@ -214,12 +224,8 @@ fn pieces_give_the_whole_tile_for_a_local_network() {
     let net = UNet::with_random_weights(config(Norm::None, FinalActivation::Sigmoid), &device);
     let (w, h) = (600, 300);
     let pixels = cells(w, h);
-    let whole = net
-        .infer(image(&pixels, w, h), &settings(Pieces::fixed(2048)))
-        .unwrap();
-    let pieces = net
-        .infer(image(&pixels, w, h), &settings(Pieces::fixed(256)))
-        .unwrap();
+    let whole = raw(&net, image(&pixels, w, h), &settings(Pieces::fixed(2048))).unwrap();
+    let pieces = raw(&net, image(&pixels, w, h), &settings(Pieces::fixed(256))).unwrap();
     assert!(net.halo.get().copied().flatten().is_some(), "measured");
     let diff = whole
         .probabilities
@@ -228,6 +234,140 @@ fn pieces_give_the_whole_tile_for_a_local_network() {
         .map(|(a, b)| (a - b).abs())
         .fold(0.0f32, f32::max);
     assert!(diff < 1e-5, "max difference {diff}");
+}
+
+/// The header comes from the file's header alone and says what the loaded
+/// model says; a file that is no model names itself.
+#[test]
+fn the_header_is_read_without_the_weights() {
+    let device = Device::flex();
+    let mut net =
+        UNet::with_random_weights(config(Norm::Instance, FinalActivation::Sigmoid), &device);
+    net.set_preprocessing(Preprocessing::ZeroMeanUnitVariance);
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("unet.safetensors");
+    let (tensors, metadata) = net.to_file_contents(BTreeMap::new());
+    crate::weights::write(&path, &tensors, &metadata).unwrap();
+    assert_eq!(UNet::header(&path).unwrap(), net.to_header());
+
+    let junk = dir.path().join("junk.safetensors");
+    std::fs::write(&junk, b"not a model file at all").unwrap();
+    let err = UNet::header(&junk).unwrap_err();
+    assert!(err.to_string().contains("junk.safetensors"), "{err}");
+}
+
+/// Normalized while each piece is copied for the network: the same result,
+/// to the bit, as the tile normalized up front (as before) and run without.
+#[test]
+fn normalizing_on_the_way_equals_normalizing_up_front() {
+    let device = Device::flex();
+    let mut net = UNet::with_random_weights(config(Norm::None, FinalActivation::Sigmoid), &device);
+    net.set_preprocessing(Preprocessing::ZeroMeanUnitVariance);
+    let (w, h) = (600, 300);
+    let pixels: Vec<f32> = cells(w, h).iter().map(|v| v * 3000.0 + 200.0).collect();
+    let manual = |affine: pre::Affine| {
+        let mut normalized = pixels.clone();
+        affine.apply(&mut normalized);
+        let none = UNetParams {
+            normalization: Normalization::None,
+            ..settings(Pieces::fixed(256))
+        };
+        raw(&net, image(&normalized, w, h), &none).unwrap()
+    };
+    let n = pixels.len() as f64;
+    let mean = pixels.iter().map(|&v| f64::from(v)).sum::<f64>() / n;
+    let var = pixels
+        .iter()
+        .map(|&v| (f64::from(v) - mean).powi(2))
+        .sum::<f64>()
+        / n;
+    let zmuv = pre::Affine {
+        offset: mean,
+        scale: 1.0 / (var.sqrt() + 1e-6),
+    };
+    assert_eq!(
+        raw(&net, image(&pixels, w, h), &settings(Pieces::fixed(256))).unwrap(),
+        manual(zmuv),
+        "the file's zero mean / unit variance, in pieces"
+    );
+
+    let (lo, hi) = pixels
+        .iter()
+        .fold((f32::MAX, f32::MIN), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+    let range = pre::Affine {
+        offset: f64::from(lo),
+        scale: 1.0 / (f64::from(hi) - f64::from(lo) + 1e-6),
+    };
+    let percentile = UNetParams {
+        normalization: Normalization::Percentile {
+            low: 0.0,
+            high: 100.0,
+        },
+        ..settings(Pieces::fixed(256))
+    };
+    assert_eq!(
+        raw(&net, image(&pixels, w, h), &percentile).unwrap(),
+        manual(range),
+        "percentiles 0 and 100 = the tile's range"
+    );
+}
+
+#[test]
+fn thresholds_keep_probable_pixels_and_carve_out_boundaries() {
+    const FG: u32 = 7;
+    let mut out = [99u32; 6];
+    // Inclusive probability threshold; boundary from its threshold on.
+    let probs = [0.1, 0.5, 0.9, 0.9, 0.9, 0.2];
+    post::threshold(&probs, None, 0.5, 0.5, FG, &mut out).unwrap();
+    assert_eq!(out, [0, FG, FG, FG, FG, 0]);
+    let boundary = [0.0, 0.1, 0.9, 0.5, 0.49, 0.0];
+    post::threshold(&probs, Some(&boundary), 0.5, 0.5, FG, &mut out).unwrap();
+    assert_eq!(out, [0, FG, 0, 0, FG, 0]);
+    assert!(matches!(
+        post::threshold(&probs, None, 0.5, 0.5, FG, &mut [0; 5]),
+        Err(NnError::InvalidInput(_))
+    ));
+}
+
+/// Through the engine: pre, infer in a slot, post - the mask of the
+/// probabilities `infer` gives.
+#[test]
+fn the_engine_runs_pre_infer_and_post() {
+    use crate::runtime::{DeviceSelection, Engine, EngineConfig};
+    let device = Device::flex();
+    let net = UNet::with_random_weights(config(Norm::None, FinalActivation::Sigmoid), &device);
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("unet.safetensors");
+    let (tensors, metadata) = net.to_file_contents(BTreeMap::new());
+    crate::weights::write(&path, &tensors, &metadata).unwrap();
+    let engine = Engine::new(&EngineConfig {
+        devices: DeviceSelection::Cpu,
+        gpu_slots: 1,
+        cores: 2,
+    });
+    let (w, h) = (37, 23);
+    let pixels = cells(w, h);
+    let params = UNetParams {
+        foreground: 3,
+        ..settings(Pieces::fixed(2048))
+    };
+    let mut out = vec![0u32; w * h];
+    let written = engine
+        .run::<UNet>(&path, image(&pixels, w, h), &params, &mut out)
+        .unwrap();
+    assert_eq!(written, Written::Mask);
+    let probs = raw(&net, image(&pixels, w, h), &params).unwrap();
+    let mut expected = vec![0u32; w * h];
+    post::threshold(
+        &probs.probabilities,
+        probs.boundary.as_deref(),
+        0.5,
+        0.5,
+        3,
+        &mut expected,
+    )
+    .unwrap();
+    assert_eq!(out, expected);
 }
 
 /// A `.npy` file of f32 (little-endian, C order): its values.
@@ -294,8 +434,8 @@ fn real_romantic_shark_gives_pytorchs_results() {
     let side = 256;
     let normalized = read_f32(&reference.join("test256.input.f32"));
     let expected = read_npy_f32(&dir.join("test_output_0.npy"));
-    let raw = net.forward_raw(&normalized, side, side, &device);
-    let (max, flips) = difference(&raw, &expected, side * side);
+    let network_only = net.forward_raw(&normalized, side, side, &device);
+    let (max, flips) = difference(&network_only, &expected, side * side);
     assert!(
         max < 1e-4 && flips == 0,
         "network vs package: max {max}, {flips} flips"
@@ -310,9 +450,12 @@ fn real_romantic_shark_gives_pytorchs_results() {
         ),
     ] {
         let engine = read_f32(&reference.join(format!("{name}.engine.f32")));
-        let out = net
-            .infer(image(&input, side, side), &settings(Pieces::fixed(2048)))
-            .unwrap();
+        let out = raw(
+            &net,
+            image(&input, side, side),
+            &settings(Pieces::fixed(2048)),
+        )
+        .unwrap();
         let mut ours = out.probabilities;
         ours.extend(out.boundary.unwrap());
         // Float rounding only (another summation order): burn-flex flips 3
@@ -343,9 +486,12 @@ fn real_romantic_shark_in_f16_on_the_gpu_stays_within_f16_rounding() {
     let side = 1024;
     let input = read_f32(&reference.join("cells1024.input.f32"));
     let engine = read_f32(&reference.join("cells1024.engine.f32"));
-    let out = net
-        .infer(image(&input, side, side), &settings(Pieces::fixed(1024)))
-        .unwrap();
+    let out = raw(
+        &net,
+        image(&input, side, side),
+        &settings(Pieces::fixed(1024)),
+    )
+    .unwrap();
     let mut ours = out.probabilities;
     ours.extend(out.boundary.unwrap());
     let (max, flips) = difference(&ours, &engine, side * side);

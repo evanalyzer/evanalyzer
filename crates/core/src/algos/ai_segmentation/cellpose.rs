@@ -141,7 +141,7 @@ impl ImageAlgorithm for Cellpose {
             channels: 1,
             data: input_image.as_slice(),
         };
-        let output = ai_devices::infer::<CellposeSam>(&self.model_path, image, &settings)?;
+        let output = ai_devices::infer_raw::<CellposeSam>(&self.model_path, image, &settings)?;
         let (flow_y, flow_x, cell_prob) = (output.flow_y, output.flow_x, output.cell_prob);
 
         let mut labels = self.masks_from_flows(&flow_y, &flow_x, &cell_prob, w, h);

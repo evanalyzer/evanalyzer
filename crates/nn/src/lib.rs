@@ -10,8 +10,9 @@
 //! Every machine-learning algorithm of EVAnalyzer, behind plain-data
 //! interfaces (slices in, `Vec`s out - no burn or smartcore types):
 //!
-//! - [`model`] - neural networks run on an image ([`Model`]): U-Net,
-//!   StarDist, Cellpose-SAM; their training ([`Trainable`]) later.
+//! - [`model`] - neural networks run on an image ([`Model`]: pre-processing,
+//!   the network, post-processing): U-Net, StarDist, Cellpose-SAM; their
+//!   training ([`Trainable`]) later.
 //! - [`classifier`] - trained classifiers on feature rows ([`Classifier`]):
 //!   MLP, KNN, random forest. Object and pixel classifiers are the same
 //!   here; where the rows come from is core's.
@@ -20,12 +21,14 @@
 //!   model run; nothing is set up before.
 //! - [`pieces`] - large tiles through a network in pieces.
 //! - [`weights`] - the model file format (safetensors + metadata).
+//! - `libs` - building blocks several models share (percentiles).
 //!
 //! The only crate depending on burn and smartcore. Does not depend on
 //! `evanalyzer_cfg`: core maps its settings to the types here.
 
 pub mod classifier;
 pub mod errors;
+mod libs;
 pub mod model;
 pub mod pieces;
 pub mod runtime;
@@ -37,7 +40,7 @@ pub mod weights;
 pub use burn::tensor::Device;
 pub use classifier::{Classifier, Predictions, Samples, TrainedClassifier};
 pub use errors::NnError;
-pub use model::{Image, Model, Trainable};
+pub use model::{Image, Model, Normalization, RawModel, Trainable, Written};
 pub use pieces::Pieces;
 pub use runtime::{
     DeviceInfo, DeviceSelection, EngineConfig, EngineInfo, GpuInfo, configure_gpu, gpus,
@@ -54,11 +57,25 @@ fn engine(config: impl FnOnce() -> EngineConfig) -> &'static runtime::Engine {
     ENGINE.get_or_init(|| runtime::Engine::new(&config()))
 }
 
-/// Runs model `M` from `file` on `image`. The engine is set up with
-/// `config` on the first call (later calls ignore it); the model is loaded
-/// once per device and kept until [`release_models`] (or the file changes).
-/// Blocks while every device is busy.
-pub fn infer<M: Model>(
+/// Runs model `M` from `file` on `image` - pre-processing, the network in
+/// an engine slot, post-processing into `out` (one value per pixel; see
+/// [`Model`]). The engine is set up with `config` on the first call (later
+/// calls ignore it); the model is loaded once per device and kept until
+/// [`release_models`] (or the file changes). Blocks while every device is
+/// busy.
+pub fn run<M: Model>(
+    file: &Path,
+    image: Image<'_>,
+    params: &M::Params,
+    out: &mut [u32],
+    config: impl FnOnce() -> EngineConfig,
+) -> Result<Written, NnError> {
+    engine(config).run::<M>(file, image, params, out)
+}
+
+/// Runs `M` (the interface before pre- and post-processing moved into nn:
+/// StarDist, Cellpose-SAM) from `file` on `image`, like [`run`].
+pub fn infer_raw<M: RawModel>(
     file: &Path,
     image: Image<'_>,
     settings: &M::Settings,
@@ -68,7 +85,7 @@ where
     M::Settings: Sync,
     M::Output: Send,
 {
-    engine(config).run::<M, _>(file, |model| model.infer(image, settings))
+    engine(config).infer_raw::<M>(file, image, settings)
 }
 
 /// What the engine runs on - `None` before the first model run.

@@ -22,8 +22,8 @@
 use burn::tensor::{Device, DeviceKind};
 use evanalyzer_nn::model::Image;
 use evanalyzer_nn::model::stardist::{StarDist, StarDistSettings};
-use evanalyzer_nn::model::unet::{UNet, UNetSettings};
-use evanalyzer_nn::{Model, Pieces};
+use evanalyzer_nn::model::unet::{UNet, UNetParams};
+use evanalyzer_nn::{Model, Normalization, Pieces, RawModel};
 use std::path::Path;
 use std::time::Instant;
 
@@ -140,15 +140,20 @@ fn main() {
                 channels: 1,
                 data: &input,
             };
-            let settings = UNetSettings {
+            let settings = UNetParams {
+                normalization: Normalization::ModelDefault,
                 foreground_channel: 0,
                 softmax: false,
                 boundary_channel: Some(1),
                 pieces,
+                probability_threshold: 0.5,
+                boundary_threshold: 0.5,
+                foreground: 1,
             };
             for i in 0..repeats {
                 let start = Instant::now();
-                let out = net.infer(image, &settings).unwrap();
+                let (input, ()) = UNet::pre(&net.to_header(), image, &settings).unwrap();
+                let out = net.infer(&input).unwrap();
                 times.push(start.elapsed().as_secs_f64());
                 if i == 0 && !big {
                     let engine = read_f32(&r.join("cells1024.engine.f32"));
@@ -196,15 +201,20 @@ fn main() {
                 channels: 1,
                 data: &input,
             };
-            let settings = UNetSettings {
+            let settings = UNetParams {
+                normalization: Normalization::ModelDefault,
                 foreground_channel: 0,
                 softmax: false,
                 boundary_channel: Some(1),
                 pieces,
+                probability_threshold: 0.5,
+                boundary_threshold: 0.5,
+                foreground: 1,
             };
             for _ in 0..repeats {
                 let start = Instant::now();
-                net.infer(image, &settings).unwrap();
+                let (input, ()) = UNet::pre(&net.to_header(), image, &settings).unwrap();
+                net.infer(&input).unwrap();
                 times.push(start.elapsed().as_secs_f64());
             }
         }

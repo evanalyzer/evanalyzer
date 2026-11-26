@@ -2,7 +2,7 @@
 //!
 //! Which devices AI models (Cellpose-SAM, StarDist, U-Net) run on, set once
 //! at startup from the command line (`--ai-devices`, `--gpu-slots`), and
-//! [`infer`]: a model run on the engine they set up (`evanalyzer_nn`).
+//! [`run`]: a model run on the engine they set up (`evanalyzer_nn`).
 //!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-10-10
@@ -12,7 +12,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use evanalyzer_cfg::core_types::InternalErrors;
-use evanalyzer_nn::{DeviceSelection, EngineConfig, Image, Model};
+use evanalyzer_nn::{DeviceSelection, EngineConfig, Image, Model, RawModel, Written};
 use std::fmt;
 use std::str::FromStr;
 use std::sync::OnceLock;
@@ -81,9 +81,22 @@ pub(crate) fn ai_device_options() -> &'static AiDeviceOptions {
     OPTIONS.get_or_init(AiDeviceOptions::default)
 }
 
-/// Model `M` from `file` on `image` with the engine (`evanalyzer_nn::infer`),
-/// set up with these options on the first call.
-pub(crate) fn infer<M: Model>(
+/// Model `M` from `file` on `image` with the engine (`evanalyzer_nn::run`:
+/// pre-processing, the network, post-processing into `out`), set up with
+/// these options on the first call.
+pub(crate) fn run<M: Model>(
+    file: &std::path::Path,
+    image: Image<'_>,
+    params: &M::Params,
+    out: &mut [u32],
+) -> Result<Written, InternalErrors> {
+    evanalyzer_nn::run::<M>(file, image, params, out, engine_config)
+        .map_err(|e| InternalErrors::Generic(e.to_string()))
+}
+
+/// Like [`run`] for the models whose pre- and post-processing are still in
+/// core (StarDist, Cellpose-SAM): their raw output.
+pub(crate) fn infer_raw<M: RawModel>(
     file: &std::path::Path,
     image: Image<'_>,
     settings: &M::Settings,
@@ -92,7 +105,7 @@ where
     M::Settings: Sync,
     M::Output: Send,
 {
-    evanalyzer_nn::infer::<M>(file, image, settings, engine_config)
+    evanalyzer_nn::infer_raw::<M>(file, image, settings, engine_config)
         .map_err(|e| InternalErrors::Generic(e.to_string()))
 }
 

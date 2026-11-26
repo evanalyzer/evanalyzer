@@ -9,8 +9,8 @@
 use std::path::PathBuf;
 
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, SegmentationClass};
-use evanalyzer_nn::Image;
-use evanalyzer_nn::model::unet::{UNet as UNetModel, UNetSettings};
+use evanalyzer_nn::model::unet::{UNet as UNetModel, UNetParams};
+use evanalyzer_nn::{Image, Model, Normalization};
 use macros::CommandsMeta;
 
 use super::PieceSize;
@@ -114,8 +114,8 @@ pub struct UNet {
 }
 
 /// What the network takes per pixel of the image it gets at once (see
-/// `shared_ram_bytes`).
-pub(crate) const NETWORK_BYTES_PER_PIXEL: f64 = 1650.0;
+/// `shared_ram_bytes`) - nn's measured figure.
+pub(crate) const NETWORK_BYTES_PER_PIXEL: f64 = <UNetModel as Model>::NET_BYTES_PER_PIXEL;
 
 impl UNet {
     /// The pieces a `width x height` tile runs in (see [`PieceSize::pieces`]).
@@ -135,11 +135,15 @@ impl ImageAlgorithm for UNet {
         let size = input_image.size();
         let (width, height) = (size.width, size.height);
 
-        let settings = UNetSettings {
+        let params = UNetParams {
+            normalization: Normalization::ModelDefault,
             foreground_channel: self.foreground_channel.max(0) as usize,
             softmax: matches!(self.output_mode, UNetOutputMode::SoftmaxClasses),
             boundary_channel: usize::try_from(self.boundary_channel).ok(),
             pieces: self.pieces(width, height),
+            probability_threshold: self.probability_threshold,
+            boundary_threshold: self.boundary_threshold,
+            foreground: self.segmentation_class.as_u32(),
         };
         let image = Image {
             width,
@@ -147,19 +151,12 @@ impl ImageAlgorithm for UNet {
             channels: 1,
             data: input_image.as_slice(),
         };
-        let output = ai_devices::infer::<UNetModel>(&self.model_path, image, &settings)?;
-        let (probabilities, boundary) = (output.probabilities, output.boundary);
-
-        let foreground_class = self.segmentation_class.as_u32();
-        let output_slice = segmentation_map.as_slice_mut();
-        output_slice.copy_from_slice(&Self::classify_pixels(
-            &probabilities,
-            boundary.as_deref(),
-            self.probability_threshold,
-            self.boundary_threshold,
-            foreground_class,
-        ));
-
+        ai_devices::run::<UNetModel>(
+            &self.model_path,
+            image,
+            &params,
+            segmentation_map.as_slice_mut(),
+        )?;
         Ok(())
     }
 
@@ -187,7 +184,7 @@ impl ImageAlgorithm for UNet {
     /// What the step keeps of the answer per worker: the foreground and
     /// boundary probabilities (8 bytes per pixel, `tests::tile_ram`).
     fn ram_per_tile_pixel(&self) -> f64 {
-        8.0
+        <UNetModel as Model>::POST_BYTES_PER_PIXEL
     }
 
     /// One inference at a time on the CPU (the AI engine's one slot): the
@@ -207,38 +204,6 @@ impl ImageAlgorithm for UNet {
         let pixels = evanalyzer_nn::pieces::largest_model_input(tile_width, piece)
             * evanalyzer_nn::pieces::largest_model_input(tile_height, piece);
         (NETWORK_BYTES_PER_PIXEL * pixels as f64) as u64 + super::model_bytes(&self.model_path)
-    }
-}
-
-impl UNet {
-    /// Classifies each pixel as foreground/background from its probability
-    /// and, for boundary-aware models, its boundary probability: foreground
-    /// when the probability reaches `probability_threshold` and - if a
-    /// boundary map is given - the boundary probability stays below
-    /// `boundary_threshold`. This is the "carve thin gaps between touching
-    /// objects" behaviour the `boundary_channel` doc comment above describes;
-    /// it is the whole reason a boundary-aware model separates touching
-    /// nuclei where a plain mask-only model can't.
-    fn classify_pixels(
-        probabilities: &[f32],
-        boundary: Option<&[f32]>,
-        probability_threshold: f32,
-        boundary_threshold: f32,
-        foreground_class: u32,
-    ) -> Vec<u32> {
-        probabilities
-            .iter()
-            .enumerate()
-            .map(|(i, &p)| {
-                let is_foreground = p >= probability_threshold
-                    && boundary.map(|b| b[i] < boundary_threshold).unwrap_or(true);
-                if is_foreground {
-                    foreground_class
-                } else {
-                    SegmentationClass::BACKGROUND.as_u32()
-                }
-            })
-            .collect()
     }
 }
 
@@ -310,11 +275,10 @@ mod tests {
     // ---- execute(): a real model file (a tiny random U-Net, nn's
     // `test_support`) through the engine ----
 
-    /// The step gives what the model gives, thresholded: the probabilities
-    /// of the model run directly, through `classify_pixels`.
+    /// The step gives what the model gives, thresholded into its class: the
+    /// probabilities of the model run directly (`pre` + `infer`).
     #[test]
     fn execute_runs_the_model_file_and_thresholds_its_probabilities() {
-        use evanalyzer_nn::Model;
         use evanalyzer_nn::model::unet::Preprocessing;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("unet.safetensors");
@@ -338,11 +302,15 @@ mod tests {
             .unwrap();
 
         let model = UNetModel::load(&path, &evanalyzer_nn::Device::flex(), false).unwrap();
-        let settings = UNetSettings {
+        let params = UNetParams {
+            normalization: Normalization::ModelDefault,
             foreground_channel: 0,
             softmax: false,
             boundary_channel: None,
             pieces: cmd.pieces(w, h),
+            probability_threshold: 0.5,
+            boundary_threshold: 0.5,
+            foreground: FG,
         };
         let image = Image {
             width: w,
@@ -350,17 +318,19 @@ mod tests {
             channels: 1,
             data: &pixels,
         };
-        let direct = model.infer(image, &settings).unwrap();
-        let expected = UNet::classify_pixels(&direct.probabilities, None, 0.5, 0.5, FG);
+        let header = UNetModel::header(&path).unwrap();
+        let (input, ()) = UNetModel::pre(&header, image, &params).unwrap();
+        let direct = model.infer(&input).unwrap();
         // Up to float rounding: the engine runs on its own threads (another
         // summation order; this tiny random network's InstanceNorm on little
         // variance turns it into ~1e-4) - pixels at the threshold may land
         // either side.
         let ours = ctx.get_segmentation_map().unwrap().as_slice();
-        for ((a, b), p) in ours.iter().zip(&expected).zip(&direct.probabilities) {
+        for (a, p) in ours.iter().zip(&direct.probabilities) {
+            let expected = if *p >= 0.5 { FG } else { bg() };
             assert!(
-                a == b || (p - 0.5).abs() < 1e-3,
-                "probability {p}: {a} vs {b}"
+                *a == expected || (p - 0.5).abs() < 1e-3,
+                "probability {p}: {a} vs {expected}"
             );
         }
     }
@@ -374,64 +344,5 @@ mod tests {
 
         let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
         assert!(matches!(err, InternalErrors::Generic(_)));
-    }
-
-    #[test]
-    fn classify_pixels_without_a_boundary_map_uses_probability_alone() {
-        let probs = [0.1, 0.5, 0.9];
-        let result = UNet::classify_pixels(&probs, None, 0.5, 0.5, FG);
-        assert_eq!(result, vec![bg(), FG, FG]);
-    }
-
-    #[test]
-    fn classify_pixels_threshold_comparison_is_inclusive() {
-        // Exactly at the probability threshold must count as foreground (`>=`).
-        let probs = [0.5];
-        let result = UNet::classify_pixels(&probs, None, 0.5, 0.5, FG);
-        assert_eq!(result, vec![FG]);
-    }
-
-    #[test]
-    fn classify_pixels_boundary_at_or_above_threshold_excludes_the_pixel() {
-        // High foreground probability, but the boundary probability is
-        // exactly at the boundary threshold - not *below* it, so it must be
-        // excluded (this is the exact carving behaviour boundary-aware
-        // models rely on to separate touching nuclei).
-        let probs = [0.9];
-        let boundary = [0.5];
-        let result = UNet::classify_pixels(&probs, Some(&boundary), 0.5, 0.5, FG);
-        assert_eq!(result, vec![bg()]);
-    }
-
-    #[test]
-    fn classify_pixels_boundary_below_threshold_keeps_the_pixel_as_foreground() {
-        let probs = [0.9];
-        let boundary = [0.1];
-        let result = UNet::classify_pixels(&probs, Some(&boundary), 0.5, 0.5, FG);
-        assert_eq!(result, vec![FG]);
-    }
-
-    #[test]
-    fn classify_pixels_low_probability_is_background_regardless_of_boundary() {
-        let probs = [0.1];
-        let boundary = [0.0]; // well below the boundary threshold
-        let result = UNet::classify_pixels(&probs, Some(&boundary), 0.5, 0.5, FG);
-        assert_eq!(
-            result,
-            vec![bg()],
-            "a low foreground probability must stay background even with an open boundary"
-        );
-    }
-
-    #[test]
-    fn classify_pixels_handles_a_mixed_row_pixel_by_pixel() {
-        let probs = [0.9, 0.9, 0.2, 0.9];
-        let boundary = [0.1, 0.9, 0.1, 0.5];
-        // px0: fg prob high, boundary open -> foreground
-        // px1: fg prob high, boundary closed (>= threshold) -> background
-        // px2: fg prob low -> background regardless of boundary
-        // px3: fg prob high, boundary exactly at threshold (not < ) -> background
-        let result = UNet::classify_pixels(&probs, Some(&boundary), 0.5, 0.5, FG);
-        assert_eq!(result, vec![FG, bg(), bg(), bg()]);
     }
 }

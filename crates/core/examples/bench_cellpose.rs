@@ -19,12 +19,13 @@
 // `--repeat N` runs the job N times in one process: the first run includes
 // setting up the engine, loading the model and the warm-up; the others are
 // the steady state (their median is printed). `--cpu` never uses a GPU.
+// `--unet` runs a U-Net step (e.g. romantic-shark) instead of Cellpose.
 
 use evanalyzer_cfg::core_types::{ImageAddress, SegmentationClass};
 use evanalyzer_cfg::settings::images_settings::ImageEntry;
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
 use evanalyzer_cfg::settings::pipeline_command_settings::{
-    CellposeSettings, ExtractObjectsSettings,
+    CellposeSettings, ExtractObjectsSettings, UNetSettings,
 };
 use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
@@ -141,12 +142,20 @@ fn main() {
         image_source: ImageAddress::Channel(0),
         enabled: true,
         steps: vec![
-            step(PipelineCommand::Cellpose(CellposeSettings {
-                model_path: model,
-                segmentation_class: SegmentationClass(1),
-                input_channels: channels,
-                ..Default::default()
-            })),
+            step(if std::env::args().any(|a| a == "--unet") {
+                PipelineCommand::UNet(UNetSettings {
+                    model_path: model,
+                    segmentation_class: SegmentationClass(1),
+                    ..Default::default()
+                })
+            } else {
+                PipelineCommand::Cellpose(CellposeSettings {
+                    model_path: model,
+                    segmentation_class: SegmentationClass(1),
+                    input_channels: channels,
+                    ..Default::default()
+                })
+            }),
             step(PipelineCommand::ExtractObjects(ExtractObjectsSettings {
                 max_objects_before_fail: 1_000_000,
                 ..Default::default()

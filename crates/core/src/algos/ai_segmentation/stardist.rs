@@ -224,7 +224,7 @@ impl ImageAlgorithm for Stardist {
             channels: 1,
             data: input_image.as_slice(),
         };
-        let output = ai_devices::infer::<StarDistModel>(&self.model_path, image, &settings)?;
+        let output = ai_devices::infer_raw::<StarDistModel>(&self.model_path, image, &settings)?;
         let (prob_flat, dist_flat) = (output.prob, output.dist);
         let (grid_h, grid_w, n_rays) = (output.grid_height, output.grid_width, output.n_rays);
 

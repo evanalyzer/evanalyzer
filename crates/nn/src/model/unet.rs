@@ -8,19 +8,24 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 //!
 //! U-Net (torch-em `UNet2d`, bioimage.io's U-Nets) as the libtorch engine
-//! ran it (removed `crates/ai/src/torch/unet.rs`): the tile normalized if the model
-//! file asks for it, mirror-padded to a multiple of `2^depth` with at least
-//! [`MARGIN`] px of context, run whole or in pieces (`crate::pieces`), the
-//! prediction cropped back and reduced to the foreground (and boundary)
-//! probability.
+//! ran it (removed `crates/ai/src/torch/unet.rs`), in three steps
+//! ([`Model`]):
+//!
+//! - `pre`: the image checked, the normalization of the model file (or the
+//!   step's) computed over the tile ([`pre`]);
+//! - `infer`: mirror-padded to a multiple of `2^depth` with at least
+//!   [`MARGIN`] px of context, normalized on the way, run whole or in pieces
+//!   (`crate::pieces`), cropped back and reduced to the foreground (and
+//!   boundary) probability ([`infer`]);
+//! - `post`: thresholded into a mask ([`post`]).
 //!
 //! The model file (`crate::weights`): architecture `unet2d`, layout version
 //! 1 = torch-em's tensor names, `config` = [`UNetConfig`] as JSON (the
 //! names of torch-em's `UNet2d` arguments).
 
 use crate::errors::NnError;
-use crate::model::{Image, Model};
-use crate::pieces::{self, Pieces, Planes, pad_plane};
+use crate::model::{Image, Model, Normalization, Written};
+use crate::pieces::Pieces;
 use crate::weights::{ModelFile, ModelMetadata, NamedTensor};
 use burn::nn::Initializer;
 use burn::tensor::{Device, Tensor, TensorData};
@@ -28,7 +33,10 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 mod config;
+mod infer;
 mod network;
+mod post;
+mod pre;
 
 pub use config::{ARCH, ARCH_VERSION, FinalActivation, Norm, Preprocessing, UNetConfig};
 
@@ -36,33 +44,32 @@ pub use config::{ARCH, ARCH_VERSION, FinalActivation, Norm, Preprocessing, UNetC
 /// U-Nets declare (e.g. 16 px for romantic-shark, 8 px for joyful-pig).
 pub const MARGIN: usize = 16;
 
-impl Preprocessing {
-    fn apply(self, pixels: &[f32]) -> Option<Vec<f32>> {
-        match self {
-            Self::None => None,
-            Self::ZeroMeanUnitVariance => {
-                let n = pixels.len().max(1) as f64;
-                let mean = pixels.iter().map(|&v| v as f64).sum::<f64>() / n;
-                let var = pixels
-                    .iter()
-                    .map(|&v| (v as f64 - mean).powi(2))
-                    .sum::<f64>()
-                    / n;
-                let scale = 1.0 / (var.sqrt() + 1e-6);
-                Some(
-                    pixels
-                        .iter()
-                        .map(|&v| ((v as f64 - mean) * scale) as f32)
-                        .collect(),
-                )
-            }
-        }
+/// What a U-Net's model file says without its weights.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UNetHeader {
+    pub config: UNetConfig,
+    /// The normalization it was trained with ([`Normalization::ModelDefault`]).
+    pub preprocessing: Preprocessing,
+}
+
+impl UNetHeader {
+    fn from_metadata(metadata: &ModelMetadata) -> Result<Self, NnError> {
+        metadata.expect_arch(ARCH, ARCH_VERSION)?;
+        let config: UNetConfig = serde_json::from_str(&metadata.config)
+            .map_err(|e| NnError::InvalidModelFile(format!("U-Net config: {e}")))?;
+        config.check()?;
+        let preprocessing = Preprocessing::from_metadata(metadata.preprocessing.as_deref())?;
+        Ok(Self {
+            config,
+            preprocessing,
+        })
     }
 }
 
 /// What a step chooses per run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct UNetSettings {
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UNetParams {
+    pub normalization: Normalization,
     /// Channel of the foreground probability (when the output has more than
     /// one; out-of-range values are clamped).
     pub foreground_channel: usize,
@@ -74,10 +81,37 @@ pub struct UNetSettings {
     pub boundary_channel: Option<usize>,
     /// How large a tile runs in pieces.
     pub pieces: Pieces,
+    /// Foreground from this probability on.
+    pub probability_threshold: f32,
+    /// A boundary from this boundary probability on - not foreground.
+    pub boundary_threshold: f32,
+    /// The value written for foreground pixels (background: 0).
+    pub foreground: u32,
 }
 
+/// The tile as the network gets it - made by `pre` only.
+pub struct UNetInput<'a> {
+    pixels: &'a [f32],
+    width: usize,
+    height: usize,
+    channels: usize,
+    /// Applied while each piece is copied for the network.
+    normalization: Option<pre::Affine>,
+    readout: Readout,
+    pieces: Pieces,
+}
+
+/// Which planes of the network's output are kept, and how.
+#[derive(Debug, Clone, Copy)]
+struct Readout {
+    foreground_channel: usize,
+    softmax: bool,
+    boundary_channel: Option<usize>,
+}
+
+/// What the network gives back.
 #[derive(Debug, Clone, PartialEq)]
-pub struct UNetOutput {
+pub struct UNetRaw {
     /// Foreground probability per pixel (`width * height`).
     pub probabilities: Vec<f32>,
     /// Boundary probability per pixel, if a boundary channel was asked for
@@ -97,11 +131,6 @@ pub struct UNet {
     /// CPU: the pieces must fit into it (`pieces::fit_gpu`).
     gpu_memory: Option<u64>,
 }
-
-/// What the network takes on the GPU per pixel of its input, per 64 filters
-/// of its first level (where most of it lies): half of the 1650 bytes
-/// measured in f32 for romantic-shark (64 filters, `tests::tile_ram`) - f16.
-const GPU_BYTES_PER_PIXEL_PER_64_FILTERS: f64 = 825.0;
 
 impl UNet {
     fn new(
@@ -166,11 +195,10 @@ impl UNet {
     /// A U-Net from a model file's bytes (see the module docs).
     pub fn from_bytes(bytes: &[u8], device: &Device) -> Result<Self, NnError> {
         let file = ModelFile::parse(bytes)?;
-        let metadata = file.expect_arch(ARCH, ARCH_VERSION)?;
-        let config: UNetConfig = serde_json::from_str(&metadata.config)
-            .map_err(|e| NnError::InvalidModelFile(format!("U-Net config: {e}")))?;
-        config.check()?;
-        let preprocessing = Preprocessing::from_metadata(metadata.preprocessing.as_deref())?;
+        let UNetHeader {
+            config,
+            preprocessing,
+        } = UNetHeader::from_metadata(&file.metadata)?;
         let mut network = network::UNet2d::new(&config, Some(Initializer::Zeros), device);
         network.load_torch_em(&file.tensors, device)?;
         Ok(Self::new(config, preprocessing, network, device))
@@ -230,146 +258,91 @@ impl UNet {
         crate::errors::read_f32(self.network.forward(x))
     }
 
-    /// The network on one `width x height` image (`in_channels` planes),
-    /// padded and cropped back: the foreground (and boundary) plane.
-    fn predict(
-        &self,
-        pixels: &[f32],
-        width: usize,
-        height: usize,
-        settings: &UNetSettings,
-    ) -> Result<Planes, NnError> {
-        let multiple = self.config.size_multiple();
-        let (top, bottom) = padding(height, multiple);
-        let (left, right) = padding(width, multiple);
-        let (pw, ph) = (left + width + right, top + height + bottom);
-        let mut padded = Vec::with_capacity(self.config.in_channels * pw * ph);
-        for plane in pixels.chunks_exact(width * height) {
-            pad_plane(
-                plane,
-                width,
-                height,
-                (left, right, top, bottom),
-                &mut padded,
-            );
+    /// What this U-Net's model file says without its weights.
+    pub fn to_header(&self) -> UNetHeader {
+        UNetHeader {
+            config: self.config.clone(),
+            preprocessing: self.preprocessing,
         }
-        let output = self.try_forward_raw(&padded, ph, pw, &self.device)?;
-        let channels = self.config.out_channels;
-        if output.len() != channels * pw * ph {
-            return Err(NnError::Internal(format!(
-                "U-Net output has {} values, {} expected",
-                output.len(),
-                channels * pw * ph
-            )));
-        }
-        // Channel `c`'s value at the tile's pixel (x, y).
-        let at = |c: usize, x: usize, y: usize| output[(c * ph + y + top) * pw + x + left];
-        let fg = settings.foreground_channel.min(channels - 1);
-        let mut first = Vec::with_capacity(width * height);
-        for y in 0..height {
-            for x in 0..width {
-                let value = if channels > 1 && settings.softmax {
-                    let max = (0..channels).map(|c| at(c, x, y)).fold(f32::MIN, f32::max);
-                    let sum: f32 = (0..channels).map(|c| (at(c, x, y) - max).exp()).sum();
-                    (at(fg, x, y) - max).exp() / sum
-                } else {
-                    at(fg, x, y)
-                };
-                first.push(value);
-            }
-        }
-        // Boundary-aware models (e.g. affable-shark) predict an independent
-        // boundary map: it opens thin gaps between touching objects.
-        let rest = match settings.boundary_channel {
-            Some(b) if channels > 1 && b < channels => {
-                let mut rest = Vec::with_capacity(width * height);
-                for y in 0..height {
-                    for x in 0..width {
-                        rest.push(at(b, x, y));
-                    }
-                }
-                rest
-            }
-            _ => Vec::new(),
-        };
-        Ok(Planes {
-            planes: if rest.is_empty() { 1 } else { 2 },
-            width,
-            height,
-            first,
-            rest,
-        })
     }
 }
 
-/// Padding `(before, after)` for one side of `len` pixels: [`MARGIN`]
-/// before, and after whatever brings the total up to a multiple of
-/// `multiple` with at least `MARGIN` of context.
-fn padding(len: usize, multiple: usize) -> (usize, usize) {
-    let total = (len + 2 * MARGIN).next_multiple_of(multiple);
-    (MARGIN, total - len - MARGIN)
+/// `file`'s name in front of an invalid-file message.
+fn in_file(file: &Path) -> impl Fn(NnError) -> NnError + '_ {
+    move |e| match e {
+        NnError::InvalidModelFile(m) => {
+            NnError::InvalidModelFile(format!("{}: {m}", file.display()))
+        }
+        other => other,
+    }
 }
 
 impl Model for UNet {
-    type Settings = UNetSettings;
-    type Output = UNetOutput;
+    type Header = UNetHeader;
+    type Params = UNetParams;
+    type Input<'a> = UNetInput<'a>;
+    type Raw = UNetRaw;
+    type Plan = ();
+
+    /// Measured 1.61 KB for bioimage.io's `romantic-shark` (depth 4, 64
+    /// filters, InstanceNorm) on burn's CPU backend (core's
+    /// `tests::tile_ram::measure_ai_tile_commands`, 2026-11-25; libtorch:
+    /// 1.55 KB for `joyful-pig`, 0.67 / 1.3 KB for U-Nets of depth 4 from
+    /// 32 / 64 filters - BENCHMARK.md "AI models: RAM per inference").
+    const NET_BYTES_PER_PIXEL: f64 = 1650.0;
+    /// The foreground and boundary probabilities (core's `tests::tile_ram`).
+    const POST_BYTES_PER_PIXEL: f64 = 8.0;
+
+    fn header(file: &Path) -> Result<UNetHeader, NnError> {
+        let metadata = crate::weights::read_header(file)?;
+        UNetHeader::from_metadata(&metadata).map_err(in_file(file))
+    }
 
     fn load(file: &Path, device: &Device, gpu: bool) -> Result<Self, NnError> {
         let bytes = std::fs::read(file)?;
-        let mut net = Self::from_bytes(&bytes, device).map_err(|e| match e {
-            NnError::InvalidModelFile(m) => {
-                NnError::InvalidModelFile(format!("{}: {m}", file.display()))
-            }
-            other => other,
-        })?;
+        let mut net = Self::from_bytes(&bytes, device).map_err(in_file(file))?;
         net.set_half_convs(gpu);
         Ok(net)
     }
 
-    fn infer(&self, image: Image<'_>, settings: &UNetSettings) -> Result<UNetOutput, NnError> {
-        let (width, height, channels) = (image.width, image.height, image.channels);
-        if width == 0 || height == 0 {
-            return Err(NnError::InvalidInput("U-Net: an empty image".into()));
-        }
-        if channels != self.config.in_channels {
-            return Err(NnError::InvalidInput(format!(
-                "U-Net: the model takes {} channel(s), the image has {channels}",
-                self.config.in_channels
-            )));
-        }
-        let len = width * height * channels;
-        if image.data.len() < len {
-            return Err(NnError::InvalidInput(format!(
-                "U-Net: the image has {} values, {len} expected",
-                image.data.len()
-            )));
-        }
-        let normalized = self.preprocessing.apply(&image.data[..len]);
-        let pixels = normalized.as_deref().unwrap_or(&image.data[..len]);
-        let predict = |p: &[f32], w: usize, h: usize| self.predict(p, w, h, settings);
-        // The receptive field's halo, `None` for a model seeing the whole
-        // image (measured once).
-        let local_halo = || {
-            if self.config.sees_whole_image() {
-                return Ok(None);
-            }
-            if let Some(halo) = self.halo.get() {
-                return Ok(*halo);
-            }
-            let halo = pieces::receptive_halo(channels, predict)?;
-            Ok(*self.halo.get_or_init(|| halo))
+    fn pre<'a>(
+        header: &UNetHeader,
+        image: Image<'a>,
+        params: &UNetParams,
+    ) -> Result<(UNetInput<'a>, ()), NnError> {
+        let pixels = pre::checked_pixels(&header.config, &image)?;
+        let normalization = pre::normalization(pixels, params.normalization, header.preprocessing);
+        let input = UNetInput {
+            pixels,
+            width: image.width,
+            height: image.height,
+            channels: image.channels,
+            normalization,
+            readout: Readout {
+                foreground_channel: params.foreground_channel,
+                softmax: params.softmax,
+                boundary_channel: params.boundary_channel,
+            },
+            pieces: params.pieces,
         };
-        let gpu_bytes =
-            GPU_BYTES_PER_PIXEL_PER_64_FILTERS * self.config.initial_features as f64 / 64.0;
-        let fitted = pieces::fit_gpu(settings.pieces, self.gpu_memory, gpu_bytes, width, height);
-        let plan = pieces::plan(width, height, fitted, local_halo, "U-Net")?;
-        let planes = pieces::run_fitting(
-            pixels, channels, width, height, plan, local_halo, predict, "U-Net",
+        Ok((input, ()))
+    }
+
+    fn infer(&self, input: &UNetInput<'_>) -> Result<UNetRaw, NnError> {
+        let planes = infer::in_pieces(self, input)?;
+        Ok(infer::raw(planes))
+    }
+
+    fn post(raw: UNetRaw, _: (), params: &UNetParams, out: &mut [u32]) -> Result<Written, NnError> {
+        post::threshold(
+            &raw.probabilities,
+            raw.boundary.as_deref(),
+            params.probability_threshold,
+            params.boundary_threshold,
+            params.foreground,
+            out,
         )?;
-        Ok(UNetOutput {
-            probabilities: planes.first,
-            boundary: (planes.planes > 1).then_some(planes.rest),
-        })
+        Ok(Written::Mask)
     }
 }
 

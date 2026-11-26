@@ -7,17 +7,27 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 //!
-//! Neural networks run on an image. Each model is its own type:
+//! Neural networks run on an image. Each model is its own type and does
+//! three things, each in its own module of the model:
 //!
-//! - the struct holds the network and its architecture config - both come
-//!   from the model file and belong to the weights;
-//! - [`Model::Settings`] is what a step chooses per run (channels, softmax,
-//!   pieces, ...). Passed with every call, never stored: a loaded model is
-//!   cached per file + device and shared by every step using that file
-//!   (Cellpose-SAM: 1.2 GB), whatever their settings.
+//! 1. [`Model::pre`] - pre-processing on the CPU: statistics, normalization,
+//!    resizing; what the network gets ([`Model::Input`]).
+//! 2. [`Model::infer`] - the network, inside an engine slot (a GPU or the
+//!    CPU): the only method with `&self`, the only one reaching the network
+//!    and its device. Raw maps out ([`Model::Raw`]).
+//! 3. [`Model::post`] - post-processing on the CPU: thresholds, objects;
+//!    written into the caller's buffer.
 //!
-//! Core runs a model through [`crate::infer`], never `load`/`infer` here
-//! directly - the cache picks the device and keeps the loaded model.
+//! `pre` and `post` have no `self`: they can't start a tensor op, and they
+//! run without a device chosen - so never inside a slot. The engine
+//! ([`crate::run`]) calls the three in order and holds the slot only around
+//! `infer`; it is the app's only way to run a model. Tests and the dev
+//! examples may load a model and call `infer` directly.
+//!
+//! The struct holds the network and its architecture - both from the model
+//! file. [`Model::Params`] is what a step chooses per run, passed with every
+//! call, never stored: a loaded model is cached per file + device and
+//! shared by every step using that file, whatever their settings.
 
 use crate::errors::NnError;
 use crate::train::{TrainControl, TrainStats};
@@ -32,16 +42,91 @@ pub use cellpose_sam::CellposeSam;
 pub use stardist::StarDist;
 pub use unet::UNet;
 
-/// A neural network run on an image.
+/// An AI model: [`Model::pre`] → [`Model::infer`] → [`Model::post`] (see
+/// the module docs).
 pub trait Model: Sized + Send + Sync + 'static {
+    /// What the model file says without its weights: architecture and
+    /// defaults ([`Model::header`]).
+    type Header: Send + Sync;
+    /// What a step chooses per run: normalization, thresholds, pieces.
+    type Params: Sync;
+    /// What `pre` hands to `infer`; borrows the image where it can. Only
+    /// `pre` makes one.
+    type Input<'a>: Sync;
+    /// What the network gives back: raw maps, no thresholds.
+    type Raw: Send;
+    /// What `pre` learned that `post` needs (sizes, scale).
+    type Plan: Send;
+
+    /// RAM the network takes per pixel of the largest image it gets at once
+    /// (the tile or a piece of it), on the CPU - for core's RAM plan.
+    const NET_BYTES_PER_PIXEL: f64;
+    /// RAM per tile pixel from `infer`'s answer through `post` (the raw maps
+    /// and post's own buffers) - for core's RAM plan.
+    const POST_BYTES_PER_PIXEL: f64;
+
+    /// Reads [`Model::Header`] from the file's header (`weights::read_header`),
+    /// without the weights.
+    fn header(file: &Path) -> Result<Self::Header, NnError>;
+
+    /// Builds the architecture from the file's metadata and loads the
+    /// weights onto `device` - a GPU when `gpu`.
+    fn load(file: &Path, device: &Device, gpu: bool) -> Result<Self, NnError>;
+
+    /// Pre-processing (CPU, no slot).
+    fn pre<'a>(
+        header: &Self::Header,
+        image: Image<'a>,
+        params: &Self::Params,
+    ) -> Result<(Self::Input<'a>, Self::Plan), NnError>;
+
+    /// The network (inside a slot). Allowed CPU work besides it: splitting
+    /// into pieces and stitching them, copying pixels into tensors.
+    fn infer(&self, input: &Self::Input<'_>) -> Result<Self::Raw, NnError>;
+
+    /// Post-processing (CPU, no slot): one value per pixel into `out`.
+    fn post(
+        raw: Self::Raw,
+        plan: Self::Plan,
+        params: &Self::Params,
+        out: &mut [u32],
+    ) -> Result<Written, NnError>;
+}
+
+/// What [`Model::post`] wrote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Written {
+    /// A mask: the params' foreground value or 0.
+    Mask,
+    /// Instance labels `1..=n` (0 = background), `n` given.
+    Instances(u32),
+}
+
+/// How the image is scaled before the network - per tile.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum Normalization {
+    /// What the model file says (U-Net: its preprocessing; StarDist,
+    /// Cellpose: their percentiles).
+    #[default]
+    ModelDefault,
+    /// The tile's `low` and `high` percentiles (0-100) become 0 and 1; how
+    /// a model treats a tile without contrast is the model's own.
+    Percentile { low: f64, high: f64 },
+    /// The pixels as they are.
+    None,
+}
+
+/// The model interface before pre- and post-processing moved into nn -
+/// StarDist and Cellpose-SAM until they move too (then it goes). Run with
+/// [`crate::infer_raw`].
+pub trait RawModel: Sized + Send + Sync + 'static {
     /// What a step chooses per run.
     type Settings;
     /// What the model gives back - plain data.
     type Output;
 
     /// Builds the architecture from the file's metadata and loads the
-    /// weights onto `device` - a GPU when `gpu` (convolutions in f16 there,
-    /// decided 2026-11-25; Cellpose-SAM stays f32).
+    /// weights onto `device` - a GPU when `gpu`.
     fn load(file: &Path, device: &Device, gpu: bool) -> Result<Self, NnError>;
 
     /// Runs the model on `image`.

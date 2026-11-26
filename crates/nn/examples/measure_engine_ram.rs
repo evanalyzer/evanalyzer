@@ -10,7 +10,7 @@
 //! The AI engine's own RAM - what the job planner reserves once for a job
 //! with an AI step (`AI_ENGINE_BYTES` in `evanalyzer_core::memory::analysis`):
 //! a tiny U-Net (2 levels, 4 filters - weights and activations of a few KB)
-//! through [`evanalyzer_nn::infer`] on a 64² image, so what the process
+//! through [`evanalyzer_nn::run`] on a 64² image, so what the process
 //! grows by is the engine: its thread pool, burn's backend, on a GPU the
 //! graphics driver and the device. Resident memory (`VmRSS`) and its peak
 //! (`VmHWM`) before, after the first run and after nine more, in MB. One
@@ -19,7 +19,7 @@
 //!   cargo build-linux -p evanalyzer_nn --example measure_engine_ram
 //!   target/x86_64-unknown-linux-gnu/release/examples/measure_engine_ram cpu|gpu
 
-use evanalyzer_nn::model::unet::{Preprocessing, UNet, UNetSettings};
+use evanalyzer_nn::model::unet::{Preprocessing, UNet, UNetParams};
 use evanalyzer_nn::test_support::{tiny_unet_config, unet_file};
 use evanalyzer_nn::{DeviceSelection, EngineConfig, Image, Pieces};
 
@@ -47,12 +47,17 @@ fn main() {
         channels: 1,
         data: &pixels,
     };
-    let settings = UNetSettings {
+    let settings = UNetParams {
+        normalization: evanalyzer_nn::Normalization::ModelDefault,
         foreground_channel: 0,
         softmax: false,
         boundary_channel: None,
         pieces: Pieces::fixed(2048),
+        probability_threshold: 0.5,
+        boundary_threshold: 0.5,
+        foreground: 1,
     };
+    let mut mask = vec![0u32; 64 * 64];
     let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
     let config = || EngineConfig {
         devices: devices.clone(),
@@ -61,10 +66,10 @@ fn main() {
     };
 
     let before = status_mb("VmRSS:");
-    evanalyzer_nn::infer::<UNet>(&file, image, &settings, config).unwrap();
+    evanalyzer_nn::run::<UNet>(&file, image, &settings, &mut mask, config).unwrap();
     let first = (status_mb("VmRSS:"), status_mb("VmHWM:"));
     for _ in 0..9 {
-        evanalyzer_nn::infer::<UNet>(&file, image, &settings, config).unwrap();
+        evanalyzer_nn::run::<UNet>(&file, image, &settings, &mut mask, config).unwrap();
     }
     let later = (status_mb("VmRSS:"), status_mb("VmHWM:"));
     let devices: Vec<String> = evanalyzer_nn::engine_info()

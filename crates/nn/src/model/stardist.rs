@@ -19,7 +19,7 @@
 //! `config.rs`.
 
 use crate::errors::NnError;
-use crate::model::{Image, Model};
+use crate::model::{Image, RawModel};
 use crate::pieces::{self, Pieces, Planes, pad_plane};
 use crate::weights::ModelFile;
 use burn::tensor::{Device, Tensor, TensorData};
@@ -169,7 +169,7 @@ impl StarDist {
     }
 }
 
-impl Model for StarDist {
+impl RawModel for StarDist {
     type Settings = StarDistSettings;
     type Output = StarDistOutput;
 

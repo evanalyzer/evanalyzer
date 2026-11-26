@@ -113,7 +113,46 @@ impl<'a> ModelFile<'a> {
     /// The file's metadata if it is of architecture `arch` in a layout
     /// version up to `max_version` - else a message naming what it is.
     pub fn expect_arch(&self, arch: &str, max_version: u32) -> Result<&ModelMetadata, NnError> {
-        let m = &self.metadata;
+        self.metadata.expect_arch(arch, max_version)
+    }
+}
+
+/// The largest header a model file may have (safetensors' own limit).
+const MAX_HEADER_BYTES: u64 = 100_000_000;
+
+/// The metadata of the model file `path`, read from its header alone - not
+/// its weights (Cellpose-SAM: 1.2 GB). For a model's `header`, which runs
+/// before an engine slot is taken.
+pub fn read_header(path: &Path) -> Result<ModelMetadata, NnError> {
+    use std::io::Read;
+    let invalid = |why: String| NnError::InvalidModelFile(format!("{}: {why}", path.display()));
+    let mut file = std::fs::File::open(path)?;
+    let mut length = [0u8; 8];
+    file.read_exact(&mut length)
+        .map_err(|_| invalid("no safetensors file (too short)".into()))?;
+    let length = u64::from_le_bytes(length);
+    if length > MAX_HEADER_BYTES {
+        return Err(invalid(format!("a header of {length} bytes")));
+    }
+    let mut header = vec![0u8; length as usize];
+    file.read_exact(&mut header)
+        .map_err(|_| invalid("no safetensors file (header cut off)".into()))?;
+    let header: HashMap<String, serde_json::Value> = serde_json::from_slice(&header)
+        .map_err(|e| invalid(format!("no safetensors header: {e}")))?;
+    let metadata: HashMap<String, String> = match header.get("__metadata__") {
+        Some(value) => {
+            serde_json::from_value(value.clone()).map_err(|e| invalid(format!("metadata: {e}")))?
+        }
+        None => HashMap::new(),
+    };
+    ModelMetadata::from_map(&metadata)
+}
+
+impl ModelMetadata {
+    /// This metadata if it is of architecture `arch` in a layout version up
+    /// to `max_version` - else a message naming what it is.
+    pub fn expect_arch(&self, arch: &str, max_version: u32) -> Result<&Self, NnError> {
+        let m = self;
         if m.arch != arch {
             return Err(NnError::UnsupportedArchitecture(format!(
                 "the file is a `{}` model, not `{arch}`",
