@@ -142,7 +142,7 @@ fn a_saved_unet_loads_with_the_same_results() {
         UNet::with_random_weights(config(Norm::Instance, FinalActivation::Sigmoid), &device);
     net.set_preprocessing(Preprocessing::ZeroMeanUnitVariance);
     let dir = tempfile::TempDir::new().unwrap();
-    let path = dir.path().join("unet.safetensors");
+    let path = dir.path().join("unet.evanet");
     let info = BTreeMap::from([("license".to_string(), "MIT".to_string())]);
     let (tensors, metadata) = net.to_file_contents(info.clone());
     crate::weights::write(&path, &tensors, &metadata).unwrap();
@@ -245,15 +245,15 @@ fn the_header_is_read_without_the_weights() {
         UNet::with_random_weights(config(Norm::Instance, FinalActivation::Sigmoid), &device);
     net.set_preprocessing(Preprocessing::ZeroMeanUnitVariance);
     let dir = tempfile::TempDir::new().unwrap();
-    let path = dir.path().join("unet.safetensors");
+    let path = dir.path().join("unet.evanet");
     let (tensors, metadata) = net.to_file_contents(BTreeMap::new());
     crate::weights::write(&path, &tensors, &metadata).unwrap();
     assert_eq!(UNet::header(&path).unwrap(), net.to_header());
 
-    let junk = dir.path().join("junk.safetensors");
+    let junk = dir.path().join("junk.evanet");
     std::fs::write(&junk, b"not a model file at all").unwrap();
     let err = UNet::header(&junk).unwrap_err();
-    assert!(err.to_string().contains("junk.safetensors"), "{err}");
+    assert!(err.to_string().contains("junk.evanet"), "{err}");
 }
 
 /// Normalized while each piece is copied for the network: the same result,
@@ -337,7 +337,7 @@ fn the_engine_runs_pre_infer_and_post() {
     let device = Device::flex();
     let net = UNet::with_random_weights(config(Norm::None, FinalActivation::Sigmoid), &device);
     let dir = tempfile::TempDir::new().unwrap();
-    let path = dir.path().join("unet.safetensors");
+    let path = dir.path().join("unet.evanet");
     let (tensors, metadata) = net.to_file_contents(BTreeMap::new());
     crate::weights::write(&path, &tensors, &metadata).unwrap();
     let engine = Engine::new(&EngineConfig {
@@ -413,7 +413,7 @@ fn difference(a: &[f32], b: &[f32], pixels: usize) -> (f32, usize) {
 }
 
 /// romantic-shark converted to our file (`examples/convert_unet`, into
-/// `tests/romantic-shark/romantic-shark.safetensors`), against PyTorch:
+/// `tests/romantic-shark/romantic-shark.evanet`), against PyTorch:
 ///
 /// - the network alone on the package's 256² test input (normalized) vs
 ///   the package's own expected output;
@@ -428,7 +428,7 @@ fn real_romantic_shark_gives_pytorchs_results() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/romantic-shark");
     let reference = dir.join("reference");
     let device = Device::flex();
-    let net = UNet::load(&dir.join("romantic-shark.safetensors"), &device, false).unwrap();
+    let net = UNet::load(&dir.join("romantic-shark.evanet"), &device, false).unwrap();
     assert_eq!(net.preprocessing(), Preprocessing::ZeroMeanUnitVariance);
 
     let side = 256;
@@ -481,7 +481,7 @@ fn real_romantic_shark_in_f16_on_the_gpu_stays_within_f16_rounding() {
     use burn::tensor::DeviceKind;
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/romantic-shark");
     let device = Device::wgpu(DeviceKind::DiscreteGpu(0));
-    let net = UNet::load(&dir.join("romantic-shark.safetensors"), &device, true).unwrap();
+    let net = UNet::load(&dir.join("romantic-shark.evanet"), &device, true).unwrap();
     let reference = dir.join("reference");
     let side = 1024;
     let input = read_f32(&reference.join("cells1024.input.f32"));

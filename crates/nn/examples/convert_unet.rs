@@ -15,11 +15,11 @@
 //! where the weights come from. The written file is loaded back as a check.
 //!
 //!   cargo build-linux -p evanalyzer_nn --example convert_unet
-//!   target/x86_64-unknown-linux-gnu/release/examples/convert_unet <in.safetensors> <out.safetensors> \
+//!   target/x86_64-unknown-linux-gnu/release/examples/convert_unet <in.safetensors> <out.evanet> \
 //!     '<config json>' [zero_mean_unit_variance|none] [key=value ...]
 //!
 //! e.g. romantic-shark:
-//!   … weights.safetensors tests/romantic-shark/romantic-shark.safetensors \
+//!   … weights.safetensors tests/romantic-shark/romantic-shark.evanet \
 //!     '{"in_channels":1,"out_channels":2,"depth":4,"initial_features":64,"gain":2,
 //!       "norm":"instance","final_activation":"sigmoid"}' zero_mean_unit_variance \
 //!     source=bioimage.io/romantic-shark license=CC-BY-4.0 citation=…

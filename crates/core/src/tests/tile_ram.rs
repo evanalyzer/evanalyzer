@@ -91,9 +91,9 @@ fn configured(command: PipelineCommand) -> PipelineCommand {
 /// (git-ignored, see `docs/nn_burn_migration_plan.md`): what the analysis
 /// keeps of an inference depends on the outputs (StarDist's candidates) -
 /// random weights would detect anything. Without them, not measured.
-const UNET: &str = "tests/romantic-shark/romantic-shark.safetensors";
-const STARDIST: &str = "tests/stardist/2D_versatile_fluo.safetensors";
-const CELLPOSE: &str = "tests/cellpose-sam/cpsam_v2.safetensors";
+const UNET: &str = "tests/romantic-shark/romantic-shark.evanet";
+const STARDIST: &str = "tests/stardist/2D_versatile_fluo.evanet";
+const CELLPOSE: &str = "tests/cellpose-sam/cpsam_v2.evanet";
 
 fn real_model(file: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -29,7 +29,7 @@ cells StarDist keeps), raw little-endian f32, and `<case>.shape.json`.
 
     pip install tensorflow-cpu stardist safetensors
     python convert_stardist.py tests/stardist 2D_versatile_fluo \
-        tests/stardist/2D_versatile_fluo.safetensors --references tests/stardist/reference
+        tests/stardist/2D_versatile_fluo.evanet --references tests/stardist/reference
 """
 
 import argparse

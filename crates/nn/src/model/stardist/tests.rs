@@ -167,7 +167,7 @@ fn read_f32(path: &Path) -> Vec<f32> {
 fn real_stardist_gives_stardists_output() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/stardist");
     let net = StarDist::load(
-        &dir.join("2D_versatile_fluo.safetensors"),
+        &dir.join("2D_versatile_fluo.evanet"),
         &Device::flex(),
         false,
     )
@@ -236,7 +236,7 @@ fn real_stardist_in_f16_on_the_gpu_stays_within_f16_rounding() {
     use burn::tensor::DeviceKind;
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/stardist");
     let device = Device::wgpu(DeviceKind::DiscreteGpu(0));
-    let net = StarDist::load(&dir.join("2D_versatile_fluo.safetensors"), &device, true).unwrap();
+    let net = StarDist::load(&dir.join("2D_versatile_fluo.evanet"), &device, true).unwrap();
     let reference = dir.join("reference");
     let (w, h) = (1100, 600);
     let input = read_f32(&reference.join("cells1100x600.input.f32"));
@@ -308,7 +308,7 @@ fn normalizing_on_the_way_equals_normalizing_up_front() {
 fn the_engine_runs_pre_infer_and_post() {
     use crate::runtime::{DeviceSelection, Engine, EngineConfig};
     let dir = tempfile::TempDir::new().unwrap();
-    let path = dir.path().join("stardist.safetensors");
+    let path = dir.path().join("stardist.evanet");
     std::fs::write(&path, stardist_file(&tiny_config([2, 2]))).unwrap();
     assert_eq!(
         StarDist::header(&path).unwrap(),

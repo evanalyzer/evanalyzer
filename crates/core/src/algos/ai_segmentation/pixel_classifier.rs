@@ -60,7 +60,7 @@ pub struct SegmentationMapping {
 #[cmdsmeta(category = "segment", display_name = "AI Pixel Classifier")]
 pub struct PixelClassifier {
     /// Path to a trained pixel classifier model, saved from the AI training dialog.
-    #[cmdsmeta(file_extensions = "evamodel")]
+    #[cmdsmeta(file_extensions = EVANALYZER_TRAINED_AI_MODELS)]
     pub model_path: PathBuf,
 
     /// Maps the model's predicted classes to this project's segmentation classes.

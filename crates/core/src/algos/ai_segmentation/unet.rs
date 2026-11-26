@@ -40,7 +40,7 @@ pub enum UNetOutputMode {
 
 /// Semantic segmentation with a pretrained U-Net (torch-em `UNet2d`, the
 /// architecture of bioimage.io's U-Nets), from an EVAnalyzer model file
-/// (`.safetensors`, converted once from the original - `crates/nn`).
+/// (`.evanet`, converted once from the original - `crates/nn`).
 ///
 /// The model gives one or more channels per pixel: with one, its
 /// foreground probability; with more, `output_mode` and `foreground_channel`
@@ -56,8 +56,8 @@ pub enum UNetOutputMode {
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "segment", display_name = "AI UNet Segmentation")]
 pub struct UNet {
-    /// The U-Net model file (EVAnalyzer's `.safetensors`).
-    #[cmdsmeta(file_extensions = "safetensors")]
+    /// The U-Net model file (EVAnalyzer's `.evanet`).
+    #[cmdsmeta(file_extensions = NN_MODEL_EXTENSION)]
     pub model_path: PathBuf,
 
     /// The class assigned to pixels whose predicted probability reaches
@@ -287,7 +287,7 @@ mod tests {
     fn execute_runs_the_model_file_and_thresholds_its_probabilities() {
         use evanalyzer_nn::model::unet::Preprocessing;
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("unet.safetensors");
+        let path = dir.path().join("unet.evanet");
         let config = evanalyzer_nn::test_support::tiny_unet_config();
         std::fs::write(
             &path,
@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn execute_errors_when_the_model_path_does_not_exist() {
         let dir = tempfile::tempdir().unwrap();
-        let cmd = unet(dir.path().join("missing.safetensors"));
+        let cmd = unet(dir.path().join("missing.evanet"));
         let mut ctx = gray_ctx(2, 2, vec![0.0; 4]);
         let mut cache = GlobalPipelineCache::default();
 

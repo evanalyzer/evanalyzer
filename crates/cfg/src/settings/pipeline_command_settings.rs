@@ -2825,7 +2825,7 @@ fn _serde_default_cellpose_normalization()
 #[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct CellposeSettings {
-    /// The Cellpose-SAM model file (EVAnalyzer's `.safetensors`, converted
+    /// The Cellpose-SAM model file (EVAnalyzer's `.evanet`, converted
     /// once from Cellpose's own, e.g. `cpsam_v2`).
     pub model_path: PathBuf,
     /// The class assigned to pixels of every detected object. All other
@@ -3036,7 +3036,7 @@ fn _serde_default_stardist_normalization()
     AiSegmentationInputNormalizationInputNormalizationSettings::ModelDefault
 }
 /// Instance segmentation with a pretrained StarDist 2D model, from an
-/// EVAnalyzer model file (`.safetensors`, converted once from StarDist's own,
+/// EVAnalyzer model file (`.evanet`, converted once from StarDist's own,
 /// e.g. `2D_versatile_fluo` - `crates/nn`).
 ///
 /// For each grid cell the model gives the probability of an object's centre
@@ -3054,7 +3054,7 @@ fn _serde_default_stardist_normalization()
 #[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct StardistSettings {
-    /// The StarDist model file (EVAnalyzer's `.safetensors`).
+    /// The StarDist model file (EVAnalyzer's `.evanet`).
     pub model_path: PathBuf,
     /// The class assigned to pixels of every detected object. All other
     /// pixels are assigned `SegmentationClass::BACKGROUND`.
@@ -3173,7 +3173,7 @@ fn _serde_default_unet_normalization() -> AiSegmentationInputNormalizationInputN
 }
 /// Semantic segmentation with a pretrained U-Net (torch-em `UNet2d`, the
 /// architecture of bioimage.io's U-Nets), from an EVAnalyzer model file
-/// (`.safetensors`, converted once from the original - `crates/nn`).
+/// (`.evanet`, converted once from the original - `crates/nn`).
 ///
 /// The model gives one or more channels per pixel: with one, its
 /// foreground probability; with more, `output_mode` and `foreground_channel`
@@ -3190,7 +3190,7 @@ fn _serde_default_unet_normalization() -> AiSegmentationInputNormalizationInputN
 #[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct UNetSettings {
-    /// The U-Net model file (EVAnalyzer's `.safetensors`).
+    /// The U-Net model file (EVAnalyzer's `.evanet`).
     pub model_path: PathBuf,
     /// The class assigned to pixels whose predicted probability reaches
     /// `probability_threshold`. All other pixels are assigned `SegmentationClass::BACKGROUND`.

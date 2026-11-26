@@ -13379,11 +13379,8 @@ mod tests {
         // "cancelled" right away.
         let (ui, ui_state, _controller) = selected(vec![]);
         let token_before = ui.global::<PipelinesPanelState>().get_browse_result_token();
-        ui.global::<PipelinesPanelState>().invoke_browse_file(
-            "safetensors".into(),
-            "/tmp".into(),
-            3,
-        );
+        ui.global::<PipelinesPanelState>()
+            .invoke_browse_file("evanet".into(), "/tmp".into(), 3);
         assert_eq!(
             ui.global::<PipelinesPanelState>().get_browse_result_token(),
             token_before

@@ -7,10 +7,11 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 //!
-//! The model file: one `*.safetensors` per model - named f32 tensors plus
-//! `__metadata__` saying which architecture and variant it is for. Data only
-//! (no pickle), mmap-able, independent of burn's own formats: a burn upgrade
-//! can only break the loading code here, never files.
+//! The model file: one `*.evanet` per model, a safetensors file - named f32
+//! tensors plus `__metadata__` saying which architecture and variant it is
+//! for. Data only (no pickle), mmap-able, independent of burn's own
+//! formats: a burn upgrade can only break the loading code here, never
+//! files.
 //!
 //! Only our own files are read (decided 2026-11-25): foreign models are
 //! converted once by hand with the dev converters (`examples/convert_*`),
@@ -99,7 +100,7 @@ pub struct ModelFile<'a> {
 }
 
 impl<'a> ModelFile<'a> {
-    /// Parses `bytes` (a whole `.safetensors` file).
+    /// Parses `bytes` (a whole `.evanet` file).
     pub fn parse(bytes: &'a [u8]) -> Result<Self, NnError> {
         let (_, header) = SafeTensors::read_metadata(bytes)
             .map_err(|e| NnError::InvalidModelFile(format!("no safetensors file: {e}")))?;
@@ -230,7 +231,7 @@ pub struct NamedTensor {
     pub values: Vec<f32>,
 }
 
-/// `tensors` and `metadata` as the bytes of a `.safetensors` file (models
+/// `tensors` and `metadata` as the bytes of an `.evanet` file (models
 /// stored inside another file, e.g. an MLP in a `.evamodel`).
 ///
 /// Written here, not with the safetensors crate's `serialize`: that one
@@ -278,7 +279,7 @@ pub fn to_bytes(tensors: &[NamedTensor], metadata: &ModelMetadata) -> Result<Vec
     Ok(bytes)
 }
 
-/// Writes `tensors` and `metadata` as a `.safetensors` file to `path` (see
+/// Writes `tensors` and `metadata` as an `.evanet` file to `path` (see
 /// [`to_bytes`]).
 pub fn write(
     path: &Path,
@@ -306,7 +307,7 @@ mod tests {
     #[test]
     fn a_written_file_reads_back_with_its_metadata_and_tensors() {
         let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("m.safetensors");
+        let path = dir.path().join("m.evanet");
         let tensor = NamedTensor {
             name: "a.weight".into(),
             shape: vec![2, 3],
@@ -371,7 +372,7 @@ mod tests {
     #[test]
     fn foreign_files_and_newer_layouts_are_refused() {
         let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("m.safetensors");
+        let path = dir.path().join("m.evanet");
         // A plain safetensors file without our metadata.
         use safetensors::tensor::{Dtype, TensorView};
         let data = 1.0f32.to_le_bytes();

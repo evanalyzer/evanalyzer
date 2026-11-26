@@ -80,7 +80,7 @@ pub enum AiClassifyMatchHandling {
 #[cmdsmeta(category = "object", display_name = "AI Object Classifier")]
 pub struct AiObjectClassifier {
     /// Path to a trained object classifier model, saved from the AI training dialog.
-    #[cmdsmeta(file_extensions = "evamodel")]
+    #[cmdsmeta(file_extensions = EVANALYZER_TRAINED_AI_MODELS)]
     pub model_path: PathBuf,
 
     /// Maps the model's predicted classes to this project's object classes.

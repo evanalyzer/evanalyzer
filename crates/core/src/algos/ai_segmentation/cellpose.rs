@@ -45,9 +45,9 @@ use crate::{
     display_name = "AI Cellpose Segmentation"
 )]
 pub struct Cellpose {
-    /// The Cellpose-SAM model file (EVAnalyzer's `.safetensors`, converted
+    /// The Cellpose-SAM model file (EVAnalyzer's `.evanet`, converted
     /// once from Cellpose's own, e.g. `cpsam_v2`).
-    #[cmdsmeta(file_extensions = "safetensors")]
+    #[cmdsmeta(file_extensions = NN_MODEL_EXTENSION)]
     pub model_path: PathBuf,
 
     /// The class assigned to pixels of every detected object. All other
@@ -256,7 +256,7 @@ mod tests {
     #[test]
     fn execute_runs_the_model_file_and_writes_instances() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("cellpose.safetensors");
+        let path = dir.path().join("cellpose.evanet");
         let config = evanalyzer_nn::test_support::tiny_cellpose_sam_config();
         std::fs::write(
             &path,
@@ -290,7 +290,7 @@ mod tests {
     fn execute_errors_when_the_model_path_does_not_exist() {
         let dir = tempfile::tempdir().unwrap();
         let cmd = Cellpose {
-            model_path: dir.path().join("missing.safetensors"),
+            model_path: dir.path().join("missing.evanet"),
             ..cellpose(0)
         };
         let mut ctx = gray_ctx(2, 2, vec![0.0; 4]);

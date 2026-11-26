@@ -28,7 +28,7 @@ dY, dX, cell logit), raw little-endian f32.
 
     pip install "cellpose>=4" torch safetensors
     python convert_cellpose_sam.py tests/cellpose-sam/cpsam_v2 \
-        tests/cellpose-sam/cpsam_v2.safetensors --references tests/cellpose-sam/reference
+        tests/cellpose-sam/cpsam_v2.evanet --references tests/cellpose-sam/reference
 """
 
 import argparse

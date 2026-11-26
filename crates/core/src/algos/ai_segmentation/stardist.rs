@@ -21,7 +21,7 @@ use crate::{
 };
 
 /// Instance segmentation with a pretrained StarDist 2D model, from an
-/// EVAnalyzer model file (`.safetensors`, converted once from StarDist's own,
+/// EVAnalyzer model file (`.evanet`, converted once from StarDist's own,
 /// e.g. `2D_versatile_fluo` - `crates/nn`).
 ///
 /// For each grid cell the model gives the probability of an object's centre
@@ -42,8 +42,8 @@ use crate::{
     display_name = "AI Stardist Segmentation"
 )]
 pub struct Stardist {
-    /// The StarDist model file (EVAnalyzer's `.safetensors`).
-    #[cmdsmeta(file_extensions = "safetensors")]
+    /// The StarDist model file (EVAnalyzer's `.evanet`).
+    #[cmdsmeta(file_extensions = NN_MODEL_EXTENSION)]
     pub model_path: PathBuf,
 
     /// The class assigned to pixels of every detected object. All other
@@ -203,7 +203,7 @@ mod tests {
     #[test]
     fn execute_runs_the_model_file_and_writes_instances() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("stardist.safetensors");
+        let path = dir.path().join("stardist.evanet");
         let config = evanalyzer_nn::test_support::tiny_stardist_config([2, 2]);
         std::fs::write(&path, evanalyzer_nn::test_support::stardist_file(&config)).unwrap();
         let (w, h) = (64, 48);
@@ -232,7 +232,7 @@ mod tests {
     fn execute_errors_when_the_model_path_does_not_exist() {
         let dir = tempfile::tempdir().unwrap();
         let cmd = Stardist {
-            model_path: dir.path().join("missing.safetensors"),
+            model_path: dir.path().join("missing.evanet"),
             ..stardist(0.5, 0.3)
         };
         let mut ctx = gray_ctx(2, 2, vec![0.0; 4]);

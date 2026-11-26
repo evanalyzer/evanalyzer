@@ -38,7 +38,7 @@ fn main() {
         _ => panic!("usage: measure_engine_ram cpu|gpu"),
     };
     let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("tiny.safetensors");
+    let file = dir.path().join("tiny.evanet");
     std::fs::write(&file, unet_file(tiny_unet_config(), Preprocessing::None)).unwrap();
     let pixels: Vec<f32> = (0..64 * 64).map(|i| (i % 17) as f32 / 17.0).collect();
     let image = Image {

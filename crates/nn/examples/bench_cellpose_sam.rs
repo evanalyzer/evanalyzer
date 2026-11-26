@@ -60,7 +60,7 @@ fn main() {
     };
     let start = Instant::now();
     // As the engine loads it: f16 when asked for (`load`'s GPU path).
-    let net = CellposeSam::load(&dir.join("cpsam_v2.safetensors"), &device, half).unwrap();
+    let net = CellposeSam::load(&dir.join("cpsam_v2.evanet"), &device, half).unwrap();
     eprintln!("loaded in {:.1} s", start.elapsed().as_secs_f64());
 
     let input = read_f32(&dir.join("reference-f32").join(format!("{case}.input.f32")));

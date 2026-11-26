@@ -199,7 +199,7 @@ fn read_f32(path: &Path) -> Vec<f32> {
 #[ignore = "needs tests/cellpose-sam (cpsam_v2 converted + references)"]
 fn real_cpsam_gives_cellposes_output() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/cellpose-sam");
-    let net = CellposeSam::load(&dir.join("cpsam_v2.safetensors"), &Device::flex(), false).unwrap();
+    let net = CellposeSam::load(&dir.join("cpsam_v2.evanet"), &Device::flex(), false).unwrap();
     assert_eq!(net.config(), &CellposeSamConfig::vit_l());
     for (i, channels) in [(0, 3), (1, 3), (2, 1)] {
         let reference = dir.join("reference");
@@ -248,7 +248,7 @@ fn real_cpsam_gives_cellposes_output() {
 #[ignore = "needs tests/cellpose-sam (cpsam_v2 converted + libtorch engine references)"]
 fn real_cpsam_infer_gives_the_libtorch_engines_output() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/cellpose-sam");
-    let net = CellposeSam::load(&dir.join("cpsam_v2.safetensors"), &Device::flex(), false).unwrap();
+    let net = CellposeSam::load(&dir.join("cpsam_v2.evanet"), &Device::flex(), false).unwrap();
     // (name, width, height, net width, net height, replicate)
     for (name, w, h, nw, nh, replicate) in [
         ("cells256-zero", 256, 256, 256, 256, false),
@@ -313,7 +313,7 @@ fn real_cpsam_in_f16_on_the_gpu_stays_within_the_bf16_rounding() {
     use burn::tensor::DeviceKind;
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/cellpose-sam");
     let device = Device::wgpu(DeviceKind::DiscreteGpu(0));
-    let net = CellposeSam::load(&dir.join("cpsam_v2.safetensors"), &device, true).unwrap();
+    let net = CellposeSam::load(&dir.join("cpsam_v2.evanet"), &device, true).unwrap();
     for (name, w, h, replicate) in [
         ("cells300x200-replicate", 300, 200, true),
         ("cells1024-replicate", 1024, 1024, true),
@@ -416,7 +416,7 @@ fn normalizing_on_the_way_equals_normalizing_up_front() {
 fn the_engine_runs_pre_infer_and_post() {
     use crate::runtime::{DeviceSelection, Engine, EngineConfig};
     let dir = tempfile::TempDir::new().unwrap();
-    let path = dir.path().join("cellpose.safetensors");
+    let path = dir.path().join("cellpose.evanet");
     std::fs::write(&path, cellpose_sam_file(&tiny_config())).unwrap();
     assert_eq!(
         CellposeSam::header(&path).unwrap(),

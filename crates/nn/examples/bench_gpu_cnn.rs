@@ -70,7 +70,7 @@ fn main() {
             let dir = tests.join("stardist");
             let r = dir.join("reference");
             let mut net =
-                StarDist::load(&dir.join("2D_versatile_fluo.safetensors"), &device, false).unwrap();
+                StarDist::load(&dir.join("2D_versatile_fluo.evanet"), &device, false).unwrap();
             net.set_half_convs(half);
             let (w, h) = (1100, 600);
             let input = read_f32(&r.join("cells1100x600.input.f32"));
@@ -132,8 +132,7 @@ fn main() {
         "unet" => {
             let dir = tests.join("romantic-shark");
             let r = dir.join("reference");
-            let mut net =
-                UNet::load(&dir.join("romantic-shark.safetensors"), &device, false).unwrap();
+            let mut net = UNet::load(&dir.join("romantic-shark.evanet"), &device, false).unwrap();
             net.set_half_convs(half);
             let side = 1024;
             let input = read_f32(&r.join("cells1024.input.f32"));

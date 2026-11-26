@@ -315,7 +315,7 @@
           "minimum": 0
         },
         "modelPath": {
-          "description": "The Cellpose-SAM model file (EVAnalyzer's `.safetensors`, converted\nonce from Cellpose's own, e.g. `cpsam_v2`).",
+          "description": "The Cellpose-SAM model file (EVAnalyzer's `.evanet`, converted\nonce from Cellpose's own, e.g. `cpsam_v2`).",
           "type": "string",
           "default": ""
         },
@@ -5876,11 +5876,11 @@
       ]
     },
     "StardistSettings": {
-      "description": "Instance segmentation with a pretrained StarDist 2D model, from an\nEVAnalyzer model file (`.safetensors`, converted once from StarDist's own,\ne.g. `2D_versatile_fluo` - `crates/nn`).\n\nFor each grid cell the model gives the probability of an object's centre\nand the distances to its boundary along `n_rays` equally spaced angles\n(StarDist's star-convex polygons). On a grid coarser than the pixels the\npolygons are scaled back to the image.\n\nPer grid cell candidates above `probability_threshold` are converted to\nstar-convex polygons, then greedily filtered with non-maximum suppression\n(polygons whose pixel-overlap ratio with a higher-scoring candidate exceeds\n`nms_threshold` are discarded) before being rasterized into the pipeline's\nsegmentation and instance maps. Runs on a GPU when there is one\n(convolutions in half precision there), else on the CPU.",
+      "description": "Instance segmentation with a pretrained StarDist 2D model, from an\nEVAnalyzer model file (`.evanet`, converted once from StarDist's own,\ne.g. `2D_versatile_fluo` - `crates/nn`).\n\nFor each grid cell the model gives the probability of an object's centre\nand the distances to its boundary along `n_rays` equally spaced angles\n(StarDist's star-convex polygons). On a grid coarser than the pixels the\npolygons are scaled back to the image.\n\nPer grid cell candidates above `probability_threshold` are converted to\nstar-convex polygons, then greedily filtered with non-maximum suppression\n(polygons whose pixel-overlap ratio with a higher-scoring candidate exceeds\n`nms_threshold` are discarded) before being rasterized into the pipeline's\nsegmentation and instance maps. Runs on a GPU when there is one\n(convolutions in half precision there), else on the CPU.",
       "type": "object",
       "properties": {
         "modelPath": {
-          "description": "The StarDist model file (EVAnalyzer's `.safetensors`).",
+          "description": "The StarDist model file (EVAnalyzer's `.evanet`).",
           "type": "string",
           "default": ""
         },
@@ -6501,7 +6501,7 @@
       }
     },
     "UNetSettings": {
-      "description": "Semantic segmentation with a pretrained U-Net (torch-em `UNet2d`, the\narchitecture of bioimage.io's U-Nets), from an EVAnalyzer model file\n(`.safetensors`, converted once from the original - `crates/nn`).\n\nThe model gives one or more channels per pixel: with one, its\nforeground probability; with more, `output_mode` and `foreground_channel`\ndecide how the foreground probability is taken. The model file says\nwhether the image is normalized first (zero mean, unit variance). Runs on\na GPU when there is one (convolutions in half precision there), else on\nthe CPU.\n\nAny tile size works: the tile is mirror-padded to the network's multiple\n(16 for depth 4) plus a 16 px border (context for the pixels at the tile\nedge, the \"halo\" bioimage.io models declare), and the prediction is\ncropped back to the tile.",
+      "description": "Semantic segmentation with a pretrained U-Net (torch-em `UNet2d`, the\narchitecture of bioimage.io's U-Nets), from an EVAnalyzer model file\n(`.evanet`, converted once from the original - `crates/nn`).\n\nThe model gives one or more channels per pixel: with one, its\nforeground probability; with more, `output_mode` and `foreground_channel`\ndecide how the foreground probability is taken. The model file says\nwhether the image is normalized first (zero mean, unit variance). Runs on\na GPU when there is one (convolutions in half precision there), else on\nthe CPU.\n\nAny tile size works: the tile is mirror-padded to the network's multiple\n(16 for depth 4) plus a 16 px border (context for the pixels at the tile\nedge, the \"halo\" bioimage.io models declare), and the prediction is\ncropped back to the tile.",
       "type": "object",
       "properties": {
         "boundaryChannel": {
@@ -6529,7 +6529,7 @@
           "minimum": 0
         },
         "modelPath": {
-          "description": "The U-Net model file (EVAnalyzer's `.safetensors`).",
+          "description": "The U-Net model file (EVAnalyzer's `.evanet`).",
           "type": "string",
           "default": ""
         },

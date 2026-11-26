@@ -216,8 +216,8 @@ on the CPU (burn-flex). `--ai-devices` picks the devices, `--gpu-slots` the
 parallel inferences per GPU. A GPU that fails an inference hands it to the
 CPU.
 
-Models are EVAnalyzer's own safetensors files (architecture and settings in
-`__metadata__`), converted once by hand with the dev tools in `docs/`
+Models are EVAnalyzer's own `.evanet` files - safetensors files with the
+architecture and settings in `__metadata__` -, converted once by hand with the dev tools in `docs/`
 (`convert_cellpose_sam.py`, `convert_stardist.py`,
 `export_unet_weights.py` + the `convert_unet` example) - see
 [docs/nn_burn_migration_plan.md](docs/nn_burn_migration_plan.md).
@@ -293,7 +293,9 @@ Pipeline commands (`Blur`, `Threshold`, `Cellpose`, ...) are declared once, in
 Field types bring their own UI and behavior:
 
 - `PathBuf` - a file picker, stored relative to the project so projects can be
-  moved. `file_extensions` only narrows the picker's filter.
+  moved. `file_extensions` only narrows the picker's filter: a string
+  (`"pt,pth"`) or a constant of `crates/cfg/src/file_extensions.rs`
+  (`NN_MODEL_EXTENSION`).
 - `ObjectClass` / `SegmentationClass` (also in `Vec`/`Option`) - a class
   picker, and listed in `PipelineCommand::object_classes()`. A trained model's
   own class ids use `ModelClass` / `ModelSegmentationClass` instead.
