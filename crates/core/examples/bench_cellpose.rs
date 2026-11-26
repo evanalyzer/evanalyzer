@@ -14,18 +14,23 @@
 //
 // Usage: cargo build-linux -p evanalyzer_core --example bench_cellpose, then
 //   target/x86_64-unknown-linux-gnu/release/examples/bench_cellpose \
-//     <workdir> --model <model.safetensors> [--cpu] [--images N] [--size PX] [--threads N] [--channels N] [--repeat N]
+//     <workdir> --model <model.evanet> [--cpu] [--images N] [--size PX] [--threads N] [--channels N] [--repeat N]
 //
 // `--repeat N` runs the job N times in one process: the first run includes
 // setting up the engine, loading the model and the warm-up; the others are
 // the steady state (their median is printed). `--cpu` never uses a GPU.
-// `--unet` runs a U-Net step (e.g. romantic-shark) instead of Cellpose.
+// `--unet` / `--stardist` run a U-Net / StarDist step instead of Cellpose.
+// `--normalization off` turns the input normalization off (a version
+// without the setting ignores it). `--save` saves each image's instance map
+// (U-Net: segmentation mask) as PNG into the results folder, printed at the
+// end. `--gpu-cache DIR` keeps the GPU's tuned kernels between runs.
 
 use evanalyzer_cfg::core_types::{ImageAddress, SegmentationClass};
 use evanalyzer_cfg::settings::images_settings::ImageEntry;
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
 use evanalyzer_cfg::settings::pipeline_command_settings::{
-    CellposeSettings, ExtractObjectsSettings, UNetSettings,
+    CellposeSettings, ExtractObjectsSettings, MathSaveImageImageSourceSettings, SaveImageSettings,
+    StardistSettings, UNetSettings,
 };
 use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
@@ -86,18 +91,57 @@ fn peak_rss_mb() -> u64 {
         .map_or(0, |kb| kb / 1024)
 }
 
+/// The AI step: Cellpose, a U-Net or StarDist, with `--normalization off`
+/// set through the project file's names (a version without the setting
+/// ignores it).
+fn ai_step(model: PathBuf, channels: i32, unet: bool, stardist: bool) -> PipelineCommand {
+    let class = SegmentationClass(1);
+    let command = if unet {
+        PipelineCommand::UNet(UNetSettings {
+            model_path: model,
+            segmentation_class: class,
+            ..Default::default()
+        })
+    } else if stardist {
+        PipelineCommand::Stardist(StardistSettings {
+            model_path: model,
+            segmentation_class: class,
+            ..Default::default()
+        })
+    } else {
+        PipelineCommand::Cellpose(CellposeSettings {
+            model_path: model,
+            segmentation_class: class,
+            input_channels: channels,
+            ..Default::default()
+        })
+    };
+    if arg("--normalization").as_deref() != Some("off") {
+        return command;
+    }
+    let mut value = serde_json::to_value(&command).unwrap();
+    // Serialized as `{"type": "STARDIST", "modelPath": ..., ...}`.
+    let settings = value.as_object_mut().expect("a command's settings");
+    settings.insert("normalization".into(), serde_json::json!({ "type": "OFF" }));
+    serde_json::from_value(value).unwrap()
+}
+
 fn main() {
     env_logger::init();
     let workdir = PathBuf::from(std::env::args().nth(1).expect("workdir"));
-    let model = PathBuf::from(arg("--model").expect("--model <model.safetensors>"));
-    if std::env::args().any(|a| a == "--cpu") {
-        evanalyzer_core::ai_devices::configure_ai_devices(
-            evanalyzer_core::ai_devices::AiDeviceOptions {
-                devices: evanalyzer_core::ai_devices::AiDeviceSelection::Cpu,
-                ..Default::default()
+    let model = PathBuf::from(arg("--model").expect("--model <model.evanet>"));
+    let flag = |name: &str| std::env::args().any(|a| a == name);
+    evanalyzer_core::ai_devices::configure_ai_devices(
+        evanalyzer_core::ai_devices::AiDeviceOptions {
+            devices: if flag("--cpu") {
+                evanalyzer_core::ai_devices::AiDeviceSelection::Cpu
+            } else {
+                evanalyzer_core::ai_devices::AiDeviceSelection::Auto
             },
-        );
-    }
+            gpu_cache: arg("--gpu-cache").map(PathBuf::from),
+            ..Default::default()
+        },
+    );
     let images = num("--images", 4);
     let size = num("--size", 1024) as u32;
     let threads = num("--threads", 0);
@@ -142,26 +186,27 @@ fn main() {
         image_source: ImageAddress::Channel(0),
         enabled: true,
         steps: vec![
-            step(if std::env::args().any(|a| a == "--unet") {
-                PipelineCommand::UNet(UNetSettings {
-                    model_path: model,
-                    segmentation_class: SegmentationClass(1),
-                    ..Default::default()
-                })
-            } else {
-                PipelineCommand::Cellpose(CellposeSettings {
-                    model_path: model,
-                    segmentation_class: SegmentationClass(1),
-                    input_channels: channels,
-                    ..Default::default()
-                })
-            }),
+            step(ai_step(model, channels, flag("--unet"), flag("--stardist"))),
             step(PipelineCommand::ExtractObjects(ExtractObjectsSettings {
                 max_objects_before_fail: 1_000_000,
                 ..Default::default()
             })),
         ],
     });
+    if flag("--save") {
+        let source = if flag("--unet") {
+            MathSaveImageImageSourceSettings::SegmentationMask
+        } else {
+            MathSaveImageImageSourceSettings::InstanceMap
+        };
+        project.pipelines[0].steps.insert(
+            1,
+            step(PipelineCommand::SaveImage(SaveImageSettings {
+                name: "masks".into(),
+                source,
+            })),
+        );
+    }
 
     let parallelism = if threads == 0 {
         std::thread::available_parallelism().unwrap().get()
@@ -208,6 +253,9 @@ fn main() {
     }
     let mut steady = times[1.min(times.len() - 1)..].to_vec();
     steady.sort_by(f64::total_cmp);
+    if flag("--save") {
+        println!("results in {}", workdir.display());
+    }
     println!(
         "threads={parallelism} images={images} size={size} first={:.2}s steady median={:.2}s  peak RSS {} MB",
         times[0],
