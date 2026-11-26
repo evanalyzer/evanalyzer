@@ -16,7 +16,13 @@
 //!
 //!   cargo build-linux -p evanalyzer_nn --example convert_unet
 //!   target/x86_64-unknown-linux-gnu/release/examples/convert_unet <in.safetensors> <out.evanet> \
-//!     '<config json>' [zero_mean_unit_variance|none] [key=value ...]
+//!     '<config json>' [zero_mean_unit_variance|none] [key=value ...] \
+//!     [--check=<test_input_0.npy>,<test_output_0.npy>]
+//!
+//! `--check`: the written file loaded back and run (the network alone, on
+//! the CPU) on the package's test input, normalized as the file says,
+//! against the package's expected output - the conversion is refused when
+//! they differ by more than float rounding.
 //!
 //! e.g. romantic-shark:
 //!   … weights.safetensors tests/romantic-shark/romantic-shark.evanet \
@@ -41,9 +47,14 @@ fn main() {
         "zero_mean_unit_variance" => Preprocessing::ZeroMeanUnitVariance,
         other => panic!("unknown preprocessing {other}"),
     };
+    let check = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--check="))
+        .map(|v| v.split_once(',').expect("--check=<input.npy>,<output.npy>"));
     let info: BTreeMap<String, String> = args
         .iter()
         .skip(5)
+        .filter(|a| !a.starts_with("--check="))
         .map(|kv| {
             let (k, v) = kv.split_once('=').expect("key=value");
             (k.to_string(), v.to_string())
@@ -66,5 +77,79 @@ fn main() {
         tensors.len(),
         loaded.config(),
         preprocessing
+    );
+    if let Some((test_input, test_output)) = check {
+        check_against_the_package(&loaded, Path::new(test_input), Path::new(test_output));
+    }
+}
+
+/// A `.npy` file of f32 (little-endian, C order): its shape and values.
+fn read_npy_f32(path: &Path) -> (Vec<usize>, Vec<f32>) {
+    let bytes = std::fs::read(path).unwrap();
+    assert_eq!(&bytes[..6], b"\x93NUMPY", "{}", path.display());
+    let header_len = u16::from_le_bytes([bytes[8], bytes[9]]) as usize;
+    let header = std::str::from_utf8(&bytes[10..10 + header_len]).unwrap();
+    assert!(
+        header.contains("'<f4'") && header.contains("False"),
+        "{header}"
+    );
+    let shape = header
+        .split("'shape': (")
+        .nth(1)
+        .and_then(|s| s.split(')').next())
+        .unwrap()
+        .split(',')
+        .filter_map(|n| n.trim().parse().ok())
+        .collect();
+    let values = bytes[10 + header_len..]
+        .chunks_exact(4)
+        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .collect();
+    (shape, values)
+}
+
+/// The network on the package's test input (`[1, C, H, W]`, normalized as
+/// the file says - zero mean / unit variance in f64 like nn) against the
+/// package's output: max |difference| and the pixels of channel 0 on
+/// different sides of 0.5.
+fn check_against_the_package(net: &UNet, input: &Path, output: &Path) {
+    let (shape, pixels) = read_npy_f32(input);
+    let (height, width) = (shape[shape.len() - 2], shape[shape.len() - 1]);
+    let normalized: Vec<f32> = match net.preprocessing() {
+        Preprocessing::None => pixels,
+        Preprocessing::ZeroMeanUnitVariance => {
+            let n = pixels.len() as f64;
+            let mean = pixels.iter().map(|&v| f64::from(v)).sum::<f64>() / n;
+            let var = pixels
+                .iter()
+                .map(|&v| (f64::from(v) - mean).powi(2))
+                .sum::<f64>()
+                / n;
+            let scale = 1.0 / (var.sqrt() + 1e-6);
+            pixels
+                .iter()
+                .map(|&v| ((f64::from(v) - mean) * scale) as f32)
+                .collect()
+        }
+    };
+    let ours = net.forward_raw(&normalized, height, width, &Device::flex());
+    let (_, expected) = read_npy_f32(output);
+    assert_eq!(ours.len(), expected.len(), "output size");
+    let max = ours
+        .iter()
+        .zip(&expected)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f32, f32::max);
+    let flips = ours[..width * height]
+        .iter()
+        .zip(&expected[..width * height])
+        .filter(|(a, b)| (**a > 0.5) != (**b > 0.5))
+        .count();
+    println!(
+        "check against the package ({width}x{height}): max |difference| {max:.2e}, {flips} pixels flip"
+    );
+    assert!(
+        max < 1e-3 && flips <= width * height / 100_000,
+        "the converted model doesn't give the package's output"
     );
 }

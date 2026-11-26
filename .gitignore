@@ -38,6 +38,9 @@ tests/timeseries_96img_48t_tracked.evadb
 tests/joyful-pig/
 # bioimage.io's romantic-shark U-Net (~223 MB) for the burn migration's comparisons.
 tests/romantic-shark/
+# bioimage.io's affable-shark and powerful-chipmunk U-Nets converted to .evanet (~116 MB each).
+tests/affable-shark/
+tests/powerful-chipmunk/
 # Cellpose-SAM weights (cpsam_v2, ~1.2 GB), converted file and references for the burn migration.
 tests/cellpose-sam/
 # StarDist models (official zips), converted files and references for the burn migration.
