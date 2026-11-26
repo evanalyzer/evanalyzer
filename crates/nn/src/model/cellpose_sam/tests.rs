@@ -283,3 +283,54 @@ fn real_cpsam_infer_gives_the_libtorch_engines_output() {
         }
     }
 }
+
+/// The GPU path (matrix products and convolutions in f16, as `load` sets it
+/// on a GPU) against Cellpose's f32 network run by the libtorch engine
+/// (`reference-f32/`): within the tolerances the shipped bf16-rounded model
+/// meets (measured 2026-11-26 at 1024²: flows 3.7e-2, probability 3.2e-3,
+/// 23 flips of 1,048,576; the shipped model 1.8e-2, 5.4e-3, 61). Needs a
+/// discrete GPU; release build.
+#[test]
+#[ignore = "needs tests/cellpose-sam and a discrete GPU"]
+fn real_cpsam_in_f16_on_the_gpu_stays_within_the_bf16_rounding() {
+    use burn::tensor::DeviceKind;
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/cellpose-sam");
+    let device = Device::wgpu(DeviceKind::DiscreteGpu(0));
+    let net = CellposeSam::load(&dir.join("cpsam_v2.safetensors"), &device, true).unwrap();
+    for (name, w, h, replicate) in [
+        ("cells300x200-replicate", 300, 200, true),
+        ("cells1024-replicate", 1024, 1024, true),
+    ] {
+        let input = read_f32(&dir.join("reference-f32").join(format!("{name}.input.f32")));
+        let s = CellposeSamSettings {
+            net_width: w,
+            net_height: h,
+            input_channels: 3,
+            replicate_gray_channel: replicate,
+        };
+        let out = net.infer(image(&input, w, h), &s).unwrap();
+        let ours = [out.flow_y, out.flow_x, out.cell_prob].concat();
+        let engine = read_f32(&dir.join("reference-f32").join(format!("{name}.engine.f32")));
+        let n = w * h;
+        let max = |a: &[f32], b: &[f32]| {
+            a.iter()
+                .zip(b)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max)
+        };
+        let (flow, prob) = (
+            max(&ours[..2 * n], &engine[..2 * n]),
+            max(&ours[2 * n..], &engine[2 * n..]),
+        );
+        let flips = ours[2 * n..]
+            .iter()
+            .zip(&engine[2 * n..])
+            .filter(|(a, b)| (**a > 0.5) != (**b > 0.5))
+            .count();
+        eprintln!("{name} f16: flows {flow:.2e}, probability {prob:.2e}, flips {flips} of {n}");
+        assert!(
+            flow < 0.1 && prob < 0.05 && flips as f64 <= 1e-4 * n as f64,
+            "{name}"
+        );
+    }
+}

@@ -70,6 +70,12 @@ impl CellposeSam {
         &self.config
     }
 
+    /// Matrix products and convolutions in f16 (the GPU's tensor cores) or
+    /// f32 - set once after loading (back to f32 keeps the f16 rounding).
+    pub fn set_half(&mut self, half: bool) {
+        self.network.set_half(half);
+    }
+
     /// A Cellpose-SAM from a model file's bytes (see `config.rs`).
     pub fn from_bytes(bytes: &[u8], device: &Device) -> Result<Self, NnError> {
         let file = ModelFile::parse(bytes)?;
@@ -141,15 +147,20 @@ impl Model for CellposeSam {
     type Settings = CellposeSamSettings;
     type Output = CellposeSamOutput;
 
-    /// f32 on the GPU too (its matrix products are fast there in f32).
-    fn load(file: &Path, device: &Device, _gpu: bool) -> Result<Self, NnError> {
+    /// On the GPU the matrix products and convolutions in f16 (its tensor
+    /// cores; 4.9x faster than f32 at 1024², as close to Cellpose's f32
+    /// network as the bf16 model of the libtorch engine - BENCHMARK.md),
+    /// on the CPU f32.
+    fn load(file: &Path, device: &Device, gpu: bool) -> Result<Self, NnError> {
         let bytes = std::fs::read(file)?;
-        Self::from_bytes(&bytes, device).map_err(|e| match e {
+        let mut net = Self::from_bytes(&bytes, device).map_err(|e| match e {
             NnError::InvalidModelFile(m) => {
                 NnError::InvalidModelFile(format!("{}: {m}", file.display()))
             }
             other => other,
-        })
+        })?;
+        net.set_half(gpu);
+        Ok(net)
     }
 
     /// Uses the image's first channel, as the libtorch engine did.

@@ -2672,6 +2672,37 @@ the patch put back changes nothing, `crates/core/src` from before (only the
 count (perf, P cores: 5.430e11 vs 5.441e11) - code placement by the
 compiler, not more work. Packages lose libtorch (CPU ~0.5 GB, CUDA ~2 GB).
 
+## Cellpose-SAM on the GPU: one GEMM per Linear, f16 (2026-11-26)
+
+A user run: Cellpose-SAM on burn/wgpu 98 s per image vs ~35 s with libtorch
+on CUDA, same computer (NVIDIA RTX 3000 Ada Laptop). The log showed every
+kernel in F32 and the MLP/qkv/proj matrix products as `m: 32`: burn's
+`Linear` on `[B, 32, 32, C]` ran 32 products of 32 rows each instead of one
+of 1,024. Fixed: an own linear layer over all rows at once (one GEMM), and
+on the GPU the matrix products and convolutions in f16 (weights converted
+once; LayerNorm, softmax, GELU, biases, residuals in f32).
+
+`evanalyzer_nn` example `bench_cellpose_sam` (real `CellposeSam::infer`,
+tiles and blending; one process, images after the first = steady state;
+`nvidia-smi` sampled every 200 ms):
+
+| Case | Variant | First image | Later images | vs Cellpose's f32 network (flows / prob. / flips) |
+|---|---|---|---|---|
+| 300 x 200 (2 tiles), GPU | before (f32, `m: 32`) | 23.5 s | 1.59 s | 3.3e-5 / 2.3e-6 / 0 |
+| | f32, one GEMM | 22.4 s | 0.67 s | 2.9e-5 / 2.4e-6 / 0 |
+| | f16, one GEMM | 21.1 s | 0.32 s | 2.0e-2 / 1.8e-3 / 1 of 60,000 |
+| 1024² (25 tiles), GPU | before | 32.7 s | 20.1 s | 4.5e-5 / 2.7e-6 / 0 |
+| | f16, one GEMM | 16.8 s | 4.1 s | 3.7e-2 / 3.2e-3 / 23 of 1,048,576 |
+| 300 x 200, CPU (burn-flex, f32) | before | | 12.4-12.6 s | |
+| | one GEMM | | 10.1 s | same |
+
+The shipped libtorch model (bf16-rounded weights) was 1.8e-2 / 5.4e-3 / 61
+flips from the f32 network at 1024² - f16 is as close. GPU busy 99-100 %
+during the later images (batching tiles would gain little); GPU memory peak
+6.8 → 6.2 GB. The first image costs ~12-20 s more in every process
+(autotune + shader compilation + loading the 1.2 GB model) - open.
+Test: `real_cpsam_in_f16_on_the_gpu_stays_within_the_bf16_rounding`.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
