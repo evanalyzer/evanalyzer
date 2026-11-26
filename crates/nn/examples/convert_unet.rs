@@ -83,16 +83,24 @@ fn main() {
     }
 }
 
-/// A `.npy` file of f32 (little-endian, C order): its shape and values.
+/// A `.npy` file of f32 (little-endian) or u8, C order: its shape and the
+/// values as f32 (bioimage.io's `ensure_dtype: float32`).
 fn read_npy_f32(path: &Path) -> (Vec<usize>, Vec<f32>) {
     let bytes = std::fs::read(path).unwrap();
     assert_eq!(&bytes[..6], b"\x93NUMPY", "{}", path.display());
     let header_len = u16::from_le_bytes([bytes[8], bytes[9]]) as usize;
     let header = std::str::from_utf8(&bytes[10..10 + header_len]).unwrap();
-    assert!(
-        header.contains("'<f4'") && header.contains("False"),
-        "{header}"
-    );
+    assert!(header.contains("False"), "{header}");
+    let data = &bytes[10 + header_len..];
+    let values: Vec<f32> = if header.contains("'<f4'") {
+        data.chunks_exact(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect()
+    } else if header.contains("'|u1'") {
+        data.iter().map(|&v| f32::from(v)).collect()
+    } else {
+        panic!("only f32 and u8 test tensors: {header}")
+    };
     let shape = header
         .split("'shape': (")
         .nth(1)
@@ -100,10 +108,6 @@ fn read_npy_f32(path: &Path) -> (Vec<usize>, Vec<f32>) {
         .unwrap()
         .split(',')
         .filter_map(|n| n.trim().parse().ok())
-        .collect();
-    let values = bytes[10 + header_len..]
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
         .collect();
     (shape, values)
 }
