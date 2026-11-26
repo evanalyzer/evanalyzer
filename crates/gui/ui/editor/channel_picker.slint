@@ -111,7 +111,6 @@ export component ChannelPicker inherits Rectangle {
                 }
 
                 VerticalLayout {
-                    spacing: 0px;
                     for index in root.channel-count: InkPickerRow {
                         height: root.row-height;
                         label: ImageMetaData.is-rgb && index == 0 ? "Image" : "Channel " + index;
@@ -160,7 +159,6 @@ export component ImageAddressPicker inherits HorizontalLayout {
 
     ComboBox {
         enabled: root.enabled;
-        horizontal-stretch: 1;
         // "Memory": this pipeline's slots; "Shared": slots every pipeline
         // after this one can read (a module's slots show as "Memory").
         model: root.kinds;

@@ -209,7 +209,6 @@ component ClassDropdown inherits Rectangle {
                 property <length> reveal-top: -1px;
 
                 VerticalLayout {
-                    spacing: 0px;
 
                     InkPickerRow {
                         label: "Unset";
@@ -373,7 +372,6 @@ export component MultiClassDropdown inherits Rectangle {
                 padding-top: 4px;
                 padding-bottom: 4px;
                 // spacing: 0px - gap between chips is baked into each slot's 46px width
-                spacing: 0px;
                     // Not `alignment: start`: that packs every item at its
                     // preferred width, so the chip area (0px preferred) would
                     // get no room and only show the "+N" badge.
@@ -414,7 +412,6 @@ export component MultiClassDropdown inherits Rectangle {
                             chips := HorizontalLayout {
                             x: 0px;
                             width: self.preferred-width;
-                            spacing: 0px;
                             for i in 33: Rectangle {
                                 width: root.selection-flags[i] == "1" ? 46px : 0px;
                                 height: 18px;
@@ -463,8 +460,6 @@ export component MultiClassDropdown inherits Rectangle {
                                             }
                                         }
 
-                                        width: parent.width;
-                                        height: parent.height;
                                         background: Ink.focus.with-alpha(0.12);
 
                                         HorizontalLayout {
@@ -817,9 +812,6 @@ component ScalarControls inherits Rectangle {
                 font-family: ScriptFont.family;
                 font-size: Ink.fs-caption;
                 color: Ink.text-dim;
-                wrap: no-wrap;
-                overflow: clip;
-                vertical-alignment: top;
             }
 
             Rectangle {
@@ -978,7 +970,6 @@ component ScalarControls inherits Rectangle {
 
         if p.param-type == ParamType.obj-class:
         ClassDropdown {
-            is-seg: false;
             compact: root.compact;
             module-classes: true;
             value: p.value;
@@ -999,7 +990,6 @@ component ScalarControls inherits Rectangle {
 
         if p.param-type == ParamType.multi-obj-class:
         MultiClassDropdown {
-            is-seg: false;
             module-classes: true;
             value: p.value;
             selection-flags: p.options;
@@ -2083,7 +2073,6 @@ component StepRow inherits Rectangle {
     clip: true;
 
     VerticalLayout {
-        spacing: 0px;
 
         // -- The line --
             Rectangle {
@@ -2122,7 +2111,6 @@ component StepRow inherits Rectangle {
                 }
 
                 HorizontalLayout {
-                    spacing: 0px;
 
                     // The gutter: the step's id (what "#2 EV Detection"
                     // elsewhere refers to) - a click sets its breakpoint, like
@@ -2270,7 +2258,6 @@ component StepRow inherits Rectangle {
                     // always and last (every list's rule: faint while on,
                     // a crossed eye in full while off) --
                     HorizontalLayout {
-                        spacing: 0px;
                         padding-left: 2px;
                         padding-right: 4px;
 
@@ -2379,7 +2366,6 @@ component StepRow inherits Rectangle {
                     // to its values, or a table where sections have the
                     // same settings.
                     VerticalLayout {
-                    spacing: 0px;
                     for section in step.section-views: VerticalLayout {
                         // A table's other sections are its rows: nothing here.
                         padding-bottom: section.kind == 2 ? 0px : 8px;
@@ -2825,7 +2811,6 @@ export component PipelinesPanel inherits Rectangle {
     }
 
     VerticalLayout {
-        spacing: 0px;
 
         // -- The head, always: a click on the title folds the list to its
         // selected row (caret as the other panels' heads, Image info) --
@@ -2896,7 +2881,6 @@ export component PipelinesPanel inherits Rectangle {
             height: tray.preferred-height;
 
             tray := VerticalLayout {
-                spacing: 0px;
                 padding-bottom: 2px;
 
                 // At most six rows; more scroll.
@@ -2920,7 +2904,6 @@ export component PipelinesPanel inherits Rectangle {
                             VerticalLayout {
                                 y: 5px;
                                 height: parent.height - 10px;
-                                spacing: 0px;
                                 for p[i] in PipelinesPanelState.pipelines: PipelineRow {
                                     height: root.pipeline-row-h;
                                     pipeline: p;
@@ -2995,7 +2978,6 @@ export component PipelinesPanel inherits Rectangle {
                     if p.id == PipelinesPanelState.active-pipeline-id: HorizontalLayout {
                         padding: 4px;
                         padding-right: 2px;
-                        spacing: 0px;
                         PipelineRow {
                             height: root.pipeline-row-h;
                             pipeline: p;
@@ -3214,7 +3196,6 @@ export component PipelinesPanel inherits Rectangle {
                 padding-right: 8px;
                 padding-bottom: 4px;
                 padding-top: 6px;
-                spacing: 0px;
 
                 // None shown: how to pick one (the rows above).
                 if root.has-pipeline && !root.pipeline-selected: VerticalLayout {
@@ -3292,7 +3273,6 @@ export component PipelinesPanel inherits Rectangle {
                 }
 
                 for cmd[i] in PipelinesPanelState.active-commands: VerticalLayout {
-                    spacing: 0px;
                     StepRow {
                         step: cmd;
                         idx: i;
@@ -3557,20 +3537,17 @@ export component PipelinesPanel inherits Rectangle {
                     InkCaption {
                         horizontal-stretch: 1;
                         text: "PIPELINE";
-                        vertical-alignment: center;
                     }
 
                     InkCaption {
                         width: 92px;
                         text: "SOURCE";
-                        vertical-alignment: center;
                     }
 
                     InkCaption {
                         width: 36px;
                         text: "STEPS";
                         horizontal-alignment: right;
-                        vertical-alignment: center;
                     }
 
                     Rectangle {
@@ -3595,7 +3572,6 @@ export component PipelinesPanel inherits Rectangle {
                 ScrollView {
                     height: min(PipelinesPanelState.switcher-items.length, 10) * 32px;
                     VerticalLayout {
-                        spacing: 0px;
                         for it[k] in PipelinesPanelState.switcher-items: PipelineRow {
                             height: 32px;
                             pipeline: it.pipeline;
@@ -3955,7 +3931,6 @@ export component StepSettingsDialog inherits InkDialog {
 
                         // The sections as on the card, open here or not.
                         if !root.searching: VerticalLayout {
-                            spacing: 0px;
                             for section in cmd.section-views: VerticalLayout {
                                 property <bool> open: section.kind == 0 && root.is-open(cmd.step-id, section.name);
                                 // A table's other sections are its rows: nothing here.
@@ -4101,7 +4076,6 @@ export component TuningPanel inherits Rectangle {
     callback close;
 
     VerticalLayout {
-        spacing: 0px;
 
         // -- Head: Tuning, a chip per step, find a setting, ✕ --
         Rectangle {
@@ -4191,7 +4165,6 @@ export component TuningPanel inherits Rectangle {
 
             cols := HorizontalLayout {
                 alignment: start;
-                spacing: 0px;
                 for t[i] in root.tuned: Rectangle {
                     property <bool> first: i == 0 || root.tuned[i - 1].step != t.step;
                     visible: self.first && (root.tab < 0 || root.tab == t.step);
