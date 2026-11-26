@@ -799,6 +799,15 @@ fn scan_directory(
 }
 
 #[allow(dead_code)]
+/// `#[cmdsmeta(file_extensions = ...)]`: a string or a constant's name.
+#[derive(Debug, Clone)]
+enum FileExtensions {
+    /// Comma-separated, e.g. "pt,pth".
+    Literal(String),
+    /// A constant of `src/file_extensions.rs`, e.g. `NN_MODEL_EXTENSIONS`.
+    Constant(String),
+}
+
 #[derive(Debug, Clone)]
 struct FieldMetadata {
     min: Option<f32>,
@@ -810,15 +819,13 @@ struct FieldMetadata {
     /// the Rust field can be renamed without breaking saved projects/scripts.
     key: Option<String>,
     unit: Option<String>,
-    regex: Option<String>,
     display_name: Option<String>,
     summary: bool,
     optional: bool,
     visibility: Visibility,
-    /// Comma-separated list of file extensions (no leading dot, e.g. "pt,pth")
-    /// for `PathBuf` fields rendered with a "Browse…" button. Empty/absent
-    /// means any file is selectable.
-    file_extensions: Option<String>,
+    /// File extensions (no leading dot) for `PathBuf` fields rendered with a
+    /// "Browse…" button. Empty/absent means any file is selectable.
+    file_extensions: Option<FileExtensions>,
     /// `#[cmdsmeta(script)]` on a `String` field: a Rhai script, edited in
     /// the script editor (`ParamType::Script`) instead of a text field.
     script: bool,
@@ -882,7 +889,6 @@ impl Default for FieldMetadata {
             step: None,
             key: None,
             unit: None,
-            regex: None,
             display_name: None,
             summary: false,
             optional: false,
@@ -1533,8 +1539,25 @@ fn parse_custom_meta(field: &syn::Field) -> FieldMetadata {
                          `visibility = Default | Advanced | Hidden`"
                     );
                 } else if meta.path.is_ident("file_extensions") {
-                    let value: syn::LitStr = meta.value()?.parse()?;
-                    metadata.file_extensions = Some(value.value());
+                    // A string ("pt,pth") or the name of a constant in
+                    // `src/file_extensions.rs` (`NN_MODEL_EXTENSIONS`).
+                    let value: syn::Expr = meta.value()?.parse()?;
+                    metadata.file_extensions = Some(match value {
+                        syn::Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Str(s),
+                            ..
+                        }) => FileExtensions::Literal(s.value()),
+                        syn::Expr::Path(p) if p.path.get_ident().is_some() => {
+                            FileExtensions::Constant(p.path.get_ident().unwrap().to_string())
+                        }
+                        other => {
+                            return Err(syn::Error::new_spanned(
+                                other,
+                                "cmdsmeta: `file_extensions` takes a string or a constant \
+                                 of `src/file_extensions.rs`",
+                            ));
+                        }
+                    });
                 } else if meta.path.is_ident("read_only") {
                     metadata.read_only = true;
                 } else if meta.path.is_ident("section") {
@@ -2145,7 +2168,10 @@ fn leaf_parts(
             // rather than one element per extension — otherwise only the first
             // extension reaches the file dialog filter.
             let extensions_expr = match &meta.file_extensions {
-                Some(exts) => {
+                Some(FileExtensions::Constant(name)) => {
+                    format!("vec![crate::{name}.to_string()]")
+                }
+                Some(FileExtensions::Literal(exts)) => {
                     let csv = exts
                         .split(',')
                         .map(|e| e.trim())

@@ -103,7 +103,6 @@ export component InkTextField inherits Rectangle {
             text <=> root.text;
             enabled: root.enabled;
             read-only: root.read-only;
-            single-line: true;
             vertical-alignment: center;
             font-size: Ink.fs-body;
             font-family: root.mono ? Ink.font-mono : Ink.font-sans;
@@ -175,7 +174,6 @@ export component InkSearchField inherits Rectangle {
             width: parent.width - 26px - 24px;
             height: parent.height;
             text <=> root.text;
-            single-line: true;
             vertical-alignment: center;
             font-size: Ink.fs-body;
             color: Ink.text;
@@ -350,7 +348,6 @@ export component InkNumberField inherits Rectangle {
                 enabled: root.enabled;
                 text: "\{root.value}";
                 input-type: decimal;
-                single-line: true;
                 vertical-alignment: center;
                 font-size: Ink.fs-body;
                 font-family: Ink.font-mono;
@@ -379,7 +376,6 @@ export component InkNumberField inherits Rectangle {
             visible: !root.compact;
             x: parent.width - root.buttons-w;
             width: root.buttons-w;
-            spacing: 0px;
             Rectangle {
                 width: 1px;
                 background: Ink.border;
@@ -525,7 +521,6 @@ export component InkSelect inherits Rectangle {
             content-height: list.preferred-height;
 
             list := VerticalLayout {
-                spacing: 0px;
                 for entry[i] in root.model: Rectangle {
                     height: 26px;
                     border-radius: Ink.radius-sm;

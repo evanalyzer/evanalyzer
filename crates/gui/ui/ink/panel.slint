@@ -32,7 +32,6 @@ export component InkPanel inherits Rectangle {
     TouchArea { }
 
     VerticalLayout {
-        spacing: 0px;
         @children
     }
 }
@@ -173,7 +172,6 @@ export component InkPanelHead inherits Rectangle {
         if root.summary-shown: HorizontalLayout {
             horizontal-stretch: root.subtitle == "" ? 1 : 0;
             alignment: end;
-            spacing: 0px;
             Text {
                 min-width: 24px;
                 text: root.summary;
@@ -377,7 +375,6 @@ export component InkDialog inherits Rectangle {
             }
 
             layout := VerticalLayout {
-                spacing: 0px;
                 Rectangle {
                     height: Ink.head-h;
                     // Drag the head to move the dialog.

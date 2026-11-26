@@ -18,6 +18,18 @@
 #[allow(dead_code)]
 pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 5;
 
+// The file extensions the generated `pipeline_command.rs` names
+// (`#[cmdsmeta(file_extensions = SOME_CONSTANT)]`).
+#[allow(dead_code)]
+mod file_extensions {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/file_extensions.rs"
+    ));
+}
+#[allow(unused_imports)]
+use file_extensions::*;
+
 mod utils {
     pub mod hex_colors {
         include!(concat!(

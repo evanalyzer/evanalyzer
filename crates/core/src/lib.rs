@@ -31,16 +31,19 @@ static ALLOCATOR: tests::counting_allocator::CountingAllocator =
     tests::counting_allocator::CountingAllocator;
 
 // System resource sizing (parallelism, reader pool size) based on available RAM
+pub use crate::ai_devices::gpus;
+/// What an AI step's model file is - for its card in the step settings.
+pub use crate::algos::ai_segmentation::model_file;
 pub use crate::job::job_generator::{check_image_paths, random_job_name};
 pub use crate::memory::analysis::{MAX_TILE_SIZE, estimate_ram_budget, recommended_parallelism};
-pub use crate::memory::{SystemDiagnostics, cpu_ram_diagnostics, system_diagnostics};
+pub use crate::memory::cpu_ram_diagnostics;
 pub use crate::object::shape::{StoredObjectShape, stored_object_shape};
 pub use crate::storage::duckdb::shared_connection as open_results_database;
 pub use crate::storage::duckdb::{
     RESULTS_SCHEMA_VERSION, ResultsConnection, add_review_columns, reject_newer_results,
 };
 pub use crate::storage::mask_codec::{decode_mask, encode_mask};
-pub use evanalyzer_ai::cuda_is_available;
+pub use evanalyzer_nn::GpuInfo;
 
 // Image reader
 pub use crate::image::ChannelInfo;

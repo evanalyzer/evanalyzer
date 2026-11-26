@@ -11,7 +11,7 @@
 //! `third_party_notices.json` (hand-maintained, same format) adds what
 //! isn't a crate: code ported from other projects, the fonts and icons
 //! compiled in, and the native libraries shipped next to the binary
-//! (libtorch, DuckDB, Skia, NVIDIA's CUDA libraries). Its entries have an
+//! (DuckDB, Skia). Its entries have an
 //! empty `version` where there is none.
 //!
 //! Grouped by exact license *text*, not just SPDX id: copyright lines differ
@@ -95,8 +95,8 @@ pub fn load() -> (Vec<ThirdPartyGroup>, usize) {
 
 /// The About dialog's license list as plain text: `THIRD-PARTY-NOTICES.txt`
 /// at the repo root, which the release archives carry next to the binaries
-/// and native libraries (some licenses, e.g. NVIDIA's, ask for the text with
-/// the files, not only inside the program).
+/// and native libraries (some licenses ask for the text with the files, not
+/// only inside the program).
 #[cfg(test)]
 pub fn notices_text() -> String {
     let (groups, _) = load();

@@ -263,6 +263,10 @@ fn native_paths(request: Request) -> Request {
         Request::ReadFile { path } => Request::ReadFile {
             path: native_path(path),
         },
+        Request::ReadFileStart { path, len } => Request::ReadFileStart {
+            path: native_path(path),
+            len,
+        },
         Request::WriteFile { path } => Request::WriteFile {
             path: native_path(path),
         },
@@ -730,6 +734,13 @@ impl Session {
                 Ok(data) => self.reply(id, Reply::FileData, vec![data]),
                 Err(e) => self.fail(id, &e),
             },
+            Request::ReadFileStart { path, len } => {
+                let len = usize::try_from(len).unwrap_or(usize::MAX);
+                match files.read_file_start(&path, len) {
+                    Ok(data) => self.reply(id, Reply::FileData, vec![data]),
+                    Err(e) => self.fail(id, &e),
+                }
+            }
             Request::WriteFile { path } => {
                 let Some(data) = blobs.first() else {
                     self.reply(
@@ -1095,6 +1106,9 @@ mod session_tests {
         fn read_file(&self, _: &Path) -> Result<Vec<u8>, InternalErrors> {
             Err(broken("read_file"))
         }
+        fn read_file_start(&self, _: &Path, _: usize) -> Result<Vec<u8>, InternalErrors> {
+            Err(broken("read_file_start"))
+        }
         fn write_file(&self, _: &Path, _: &[u8]) -> Result<(), InternalErrors> {
             Err(broken("write_file"))
         }
@@ -1230,6 +1244,13 @@ mod session_tests {
             (Request::ListDir { path: path() }, "list_dir"),
             (Request::Stat { path: path() }, "stat"),
             (Request::ReadFile { path: path() }, "read_file"),
+            (
+                Request::ReadFileStart {
+                    path: path(),
+                    len: 8,
+                },
+                "read_file_start",
+            ),
             (Request::CreateDir { path: path() }, "create_dir_all"),
             (
                 Request::Rename {

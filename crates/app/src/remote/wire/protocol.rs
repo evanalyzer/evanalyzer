@@ -78,7 +78,11 @@ use std::sync::Arc;
 // of all images sends no list of paths per page.
 // 60: `ExportResults` (the old results export, a `ResultExport`) is
 // `ExportParquet` (a folder): the tables are written by `RunExport`.
-pub const PROTOCOL_VERSION: u32 = 60;
+// 61: `SystemInfo::gpus` (every GPU, its name, whether AI runs on it)
+// replaces `cuda_available`.
+// 62: `ReadFileStart` (the first bytes of a file - an AI model's header
+// for its card, without the weights).
+pub const PROTOCOL_VERSION: u32 = 62;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -167,6 +171,11 @@ pub(crate) enum Request {
     },
     ReadFile {
         path: PathBuf,
+    },
+    /// The first `len` bytes of the file (all of a shorter one).
+    ReadFileStart {
+        path: PathBuf,
+        len: u64,
     },
     /// The file's contents follow as blob 0.
     WriteFile {

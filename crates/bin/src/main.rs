@@ -49,7 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 args.log_level.clone(),
                 &args.ai_devices,
                 args.gpu_slots,
-                (args.ai_plugin.clone(), args.max_threads, args.max_ram),
+                (args.max_threads, args.max_ram),
             )
             .unwrap_or_else(|e| {
                 // `main`'s error return would print it Debug-formatted, which
@@ -80,7 +80,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         configure_ai_devices(AiDeviceOptions {
             devices: args.ai_devices.clone().unwrap_or_default(),
             gpu_slots: args.gpu_slots.unwrap_or(DEFAULT_GPU_SLOTS),
-            plugin: args.ai_plugin.clone(),
+            gpu_cache: Some(gpu_cache_folder(&args.command)),
         });
     }
 
@@ -293,6 +293,24 @@ fn resource_limits(args: &args::Args) -> ResourceLimits {
     saved.with_overrides(args.max_threads, args.max_ram)
 }
 
+/// Where the GPU keeps its autotune results and compiled kernels across
+/// runs: `cache/gpu` in the user folder - a worker's below its `--home`, so
+/// each user served by a server has their own.
+fn gpu_cache_folder(command: &Option<TopCommand>) -> PathBuf {
+    let user_folder = match command {
+        Some(TopCommand::Worker {
+            home: Some(home), ..
+        }) => evanalyzer_app::user::folder::user_folder_in(home),
+        _ => evanalyzer_app::user::folder::get_user_folder(),
+    };
+    gpu_cache_folder_in(&user_folder)
+}
+
+/// `<user folder>/cache/gpu`.
+fn gpu_cache_folder_in(user_folder: &std::path::Path) -> PathBuf {
+    user_folder.join("cache").join("gpu")
+}
+
 fn server_config(
     file: Option<&std::path::Path>,
     listen: Option<String>,
@@ -300,7 +318,7 @@ fn server_config(
     log_level: Option<String>,
     ai_devices: &Option<AiDeviceSelection>,
     gpu_slots: Option<usize>,
-    (ai_plugin, max_threads, max_ram_mb): (Option<PathBuf>, Option<usize>, Option<u64>),
+    (max_threads, max_ram_mb): (Option<usize>, Option<u64>),
 ) -> std::io::Result<ServerConfig> {
     let config = match file {
         Some(file) => ServerConfig::load(file)?,
@@ -309,7 +327,7 @@ fn server_config(
     let config = config
         .with_overrides(listen, data_dir, log_level)
         .with_worker_ai_overrides(ai_devices.as_ref().map(ToString::to_string), gpu_slots)
-        .with_worker_resource_overrides(ai_plugin, max_threads, max_ram_mb);
+        .with_worker_resource_overrides(max_threads, max_ram_mb);
     // Checked here, so a typo in the file fails at startup instead of in
     // every worker.
     let invalid = |e: String| std::io::Error::new(std::io::ErrorKind::InvalidInput, e);
@@ -407,6 +425,14 @@ mod tests {
     }
 
     #[test]
+    fn the_gpu_cache_lies_in_the_user_folder() {
+        assert_eq!(
+            gpu_cache_folder_in(std::path::Path::new("/home/alice/.evanalyzer")),
+            PathBuf::from("/home/alice/.evanalyzer/cache/gpu")
+        );
+    }
+
+    #[test]
     fn without_remote_the_analysis_runs_on_this_machine() {
         let backend =
             generate_backend(None, None, None, None, TlsTrust::PublicAuthorities).unwrap();
@@ -493,7 +519,7 @@ mod tests {
             Some("debug".into()),
             &Some(AiDeviceSelection::Cpu),
             Some(2),
-            (Some("/opt/a.so".into()), Some(8), Some(16384)),
+            (Some(8), Some(16384)),
         )
         .unwrap();
 
@@ -502,15 +528,13 @@ mod tests {
         assert_eq!(config.log_level, "debug");
         assert_eq!(config.workers.ai_devices.as_deref(), Some("cpu"));
         assert_eq!(config.workers.gpu_slots, Some(2));
-        assert_eq!(config.workers.ai_plugin, Some("/opt/a.so".into()));
         assert_eq!(config.workers.max_threads, Some(8));
         assert_eq!(config.workers.max_ram_mb, Some(16384));
     }
 
     #[test]
     fn no_settings_at_all_give_the_default_server_config() {
-        let config =
-            server_config(None, None, None, None, &None, None, (None, None, None)).unwrap();
+        let config = server_config(None, None, None, None, &None, None, (None, None)).unwrap();
 
         assert_eq!(config, ServerConfig::default());
     }
@@ -522,16 +546,8 @@ mod tests {
             "listen = \"127.0.0.1:7500\"\nlog_level = \"warn\"\n",
         );
 
-        let from_file = server_config(
-            Some(&file.0),
-            None,
-            None,
-            None,
-            &None,
-            None,
-            (None, None, None),
-        )
-        .unwrap();
+        let from_file =
+            server_config(Some(&file.0), None, None, None, &None, None, (None, None)).unwrap();
         let overridden = server_config(
             Some(&file.0),
             Some("127.0.0.1:7600".into()),
@@ -539,7 +555,7 @@ mod tests {
             None,
             &None,
             None,
-            (None, None, None),
+            (None, None),
         )
         .unwrap();
 
@@ -556,16 +572,7 @@ mod tests {
         let missing = std::env::temp_dir().join("evanalyzer-bin-test-does-not-exist.toml");
 
         assert!(
-            server_config(
-                Some(&missing),
-                None,
-                None,
-                None,
-                &None,
-                None,
-                (None, None, None)
-            )
-            .is_err()
+            server_config(Some(&missing), None, None, None, &None, None, (None, None)).is_err()
         );
     }
 
@@ -573,16 +580,8 @@ mod tests {
     fn a_misspelled_ai_device_list_in_the_file_fails_at_startup() {
         let file = TempFile::with("devices.toml", "[workers]\nai_devices = \"gpu\"\n");
 
-        let e = server_config(
-            Some(&file.0),
-            None,
-            None,
-            None,
-            &None,
-            None,
-            (None, None, None),
-        )
-        .unwrap_err();
+        let e =
+            server_config(Some(&file.0), None, None, None, &None, None, (None, None)).unwrap_err();
 
         assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput);
         assert!(e.to_string().starts_with("workers.ai_devices:"), "{e}");
@@ -601,16 +600,8 @@ mod tests {
             ),
         ] {
             let file = TempFile::with("limits.toml", text);
-            let e = server_config(
-                Some(&file.0),
-                None,
-                None,
-                None,
-                &None,
-                None,
-                (None, None, None),
-            )
-            .unwrap_err();
+            let e = server_config(Some(&file.0), None, None, None, &None, None, (None, None))
+                .unwrap_err();
             assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput);
             assert!(e.to_string().contains(key), "{e}");
         }
@@ -620,17 +611,8 @@ mod tests {
     fn zero_gpu_slots_are_refused() {
         let file = TempFile::with("slots.toml", "[workers]\ngpu_slots = 0\n");
 
-        let from_file = server_config(
-            Some(&file.0),
-            None,
-            None,
-            None,
-            &None,
-            None,
-            (None, None, None),
-        );
-        let from_command_line =
-            server_config(None, None, None, None, &None, Some(0), (None, None, None));
+        let from_file = server_config(Some(&file.0), None, None, None, &None, None, (None, None));
+        let from_command_line = server_config(None, None, None, None, &None, Some(0), (None, None));
 
         for result in [from_file, from_command_line] {
             let e = result.unwrap_err();

@@ -43,7 +43,9 @@ pub fn get_user_folder() -> PathBuf {
 /// ├── settings.json          app settings, incl. pinned server fingerprints
 /// ├── trust.json             the exports' scripts this user allows to run
 /// ├── templates/             the user's templates and modules
-/// └── logs/crash.log
+/// ├── logs/crash.log
+/// └── cache/gpu/             the GPU's autotune results and compiled kernels
+///                            (deletable: costs one slow first model run)
 /// ```
 pub fn user_folder_in(home: &Path) -> PathBuf {
     home.join(USER_FOLDER_NAME)

@@ -22,15 +22,13 @@ mod script;
 mod segmentation;
 mod spartial_transform;
 
-pub use self::ai_segmentation::PieceSize;
 pub use self::ai_segmentation::cellpose::Cellpose;
 pub use self::ai_segmentation::pixel_classifier::PixelClassifier;
 pub use self::ai_segmentation::pixel_classifier::SegmentationMapping;
 pub use self::ai_segmentation::stardist::Stardist;
 pub use self::ai_segmentation::unet::UNet;
 pub use self::ai_segmentation::unet::UNetOutputMode;
-pub use self::ai_segmentation::yolov5::YoloClassMapping;
-pub use self::ai_segmentation::yolov5::Yolov5;
+pub use self::ai_segmentation::{InputNormalization, PieceSize};
 
 pub use self::filters::bandpass::Bandpass;
 pub use self::filters::blur::Blur;

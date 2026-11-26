@@ -38,10 +38,25 @@ pub const MAX_TILE_SIZE: usize = 4096;
 /// for the analysis' thread pools and the results writer.
 pub const PROGRAM_BYTES: u64 = 256 << 20;
 
-/// The AI engine's libraries (libtorch, loaded on the first model run:
-/// ~280 MB), for a job with an AI step - its network and weights are the
-/// step's own (`ImageAlgorithm::shared_ram_bytes`).
-pub const AI_ENGINE_BYTES: u64 = 320 << 20;
+/// The AI engine's own RAM on the CPU (its thread pool, burn's CPU backend),
+/// for a job with an AI step - its network and weights are the step's own
+/// (`ImageAlgorithm::shared_ram_bytes`). Measured 2026-11-26 with
+/// `evanalyzer_nn`'s example `measure_engine_ram cpu`: +10 MB (22 cores).
+pub const AI_ENGINE_BYTES: u64 = 16 << 20;
+
+/// More per GPU the engine runs on: the graphics driver and the device in
+/// the computer's RAM. Measured 2026-11-26 (`measure_engine_ram gpu`):
+/// +380-490 MB, peaks up to 506 MB, on an NVIDIA RTX 3000 Ada (Vulkan) -
+/// it varies from run to run.
+pub const AI_ENGINE_GPU_BYTES: u64 = 512 << 20;
+
+/// The AI engine's own RAM with this process' AI devices: CPU part plus
+/// [`AI_ENGINE_GPU_BYTES`] per GPU it runs on. `--ai-devices cpu` never
+/// looks for GPUs; otherwise this opens them once (slow) - only for a job
+/// with an AI step, which opens them anyway.
+pub fn ai_engine_bytes() -> u64 {
+    AI_ENGINE_BYTES + crate::ai_devices::used_gpu_count() as u64 * AI_ENGINE_GPU_BYTES
+}
 
 /// Peak per-worker RAM broken into the pieces that scale differently, so a
 /// caller can size an `ImageCache` budget on top of what's already

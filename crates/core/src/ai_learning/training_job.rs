@@ -12,9 +12,17 @@ use crate::ai_learning::model::{
 };
 use evanalyzer_cfg::core_types::{InternalErrors, TrainingProgressEvent, TrainingStats};
 use evanalyzer_cfg::settings::ai_learning_settings::{
-    AiLearningBackendSettings, AiLearningSettings,
+    AiLearningBackendSettings, AiLearningSettings, KNNAlgorithmName, KNNDistanceMetric,
+    KNNWeightFunction, MlpActivation, SplitCriterion,
 };
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
+use evanalyzer_nn::classifier::knn::{KnnDistance, KnnSearch, KnnWeight};
+use evanalyzer_nn::classifier::mlp::MlpActivation as NnMlpActivation;
+use evanalyzer_nn::classifier::rtree::SplitCriterion as NnSplitCriterion;
+use evanalyzer_nn::classifier::{
+    Classifier as _, Knn, KnnParams, Mlp, MlpParams, RandomForest, RandomForestParams, Samples,
+};
+use evanalyzer_nn::train::{TrainControl, TrainDevice, TrainProgress, TrainStats};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -37,44 +45,141 @@ pub struct TrainingImage {
     pub labeled_objects: Vec<ObjectMetricSettings>,
 }
 
-/// Fits `rows`/`labels` (dense indices into the model's `class_labels`, with
-/// `n_classes` the total count) using whichever backend `settings.backend`
-/// selects. Shared by `PixelTrainingJob`/`ObjectTrainingJob` so both jobs
-/// dispatch identically once their own feature extraction is done.
+/// Fits `rows` (row-major, `n_features` values per sample) and `labels`
+/// (dense indices into the model's `class_labels`, `n_classes` the total
+/// count) with whichever classifier `backend` selects (`evanalyzer_nn`).
+/// Shared by `PixelTrainingJob`/`ObjectTrainingJob`.
 ///
-/// `progress`/`cancel` are only actually used by the `Mlp` backend (to emit
-/// per-epoch `TrainingProgressEvent::Epoch` and to let the epoch loop bail
-/// out early) - `RandomForest`/`Knn` fit in one blocking smartcore call with
-/// no hook to report progress or interrupt mid-fit from, so they take them
-/// only to keep this dispatch's signature uniform for its three callers.
-pub(crate) fn fit_classifier(
+/// `progress`/`cancel` are used by the MLP (an epoch event, a check per
+/// epoch); the random forest and KNN fit in one blocking call.
+pub fn fit_classifier(
     backend: &AiLearningBackendSettings,
-    rows: &[Vec<f32>],
-    labels: &[usize],
+    rows: &[f32],
+    n_features: usize,
+    labels: &[u32],
     n_classes: usize,
     progress: &Sender<TrainingProgressEvent>,
     cancel: &Arc<AtomicBool>,
 ) -> Result<(Classifier, TrainingStats), InternalErrors> {
-    match backend {
+    // As before the move: the message the training panel shows.
+    if labels.is_empty() {
+        return Err(InternalErrors::Internal(
+            "cannot train on zero samples".to_string(),
+        ));
+    }
+    let samples = Samples {
+        rows,
+        n_features,
+        labels,
+        n_classes,
+    };
+    let report = |p: TrainProgress| {
+        if let TrainProgress::Epoch {
+            epoch,
+            total_epochs,
+            train_loss,
+            val_loss,
+        } = p
+        {
+            let _ = progress.send(TrainingProgressEvent::Epoch {
+                epoch,
+                total_epochs,
+                train_loss,
+                val_loss,
+            });
+        }
+    };
+    let control = |seed: u64| TrainControl {
+        progress: &report,
+        cancel,
+        seed,
+        device: TrainDevice::Cpu,
+        cores: rayon::current_num_threads(),
+    };
+    let (classifier, stats) = match backend {
         AiLearningBackendSettings::RandomForest(s) => {
-            let classifier = model::random_forest::fit_random_forest(rows, labels, s)?;
-            let stats = TrainingStats::RandomForest {
-                n_trees: s.n_trees as usize,
-                n_samples: rows.len(),
+            let params = RandomForestParams {
+                criterion: match s.criterion {
+                    SplitCriterion::Gini => NnSplitCriterion::Gini,
+                    SplitCriterion::Entropy => NnSplitCriterion::Entropy,
+                    SplitCriterion::ClassificationError => NnSplitCriterion::ClassificationError,
+                },
+                max_depth: s.max_depth,
+                min_samples_leaf: s.min_samples_leaf,
+                min_samples_split: s.min_samples_split,
+                n_trees: s.n_trees,
+                m: s.m,
             };
-            Ok((classifier, stats))
+            let (model, stats) = RandomForest::train(&samples, &params, &control(s.seed))
+                .map_err(model::nn_error)?;
+            (Classifier::RandomForest(model), stats)
         }
         AiLearningBackendSettings::Knn(s) => {
-            let classifier = model::knn::fit_knn(rows, labels, s)?;
-            let stats = TrainingStats::Knn {
+            let params = KnnParams {
+                search: match s.algorithm {
+                    KNNAlgorithmName::LinearSearch => KnnSearch::Linear,
+                    KNNAlgorithmName::CoverTree => KnnSearch::CoverTree,
+                },
+                weight: match s.weight {
+                    KNNWeightFunction::Uniform => KnnWeight::Uniform,
+                    KNNWeightFunction::Distance => KnnWeight::Distance,
+                },
                 k: s.k,
-                n_samples: rows.len(),
+                distance: match s.distance {
+                    KNNDistanceMetric::Euclidean => KnnDistance::Euclidean,
+                    KNNDistanceMetric::Manhattan => KnnDistance::Manhattan,
+                    KNNDistanceMetric::Cosine => KnnDistance::Cosine,
+                    KNNDistanceMetric::Hamming => KnnDistance::Hamming,
+                    KNNDistanceMetric::Minkowski { p } => KnnDistance::Minkowski { p },
+                },
             };
-            Ok((classifier, stats))
+            let (model, stats) =
+                Knn::train(&samples, &params, &control(0)).map_err(model::nn_error)?;
+            (Classifier::Knn(model), stats)
         }
         AiLearningBackendSettings::Mlp(s) => {
-            model::mlp::fit_mlp(rows, labels, n_classes, s, progress, cancel)
+            let params = MlpParams {
+                hidden_layers: s.hidden_layers.clone(),
+                activation: match s.activation {
+                    MlpActivation::Relu => NnMlpActivation::Relu,
+                    MlpActivation::Sigmoid => NnMlpActivation::Sigmoid,
+                    MlpActivation::Tanh => NnMlpActivation::Tanh,
+                },
+                epochs: s.epochs,
+                learning_rate: s.learning_rate,
+                batch_size: s.batch_size,
+                epsilon: s.epsilon,
+            };
+            let (model, stats) =
+                Mlp::train(&samples, &params, &control(s.seed)).map_err(model::nn_error)?;
+            (Classifier::Mlp(model), stats)
         }
+    };
+    Ok((classifier, training_stats(stats)))
+}
+
+/// nn's training statistics as the progress events carry them.
+fn training_stats(stats: TrainStats) -> TrainingStats {
+    match stats {
+        TrainStats::RandomForest { n_trees, n_samples } => {
+            TrainingStats::RandomForest { n_trees, n_samples }
+        }
+        TrainStats::Knn { k, n_samples } => TrainingStats::Knn { k, n_samples },
+        TrainStats::Epochs {
+            epochs_run,
+            total_epochs,
+            final_train_loss,
+            final_val_loss,
+            best_val_loss,
+            best_val_epoch,
+        } => TrainingStats::Mlp {
+            epochs_run,
+            total_epochs,
+            final_train_loss,
+            final_val_loss,
+            best_val_loss,
+            best_val_epoch,
+        },
     }
 }
 
@@ -124,14 +229,14 @@ mod tests {
     };
     use evanalyzer_cfg::settings::meta_data::MetaData;
 
-    fn two_cluster_dataset() -> (Vec<Vec<f32>>, Vec<usize>) {
+    fn two_cluster_dataset() -> (Vec<f32>, Vec<u32>) {
         let mut rows = Vec::new();
         let mut labels = Vec::new();
         for i in 0..15 {
             let jitter = (i % 3) as f32 * 0.1;
-            rows.push(vec![0.0 + jitter, 0.0 + jitter]);
+            rows.extend([jitter, jitter]);
             labels.push(0);
-            rows.push(vec![10.0 + jitter, 10.0 + jitter]);
+            rows.extend([10.0 + jitter, 10.0 + jitter]);
             labels.push(1);
         }
         (rows, labels)
@@ -150,7 +255,7 @@ mod tests {
         let backend = AiLearningBackendSettings::RandomForest(RandomForestSettings::default());
         let (progress, cancel) = no_op_progress();
         let (classifier, stats) =
-            fit_classifier(&backend, &rows, &labels, 2, &progress, &cancel).unwrap();
+            fit_classifier(&backend, &rows, 2, &labels, 2, &progress, &cancel).unwrap();
         assert!(matches!(classifier, Classifier::RandomForest(_)));
         assert!(matches!(
             stats,
@@ -167,7 +272,7 @@ mod tests {
         });
         let (progress, cancel) = no_op_progress();
         let (classifier, stats) =
-            fit_classifier(&backend, &rows, &labels, 2, &progress, &cancel).unwrap();
+            fit_classifier(&backend, &rows, 2, &labels, 2, &progress, &cancel).unwrap();
         assert!(matches!(classifier, Classifier::Knn(_)));
         assert!(matches!(stats, TrainingStats::Knn { k: 3, .. }));
     }
@@ -183,8 +288,8 @@ mod tests {
         });
         let (progress, cancel) = no_op_progress();
         let (classifier, stats) =
-            fit_classifier(&backend, &rows, &labels, 2, &progress, &cancel).unwrap();
-        assert!(matches!(classifier, Classifier::Mlp { .. }));
+            fit_classifier(&backend, &rows, 2, &labels, 2, &progress, &cancel).unwrap();
+        assert!(matches!(classifier, Classifier::Mlp(_)));
         assert!(matches!(
             stats,
             TrainingStats::Mlp {
@@ -200,7 +305,7 @@ mod tests {
         let backend = AiLearningBackendSettings::RandomForest(RandomForestSettings::default());
         let (progress, cancel) = no_op_progress();
         let (classifier, _stats) =
-            fit_classifier(&backend, &rows, &labels, 2, &progress, &cancel).unwrap();
+            fit_classifier(&backend, &rows, 2, &labels, 2, &progress, &cancel).unwrap();
         let settings = AiLearningSettings {
             schema_version: evanalyzer_cfg::CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION,
             meta: MetaData {
@@ -226,10 +331,11 @@ mod tests {
             let _ = progress.send(TrainingProgressEvent::Started {
                 total: *job as usize,
             });
-            let (rows, labels) = ([vec![0.0], vec![1.0]], [0usize, 1]);
+            let (rows, labels) = ([0.0, 1.0], [0u32, 1]);
             let (classifier, stats) = fit_classifier(
                 &AiLearningBackendSettings::RandomForest(RandomForestSettings::default()),
                 &rows,
+                1,
                 &labels,
                 2,
                 &progress,

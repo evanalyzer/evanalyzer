@@ -83,15 +83,41 @@ impl FeatureBank {
         self.channels.len()
     }
 
-    /// Feature vector for one pixel, one value per channel, in `channels` order.
+    /// The feature channels' pixels (`FeatureBank::new` only accepts
+    /// `F32Gray` ones).
+    fn planes(&self) -> impl Iterator<Item = &[f32]> {
+        self.channels.iter().map(|c| match c.as_ref() {
+            ImageContainer::F32Gray(img) => img.as_slice(),
+            _ => unreachable!("FeatureBank::new only accepts F32Gray channels"),
+        })
+    }
+
+    /// Appends one pixel's features (one value per channel, in `channels`
+    /// order) to `out` - a row of the classifiers' row-major samples.
+    pub fn push_features_at(&self, x: usize, y: usize, out: &mut Vec<f32>) {
+        let i = y * self.width + x;
+        out.extend(self.planes().map(|plane| plane[i]));
+    }
+
+    /// One pixel's features as a vector (tests).
+    #[cfg(test)]
     pub fn feature_vector_at(&self, x: usize, y: usize) -> Vec<f32> {
-        self.channels
-            .iter()
-            .map(|c| match c.as_ref() {
-                ImageContainer::F32Gray(img) => img.as_slice()[y * self.width + x],
-                _ => unreachable!("FeatureBank::new only accepts F32Gray channels"),
-            })
-            .collect()
+        let mut out = Vec::with_capacity(self.n_features());
+        self.push_features_at(x, y, &mut out);
+        out
+    }
+
+    /// Every pixel's features, row-major (pixel by pixel, `n_features`
+    /// each) - what the classifiers predict on, without a vector per pixel.
+    pub fn rows(&self) -> Vec<f32> {
+        let n = self.n_features();
+        let mut rows = vec![0.0; self.width * self.height * n];
+        for (c, plane) in self.planes().enumerate() {
+            for (row, &value) in rows.chunks_exact_mut(n).zip(plane) {
+                row[c] = value;
+            }
+        }
+        rows
     }
 }
 
@@ -337,8 +363,10 @@ impl PixelTrainingJob {
             total: self.images.len(),
         });
 
-        let mut rows: Vec<Vec<f32>> = Vec::new();
-        let mut labels: Vec<usize> = Vec::new();
+        // The samples, row-major (`n_features` values each).
+        let mut rows: Vec<f32> = Vec::new();
+        let mut labels: Vec<u32> = Vec::new();
+        let mut n_features = 0;
         // Channels the recipe wants that an annotated image doesn't have
         // (its tiles are skipped), and whether one of those images is a
         // colour image - for an error naming the problem instead of "zero
@@ -482,13 +510,15 @@ impl PixelTrainingJob {
                     )?;
 
                     let bank = compute_pixel_features_on(&ctx, feature_spec, &images)?;
+                    // The same for every image (`training_input_color`).
+                    n_features = bank.n_features();
 
                     for (object, label) in labeled_objects {
                         for (x, y) in masked_pixels_in_tile(object, tile) {
                             let local_x = x - tile.offset_x;
                             let local_y = y - tile.offset_y;
-                            rows.push(bank.feature_vector_at(local_x, local_y));
-                            labels.push(*label);
+                            bank.push_features_at(local_x, local_y, &mut rows);
+                            labels.push(*label as u32);
                         }
                     }
                 }
@@ -515,6 +545,7 @@ impl PixelTrainingJob {
         let (classifier, stats) = training_job::fit_classifier(
             &self.settings.backend,
             &rows,
+            n_features,
             &labels,
             n_classes,
             &progress,

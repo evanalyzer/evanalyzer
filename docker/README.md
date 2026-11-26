@@ -10,14 +10,14 @@ Project, downloads and documentation:
 
 ## Tags
 
-| Tag | Platforms | AI models (Cellpose, StarDist, U-Net, YOLOv5) |
-|---|---|---|
-| `<version>`, `latest` | linux/amd64, linux/arm64 | on the CPU (amd64); none on arm64 |
-| `<version>-cuda`, `cuda` | linux/amd64 | on an NVIDIA GPU, else the CPU |
+| Tag | Platforms |
+|---|---|
+| `<version>`, `latest` | linux/amd64, linux/arm64 |
 
-`latest` and `cuda` are the newest stable release; pre-releases (e.g.
-`1.2.0-alpha.1`) get only their version tag. arm64 has no AI models:
-PyTorch publishes no libtorch for Linux arm64.
+`latest` is the newest stable release; pre-releases (e.g. `1.2.0-alpha.1`)
+get only their version tag. The AI steps (Cellpose-SAM, StarDist, U-Net)
+run on the CPU in the container: the minimal base image has no Vulkan
+driver for a GPU.
 
 ## Analyze a project
 
@@ -64,19 +64,6 @@ every setting is described in
 [docs/server.toml](https://github.com/evanalyzer/evanalyzer/blob/main/docs/server.toml)
 and [docs/server.md](https://github.com/evanalyzer/evanalyzer/blob/main/docs/server.md).
 
-## NVIDIA GPU
-
-The `-cuda` image brings libtorch's CUDA build and NVIDIA's libraries; the
-host needs only the NVIDIA driver (580 or newer) and the
-[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html):
-
-```sh
-docker run --rm --gpus all -v "$PWD":/data joda001/evanalyzer:cuda \
-    cli analyze --project /data/my.evaproj --images /data/images
-```
-
-`--ai-devices` picks the GPUs (e.g. `0,2`), as outside the container.
-
 ## Compute cluster (Apptainer / Singularity)
 
 Clusters usually run Apptainer instead of Docker. It runs the image as is,
@@ -84,15 +71,15 @@ as your own user, and on any Linux - the plain Linux download needs glibc
 2.39, which older cluster systems lack:
 
 ```sh
-apptainer pull evanalyzer.sif docker://joda001/evanalyzer:cuda
-apptainer run --nv --bind /scratch/me/study:/data evanalyzer.sif \
+apptainer pull evanalyzer.sif docker://joda001/evanalyzer:latest
+apptainer run --bind /scratch/me/study:/data evanalyzer.sif \
     --max-threads "$SLURM_CPUS_PER_TASK" --max-ram 60000 \
     cli analyze --project /data/my.evaproj --images /data/images
 ```
 
 In a Slurm job script `--max-threads` and `--max-ram` (MB) should match the
 job's `--cpus-per-task` and `--mem`, so EVAnalyzer plans with what the job
-was given, not the whole node. `--nv` passes the node's GPUs and driver in.
+was given, not the whole node.
 
 ## Build the image yourself
 
@@ -115,8 +102,7 @@ docker buildx build -f docker/Dockerfile --build-context package=pkg \
     --platform linux/amd64 --load -t evanalyzer .
 ```
 
-For the CUDA image unpack `evanalyzer-cli-linux-x86_64-cuda.tar.xz` into
-`pkg/amd64` instead and build only `linux/amd64`. Unreleased code:
+Unreleased code:
 `docker/Dockerfile.source` compiles the working copy (slow, and without the
 bundled templates).
 

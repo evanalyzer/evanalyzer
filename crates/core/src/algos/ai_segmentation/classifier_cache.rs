@@ -244,7 +244,7 @@ mod tests {
     }
 
     // -- load_cached_classifier (real end-to-end -
-    // a `SavedClassifier` is a plain in-memory value, no TorchScript fixture
+    // a `SavedClassifier` is a plain in-memory value, no model fixture
     // file needed to exercise the real cache) ------------------------------
 
     fn sample_classifier() -> SavedClassifier {
@@ -258,7 +258,7 @@ mod tests {
 
         let rows = vec![vec![0.0], vec![1.0]];
         let labels = [0usize, 1];
-        let classifier = crate::ai_learning::model::random_forest::fit_random_forest(
+        let classifier = crate::ai_learning::model::test_support::fit_random_forest(
             &rows,
             &labels,
             &RandomForestSettings::default(),
@@ -283,14 +283,17 @@ mod tests {
     /// then 8 worker threads load it through this cache and predict 16
     /// tiles with certainty (512² pixels, 20 features). `MODEL=forest`
     /// (50 trees, depth 20, 200 000 samples, out-of-bag on - the panel's
-    /// old default) or `MODEL=mlp` (64, 32). Run one model per process:
+    /// old default) or `MODEL=mlp` (64, 32); the training's time and peak
+    /// RAM first. Run one model per process:
     /// `MODEL=forest cargo test --release -p evanalyzer_core --lib
     /// bench_trained_model_in_a_run -- --ignored --nocapture`.
     #[test]
     #[ignore]
     fn bench_trained_model_in_a_run() {
         use crate::ai_learning::model::{load_from_file, save_to_file};
-        use evanalyzer_cfg::settings::ai_learning_settings::{MlpSettings, RandomForestSettings};
+        use evanalyzer_cfg::settings::ai_learning_settings::{
+            AiLearningBackendSettings, MlpSettings, RandomForestSettings,
+        };
         use rayon::prelude::*;
         let mb = |key: &str| {
             std::fs::read_to_string("/proc/self/status")
@@ -310,51 +313,55 @@ mod tests {
             seed ^= seed << 17;
             (seed >> 40) as f32 / (1u64 << 24) as f32
         };
-        let mut sample = |class: usize| -> Vec<f32> {
-            (0..20)
-                .map(|f| next() + if f % 4 == 0 { class as f32 * 0.5 } else { 0.0 })
-                .collect()
+        let mut sample = |class: usize, out: &mut Vec<f32>| {
+            out.extend((0..20).map(|f| next() + if f % 4 == 0 { class as f32 * 0.5 } else { 0.0 }));
         };
         let forest = std::env::var("MODEL").as_deref() != Ok("mlp");
         let n = if forest { 200_000 } else { 20_000 };
-        let labels: Vec<usize> = (0..n).map(|i| i % 3).collect();
-        let rows: Vec<Vec<f32>> = labels.iter().map(|&c| sample(c)).collect();
-        let tile: Vec<Vec<f32>> = (0..512 * 512).map(|i| sample(i % 3)).collect();
-        let classifier = if forest {
-            crate::ai_learning::model::random_forest::fit_random_forest(
-                &rows,
-                &labels,
-                &RandomForestSettings {
-                    n_trees: 50,
-                    max_depth: Some(20),
-                    min_samples_split: 2,
-                    min_samples_leaf: 1,
-                    keep_samples: true,
-                    seed: 1,
-                    ..Default::default()
-                },
-            )
-            .unwrap()
+        let labels: Vec<u32> = (0..n).map(|i| i % 3).collect();
+        let mut rows = Vec::with_capacity(n as usize * 20);
+        for &c in &labels {
+            sample(c as usize, &mut rows);
+        }
+        let mut tile = Vec::with_capacity(512 * 512 * 20);
+        for i in 0..512 * 512 {
+            sample(i % 3, &mut tile);
+        }
+        // Training: its time and peak RAM above what the process had.
+        let _ = std::fs::write("/proc/self/clear_refs", "5");
+        let (train_rss, train_start) = (mb("VmRSS:"), std::time::Instant::now());
+        let backend = if forest {
+            AiLearningBackendSettings::RandomForest(RandomForestSettings {
+                n_trees: 50,
+                max_depth: Some(20),
+                min_samples_split: 2,
+                min_samples_leaf: 1,
+                keep_samples: true,
+                seed: 1,
+                ..Default::default()
+            })
         } else {
-            let (tx, _rx) = std::sync::mpsc::channel();
-            crate::ai_learning::model::mlp::fit_mlp(
-                &rows,
-                &labels,
-                3,
-                &MlpSettings {
-                    hidden_layers: vec![64, 32],
-                    epochs: 5,
-                    learning_rate: 0.001,
-                    batch_size: 32,
-                    seed: 1,
-                    ..Default::default()
-                },
-                &tx,
-                &Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            )
-            .unwrap()
-            .0
+            AiLearningBackendSettings::Mlp(MlpSettings {
+                hidden_layers: vec![64, 32],
+                epochs: 5,
+                learning_rate: 0.001,
+                batch_size: 32,
+                seed: 1,
+                ..Default::default()
+            })
         };
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let (classifier, _) = crate::ai_learning::training_job::fit_classifier(
+            &backend,
+            &rows,
+            20,
+            &labels,
+            3,
+            &tx,
+            &Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .unwrap();
+        let (train_s, train_peak) = (train_start.elapsed().as_secs_f64(), mb("VmHWM:"));
         let mut saved = sample_classifier();
         saved.classifier = classifier;
         let dir = tempfile::tempdir().unwrap();
@@ -367,18 +374,20 @@ mod tests {
             .num_threads(8)
             .build()
             .unwrap();
+        let _ = std::fs::write("/proc/self/clear_refs", "5");
         let (rss, peak) = (mb("VmRSS:"), mb("VmHWM:"));
         let start = std::time::Instant::now();
         pool.install(|| {
             (0..16).into_par_iter().for_each(|_| {
                 let model = load_cached_classifier(&path, || load_from_file(&path)).unwrap();
-                let (classes, _) = model.classifier.predict_with_certainty(&tile).unwrap();
-                assert_eq!(classes.len(), tile.len());
+                let p = model.classifier.predict(&tile, 20).unwrap();
+                assert_eq!(p.classes.len(), tile.len() / 20);
             })
         });
         println!(
-            "{}: file {file_mb:.1} MB; 16 tiles on 8 threads {:.2} s; RSS {rss} -> {} MB, peak {peak} -> {} MB (+{} MB)",
+            "{}: training {train_s:.2} s, peak +{} MB; file {file_mb:.1} MB; 16 tiles on 8 threads {:.2} s; RSS {rss} -> {} MB, peak {peak} -> {} MB (+{} MB)",
             if forest { "forest" } else { "mlp" },
+            train_peak.saturating_sub(train_rss),
             start.elapsed().as_secs_f64(),
             mb("VmRSS:"),
             mb("VmHWM:"),

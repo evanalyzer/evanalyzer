@@ -49,13 +49,14 @@ pub fn commands_meta_derive(input: TokenStream) -> TokenStream {
         // the field name).
         "key",
         "unit",
-        "regex",
         "display_name",
         "summary",
         "optional",
         // Default | Advanced | Hidden - see the generator's `Visibility`.
         "visibility",
-        // Comma-separated file extensions (no dots, e.g. "pt,pth") for a
+        // Comma-separated file extensions (no dots, e.g. "pt,pth") or the
+        // name of a constant in `crates/cfg/src/file_extensions.rs` (e.g.
+        // `NN_MODEL_EXTENSIONS`, no import needed) for a
         // `PathBuf` field's native file-picker filter - see this module's
         // doc comment above for what a `PathBuf` field gets automatically
         // *without* this attribute (ParamType::FilePath, project-relative

@@ -36,11 +36,17 @@ tests/20260831_Uptake1_Exp0706_PH1.evadb
 tests/timeseries_96img_48t_tracked.evadb
 # bioimage.io's joyful-pig U-Net (~116 MB) for the ignored real-model tests.
 tests/joyful-pig/
+# bioimage.io's romantic-shark U-Net (~223 MB) for the burn migration's comparisons.
+tests/romantic-shark/
+# bioimage.io's affable-shark and powerful-chipmunk U-Nets converted to .evanet (~116 MB each).
+tests/affable-shark/
+tests/powerful-chipmunk/
+tests/shivering-raccoon/
+# Cellpose-SAM weights (cpsam_v2, ~1.2 GB), converted file and references for the burn migration.
+tests/cellpose-sam/
+# StarDist models (official zips), converted files and references for the burn migration.
+tests/stardist/
 
-# Real Cellpose-SAM TorchScript export (~1.2GB) used by
-# crates/core/tests/cellpose_sam_real_model.rs - too large to commit.
-# Regenerate locally with docs/convert_cellpose.py.
-crates/core/tests/models/
 tests/__pycache__
 # Written by job_executor's pipeline test.
 crates/core/tests/project_test/output/

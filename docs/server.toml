@@ -96,15 +96,12 @@ enabled = true
 # however long it takes - logging out or losing the connection doesn't stop
 # it. At least 1.
 idle_timeout_minutes = 120
-# Where workers run AI models (Cellpose, StarDist, U-Net, YOLOv5): "auto"
+# Where workers run AI models (Cellpose-SAM, StarDist, U-Net): "auto"
 # (every GPU, else the CPU), "cpu", or GPU numbers like "0,2".
 #ai_devices = "auto"
 # Parallel AI inferences per GPU, at least 1. Raise it for GPUs with memory
 # to spare; a GPU that runs out of memory goes back down by itself.
 #gpu_slots = 1
-# The AI plugin library the workers try first. Default: the one next to the
-# program.
-#ai_plugin = "/opt/evanalyzer/ai/cuda/libevanalyzer_ai.so"
 # Most CPU cores each worker uses (the analysis, AI models, the results
 # database), at least 1 - each logged-in user has a worker, so the server
 # uses up to this many per user. Default: all of them.

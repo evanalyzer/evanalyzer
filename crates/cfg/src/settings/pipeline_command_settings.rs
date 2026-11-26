@@ -636,6 +636,44 @@ pub enum MathSaveImageImageSourceSettings {
     SegmentationMask,
 }
 
+/// How the image is scaled before an AI model sees it - computed over each
+/// tile (an image up to 4096 x 4096 px is one tile; on a whole slide every
+/// tile is scaled by its own pixels, so a tile of mostly background has its
+/// noise stretched).
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AiSegmentationInputNormalizationInputNormalizationSettings {
+    /// What the model was trained with: StarDist the tile's 1st and 99.8th
+    /// percentile, Cellpose its 1st and 99th, a U-Net what its model file
+    /// says (e.g. zero mean, unit variance).
+    #[serde(
+        alias = "model-default",
+        alias = "modelDefault",
+        alias = "model_default"
+    )]
+    ModelDefault,
+    /// These percentiles of the tile become 0 and 1.
+    #[serde(rename_all = "camelCase")]
+    #[serde(alias = "percentile")]
+    Percentile {
+        /// The percentile that becomes 0.
+        #[schemars(range(min = 0, max = 100))]
+        low: f32,
+        /// The percentile that becomes 1.
+        #[schemars(range(min = 0, max = 100))]
+        high: f32,
+    },
+    /// The pixels as read (scaled by their bit depth to 0..1).
+    #[serde(alias = "off")]
+    Off,
+}
+
+impl Default for AiSegmentationInputNormalizationInputNormalizationSettings {
+    fn default() -> Self {
+        Self::ModelDefault {}
+    }
+}
+
 /// How an [`IntensityFilter`] compares the object's metric with its threshold.
 /// Both comparisons are strict: an object exactly at the threshold matches
 /// neither.
@@ -2764,6 +2802,10 @@ fn _serde_default_cellpose_cellpose_postprocessing() -> bool {
 fn _serde_default_cellpose_replicate_gray_channel() -> bool {
     true
 }
+fn _serde_default_cellpose_normalization()
+-> AiSegmentationInputNormalizationInputNormalizationSettings {
+    AiSegmentationInputNormalizationInputNormalizationSettings::ModelDefault
+}
 /// Instance segmentation using a Cellpose-SAM model
 ///
 /// [AI Cellpose Segmentation] -> [Extract Objects]
@@ -2783,7 +2825,8 @@ fn _serde_default_cellpose_replicate_gray_channel() -> bool {
 #[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct CellposeSettings {
-    /// Path to a TorchScript-exported Cellpose model (`torch.jit.script`/`torch.jit.trace`).
+    /// The Cellpose-SAM model file (EVAnalyzer's `.evanet` or `.safetensors`, converted
+    /// once from Cellpose's own, e.g. `cpsam_v2`).
     pub model_path: PathBuf,
     /// The class assigned to pixels of every detected object. All other
     /// pixels are assigned `SegmentationClass::BACKGROUND`.
@@ -2839,6 +2882,10 @@ pub struct CellposeSettings {
     /// Cellpose run on an RGB image whose channels are (nearly) equal.
     #[serde(default = "_serde_default_cellpose_replicate_gray_channel")]
     pub replicate_gray_channel: bool,
+    /// How the image is scaled before the model sees it: by default the
+    /// tile's 1st and 99th percentile become 0 and 1, as Cellpose does.
+    #[serde(default = "_serde_default_cellpose_normalization")]
+    pub normalization: AiSegmentationInputNormalizationInputNormalizationSettings,
 }
 
 impl Default for CellposeSettings {
@@ -2854,6 +2901,7 @@ impl Default for CellposeSettings {
             flow_threshold: 0.4f32,
             cellpose_postprocessing: true,
             replicate_gray_channel: true,
+            normalization: AiSegmentationInputNormalizationInputNormalizationSettings::ModelDefault,
         }
     }
 }
@@ -2983,32 +3031,30 @@ pub struct SegmentationMappingSettings {
 fn _serde_default_stardist_piece_size() -> AiSegmentationPieceSizePieceSizeSettings {
     AiSegmentationPieceSizePieceSizeSettings::Auto
 }
-/// Instance segmentation using a pretrained StarDist model exported as TorchScript.
+fn _serde_default_stardist_normalization()
+-> AiSegmentationInputNormalizationInputNormalizationSettings {
+    AiSegmentationInputNormalizationInputNormalizationSettings::ModelDefault
+}
+/// Instance segmentation with a pretrained StarDist 2D model, from an
+/// EVAnalyzer model file (`.evanet`, converted once from StarDist's own,
+/// e.g. `2D_versatile_fluo` - `crates/nn`).
 ///
-/// The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,
-/// same normalization as the rest of the pipeline) and return two tensors:
-/// an object-probability map `[1, 1, H', W']` and a ray-distance map
-/// `[1, n_rays, H', W']` giving, for each grid cell, the distance to the object
-/// boundary along `n_rays` equally-spaced angles (the StarDist star-convex-polygon
-/// representation). `H'`/`W'` may be smaller than the input size if the model
-/// predicts on a coarser grid; this is detected from the output shape and the
-/// polygons are rescaled back to image resolution automatically.
-///
-/// Some TorchScript exports concatenate both outputs into a single
-/// `[1, 1 + n_rays, H', W']` tensor (channel 0 = probability, the rest =
-/// distances); this is also supported.
+/// For each grid cell the model gives the probability of an object's centre
+/// and the distances to its boundary along `n_rays` equally spaced angles
+/// (StarDist's star-convex polygons). On a grid coarser than the pixels the
+/// polygons are scaled back to the image.
 ///
 /// Per grid cell candidates above `probability_threshold` are converted to
 /// star-convex polygons, then greedily filtered with non-maximum suppression
 /// (polygons whose pixel-overlap ratio with a higher-scoring candidate exceeds
 /// `nms_threshold` are discarded) before being rasterized into the pipeline's
-/// segmentation and instance maps. Runs on GPU automatically if CUDA is
-/// available in the linked libtorch build, otherwise falls back to CPU.
+/// segmentation and instance maps. Runs on a GPU when there is one
+/// (convolutions in half precision there), else on the CPU.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct StardistSettings {
-    /// Path to a TorchScript-exported StarDist model (`torch.jit.script`/`torch.jit.trace`).
+    /// The StarDist model file (EVAnalyzer's `.evanet` or `.safetensors`).
     pub model_path: PathBuf,
     /// The class assigned to pixels of every detected object. All other
     /// pixels are assigned `SegmentationClass::BACKGROUND`.
@@ -3024,6 +3070,11 @@ pub struct StardistSettings {
     /// in: smaller ones take less RAM, larger ones are faster.
     #[serde(default = "_serde_default_stardist_piece_size")]
     pub piece_size: AiSegmentationPieceSizePieceSizeSettings,
+    /// How the image is scaled before the model sees it: by default the
+    /// tile's 1st and 99.8th percentile become 0 and 1, as StarDist's
+    /// models were trained.
+    #[serde(default = "_serde_default_stardist_normalization")]
+    pub normalization: AiSegmentationInputNormalizationInputNormalizationSettings,
 }
 
 impl Default for StardistSettings {
@@ -3034,6 +3085,7 @@ impl Default for StardistSettings {
             probability_threshold: 0.5f32,
             nms_threshold: 0.3f32,
             piece_size: AiSegmentationPieceSizePieceSizeSettings::Auto,
+            normalization: AiSegmentationInputNormalizationInputNormalizationSettings::ModelDefault,
         }
     }
 }
@@ -3115,26 +3167,30 @@ impl Default for ThresholdEntrySettings {
 fn _serde_default_unet_piece_size() -> AiSegmentationPieceSizePieceSizeSettings {
     AiSegmentationPieceSizePieceSizeSettings::Auto
 }
-/// Semantic segmentation using a pretrained U-Net exported as TorchScript.
+fn _serde_default_unet_normalization() -> AiSegmentationInputNormalizationInputNormalizationSettings
+{
+    AiSegmentationInputNormalizationInputNormalizationSettings::ModelDefault
+}
+/// Semantic segmentation with a pretrained U-Net (torch-em `UNet2d`, the
+/// architecture of bioimage.io's U-Nets), from an EVAnalyzer model file
+/// (`.evanet`, converted once from the original - `crates/nn`).
 ///
-/// The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,
-/// same normalization as the rest of the pipeline) and return either a
-/// `[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already
-/// applies its final sigmoid) or a `[1, C, H, W]` tensor with more than one
-/// channel, in which case `output_mode` and `foreground_channel` decide how the
-/// foreground probability is extracted. Runs on GPU
-/// automatically if CUDA is available in the linked libtorch build, otherwise
-/// falls back to CPU.
+/// The model gives one or more channels per pixel: with one, its
+/// foreground probability; with more, `output_mode` and `foreground_channel`
+/// decide how the foreground probability is taken. The model file says
+/// whether the image is normalized first (zero mean, unit variance). Runs on
+/// a GPU when there is one (convolutions in half precision there), else on
+/// the CPU.
 ///
-/// Any tile size works: the tile is mirror-padded to a multiple of 16 (U-Nets
-/// halve the image 4 times and fail otherwise) plus a 16 px border (context
-/// for the pixels at the tile edge, the "halo" bioimage.io models declare),
-/// and the prediction is cropped back to the tile.
+/// Any tile size works: the tile is mirror-padded to the network's multiple
+/// (16 for depth 4) plus a 16 px border (context for the pixels at the tile
+/// edge, the "halo" bioimage.io models declare), and the prediction is
+/// cropped back to the tile.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct UNetSettings {
-    /// Path to a TorchScript-exported U-Net model (`torch.jit.script`/`torch.jit.trace`).
+    /// The U-Net model file (EVAnalyzer's `.evanet` or `.safetensors`).
     pub model_path: PathBuf,
     /// The class assigned to pixels whose predicted probability reaches
     /// `probability_threshold`. All other pixels are assigned `SegmentationClass::BACKGROUND`.
@@ -3179,6 +3235,10 @@ pub struct UNetSettings {
     /// in: smaller ones take less RAM, larger ones are faster.
     #[serde(default = "_serde_default_unet_piece_size")]
     pub piece_size: AiSegmentationPieceSizePieceSizeSettings,
+    /// How the image is scaled before the model sees it: by default as the
+    /// model file says (e.g. zero mean, unit variance over the tile).
+    #[serde(default = "_serde_default_unet_normalization")]
+    pub normalization: AiSegmentationInputNormalizationInputNormalizationSettings,
 }
 
 impl Default for UNetSettings {
@@ -3192,97 +3252,7 @@ impl Default for UNetSettings {
             boundary_channel: -1i32,
             boundary_threshold: 0.5f32,
             piece_size: AiSegmentationPieceSizePieceSizeSettings::Auto,
-        }
-    }
-}
-
-/// Which project segmentation class the objects of one model class get.
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[serde(default)]
-#[serde(rename_all = "camelCase")]
-pub struct YoloClassMappingSettings {
-    /// Index of the class in the model (`0` = its first class).
-    #[schemars(range(min = 0, max = 1000))]
-    pub model_class: i32,
-    /// The project's segmentation class objects of `model_class` are written as.
-    pub segmentation_class: SegmentationClass,
-}
-
-impl Default for YoloClassMappingSettings {
-    fn default() -> Self {
-        Self {
-            model_class: 0i32,
-            segmentation_class: SegmentationClass(1),
-        }
-    }
-}
-
-fn _serde_default_yolov5_image_scale() -> f32 {
-    1.0f32
-}
-/// Instance segmentation (or detection) with a YOLOv5 model exported as TorchScript.
-///
-/// [AI YOLOv5 Segmentation] -> [Extract Objects]
-///
-/// Takes a YOLOv5 TorchScript export (`export.py --include torchscript`) with
-/// a fixed 640x640 input. Segmentation models (`yolov5*-seg`) give every
-/// object its mask; plain detection models give filled boxes. Any number of
-/// model classes is supported.
-///
-/// Tiles larger than 640 px are analyzed in overlapping 640x640 windows at
-/// full resolution (small tiles are padded), so small objects stay
-/// detectable; objects seen by several windows are merged. Gray images are
-/// given to the model as RGB with equal channels.
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[serde(default)]
-#[serde(rename_all = "camelCase")]
-pub struct Yolov5Settings {
-    /// Path to a YOLOv5 model exported as TorchScript.
-    pub model_path: PathBuf,
-    /// Maps the model's classes to this project's segmentation classes;
-    /// objects of classes not listed are dropped. Leave empty to write model
-    /// class `i` as segmentation class `i + 1`, for every class.
-    pub class_mapping: Vec<YoloClassMappingSettings>,
-    /// Minimum confidence (objectness x class score) of a detection.
-    #[schemars(range(min = 0, max = 1))]
-    pub confidence_threshold: f32,
-    /// Detections of the same class overlapping more than this (box
-    /// intersection over union) are merged into the more confident one.
-    #[schemars(range(min = 0, max = 1))]
-    pub iou_threshold: f32,
-    /// Mask probability above which a pixel belongs to its object
-    /// (segmentation models only).
-    #[schemars(range(min = 0, max = 1))]
-    pub mask_threshold: f32,
-    /// Factor the image is scaled by before it is given to the model, the
-    /// masks are scaled back afterwards. Use it when the model was trained on
-    /// downscaled images: `640 / training image size`, e.g. `0.3125` for
-    /// 2048 px images YOLOv5 shrank to 640. `1` = full resolution.
-    #[schemars(range(min = 0.05, max = 4))]
-    #[serde(default = "_serde_default_yolov5_image_scale")]
-    pub image_scale: f32,
-    /// Overlap of neighboring 640x640 windows, in pixels. Must be larger
-    /// than the biggest object, so every object lies completely inside some
-    /// window.
-    #[schemars(range(min = 0, max = 512))]
-    pub window_overlap: i32,
-    /// Objects with fewer pixels than this (after overlapping objects were
-    /// resolved) are removed. `0` keeps every object.
-    #[schemars(range(min = 0, max = 100000))]
-    pub min_object_size: i32,
-}
-
-impl Default for Yolov5Settings {
-    fn default() -> Self {
-        Self {
-            model_path: PathBuf::default(),
-            class_mapping: vec![],
-            confidence_threshold: 0.25f32,
-            iou_threshold: 0.45f32,
-            mask_threshold: 0.5f32,
-            image_scale: 1.0f32,
-            window_overlap: 128i32,
-            min_object_size: 15i32,
+            normalization: AiSegmentationInputNormalizationInputNormalizationSettings::ModelDefault,
         }
     }
 }

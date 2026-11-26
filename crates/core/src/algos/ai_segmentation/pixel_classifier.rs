@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::{
-    ai_learning::model::load_from_file,
+    ai_learning::model::{load_from_file, nn_error},
     ai_learning::training::pixel::{compute_pixel_features, compute_pixel_features_on},
     algos::{
         ExecutionScope, ImageAlgorithm, ai_segmentation::classifier_cache::load_cached_classifier,
@@ -60,7 +60,7 @@ pub struct SegmentationMapping {
 #[cmdsmeta(category = "segment", display_name = "AI Pixel Classifier")]
 pub struct PixelClassifier {
     /// Path to a trained pixel classifier model, saved from the AI training dialog.
-    #[cmdsmeta(file_extensions = "evamodel")]
+    #[cmdsmeta(file_extensions = EVANALYZER_TRAINED_AI_MODELS)]
     pub model_path: PathBuf,
 
     /// Maps the model's predicted classes to this project's segmentation classes.
@@ -132,12 +132,7 @@ impl ImageAlgorithm for PixelClassifier {
         let size = ctx.image.size();
         let (width, height) = (size.width, size.height);
 
-        let mut rows = Vec::with_capacity(width * height);
-        for y in 0..height {
-            for x in 0..width {
-                rows.push(bank.feature_vector_at(x, y));
-            }
-        }
+        let (rows, n_features) = (bank.rows(), bank.n_features());
         let mapping: HashMap<SegmentationClass, u32> = self
             .segmentation_mapping
             .iter()
@@ -148,7 +143,11 @@ impl ImageAlgorithm for PixelClassifier {
         // minimum certainty is applied after it) and how probable it is.
         let wants_prediction = ctx.prediction == PredictionRequest::Asked;
         let predicted = if self.min_certainty > 0.0 || wants_prediction {
-            let (mut predicted, certainty) = saved.classifier.predict_with_certainty(&rows)?;
+            let prediction = saved
+                .classifier
+                .predict(&rows, n_features)
+                .map_err(nn_error)?;
+            let (mut predicted, certainty) = (prediction.classes, prediction.certainty);
             if wants_prediction {
                 ctx.prediction = prediction_capture(
                     &predicted,
@@ -162,12 +161,15 @@ impl ImageAlgorithm for PixelClassifier {
             // Below the minimum certainty: background (`write_predictions`).
             for (class, certainty) in predicted.iter_mut().zip(certainty) {
                 if certainty < self.min_certainty {
-                    *class = usize::MAX;
+                    *class = u32::MAX;
                 }
             }
             predicted
         } else {
-            saved.classifier.predict(&rows)?
+            saved
+                .classifier
+                .predict_classes(&rows, n_features)
+                .map_err(nn_error)?
         };
 
         let segmentation_map = ctx.get_segmentation_map_mut()?;
@@ -226,7 +228,7 @@ fn check_input_color(
 /// certainty) and its probability as a byte. `Captured`, or `None` for a
 /// model with more classes than a byte holds (no overlay then).
 fn prediction_capture(
-    predicted: &[usize],
+    predicted: &[u32],
     certainty: &[f32],
     class_labels: &[evanalyzer_cfg::settings::ai_learning_settings::PixelClassLabel],
     mapping: &HashMap<SegmentationClass, u32>,
@@ -266,16 +268,16 @@ fn prediction_capture(
 /// `mapping` into this project's segmentation classes, writing the result
 /// into `seg_slice`. Unmapped or out-of-range predictions fall back to
 /// `SegmentationClass::BACKGROUND` - see [`PixelClassifier`]'s doc comment;
-/// `usize::MAX` marks a pixel below the minimum certainty.
+/// `u32::MAX` marks a pixel below the minimum certainty.
 fn write_predictions(
-    predicted: &[usize],
+    predicted: &[u32],
     class_labels: &[evanalyzer_cfg::settings::ai_learning_settings::PixelClassLabel],
     mapping: &HashMap<SegmentationClass, u32>,
     seg_slice: &mut [u32],
 ) {
     for (out_pixel, &class_idx) in seg_slice.iter_mut().zip(predicted.iter()) {
         let model_class = class_labels
-            .get(class_idx)
+            .get(class_idx as usize)
             .map(|label| label.class)
             .unwrap_or(SegmentationClass::BACKGROUND);
         *out_pixel = mapping
@@ -288,7 +290,7 @@ fn write_predictions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ai_learning::model::random_forest::fit_random_forest;
+    use crate::ai_learning::model::test_support::{self, fit_random_forest};
     use crate::ai_learning::model::{
         CURRENT_SAVED_CLASSIFIER_VERSION, SavedClassifier, save_to_file,
     };
@@ -631,12 +633,10 @@ mod tests {
                 .unwrap();
             ctx.get_segmentation_map().unwrap().as_slice().to_vec()
         };
-        let crate::ai_learning::model::Classifier::RandomForest(forest) = &saved.classifier else {
-            unreachable!()
-        };
-        let (_, share) = forest
-            .predict_with_share(&[vec![0.05], vec![5.0], vec![10.05]])
-            .unwrap();
+        let (_, share) = test_support::predict_with_certainty(
+            &saved.classifier,
+            &[vec![0.05], vec![5.0], vec![10.05]],
+        );
         assert_eq!(share[0], 1.0, "a clear pixel: every tree agrees");
         assert!(share[1] < 1.0 || share[2] < 1.0, "{share:?}");
 
@@ -682,7 +682,7 @@ mod tests {
     #[test]
     fn write_predictions_remaps_through_the_configured_mapping() {
         let mapping = HashMap::from([(SegmentationClass(6), 42u32)]);
-        let predicted = vec![0usize, 1, 1, 0];
+        let predicted = vec![0u32, 1, 1, 0];
         let mut seg = vec![0u32; 4];
 
         write_predictions(&predicted, &labels(), &mapping, &mut seg);
@@ -697,7 +697,7 @@ mod tests {
         // Defensive: a mismatched/hand-edited model file could carry a
         // shorter `class_labels` than the classifier's own output size.
         let mapping = HashMap::from([(SegmentationClass(6), 42u32)]);
-        let predicted = vec![99usize];
+        let predicted = vec![99u32];
         let mut seg = vec![7u32]; // stale value from a previous pass
 
         write_predictions(&predicted, &labels(), &mapping, &mut seg);
@@ -708,7 +708,7 @@ mod tests {
     #[test]
     fn write_predictions_resets_stale_buffer_values_for_unmapped_classes() {
         let mapping = HashMap::new();
-        let predicted = vec![0usize, 1];
+        let predicted = vec![0u32, 1];
         let mut seg = vec![9u32, 9u32]; // stale sentinel from a previous pass
 
         write_predictions(&predicted, &labels(), &mapping, &mut seg);
@@ -880,10 +880,10 @@ mod tests {
             .execute(&mut ctx, &mut GlobalPipelineCache::default())
             .unwrap();
 
-        let (classes, certainty) = saved
-            .classifier
-            .predict_with_certainty(&pixels.iter().map(|&v| vec![v]).collect::<Vec<_>>())
-            .unwrap();
+        let (classes, certainty) = test_support::predict_with_certainty(
+            &saved.classifier,
+            &pixels.iter().map(|&v| vec![v]).collect::<Vec<_>>(),
+        );
         let PredictionRequest::Captured(capture) = ctx.prediction else {
             panic!("captured")
         };

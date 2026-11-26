@@ -1,8 +1,8 @@
 //! # ai_devices
 //!
-//! Which devices AI models (Cellpose, StarDist, U-Net, YOLOv5) run on, set
-//! once at startup from the command line (`--ai-devices`, `--gpu-slots`),
-//! and [`infer`]: a model run on the engine they set up.
+//! Which devices AI models (Cellpose-SAM, StarDist, U-Net) run on, set once
+//! at startup from the command line (`--ai-devices`, `--gpu-slots`), and
+//! [`run`]: a model run on the engine they set up (`evanalyzer_nn`).
 //!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-10-10
@@ -11,8 +11,8 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
-use evanalyzer_ai::{DeviceSelection, EngineConfig, Image, Request, Response};
 use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_nn::{DeviceSelection, EngineConfig, Image, Model, Written};
 use std::fmt;
 use std::str::FromStr;
 use std::sync::OnceLock;
@@ -26,12 +26,12 @@ pub const DEFAULT_GPU_SLOTS: usize = 1;
 /// The devices AI inference may use.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum AiDeviceSelection {
-    /// Every CUDA GPU, or the CPU when there is none.
+    /// Every discrete GPU, or the CPU when there is none.
     #[default]
     Auto,
     /// Never use a GPU.
     Cpu,
-    /// These CUDA GPUs (indexes as CUDA numbers them); ones that don't exist
+    /// These discrete GPUs (numbered from 0 in the order the system lists them); ones that don't exist
     /// are ignored, and with none left the CPU is used.
     Gpus(Vec<usize>),
 }
@@ -41,9 +41,10 @@ pub struct AiDeviceOptions {
     pub devices: AiDeviceSelection,
     /// Parallel inferences per GPU, at least 1 (see [`parse_gpu_slots`]).
     pub gpu_slots: usize,
-    /// The AI plugin library to try first (`--ai-plugin`), see
-    /// [`evanalyzer_ai::set_plugin_path`].
-    pub plugin: Option<std::path::PathBuf>,
+    /// Where the GPU keeps its autotune results and compiled kernels across
+    /// runs (`<user folder>/cache/gpu`, see [`evanalyzer_nn::configure_gpu`]);
+    /// `None`: nothing kept.
+    pub gpu_cache: Option<std::path::PathBuf>,
 }
 
 impl Default for AiDeviceOptions {
@@ -51,7 +52,7 @@ impl Default for AiDeviceOptions {
         Self {
             devices: AiDeviceSelection::default(),
             gpu_slots: DEFAULT_GPU_SLOTS,
-            plugin: None,
+            gpu_cache: None,
         }
     }
 }
@@ -62,8 +63,9 @@ static OPTIONS: OnceLock<AiDeviceOptions> = OnceLock::new();
 /// before the first AI step runs; returns `false` (and changes nothing) if
 /// options were already set or AI inference already started.
 pub fn configure_ai_devices(options: AiDeviceOptions) -> bool {
-    if let Some(plugin) = &options.plugin {
-        evanalyzer_ai::set_plugin_path(plugin.clone());
+    // Only a path: nothing is opened or written until a model runs on a GPU.
+    if options.devices != AiDeviceSelection::Cpu {
+        evanalyzer_nn::configure_gpu(options.gpu_cache.as_deref());
     }
     OPTIONS
         .set(AiDeviceOptions {
@@ -79,23 +81,76 @@ pub(crate) fn ai_device_options() -> &'static AiDeviceOptions {
     OPTIONS.get_or_init(AiDeviceOptions::default)
 }
 
-/// Runs `request` on `image` with the AI engine (see
-/// `evanalyzer_ai`), set up with these options on the first call.
-pub(crate) fn infer(request: &Request, image: Image<'_>) -> Result<Response, InternalErrors> {
-    evanalyzer_ai::infer(request, image, engine_config).map_err(InternalErrors::Generic)
+/// Model `M` from `file` on `image` with the engine (`evanalyzer_nn::run`:
+/// pre-processing, the network, post-processing into `out`), set up with
+/// these options on the first call.
+pub(crate) fn run<M: Model>(
+    file: &std::path::Path,
+    image: Image<'_>,
+    params: &M::Params,
+    out: &mut [u32],
+) -> Result<Written, InternalErrors> {
+    evanalyzer_nn::run::<M>(file, image, params, out, engine_config)
+        .map_err(|e| run_error::<M>(file, e))
+}
+
+/// A failed run of `M` as the user reads it: when the model file is the
+/// reason (missing, no model, another kind of model), what it is and which
+/// step runs it - like the card at the step's file field; else nn's message.
+fn run_error<M: Model>(file: &std::path::Path, error: evanalyzer_nn::NnError) -> InternalErrors {
+    use crate::algos::ai_segmentation::model_file::{
+        ModelFileNote, ModelKind, model_file_note, read_start,
+    };
+    use evanalyzer_nn::NnError;
+    let about_the_file = matches!(
+        error,
+        NnError::Io(_) | NnError::UnsupportedArchitecture(_) | NnError::InvalidModelFile(_)
+    );
+    if about_the_file && let Some(kind) = ModelKind::of_arch(M::ARCH) {
+        let start = read_start(file);
+        match model_file_note(kind, file, start.as_deref().map_err(Clone::clone)) {
+            ModelFileNote::WrongKind(message) | ModelFileNote::Unusable(message) => {
+                return InternalErrors::Generic(format!("{}: {message}", kind.step()));
+            }
+            // The right kind, its contents don't fit: nn's message says what.
+            ModelFileNote::Fits(_) => {}
+        }
+    }
+    InternalErrors::Generic(error.to_string())
 }
 
 fn engine_config() -> EngineConfig {
     let options = ai_device_options();
     EngineConfig {
-        devices: match &options.devices {
-            AiDeviceSelection::Auto => DeviceSelection::Auto,
-            AiDeviceSelection::Cpu => DeviceSelection::Cpu,
-            AiDeviceSelection::Gpus(gpus) => DeviceSelection::Gpus(gpus.clone()),
-        },
+        devices: device_selection(&options.devices),
         gpu_slots: options.gpu_slots,
         cores: crate::memory::cpu_cores(),
     }
+}
+
+fn device_selection(devices: &AiDeviceSelection) -> DeviceSelection {
+    match devices {
+        AiDeviceSelection::Auto => DeviceSelection::Auto,
+        AiDeviceSelection::Cpu => DeviceSelection::Cpu,
+        AiDeviceSelection::Gpus(gpus) => DeviceSelection::Gpus(gpus.clone()),
+    }
+}
+
+/// How many GPUs AI models run on with this process' options - 0 for
+/// `--ai-devices cpu` without looking for any; else see [`gpus`].
+pub(crate) fn used_gpu_count() -> usize {
+    match OPTIONS.get().map(|o| &o.devices) {
+        Some(AiDeviceSelection::Cpu) => 0,
+        _ => gpus().iter().filter(|gpu| gpu.used).count(),
+    }
+}
+
+/// The computer's GPUs and which ones AI models run on with this process'
+/// options (`--ai-devices`; nothing is fixed by asking). Opens the discrete
+/// GPUs once: slow, keep it off startup paths.
+pub fn gpus() -> Vec<evanalyzer_nn::GpuInfo> {
+    let devices = OPTIONS.get().map(|o| o.devices.clone()).unwrap_or_default();
+    evanalyzer_nn::gpus(&device_selection(&devices))
 }
 
 /// Parses `--gpu-slots`: a number of at least 1.

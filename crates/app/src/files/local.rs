@@ -184,6 +184,17 @@ impl FileSystem for LocalFileSystem {
         std::fs::read(&path).map_err(|e| io_error("read", &path, e))
     }
 
+    fn read_file_start(&self, path: &Path, len: usize) -> Result<Vec<u8>, InternalErrors> {
+        use std::io::Read;
+        let path = self.check(path)?;
+        let file = std::fs::File::open(&path).map_err(|e| io_error("read", &path, e))?;
+        let mut data = Vec::new();
+        file.take(len as u64)
+            .read_to_end(&mut data)
+            .map_err(|e| io_error("read", &path, e))?;
+        Ok(data)
+    }
+
     fn write_file(&self, path: &Path, data: &[u8]) -> Result<(), InternalErrors> {
         let path = self.check_write(path)?;
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -343,6 +354,17 @@ mod tests {
             .map(|e| e.unwrap().file_name())
             .collect();
         assert_eq!(leftovers, ["project.evaproj"]);
+    }
+
+    #[test]
+    fn read_file_start_gives_the_first_bytes_or_the_whole_short_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let fs = LocalFileSystem::default();
+        let path = dir.path().join("model.evanet");
+        fs.write_file(&path, b"0123456789").unwrap();
+        assert_eq!(fs.read_file_start(&path, 4).unwrap(), b"0123");
+        assert_eq!(fs.read_file_start(&path, 100).unwrap(), b"0123456789");
+        assert!(fs.read_file_start(&dir.path().join("missing"), 4).is_err());
     }
 
     #[test]

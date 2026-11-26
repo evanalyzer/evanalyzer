@@ -5,14 +5,11 @@
 #
 # Regenerate (from the repo root; CI checks the result is up to date):
 #
-#   cargo about generate --locked --workspace --features evanalyzer_ai/torch \
+#   cargo about generate --locked --workspace \
 #       docs/about.hbs -o crates/gui/src/generated/third_party_licenses.json
 #
-# `--workspace` covers every shipped binary (the app, the server, ...);
-# `evanalyzer_ai/torch` adds the AI plugin's crates (tch, torch-sys, ...) -
-# the plugin is evanalyzer_ai built with that feature
-# (`cargo build-ai-plugin`, .cargo/config.toml). cargo-about only reads
-# `cargo metadata`, so libtorch need not be installed. Install it with
+# `--workspace` covers every shipped binary (the app, the server, ...).
+# Install it with
 # `cargo install cargo-about --locked --version 0.9.3 --features cli`
 # (the version CI uses - another version may format the output differently).
 
@@ -189,3 +186,28 @@ checksum = "2fdef09e45fb8067fb50dfcbda3f38b82695d6e3294f2c491b290d493b864d87"
 accepted = ["MPL-2.0"]
 [option-ext]
 accepted = ["MPL-2.0"]
+
+# MPL-2.0: buildid (via cubecl-runtime) and colored (via burn-tensor) - both
+# pulled in by burn 0.22 (crates/nn), no burn build without them. Owner
+# reviewed 2026-11-26, as smartstring/option-ext above: file-level copyleft,
+# both ship unmodified, listed with their license and source in the About
+# dialog.
+[buildid]
+accepted = ["MPL-2.0"]
+[colored]
+accepted = ["MPL-2.0"]
+
+# Apache-2.0 WITH LLVM-exception (rustc_apfloat via cubecl-ir, burn 0.22):
+# Apache-2.0 with an extra permission - permissive, reviewed 2026-11-26.
+[rustc_apfloat]
+accepted = ["Apache-2.0 WITH LLVM-exception"]
+
+# cfg_block (via turso, burn's GPU cache) states its license only as a file
+# (Apache-2.0 notice, Copyright 2022 Trevor Gross) - no `license` field, so
+# cargo-about can't read it. The checksum is that file's sha256.
+[cfg_block.clarify]
+license = "Apache-2.0"
+[[cfg_block.clarify.files]]
+path = "LICENSE"
+license = "Apache-2.0"
+checksum = "408bbc4d10bdf74d8c9b74b64ea4910603257e24133da18edc4d16198e3b4010"

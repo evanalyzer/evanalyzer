@@ -1057,9 +1057,48 @@ fn load_licenses(ui: &AppWindow) {
 
 /// The About dialog's system tab: whenever it opens, asks `backend` for the
 /// machine the work runs on - in remote mode the worker's, not this one.
-/// Fetched on a background thread: the CUDA probe is slow on first use
-/// (loading the driver, commonly hundreds of ms), plus a round trip in
+/// Fetched on a background thread: the GPU probe is slow on first use
+/// (opening the adapters, commonly hundreds of ms), plus a round trip in
 /// remote mode.
+/// The About dialog's GPU card: the GPUs AI models run on by name (so one
+/// sees whether it is e.g. the NVIDIA card), else why the CPU is used.
+fn gpu_summary(gpus: &[evanalyzer_app::backend::Gpu]) -> (String, String) {
+    // Identical cards once, with their count: "2 × NVIDIA GeForce RTX 4090".
+    let mut used: Vec<(&str, usize)> = Vec::new();
+    for gpu in gpus.iter().filter(|g| g.used) {
+        match used.iter_mut().find(|(name, _)| *name == gpu.name) {
+            Some((_, count)) => *count += 1,
+            None => used.push((&gpu.name, 1)),
+        }
+    }
+    if !used.is_empty() {
+        let names: Vec<String> = used
+            .iter()
+            .map(|(name, count)| match count {
+                1 => name.to_string(),
+                n => format!("{n} × {name}"),
+            })
+            .collect();
+        let note = if gpus.iter().filter(|g| g.used).count() > 1 {
+            "AI runs on these GPUs"
+        } else {
+            "AI runs on the GPU"
+        };
+        return (names.join(", "), note.into());
+    }
+    match gpus.first() {
+        None => ("None found".into(), "AI runs on the CPU".into()),
+        Some(gpu) if gpu.discrete => (
+            gpu.name.clone(),
+            "Not in the AI devices - AI runs on the CPU".into(),
+        ),
+        Some(gpu) => (
+            gpu.name.clone(),
+            "Only discrete GPUs are used - AI runs on the CPU".into(),
+        ),
+    }
+}
+
 fn attach_system_info(ui: &AppWindow, ui_state: Arc<UiState>) {
     let ui_weak = ui.as_weak();
     ui.global::<AppInfoState>().on_refresh_system_info(move || {
@@ -1092,13 +1131,16 @@ fn attach_system_info(ui: &AppWindow, ui_state: Arc<UiState>) {
                         info.set_system_os(system.os.into());
                         info.set_cpu_cores(system.cpu_cores as i32);
                         info.set_ram_total(format_ram(system.ram_total_bytes).into());
-                        info.set_cuda_available(system.cuda_available);
+                        let (gpu, note) = gpu_summary(&system.gpus);
+                        info.set_gpu(gpu.into());
+                        info.set_gpu_note(note.into());
                     }
                     Err(e) => {
                         info.set_system_os("-".into());
                         info.set_cpu_cores(0);
                         info.set_ram_total("-".into());
-                        info.set_cuda_available(false);
+                        info.set_gpu("-".into());
+                        info.set_gpu_note("".into());
                         info.set_system_error(format!("Could not read the system: {e}").into());
                     }
                 }
@@ -1356,6 +1398,51 @@ mod ui_state_tests {
     use crate::editor::test_support::test_ui_state;
     use evanalyzer_app::project::ImageListExt;
     use evanalyzer_cfg::settings::project_settings::ProjectSettings;
+
+    // -- About dialog ---------------------------------------------------------
+
+    /// The GPU card names the GPU AI runs on, else says why the CPU is used.
+    #[test]
+    fn the_gpu_card_names_the_gpu_ai_runs_on() {
+        use evanalyzer_app::backend::Gpu;
+        let gpu = |name: &str, discrete, used| Gpu {
+            name: name.into(),
+            discrete,
+            used,
+        };
+        let nvidia = gpu("NVIDIA GeForce RTX 3060", true, true);
+        let intel = gpu("Integrated GPU", false, false);
+        assert_eq!(
+            gpu_summary(&[nvidia.clone(), intel.clone()]),
+            (
+                "NVIDIA GeForce RTX 3060".into(),
+                "AI runs on the GPU".into()
+            )
+        );
+        assert_eq!(
+            gpu_summary(&[nvidia.clone(), nvidia.clone(), intel.clone()]),
+            (
+                "2 × NVIDIA GeForce RTX 3060".into(),
+                "AI runs on these GPUs".into()
+            )
+        );
+        let not_chosen = Gpu {
+            used: false,
+            ..nvidia
+        };
+        assert_eq!(
+            gpu_summary(&[not_chosen]).1,
+            "Not in the AI devices - AI runs on the CPU"
+        );
+        assert_eq!(
+            gpu_summary(&[intel]),
+            (
+                "Integrated GPU".into(),
+                "Only discrete GPUs are used - AI runs on the CPU".into()
+            )
+        );
+        assert_eq!(gpu_summary(&[]).0, "None found");
+    }
 
     // -- dirty tracking -----------------------------------------------------
 

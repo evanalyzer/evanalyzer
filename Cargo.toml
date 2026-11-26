@@ -17,7 +17,7 @@ publish = false
 [workspace.dependencies]
 evanalyzer_core = { path = "crates/core" }
 evanalyzer_cfg = { path = "crates/cfg" }
-evanalyzer_ai = { path = "crates/ai" }
+evanalyzer_nn = { path = "crates/nn" }
 evanalyzer_app = { path = "crates/app" }
 evanalyzer_gui    = { path = "crates/gui" }
 evanalyzer_cli    = { path = "crates/cli" }
@@ -56,28 +56,31 @@ quick-xml = "0.42.0"
 rayon = "1.12.0"
 rustfft = "6.4.1"
 schemars = "1.2.3"
-serde = "1.0.229"
+serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["preserve_order", "float_roundtrip"] }
 serde_path_to_error = "0.1.20"
 tempfile = "3.27.0"
-# Held at 0.21: burn 0.22 needs its `std` feature for the optimizers, and
-# `std` drags its (deprecated) `burn-tch` into the lockfile - it links
-# libtorch through torch-sys 0.22, which collides with `tch`'s torch-sys
-# 0.26 (only one crate may link `tch`). Upgrade once burn drops burn-tch.
-burn = { version = "0.21", default-features = false, features = ["ndarray", "autodiff"] }
 clru = "0.6.3"
 sysinfo = "0.40.4"
 petname = "3.2.0"
-tch =  "0.26.0"
-libloading = "0.9.1"
-smartcore = "0.7.0"
+smartcore = { version = "0.7.0", features = ["serde"] }
+# Model files (D2).
+safetensors = "0.8.0"
+# `std` and `optim`: MLP training. `persistence` + `cubecl`: the GPU's
+# autotune results and compiled kernels cached on disk
+# (`evanalyzer_nn::configure_gpu`). No `cpu` (CubeCL CPU links the C++ LLVM
+# library) - burn-flex is the CPU backend.
+burn = { version = "0.22.1", default-features = false, features = ["flex", "wgpu", "vulkan", "autotune", "fusion", "std", "optim", "persistence", "cubecl"] }
+# Its default features (std, simd, rayon): a multi-threaded CPU backend
+# without burn's own `std`.
+burn-flex = "0.22.1"
+burn-dispatch = { version = "0.22.1", default-features = false, features = ["rayon", "simd"] }
 approx = "0.5"
 ctrlc = "3.5.3"
 thiserror = "2.0.21"
 syn = { version = "3.0.10", features = ["full", "parsing"] }
 quote = "1.0"
 pathdiff = "0.2.3"
-serde_yaml = "0.9"
 human-sort = "0.2"
 regex = "1.13.2"
 sha2 = "0.11.1"
@@ -97,5 +100,3 @@ strip = true
 lto = "thin"
 codegen-units = 16
 debug = false
-
-

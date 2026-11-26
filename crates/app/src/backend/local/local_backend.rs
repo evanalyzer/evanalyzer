@@ -118,7 +118,7 @@ impl Backend for LocalBackend {
             os: std::env::consts::OS.to_string(),
             cpu_cores,
             ram_total_bytes,
-            cuda_available: super::system::cuda_is_available(),
+            gpus: super::system::gpus(),
         })
     }
 

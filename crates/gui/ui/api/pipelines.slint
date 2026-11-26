@@ -51,6 +51,20 @@ export struct GroupItem {
         fields: [LeafParam],
     }
 
+// What an AI step's model file is, shown below its file field - read from
+// the file's header. `kind` empty: no card (another setting, no file, or
+// a file that doesn't fit - then `problem` says so).
+export struct ModelFileCard {
+        // "U-Net", "StarDist 2D", "Cellpose-SAM".
+        kind: string,
+        // The model's name, else the file's.
+        name: string,
+        // What it is for; may be empty.
+        description: string,
+        // Licence and source.
+        details: string,
+    }
+
 export struct CommandParameter {
         name: string,
         display-name: string,
@@ -68,6 +82,8 @@ export struct CommandParameter {
         // Computed in Rust rather than matched on `name`/`display-name` here,
         // so this is the one place that knows which commands these are.
         has-model-info: bool,
+        // An AI segmentation step's `model_path`: the model's card.
+        model-card: ModelFileCard,
         // Inside an opened module: this setting is a module parameter.
         exposed: bool,
         // The header shown above the setting where its section (`#[cmdsmeta(section)]`

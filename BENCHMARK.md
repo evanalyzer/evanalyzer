@@ -2636,6 +2636,134 @@ build of 34bb18e1, one run each).
   0.2-0.3 s).
 - Not covered: a weak computer; XLSX at this size (over a sheet's rows).
 
+## libtorch removed, the AI engine's own RAM on burn (2026-11-25/26)
+
+**The AI engine's own RAM** (`AI_ENGINE_BYTES`, what the planner reserves
+once for a job with an AI step). `evanalyzer_nn` example
+`measure_engine_ram cpu|gpu`: a tiny U-Net (2 levels, 4 filters) through
+`evanalyzer_nn::infer` on 64², so the growth is the engine itself; one
+process per device, three runs each, 22 cores:
+
+| Device | RSS after the first run | after ten runs |
+|---|---|---|
+| CPU (burn-flex) | +7.5-7.9 MB | +9.4-10.0 MB |
+| NVIDIA RTX 3000 Ada (wgpu/Vulkan) | +380-420 MB | +380-420 MB |
+
+Was 320 MB for every job (libtorch's libraries, ~280 MB). Now 16 MB on the
+CPU plus 512 MB per GPU used (`ai_engine_bytes`; first 448 MB, raised after
+later runs of the same measurement gave +400-490 MB, peaks up to 506 MB): a
+computer without a GPU plans 304 MB less, one with a GPU ~210 MB more. The GPU part is the graphics
+driver in the process (host RAM), not the GPU's own memory.
+
+**libtorch, crates/ai and the burn-dispatch patch removed** (b08f48ff;
+HEAD 1273124c already ran every model on burn). Release builds,
+alternated, 10 s pauses:
+
+| Case | Before | After |
+|---|---|---|
+| Startup (`--version`) | 11 ms, 31 MB | 10 ms, 32 MB |
+| `bench_pipeline` 200 x 2048², 8 threads, pinned to the P cores (8 runs) | 7.06 s wall, 51.5 s CPU, 1193 MB | 7.15 s, 52.6 s, 1193 MB |
+| `bench_pipeline` one 16384² image (tiled) | 1.227 s, 2026 MB | 1.217 s, 2052 MB |
+| Program size (`evanalyzer`) | 276.50 MB | 276.40 MB |
+
+The small images are 1-2 % slower in every series (two copies of the same
+binary: 0.03 %). The analysis code is unchanged: same features and versions,
+the patch put back changes nothing, `crates/core/src` from before (only the
+`gpus()` / plugin-field edits, none in that path) gives the old instruction
+count (perf, P cores: 5.430e11 vs 5.441e11) - code placement by the
+compiler, not more work. Packages lose libtorch (CPU ~0.5 GB, CUDA ~2 GB).
+
+## Cellpose-SAM on the GPU: one GEMM per Linear, f16 (2026-11-26)
+
+A user run: Cellpose-SAM on burn/wgpu 98 s per image vs ~35 s with libtorch
+on CUDA, same computer (NVIDIA RTX 3000 Ada Laptop). The log showed every
+kernel in F32 and the MLP/qkv/proj matrix products as `m: 32`: burn's
+`Linear` on `[B, 32, 32, C]` ran 32 products of 32 rows each instead of one
+of 1,024. Fixed: an own linear layer over all rows at once (one GEMM), and
+on the GPU the matrix products and convolutions in f16 (weights converted
+once; LayerNorm, softmax, GELU, biases, residuals in f32).
+
+`evanalyzer_nn` example `bench_cellpose_sam` (real `CellposeSam::infer`,
+tiles and blending; one process, images after the first = steady state;
+`nvidia-smi` sampled every 200 ms):
+
+| Case | Variant | First image | Later images | vs Cellpose's f32 network (flows / prob. / flips) |
+|---|---|---|---|---|
+| 300 x 200 (2 tiles), GPU | before (f32, `m: 32`) | 23.5 s | 1.59 s | 3.3e-5 / 2.3e-6 / 0 |
+| | f32, one GEMM | 22.4 s | 0.67 s | 2.9e-5 / 2.4e-6 / 0 |
+| | f16, one GEMM | 21.1 s | 0.32 s | 2.0e-2 / 1.8e-3 / 1 of 60,000 |
+| 1024² (25 tiles), GPU | before | 32.7 s | 20.1 s | 4.5e-5 / 2.7e-6 / 0 |
+| | f16, one GEMM | 16.8 s | 4.1 s | 3.7e-2 / 3.2e-3 / 23 of 1,048,576 |
+| 300 x 200, CPU (burn-flex, f32) | before | | 12.4-12.6 s | |
+| | one GEMM | | 10.1 s | same |
+
+The shipped libtorch model (bf16-rounded weights) was 1.8e-2 / 5.4e-3 / 61
+flips from the f32 network at 1024² - f16 is as close. GPU busy 99-100 %
+during the later images (batching tiles would gain little); GPU memory peak
+6.8 → 6.2 GB. The first image costs ~12-20 s more in every process
+(autotune + shader compilation + loading the 1.2 GB model) - open.
+Test: `real_cpsam_in_f16_on_the_gpu_stays_within_the_bf16_rounding`.
+
+## GPU cache on disk: autotune results and compiled kernels (2026-11-26)
+
+Each process tuned (autotune) and compiled every GPU kernel again: a user
+run of Cellpose-SAM took 50.8 s for the first image, 23 s for the next in
+the same process. burn's `persistence` (CubeCL's own store, turso/SQLite)
+keeps both in `<user folder>/cache/gpu` (`evanalyzer_nn::configure_gpu`),
+keyed by GPU, operation/shape and CubeCL version - not the weights.
+
+`bench_cellpose_sam … cells300x200-replicate 3 dgpu f16 [cache]`, separate
+processes:
+
+| Run | First image | Later images |
+|---|---|---|
+| no cache | 20.65 s | 0.31 s |
+| cache, first run (empty) | 11.50 s | 0.34 s |
+| cache, second run | 0.32 s | 0.32 s |
+| cache, third run | 0.35 s | 0.32 s |
+
+Cache size after Cellpose-SAM: 1.2 MB. Cost of the feature (126 more
+crates): program 276.5 → 295.1 MB (+18.5 MB), resident at start +1.5-2 MB;
+startup 11 / 12 ms; AI engine on the CPU +10 MB both; small images
+(`bench_pipeline` 200 x 2048², P cores, 8 runs) 7.90 → 7.87 s, 1181 /
+1180 MB; one 16384² image 1.259 / 1.277 s, peak RAM within the run-to-run
+spread (1939-2286 MB both).
+
+## StarDist and U-Net on the GPU: f16 from input to output (2026-11-26)
+
+Both already ran their convolutions in f16 on the GPU (since the wire-up),
+but converted the weights to f16 on every forward pass and every result
+back to f32. Now the weights are converted once and the activations stay
+f16 through the network (U-Net: norm statistics in f32). `bench_gpu_cnn`
+(real models, `infer` with 2048² pieces, RTX 3000 Ada Laptop, images after
+the first):
+
+| Case | f32 | f16 before | f16 now | f16 now vs reference |
+|---|---|---|---|---|
+| StarDist 1100 x 600 | 0.239 s | 0.032-0.035 s | 0.027-0.028 s | prob. 9.4e-4, dist. 3.4e-2, 10 of 165,000 flips |
+| StarDist 2048² | 1.62 s | 0.232-0.237 s | 0.200-0.208 s | |
+| U-Net (romantic-shark) 1024² | 17.5 s | 0.391-0.397 s | 0.339-0.346 s | max 1.2e-2, 99 of 1,048,576 flips (vs the libtorch engine) |
+| U-Net 2048² | 69.6 s | 1.60 s | 1.38 s | |
+
+f32 on the GPU runs burn's direct convolution (no tensor cores) - 7-45x
+slower. **Found:** the U-Net's 2048² piece needs a 2.2 GB buffer and
+sometimes runs out of the 8 GB GPU's memory ("out of device memory",
+before and after) - the engine then runs the image on the CPU. 1024² pieces
+never failed (1.75 s at 2048², 512²: 2.56 s). Pieces are sized from the
+computer's RAM, not the GPU's memory. **Fixed (same day):** running out of
+GPU memory sometimes even hung CubeCL (GPU idle, no error) instead of
+failing. Now a model seeing a limited neighbourhood gets pieces that need
+at most half the GPU's memory (`pieces::fit_gpu`, the GPU's figure from
+CubeCL: 8 GB → 1024², 16 GB → 2048²; same result up to float rounding);
+an out-of-memory error is retried in smaller pieces (`run_fitting`) and
+otherwise runs that one image on the CPU with the GPU kept (it used to be
+given up for the whole analysis). Romantic-shark's size without
+InstanceNorm on 4096², 2048² and 4096² pieces asked: 4.8 s per image, no
+failure (before: hung or out of memory). InstanceNorm models keep their
+pieces (they are part of the result).
+Tests: `real_stardist_in_f16_on_the_gpu_stays_within_f16_rounding`,
+`real_romantic_shark_in_f16_on_the_gpu_stays_within_f16_rounding`.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -2646,6 +2774,7 @@ graphics driver).
 |---|---|---|---|
 | App idle after start (AI not loaded) | 207 MB | 2026-10-19 | The real app above |
 | Analysis of 50 images 2048², 1 / 2 / 4 threads | 226 / 326 / 499 MB | 2026-10-29 | Everyday images on a small computer |
+| AI engine itself (burn), CPU / per NVIDIA GPU (driver) | +10 MB / +380-506 MB | 2026-11-26 | libtorch removed, the AI engine's own RAM on burn |
 | Image viewer, whole slide, default caches | ~280 MB above start | 2026-10-17 | Image viewer |
 | Image viewer, 2 threads, small caches | ~190 MB above start | 2026-10-17 | Image viewer |
 | Viewer with a breakpoint tile compared | ~400 MB | 2026-10-18 | Breakpoint compare |

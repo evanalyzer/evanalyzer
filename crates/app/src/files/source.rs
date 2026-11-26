@@ -28,6 +28,10 @@ pub trait FileSystem: Send + Sync {
 
     fn read_file(&self, path: &Path) -> Result<Vec<u8>, InternalErrors>;
 
+    /// The first `len` bytes of the file at `path` (all of a shorter one) -
+    /// e.g. an AI model's header, without its weights.
+    fn read_file_start(&self, path: &Path, len: usize) -> Result<Vec<u8>, InternalErrors>;
+
     /// Writes atomically (temp file + rename), so a crash mid-write never
     /// leaves a truncated project file behind. Creates missing parent folders.
     fn write_file(&self, path: &Path, data: &[u8]) -> Result<(), InternalErrors>;

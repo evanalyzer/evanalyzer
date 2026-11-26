@@ -115,14 +115,6 @@ pub struct Args {
     #[arg(long, global = true, value_name = "N", value_parser = parse_gpu_slots, help_heading = "AI")]
     pub gpu_slots: Option<usize>,
 
-    /// AI plugin library to try first (development and tests)
-    ///
-    /// `libevanalyzer_ai.so`, `evanalyzer_ai.dll` or
-    /// `libevanalyzer_ai.dylib`. A package finds its own next to the
-    /// program.
-    #[arg(long, global = true, value_name = "FILE", help_heading = "AI")]
-    pub ai_plugin: Option<std::path::PathBuf>,
-
     /// Most CPU cores EVAnalyzer uses
     ///
     /// For the analysis, AI models, the results database and everything
@@ -269,7 +261,6 @@ mod tests {
             "AI:",
             "--ai-devices",
             "--gpu-slots",
-            "--ai-plugin",
             "Resources:",
             "--max-threads",
             "--max-ram",
@@ -313,17 +304,8 @@ mod tests {
         assert_eq!((args.max_threads, args.max_ram), (Some(4), Some(8192)));
 
         // Global: also after a subcommand (a server passes them to workers).
-        let args = Args::try_parse_from([
-            "evanalyzer",
-            "worker",
-            "--max-threads",
-            "2",
-            "--ai-plugin",
-            "/opt/a.so",
-        ])
-        .unwrap();
+        let args = Args::try_parse_from(["evanalyzer", "worker", "--max-threads", "2"]).unwrap();
         assert_eq!(args.max_threads, Some(2));
-        assert_eq!(args.ai_plugin, Some(std::path::PathBuf::from("/opt/a.so")));
 
         let defaults = Args::try_parse_from(["evanalyzer"]).unwrap();
         assert_eq!((defaults.max_threads, defaults.max_ram), (None, None));

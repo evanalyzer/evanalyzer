@@ -1,15 +1,4 @@
-[env]
-# libtorch (CPU or CUDA build, same path either way) is unpacked here by the
-# CI/CD pipeline before `cargo build` runs - see libs/download-*.sh.
-LIBTORCH = { value = "libs/libtorch", relative = true }
-# The bundled libtorch release rarely matches the exact version torch-sys
-# pins internally; the ABI is stable across these patch/minor versions.
-LIBTORCH_BYPASS_VERSION_CHECK = "1"
-
 [alias]
-# The libtorch plugin (`evanalyzer_ai` as a cdylib with its `torch`
-# engine). Add `--release`, `--target …` as for the other builds.
-build-ai-plugin = ["rustc", "-p", "evanalyzer_ai", "--features", "torch", "--crate-type", "cdylib"]
 build-win       = ["xwin", "build", "--target", "x86_64-pc-windows-msvc",   "--release"]
 build-win-arm   = ["xwin", "build", "--target", "aarch64-pc-windows-msvc",   "--release"]
 build-linux     = ["build", "--target", "x86_64-unknown-linux-gnu",          "--release"]
@@ -17,11 +6,8 @@ build-linux-arm = ["build", "--target", "aarch64-unknown-linux-gnu",         "--
 build-mac       = ["build", "--target", "aarch64-apple-darwin",              "--release"]
 # Without the desktop app (command line, server, worker): no font or display
 # libraries needed - for servers, compute clusters and the Docker image.
-# CPU or CUDA is not decided here but by the libtorch the AI plugin is built
-# against: `libs/download.sh linux-cpu` or `linux-cuda`, then this and
-# `build-ai-plugin --release --target x86_64-unknown-linux-gnu`.
-build-linux-cli     = ["build", "--target", "x86_64-unknown-linux-gnu",  "--release", "-p", "evanalyzer_bin", "--no-default-features", "--features", "libtorch"]
-build-linux-arm-cli = ["build", "--target", "aarch64-unknown-linux-gnu", "--release", "-p", "evanalyzer_bin", "--no-default-features", "--features", "libtorch"]
+build-linux-cli     = ["build", "--target", "x86_64-unknown-linux-gnu",  "--release", "-p", "evanalyzer_bin", "--no-default-features"]
+build-linux-arm-cli = ["build", "--target", "aarch64-unknown-linux-gnu", "--release", "-p", "evanalyzer_bin", "--no-default-features"]
 
 # For Windows (MSVC) — statically linked CRT, lld linker
 [target.x86_64-pc-windows-msvc]
@@ -39,9 +25,7 @@ rustflags = [
 ]
 
 # For Linux x86_64
-# The extra rpath lets the binary find libtorch's .so files next to itself
-# (see release.yml packaging step) instead of only at the absolute build path
-# that torch-sys bakes in.
+# The extra rpath lets the binary find shared libraries next to itself.
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "link-arg=-fuse-ld=mold", "-C", "link-arg=-Wl,-rpath,$ORIGIN"]
 
@@ -52,7 +36,7 @@ rustflags = ["-C", "link-arg=-fuse-ld=mold", "-C", "link-arg=-Wl,-rpath,$ORIGIN"
 
 # For macOS ARM64 (Apple Silicon)
 # @loader_path is macOS's equivalent of $ORIGIN: it lets the binary find the
-# libtorch / libduckdb .dylib files shipped next to it (see release.yml packaging).
+# libduckdb .dylib files shipped next to it (see release.yml packaging).
 [target.aarch64-apple-darwin]
 rustflags = ["-C", "link-arg=-Wl,-rpath,@loader_path"]
 

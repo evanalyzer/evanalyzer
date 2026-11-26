@@ -894,27 +894,22 @@ export component AboutDialog inherits Rectangle {
                         color: Ink.warn;
                         wrap: word-wrap;
                     }
+                    // Processor and memory: short values, side by side.
                     HorizontalLayout {
                         spacing: 12px;
                         for stat in [
                             {
                                 label: "PROCESSOR",
                                 value: AppInfoState.system_loading ? "…" : AppInfoState.cpu_cores + " cores",
-                                note: "Analysis threads run on them"
+                                note: "For the analysis"
                             },
                             {
                                 label: "MEMORY",
                                 value: AppInfoState.system_loading ? "…" : AppInfoState.ram_total,
                                 note: "Installed"
                             },
-                            {
-                                label: "GPU · CUDA",
-                                value: AppInfoState.system_loading ? "Checking…" : AppInfoState.cuda_available ? "Available" : "Not available",
-                                note: AppInfoState.cuda_available ? "AI runs on the GPU" : "AI runs on the CPU"
-                            },
                         ]: Card {
                             horizontal-stretch: 1;
-                            height: 96px;
                             VerticalLayout {
                                 padding: 14px;
                                 spacing: 4px;
@@ -939,6 +934,38 @@ export component AboutDialog inherits Rectangle {
                                     font-size: Ink.fs-secondary;
                                     color: Ink.text-dim;
                                 }
+                            }
+                        }
+                    }
+
+                    // The GPU on its own row: its name can be long ("NVIDIA
+                    // RTX 3000 Ada Generation Laptop GPU") and wraps.
+                    Card {
+                        VerticalLayout {
+                            padding: 14px;
+                            spacing: 4px;
+                            Text {
+                                text: "GPU";
+                                font-size: Ink.fs-caption;
+                                font-weight: 600;
+                                letter-spacing: 0.6px;
+                                color: Ink.text-mute;
+                            }
+
+                            Text {
+                                text: AppInfoState.system_loading ? "Checking…" : AppInfoState.gpu;
+                                font-size: Ink.fs-figure;
+                                font-weight: 500;
+                                font-family: Ink.font-mono;
+                                color: Ink.text;
+                                wrap: word-wrap;
+                            }
+
+                            if !AppInfoState.system_loading && AppInfoState.gpu_note != "": Text {
+                                text: AppInfoState.gpu_note;
+                                font-size: Ink.fs-secondary;
+                                color: Ink.text-dim;
+                                wrap: word-wrap;
                             }
                         }
                     }

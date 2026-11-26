@@ -3,7 +3,7 @@ name: CI
 # Runs the test suite (+ coverage) on every push to main/beta-fix and every
 # pull request. Separate from release.yml (which only builds release
 # binaries on a version tag) so PRs never trigger the expensive
-# multi-platform/CUDA release matrix.
+# multi-platform release matrix.
 #
 # beta-fix is listed alongside main so this workflow can be verified end to
 # end before it's relied on - the GitHub Pages coverage deploy further below
@@ -28,7 +28,7 @@ concurrency:
 jobs:
   test:
     # Linux CPU only, per the beta-readiness review: it's enough to gate
-    # merges, and avoids paying for CUDA/Windows/macOS runners on every push.
+    # merges, and avoids paying for Windows/macOS runners on every push.
     runs-on: ubuntu-latest
     container:
       image: joda001/evanalyzer-toolchain:0.3.2@sha256:b56ac9d19a5d1d4149eb71608286afe48af3f12ddb201ef5fbf9c4e155c34a9f
@@ -52,20 +52,12 @@ jobs:
         with:
           key: linux-x86_64-test
 
-      - name: Download native dependencies (libtorch CPU)
-        # The AI engine crate's `torch` engine links libtorch, and the model
-        # steps' tests run it in-process (`libtorch-in-process`
-        # below). DuckDB does not need a download on Linux:
-        # crates/core/Cargo.toml enables its `bundled` feature for
-        # `cfg(target_os = "linux")`, so it's compiled from source instead.
-        run: ./libs/download.sh linux-cpu
-
-      - name: Unzip libtorch
-        run: unzip -q "libs/libtorch-"*.zip -d libs
+      # No native downloads on Linux: DuckDB is compiled from source
+      # (crates/core/Cargo.toml enables its `bundled` feature for
+      # `cfg(target_os = "linux")`), the AI models run on burn (built in).
 
       - name: Run tests with coverage instrumentation
         env:
-          LD_LIBRARY_PATH: ${{ github.workspace }}/libs/libtorch/lib
           # The instrumented build got OOM-killed (exit 137 / SIGKILL) on the
           # runner. Coverage needs no debug info. One rustc at a time: the
           # generated UI code (evanalyzer_gui_slint) alone peaks at ~10.8 GB
@@ -73,12 +65,7 @@ jobs:
           # rustc next to it passes the runner's 16 GB.
           CARGO_PROFILE_DEV_DEBUG: "0"
           CARGO_BUILD_JOBS: "1"
-        # `libtorch-in-process`: the AI model steps' tests run libtorch in
-        # the test process; `libtorch`: the plugin loader, whose test builds
-        # and loads the real plugin.
-        run: >-
-          cargo llvm-cov --workspace --no-report --locked
-          --features evanalyzer_core/libtorch,evanalyzer_core/libtorch-in-process
+        run: cargo llvm-cov --workspace --no-report --locked
 
       - name: Generate coverage reports
         run: |
@@ -164,8 +151,7 @@ jobs:
     # derived from, so this builds `evanalyzer_cfg` first to regenerate
     # them before running `cargo fmt --check` against the result.
     # `evanalyzer_cfg` has no native dependencies (it doesn't depend on
-    # evanalyzer_core), so this is cheap and doesn't need the libtorch/JRE
-    # downloads the `test` job pays for.
+    # evanalyzer_core), so this is cheap.
     runs-on: ubuntu-latest
     container:
       image: joda001/evanalyzer-toolchain:0.3.2@sha256:b56ac9d19a5d1d4149eb71608286afe48af3f12ddb201ef5fbf9c4e155c34a9f
@@ -201,9 +187,7 @@ jobs:
     # published templates is caught as early as a push/PR, not only at
     # release time.
     #
-    # The app crate builds DuckDB but neither the GUI nor libtorch (modules
-    # with AI steps get no preview), so this doesn't need the libtorch/JRE
-    # downloads the `test` job pays for.
+    # The app crate builds DuckDB but not the GUI.
     runs-on: ubuntu-latest
     container:
       image: joda001/evanalyzer-toolchain:0.3.2@sha256:b56ac9d19a5d1d4149eb71608286afe48af3f12ddb201ef5fbf9c4e155c34a9f
@@ -255,7 +239,7 @@ jobs:
 
       - name: Regenerate the license list
         run: |
-          cargo about generate --locked --workspace --features evanalyzer_ai/torch \
+          cargo about generate --locked --workspace \
             docs/about.hbs -o crates/gui/src/generated/third_party_licenses.json
 
       - name: Fail if it changed
@@ -268,8 +252,7 @@ jobs:
   audit:
     # Dependency/license audit via cargo-audit (RUSTSEC advisory DB). Only
     # needs Cargo.lock, not a full build, so it's a separate lightweight job
-    # rather than a step tacked onto `test` - no libtorch/JRE download, no
-    # compilation.
+    # rather than a step tacked onto `test` - no compilation.
     #
     # Informational, not a merge gate: it doesn't fail the job on findings
     # (mirrors the coverage job, which reports rather than enforcing a

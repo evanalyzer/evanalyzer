@@ -4,12 +4,12 @@
 # The container images (docker/Dockerfile), made from the release's
 # command-line packages - nothing is compiled here:
 #
-#   joda001/evanalyzer:<version>       linux/amd64 (AI plugin, CPU) + linux/arm64
-#   joda001/evanalyzer:<version>-cuda  linux/amd64, AI plugin with CUDA
+#   joda001/evanalyzer:<version>       linux/amd64 + linux/arm64
 #
-# Called by the release (release.yml) after its Linux builds, with their
-# packages from the same run: pushed with the version, plus `latest` /
-# `cuda` unless it is a pre-release (1.2.0-alpha.1).
+# (AI models on the CPU, or a GPU through Vulkan where the container gets
+# one - see docker/README.md.) Called by the release (release.yml) after its
+# Linux builds, with their packages from the same run: pushed with the
+# version, plus `latest` unless it is a pre-release (1.2.0-alpha.1).
 # A manual run takes the packages of an existing GitHub release (its tag)
 # and only builds the images, or also pushes them with `push` checked -
 # e.g. to publish a release's images again.
@@ -62,10 +62,6 @@ jobs:
             platforms: linux/amd64,linux/arm64
             suffix: ""
             latest: latest
-          - flavour: cuda
-            platforms: linux/amd64
-            suffix: "-cuda"
-            latest: cuda
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -78,7 +74,7 @@ jobs:
         run: |
           VERSION="${TAG#v}"
           TAGS="${IMAGE}:${VERSION}${{ matrix.suffix }}"
-          # Pre-releases (a "-" in the version) don't move latest / cuda.
+          # Pre-releases (a "-" in the version) don't move latest.
           if [[ "${VERSION}" != *-* ]]; then
             TAGS="${TAGS},${IMAGE}:${{ matrix.latest }}"
           fi
@@ -114,12 +110,8 @@ jobs:
       - name: Unpack
         run: |
           mkdir -p pkg/amd64 pkg/arm64
-          if [[ "${{ matrix.flavour }}" == "cuda" ]]; then
-            tar -xJf downloads/evanalyzer-cli-linux-x86_64-cuda.tar.xz -C pkg/amd64
-          else
-            tar -xzf downloads/evanalyzer-cli-linux-x86_64.tar.gz -C pkg/amd64
-            tar -xzf downloads/evanalyzer-cli-linux-arm64.tar.gz -C pkg/arm64
-          fi
+          tar -xzf downloads/evanalyzer-cli-linux-x86_64.tar.gz -C pkg/amd64
+          tar -xzf downloads/evanalyzer-cli-linux-arm64.tar.gz -C pkg/arm64
           rm -rf downloads
           du -sh pkg/*
 

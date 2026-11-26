@@ -305,7 +305,6 @@ export component InkMultiSelect inherits Rectangle {
             clip: true;
 
             VerticalLayout {
-                spacing: 0px;
                 if root.show-select-all: Rectangle {
                     height: 32px;
 
@@ -452,7 +451,6 @@ export component InkMultiSelect inherits Rectangle {
                             // Text below already separates one section from
                             // the next visually, so no replacement gap is
                             // needed here.
-                            spacing: 0px;
 
                             for it[idx] in root.items: Rectangle {
                                 // Slint's `for` can't skip an iteration
@@ -481,7 +479,6 @@ export component InkMultiSelect inherits Rectangle {
                             }
 
                             for g in root.groups: VerticalLayout {
-                                spacing: 0px;
 
                                 Text {
                                     text: g;
@@ -597,7 +594,6 @@ export component InkCheckList inherits VerticalLayout {
 
     if root.searchable && root.open: InkSearchField {
         text: root.filter-text;
-        placeholder: "Search";
         edited(t) => {
             root.filter-text = t;
             root.filter-changed(t);

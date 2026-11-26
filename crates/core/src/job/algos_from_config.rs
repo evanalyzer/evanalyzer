@@ -335,6 +335,26 @@ impl From<MathSaveImageImageSourceSettings> for ImageSource {
     }
 }
 
+impl From<AiSegmentationInputNormalizationInputNormalizationSettings> for InputNormalization {
+    fn from(_s: AiSegmentationInputNormalizationInputNormalizationSettings) -> Self {
+        match _s {
+            AiSegmentationInputNormalizationInputNormalizationSettings::ModelDefault => {
+                InputNormalization::ModelDefault
+            }
+            AiSegmentationInputNormalizationInputNormalizationSettings::Percentile {
+                low,
+                high,
+            } => InputNormalization::Percentile {
+                low: low.clamp(0.0, 100.0),
+                high: high.clamp(0.0, 100.0),
+            },
+            AiSegmentationInputNormalizationInputNormalizationSettings::Off => {
+                InputNormalization::Off
+            }
+        }
+    }
+}
+
 impl From<ObjectClassifyObjectsIntensityComparisonSettings> for IntensityComparison {
     fn from(_s: ObjectClassifyObjectsIntensityComparisonSettings) -> Self {
         match _s {
@@ -956,6 +976,7 @@ impl From<CellposeSettings> for Cellpose {
             flow_threshold: _s.flow_threshold.clamp(0.0, 10.0),
             cellpose_postprocessing: _s.cellpose_postprocessing,
             replicate_gray_channel: _s.replicate_gray_channel,
+            normalization: InputNormalization::from(_s.normalization),
         }
     }
 }
@@ -1598,6 +1619,7 @@ impl From<StardistSettings> for Stardist {
             probability_threshold: _s.probability_threshold.clamp(0.0, 1.0),
             nms_threshold: _s.nms_threshold.clamp(0.0, 1.0),
             piece_size: PieceSize::from(_s.piece_size),
+            normalization: InputNormalization::from(_s.normalization),
         }
     }
 }
@@ -1769,6 +1791,7 @@ impl From<UNetSettings> for UNet {
             boundary_channel: _s.boundary_channel,
             boundary_threshold: _s.boundary_threshold.clamp(0.0, 1.0),
             piece_size: PieceSize::from(_s.piece_size),
+            normalization: InputNormalization::from(_s.normalization),
         }
     }
 }
@@ -1839,30 +1862,6 @@ impl From<WeightedDeviationSettings> for WeightedDeviation {
         WeightedDeviation {
             kernel_size: _s.kernel_size,
             sigma: _s.sigma,
-        }
-    }
-}
-
-impl From<YoloClassMappingSettings> for YoloClassMapping {
-    fn from(_s: YoloClassMappingSettings) -> Self {
-        YoloClassMapping {
-            model_class: _s.model_class,
-            segmentation_class: _s.segmentation_class,
-        }
-    }
-}
-
-impl From<Yolov5Settings> for Yolov5 {
-    fn from(_s: Yolov5Settings) -> Self {
-        Yolov5 {
-            model_path: _s.model_path,
-            class_mapping: _s.class_mapping.into_iter().map(|v| v.into()).collect(),
-            confidence_threshold: _s.confidence_threshold.clamp(0.0, 1.0),
-            iou_threshold: _s.iou_threshold.clamp(0.0, 1.0),
-            mask_threshold: _s.mask_threshold.clamp(0.0, 1.0),
-            image_scale: _s.image_scale.clamp(0.05, 4.0),
-            window_overlap: _s.window_overlap,
-            min_object_size: _s.min_object_size,
         }
     }
 }
@@ -2094,9 +2093,6 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         ))),
         PipelineCommand::WeightedDeviation(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::WeightedDeviation::from(settings),
-        ))),
-        PipelineCommand::Yolov5(settings) => Ok(PipelineStep::Image(Box::new(
-            crate::algos::Yolov5::from(settings),
         ))),
     }
 }

@@ -821,8 +821,19 @@ fn stardist_settings_convert_and_clamp_thresholds() {
         probability_threshold: -0.5,
         nms_threshold: 2.0,
         piece_size: AiSegmentationPieceSizePieceSizeSettings::Fixed { side: 99_999 },
+        normalization: AiSegmentationInputNormalizationInputNormalizationSettings::Percentile {
+            low: 2.0,
+            high: 99.5,
+        },
     };
     let result = Stardist::from(settings);
+    assert_eq!(
+        result.normalization,
+        InputNormalization::Percentile {
+            low: 2.0,
+            high: 99.5
+        }
+    );
     assert_eq!(
         result.piece_size,
         PieceSize::Fixed { side: 99_999 },
@@ -923,8 +934,10 @@ fn unet_settings_convert_and_clamp_probability_threshold() {
         boundary_channel: 0,
         boundary_threshold: -1.0,
         piece_size: AiSegmentationPieceSizePieceSizeSettings::Fixed { side: 100 },
+        normalization: AiSegmentationInputNormalizationInputNormalizationSettings::Off,
     };
     let result = UNet::from(settings);
+    assert_eq!(result.normalization, InputNormalization::Off);
     assert_eq!(
         result.piece_size,
         PieceSize::Fixed { side: 100 },
@@ -1527,19 +1540,6 @@ fn segmentation_mapping_settings_convert_both_classes() {
     assert_eq!(mapping.segmentation_class, SegmentationClass(7));
 }
 
-#[test]
-fn yolo_class_mapping_settings_convert_both_classes() {
-    let mapping = YoloClassMapping::from(YoloClassMappingSettings {
-        model_class: 12,
-        segmentation_class: SegmentationClass(5),
-    });
-    assert_eq!(mapping.model_class, 12);
-    assert_eq!(mapping.segmentation_class, SegmentationClass(5));
-}
-
-/// A U-Net or StarDist step of a project saved before the piece size
-/// existed loads with the default (Auto) - the field is `optional`. In the
-/// project file it is `{"type": "AUTO"}` or `{"type": "FIXED", "side": 1024}`.
 #[test]
 fn ai_steps_saved_without_a_piece_size_get_auto() {
     let mut unet = serde_json::to_value(UNetSettings::default()).unwrap();

@@ -101,7 +101,7 @@ fn ai_segmentation_reports_the_class_it_writes() {
 }
 
 #[test]
-fn classifier_and_yolo_mappings_report_their_target_classes() {
+fn classifier_mappings_report_their_target_classes() {
     let pixel = PipelineCommand::PixelClassifier(PixelClassifierSettings {
         segmentation_mapping: vec![
             // The model's own classes (1, 2) are `ModelSegmentationClass`.
@@ -117,15 +117,6 @@ fn classifier_and_yolo_mappings_report_their_target_classes() {
         ..Default::default()
     });
     assert_eq!(sorted(pixel), [6, 7].map(ObjectClass::Global));
-
-    let yolo = PipelineCommand::Yolov5(Yolov5Settings {
-        class_mapping: vec![YoloClassMappingSettings {
-            model_class: 0,
-            segmentation_class: SegmentationClass(8),
-        }],
-        ..Default::default()
-    });
-    assert_eq!(sorted(yolo), [ObjectClass::Global(8)]);
 
     let ai = PipelineCommand::AiObjectClassifier(AiObjectClassifierSettings {
         origin_segmentation: vec![SegmentationClass(1)],
