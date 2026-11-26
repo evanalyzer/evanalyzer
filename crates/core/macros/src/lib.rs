@@ -49,7 +49,6 @@ pub fn commands_meta_derive(input: TokenStream) -> TokenStream {
         // the field name).
         "key",
         "unit",
-        "regex",
         "display_name",
         "summary",
         "optional",

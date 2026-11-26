@@ -819,7 +819,6 @@ struct FieldMetadata {
     /// the Rust field can be renamed without breaking saved projects/scripts.
     key: Option<String>,
     unit: Option<String>,
-    regex: Option<String>,
     display_name: Option<String>,
     summary: bool,
     optional: bool,
@@ -890,7 +889,6 @@ impl Default for FieldMetadata {
             step: None,
             key: None,
             unit: None,
-            regex: None,
             display_name: None,
             summary: false,
             optional: false,
