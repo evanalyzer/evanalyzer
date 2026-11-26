@@ -14,7 +14,7 @@
 //! TorchScript, in git history before 2026-11-25), to compare against it:
 //!
 //!   cargo build-linux -p evanalyzer_nn --example bench_unet
-//!   target/x86_64-unknown-linux-gnu/release/examples/bench_unet <features> <side> [threads] [flex|wgpu|dgpu|igpu|vulkan] [f32|f16]
+//!   target/x86_64-unknown-linux-gnu/release/examples/bench_unet <features> <side> [threads] [flex|wgpu|dgpu|igpu] [f32|f16]
 //!
 //! First a 64² run (sets the backend up), then two rounds on `side`²: wall
 //! time, CPU time, peak resident memory above what the process had before
@@ -68,7 +68,6 @@ fn main() {
         "wgpu" => Device::wgpu(DeviceKind::default()),
         "dgpu" => Device::wgpu(DeviceKind::DiscreteGpu(0)),
         "igpu" => Device::wgpu(DeviceKind::IntegratedGpu(0)),
-        "vulkan" => Device::vulkan(DeviceKind::DiscreteGpu(0)),
         other => panic!("unknown device {other}"),
     };
     // Convolutions in f16 (GPU tensor cores).

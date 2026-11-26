@@ -49,5 +49,8 @@ RUN cargo install --locked cargo-xwin --version 0.23.1
 RUN apt-get update && apt-get install -y clang llvm build-essential binutils lld mold \
     && if [ "$(dpkg --print-architecture)" = amd64 ]; then apt-get install -y gcc-aarch64-linux-gnu; fi \
     && rm -rf /var/lib/apt/lists/*
+# turso (CubeCL's on-disk GPU cache) compiles a Windows version resource in its
+# build script and looks for `rc.exe` on PATH; llvm-rc reads the same flags.
+RUN ln -s /usr/bin/llvm-rc /usr/local/bin/rc.exe
 RUN rustup target add x86_64-pc-windows-msvc aarch64-pc-windows-msvc aarch64-unknown-linux-gnu
 RUN ldconfig

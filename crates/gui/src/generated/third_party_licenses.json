@@ -657,7 +657,6 @@
         { "name": "svgtypes", "version": "0.16.1" },
         { "name": "swash", "version": "0.2.10" },
         { "name": "symlink", "version": "0.1.0" },
-        { "name": "syn", "version": "1.0.109" },
         { "name": "tar", "version": "0.4.46" },
         { "name": "tempfile", "version": "3.27.0" },
         { "name": "thread_local", "version": "1.1.10" },
@@ -983,7 +982,6 @@
         { "name": "cubecl-macros", "version": "0.11.4" },
         { "name": "cubecl-monitoring", "version": "0.11.4" },
         { "name": "cubecl-opt", "version": "0.11.4" },
-        { "name": "cubecl-spirv", "version": "0.11.4" },
         { "name": "cubecl-std", "version": "0.11.4" },
         { "name": "cubecl-zspace", "version": "0.11.4" },
         { "name": "cubek-attention", "version": "0.3.1" },
@@ -1061,7 +1059,6 @@
         { "name": "pin-project-internal", "version": "1.1.13" },
         { "name": "pin-project-lite", "version": "0.2.17" },
         { "name": "pin-project", "version": "1.1.13" },
-        { "name": "pliron-spirv", "version": "0.16.1+sdk-1.4.357.0" },
         { "name": "portable-atomic", "version": "1.15.0" },
         { "name": "prettyplease", "version": "0.2.37" },
         { "name": "prettyplease", "version": "0.3.0" },
@@ -1113,8 +1110,6 @@
         { "name": "time-core", "version": "0.1.9" },
         { "name": "time", "version": "0.3.55" },
         { "name": "tiny-xlib", "version": "0.2.5" },
-        { "name": "tracel-ash", "version": "0.39.5+sdk1.4.357" },
-        { "name": "tracel-rspirv", "version": "0.16.1+sdk-1.4.357.0" },
         { "name": "triple_arena", "version": "0.15.1" },
         { "name": "typed-index-collections", "version": "3.5.0" },
         { "name": "typed-path", "version": "0.13.0" },
@@ -1262,8 +1257,6 @@
     "name": "BSD 3-Clause \"New\" or \"Revised\" License",
     "text": "Copyright (c) <year> <owner>. \n\nRedistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:\n\n1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.\n\n2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.\n\n3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.\n\nTHIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS \"AS IS\" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.\n",
     "crates": [
-        { "name": "c2rust-bitfields-derive", "version": "0.20.0" },
-        { "name": "c2rust-bitfields", "version": "0.20.0" },
         { "name": "exr", "version": "1.74.2" },
         { "name": "sha1_smol", "version": "1.0.1" }
     ]

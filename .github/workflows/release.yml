@@ -303,6 +303,15 @@ jobs:
       - name: Unzip DuckDB Windows library
         run: unzip -q libs/libduckdb-windows-amd64.zip -d libs/libduckdb-windows-amd64
 
+      - name: Windows resource compiler
+        # turso (CubeCL's on-disk GPU cache) compiles a version resource in
+        # its build script and looks for `rc.exe` on PATH; llvm-rc reads the
+        # same flags.
+        run: |
+          mkdir -p "$RUNNER_TEMP/rc"
+          ln -sf "$(command -v llvm-rc)" "$RUNNER_TEMP/rc/rc.exe"
+          echo "$RUNNER_TEMP/rc" >> "$GITHUB_PATH"
+
       - name: Build
         run: cargo build-win --locked
 
@@ -588,6 +597,15 @@ jobs:
 
       - name: Unzip DuckDB Windows library
         run: unzip -q libs/libduckdb-windows-arm64.zip -d libs/libduckdb-windows-arm64
+
+      - name: Windows resource compiler
+        # turso (CubeCL's on-disk GPU cache) compiles a version resource in
+        # its build script and looks for `rc.exe` on PATH; llvm-rc reads the
+        # same flags.
+        run: |
+          mkdir -p "$RUNNER_TEMP/rc"
+          ln -sf "$(command -v llvm-rc)" "$RUNNER_TEMP/rc/rc.exe"
+          echo "$RUNNER_TEMP/rc" >> "$GITHUB_PATH"
 
       - name: Build
         # cargo-xwin's `clang` mode: ring always compiles with plain clang on

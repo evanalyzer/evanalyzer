@@ -69,8 +69,9 @@ safetensors = "0.8.0"
 # `std` and `optim`: MLP training. `persistence` + `cubecl`: the GPU's
 # autotune results and compiled kernels cached on disk
 # (`evanalyzer_nn::configure_gpu`). No `cpu` (CubeCL CPU links the C++ LLVM
-# library) - burn-flex is the CPU backend.
-burn = { version = "0.22.1", default-features = false, features = ["flex", "wgpu", "vulkan", "autotune", "fusion", "std", "optim", "persistence", "cubecl"] }
+# library) - burn-flex is the CPU backend. No `vulkan` (SPIR-V): measured no
+# faster than wgpu's default, and on macOS it needs the Vulkan SDK to build.
+burn = { version = "0.22.1", default-features = false, features = ["flex", "wgpu", "autotune", "fusion", "std", "optim", "persistence", "cubecl"] }
 # Its default features (std, simd, rayon): a multi-threaded CPU backend
 # without burn's own `std`.
 burn-flex = "0.22.1"

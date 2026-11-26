@@ -13,7 +13,7 @@
 //! features) on a `side`² image.
 //!
 //!   cargo build-linux -p evanalyzer_nn --example bench_ops
-//!   target/x86_64-unknown-linux-gnu/release/examples/bench_ops <side> [threads] [flex|wgpu|dgpu|igpu|vulkan]
+//!   target/x86_64-unknown-linux-gnu/release/examples/bench_ops <side> [threads] [flex|wgpu|dgpu|igpu]
 //!
 //! Each op runs once to warm up (kernel compilation, autotune), then
 //! `ROUNDS` times; the time per run includes summing the output and reading
@@ -122,7 +122,6 @@ fn main() {
         "wgpu" => Device::wgpu(DeviceKind::default()),
         "dgpu" => Device::wgpu(DeviceKind::DiscreteGpu(0)),
         "igpu" => Device::wgpu(DeviceKind::IntegratedGpu(0)),
-        "vulkan" => Device::vulkan(DeviceKind::DiscreteGpu(0)),
         other => panic!("unknown device {other}"),
     };
     let pool = rayon::ThreadPoolBuilder::new()
