@@ -13,7 +13,7 @@ use evanalyzer_nn::model::unet::{UNet as UNetModel, UNetParams};
 use evanalyzer_nn::{Image, Model, Normalization};
 use macros::CommandsMeta;
 
-use super::PieceSize;
+use super::{InputNormalization, PieceSize};
 
 use crate::{
     ai_devices,
@@ -111,6 +111,11 @@ pub struct UNet {
     /// in: smaller ones take less RAM, larger ones are faster.
     #[cmdsmeta(default = PieceSize::Auto, optional = true, visibility = Advanced)]
     pub piece_size: PieceSize,
+
+    /// How the image is scaled before the model sees it: by default as the
+    /// model file says (e.g. zero mean, unit variance over the tile).
+    #[cmdsmeta(default = InputNormalization::ModelDefault, optional = true, visibility = Advanced)]
+    pub normalization: InputNormalization,
 }
 
 /// What the network takes per pixel of the image it gets at once (see
@@ -136,7 +141,7 @@ impl ImageAlgorithm for UNet {
         let (width, height) = (size.width, size.height);
 
         let params = UNetParams {
-            normalization: Normalization::ModelDefault,
+            normalization: self.normalization.to_nn(),
             foreground_channel: self.foreground_channel.max(0) as usize,
             softmax: matches!(self.output_mode, UNetOutputMode::SoftmaxClasses),
             boundary_channel: usize::try_from(self.boundary_channel).ok(),
@@ -232,6 +237,7 @@ mod tests {
             boundary_channel: -1,
             boundary_threshold: 0.5,
             piece_size: PieceSize::Auto,
+            normalization: InputNormalization::ModelDefault,
         }
     }
 

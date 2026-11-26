@@ -636,6 +636,44 @@ pub enum MathSaveImageImageSourceSettings {
     SegmentationMask,
 }
 
+/// How the image is scaled before an AI model sees it - computed over each
+/// tile (an image up to 4096 x 4096 px is one tile; on a whole slide every
+/// tile is scaled by its own pixels, so a tile of mostly background has its
+/// noise stretched).
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AiSegmentationInputNormalizationInputNormalizationSettings {
+    /// What the model was trained with: StarDist the tile's 1st and 99.8th
+    /// percentile, Cellpose its 1st and 99th, a U-Net what its model file
+    /// says (e.g. zero mean, unit variance).
+    #[serde(
+        alias = "model-default",
+        alias = "modelDefault",
+        alias = "model_default"
+    )]
+    ModelDefault,
+    /// These percentiles of the tile become 0 and 1.
+    #[serde(rename_all = "camelCase")]
+    #[serde(alias = "percentile")]
+    Percentile {
+        /// The percentile that becomes 0.
+        #[schemars(range(min = 0, max = 100))]
+        low: f32,
+        /// The percentile that becomes 1.
+        #[schemars(range(min = 0, max = 100))]
+        high: f32,
+    },
+    /// The pixels as read (scaled by their bit depth to 0..1).
+    #[serde(alias = "off")]
+    Off,
+}
+
+impl Default for AiSegmentationInputNormalizationInputNormalizationSettings {
+    fn default() -> Self {
+        Self::ModelDefault {}
+    }
+}
+
 /// How an [`IntensityFilter`] compares the object's metric with its threshold.
 /// Both comparisons are strict: an object exactly at the threshold matches
 /// neither.
@@ -2984,6 +3022,10 @@ pub struct SegmentationMappingSettings {
 fn _serde_default_stardist_piece_size() -> AiSegmentationPieceSizePieceSizeSettings {
     AiSegmentationPieceSizePieceSizeSettings::Auto
 }
+fn _serde_default_stardist_normalization()
+-> AiSegmentationInputNormalizationInputNormalizationSettings {
+    AiSegmentationInputNormalizationInputNormalizationSettings::ModelDefault
+}
 /// Instance segmentation with a pretrained StarDist 2D model, from an
 /// EVAnalyzer model file (`.safetensors`, converted once from StarDist's own,
 /// e.g. `2D_versatile_fluo` - `crates/nn`).
@@ -3019,6 +3061,11 @@ pub struct StardistSettings {
     /// in: smaller ones take less RAM, larger ones are faster.
     #[serde(default = "_serde_default_stardist_piece_size")]
     pub piece_size: AiSegmentationPieceSizePieceSizeSettings,
+    /// How the image is scaled before the model sees it: by default the
+    /// tile's 1st and 99.8th percentile become 0 and 1, as StarDist's
+    /// models were trained.
+    #[serde(default = "_serde_default_stardist_normalization")]
+    pub normalization: AiSegmentationInputNormalizationInputNormalizationSettings,
 }
 
 impl Default for StardistSettings {
@@ -3029,6 +3076,7 @@ impl Default for StardistSettings {
             probability_threshold: 0.5f32,
             nms_threshold: 0.3f32,
             piece_size: AiSegmentationPieceSizePieceSizeSettings::Auto,
+            normalization: AiSegmentationInputNormalizationInputNormalizationSettings::ModelDefault,
         }
     }
 }
@@ -3110,6 +3158,10 @@ impl Default for ThresholdEntrySettings {
 fn _serde_default_unet_piece_size() -> AiSegmentationPieceSizePieceSizeSettings {
     AiSegmentationPieceSizePieceSizeSettings::Auto
 }
+fn _serde_default_unet_normalization() -> AiSegmentationInputNormalizationInputNormalizationSettings
+{
+    AiSegmentationInputNormalizationInputNormalizationSettings::ModelDefault
+}
 /// Semantic segmentation with a pretrained U-Net (torch-em `UNet2d`, the
 /// architecture of bioimage.io's U-Nets), from an EVAnalyzer model file
 /// (`.safetensors`, converted once from the original - `crates/nn`).
@@ -3174,6 +3226,10 @@ pub struct UNetSettings {
     /// in: smaller ones take less RAM, larger ones are faster.
     #[serde(default = "_serde_default_unet_piece_size")]
     pub piece_size: AiSegmentationPieceSizePieceSizeSettings,
+    /// How the image is scaled before the model sees it: by default as the
+    /// model file says (e.g. zero mean, unit variance over the tile).
+    #[serde(default = "_serde_default_unet_normalization")]
+    pub normalization: AiSegmentationInputNormalizationInputNormalizationSettings,
 }
 
 impl Default for UNetSettings {
@@ -3187,6 +3243,7 @@ impl Default for UNetSettings {
             boundary_channel: -1i32,
             boundary_threshold: 0.5f32,
             piece_size: AiSegmentationPieceSizePieceSizeSettings::Auto,
+            normalization: AiSegmentationInputNormalizationInputNormalizationSettings::ModelDefault,
         }
     }
 }

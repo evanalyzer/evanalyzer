@@ -22,7 +22,7 @@ mod script;
 mod segmentation;
 mod spartial_transform;
 
-pub use self::ai_segmentation::PieceSize;
+pub use self::ai_segmentation::{InputNormalization, PieceSize};
 pub use self::ai_segmentation::cellpose::Cellpose;
 pub use self::ai_segmentation::pixel_classifier::PixelClassifier;
 pub use self::ai_segmentation::pixel_classifier::SegmentationMapping;

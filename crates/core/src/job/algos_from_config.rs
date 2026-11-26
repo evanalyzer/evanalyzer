@@ -335,6 +335,26 @@ impl From<MathSaveImageImageSourceSettings> for ImageSource {
     }
 }
 
+impl From<AiSegmentationInputNormalizationInputNormalizationSettings> for InputNormalization {
+    fn from(_s: AiSegmentationInputNormalizationInputNormalizationSettings) -> Self {
+        match _s {
+            AiSegmentationInputNormalizationInputNormalizationSettings::ModelDefault => {
+                InputNormalization::ModelDefault
+            }
+            AiSegmentationInputNormalizationInputNormalizationSettings::Percentile {
+                low,
+                high,
+            } => InputNormalization::Percentile {
+                low: low.clamp(0.0, 100.0),
+                high: high.clamp(0.0, 100.0),
+            },
+            AiSegmentationInputNormalizationInputNormalizationSettings::Off => {
+                InputNormalization::Off
+            }
+        }
+    }
+}
+
 impl From<ObjectClassifyObjectsIntensityComparisonSettings> for IntensityComparison {
     fn from(_s: ObjectClassifyObjectsIntensityComparisonSettings) -> Self {
         match _s {
@@ -1598,6 +1618,7 @@ impl From<StardistSettings> for Stardist {
             probability_threshold: _s.probability_threshold.clamp(0.0, 1.0),
             nms_threshold: _s.nms_threshold.clamp(0.0, 1.0),
             piece_size: PieceSize::from(_s.piece_size),
+            normalization: InputNormalization::from(_s.normalization),
         }
     }
 }
@@ -1769,6 +1790,7 @@ impl From<UNetSettings> for UNet {
             boundary_channel: _s.boundary_channel,
             boundary_threshold: _s.boundary_threshold.clamp(0.0, 1.0),
             piece_size: PieceSize::from(_s.piece_size),
+            normalization: InputNormalization::from(_s.normalization),
         }
     }
 }

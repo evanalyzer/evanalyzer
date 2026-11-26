@@ -821,8 +821,19 @@ fn stardist_settings_convert_and_clamp_thresholds() {
         probability_threshold: -0.5,
         nms_threshold: 2.0,
         piece_size: AiSegmentationPieceSizePieceSizeSettings::Fixed { side: 99_999 },
+        normalization: AiSegmentationInputNormalizationInputNormalizationSettings::Percentile {
+            low: 2.0,
+            high: 99.5,
+        },
     };
     let result = Stardist::from(settings);
+    assert_eq!(
+        result.normalization,
+        InputNormalization::Percentile {
+            low: 2.0,
+            high: 99.5
+        }
+    );
     assert_eq!(
         result.piece_size,
         PieceSize::Fixed { side: 99_999 },
@@ -923,8 +934,10 @@ fn unet_settings_convert_and_clamp_probability_threshold() {
         boundary_channel: 0,
         boundary_threshold: -1.0,
         piece_size: AiSegmentationPieceSizePieceSizeSettings::Fixed { side: 100 },
+        normalization: AiSegmentationInputNormalizationInputNormalizationSettings::Off,
     };
     let result = UNet::from(settings);
+    assert_eq!(result.normalization, InputNormalization::Off);
     assert_eq!(
         result.piece_size,
         PieceSize::Fixed { side: 100 },

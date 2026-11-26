@@ -7,39 +7,87 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 //!
-//! StarDist 2D as the libtorch engine ran it (removed `crates/ai/src/torch/stardist.rs`):
-//! the object probability and the ray distances per grid cell. The tile is
-//! padded at the end (mirrored, as StarDist) to the network's multiple, run
-//! whole or in pieces (`crate::pieces`, the receptive field probed once),
-//! and the output cropped to the image's grid cells: `side / grid` of them
-//! (rounded down, as before - StarDist itself keeps a last partial cell).
-//! The star-convex polygons are core's.
+//! StarDist 2D as the libtorch engine ran it (removed `crates/ai/src/torch/stardist.rs`),
+//! in three steps ([`Model`]):
+//!
+//! - `pre`: the image checked, the percentiles of the tile computed for
+//!   csbdeep's normalization ([`pre`]);
+//! - `infer`: padded at the end (mirrored, as StarDist) to the network's
+//!   multiple, normalized on the way, run whole or in pieces
+//!   (`crate::pieces`, the receptive field probed once), cropped to the
+//!   image's grid cells: `side / grid` of them (rounded down, as before -
+//!   StarDist itself keeps a last partial cell) - the object probability and
+//!   the ray distances per grid cell ([`infer`]);
+//! - `post`: star-convex polygons per candidate cell, non-maximum
+//!   suppression, rasterized into instance labels ([`post`]).
 //!
 //! The model file (`crate::weights`): architecture `stardist2d`, see
 //! `config.rs`.
 
 use crate::errors::NnError;
-use crate::model::{Image, RawModel};
-use crate::pieces::{self, Pieces, Planes, pad_plane};
-use crate::weights::ModelFile;
+use crate::model::{Image, Model, Normalization, Written};
+use crate::pieces::Pieces;
+use crate::weights::{ModelFile, ModelMetadata};
 use burn::tensor::{Device, Tensor, TensorData};
 use std::path::Path;
 use std::sync::OnceLock;
 
 mod config;
+mod infer;
 mod network;
+mod post;
+mod pre;
 
 pub use config::{ARCH, ARCH_VERSION, StarDistConfig};
 
-/// What a step chooses per run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StarDistSettings {
-    /// How large a tile runs in pieces.
-    pub pieces: Pieces,
+/// The percentiles [`Normalization::ModelDefault`] stands for: StarDist's
+/// examples (`normalize(img, 1, 99.8)`), which its pretrained models were
+/// trained with.
+pub const DEFAULT_PERCENTILES: (f64, f64) = (1.0, 99.8);
+
+/// What a StarDist's model file says without its weights.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StarDistHeader {
+    pub config: StarDistConfig,
 }
 
+impl StarDistHeader {
+    fn from_metadata(metadata: &ModelMetadata) -> Result<Self, NnError> {
+        metadata.expect_arch(ARCH, ARCH_VERSION)?;
+        let config: StarDistConfig = serde_json::from_str(&metadata.config)
+            .map_err(|e| NnError::InvalidModelFile(format!("StarDist config: {e}")))?;
+        config.check()?;
+        Ok(Self { config })
+    }
+}
+
+/// What a step chooses per run.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StarDistParams {
+    pub normalization: Normalization,
+    /// How large a tile runs in pieces.
+    pub pieces: Pieces,
+    /// Probability from which a grid cell is a candidate object centre.
+    pub probability_threshold: f32,
+    /// Pixel overlap (intersection / union) above which a lower-scoring
+    /// candidate is suppressed by an overlapping higher-scoring one.
+    pub nms_threshold: f32,
+}
+
+/// The tile as the network gets it - made by `pre` only.
+pub struct StarDistInput<'a> {
+    pixels: &'a [f32],
+    width: usize,
+    height: usize,
+    channels: usize,
+    /// Applied while each piece is copied for the network.
+    normalization: Option<pre::Affine>,
+    pieces: Pieces,
+}
+
+/// What the network gives back.
 #[derive(Debug, Clone, PartialEq)]
-pub struct StarDistOutput {
+pub struct StarDistRaw {
     /// `grid_height * grid_width` probabilities.
     pub prob: Vec<f32>,
     /// `n_rays` planes of ray distances, each `grid_height * grid_width`.
@@ -47,6 +95,13 @@ pub struct StarDistOutput {
     pub grid_height: usize,
     pub grid_width: usize,
     pub n_rays: usize,
+}
+
+/// The tile's size, for `post`.
+#[derive(Debug, Clone, Copy)]
+pub struct StarDistPlan {
+    width: usize,
+    height: usize,
 }
 
 pub struct StarDist {
@@ -60,11 +115,6 @@ pub struct StarDist {
     /// CPU: the pieces must fit into it (`pieces::fit_gpu`).
     gpu_memory: Option<u64>,
 }
-
-/// What the network takes on the GPU per pixel of its input, per 32 filters
-/// of its first level: half of the 400 bytes the RAM plan has in f32 for
-/// `2D_versatile_fluo` (32 filters) - f16.
-const GPU_BYTES_PER_PIXEL_PER_32_FILTERS: f64 = 200.0;
 
 impl StarDist {
     pub fn config(&self) -> &StarDistConfig {
@@ -86,10 +136,7 @@ impl StarDist {
     /// A StarDist from a model file's bytes (see `config.rs`).
     pub fn from_bytes(bytes: &[u8], device: &Device) -> Result<Self, NnError> {
         let file = ModelFile::parse(bytes)?;
-        let metadata = file.expect_arch(ARCH, ARCH_VERSION)?;
-        let config: StarDistConfig = serde_json::from_str(&metadata.config)
-            .map_err(|e| NnError::InvalidModelFile(format!("StarDist config: {e}")))?;
-        config.check()?;
+        let StarDistHeader { config } = StarDistHeader::from_metadata(&file.metadata)?;
         let network = network::StarDistNet::load(&file.tensors, &config, device)?;
         Ok(Self {
             config,
@@ -125,112 +172,92 @@ impl StarDist {
         ))
     }
 
-    /// The network on one `width x height` image (`in_channels` planes),
-    /// padded at the end and cropped back: probability, then the rays.
-    fn predict(&self, pixels: &[f32], width: usize, height: usize) -> Result<Planes, NnError> {
-        let [div_y, div_x] = self.config.div_by();
-        let (pw, ph) = (
-            width.next_multiple_of(div_x),
-            height.next_multiple_of(div_y),
-        );
-        let (right, bottom) = (pw - width, ph - height);
-        let input = if (right, bottom) == (0, 0) {
-            pixels.to_vec()
-        } else {
-            let mut padded = Vec::with_capacity(self.config.in_channels * pw * ph);
-            for plane in pixels.chunks_exact(width * height) {
-                pad_plane(plane, width, height, (0, right, 0, bottom), &mut padded);
-            }
-            padded
-        };
-        let (prob, dist) = self.try_forward_raw(&input, ph, pw)?;
-        let [gy, gx] = self.config.grid;
-        let (ow, oh) = (pw / gx, ph / gy);
-        // The grid cells of the image itself (not of the padding).
-        let (grid_width, grid_height) = ((width / gx).clamp(1, ow), (height / gy).clamp(1, oh));
-        let crop = |plane: &[f32], out: &mut Vec<f32>| {
-            for y in 0..grid_height {
-                out.extend_from_slice(&plane[y * ow..y * ow + grid_width]);
-            }
-        };
-        let mut first = Vec::with_capacity(grid_width * grid_height);
-        crop(&prob, &mut first);
-        let mut rest = Vec::with_capacity(self.config.n_rays * grid_width * grid_height);
-        for ray in dist.chunks_exact(ow * oh) {
-            crop(ray, &mut rest);
+    /// What this StarDist's model file says without its weights.
+    pub fn to_header(&self) -> StarDistHeader {
+        StarDistHeader {
+            config: self.config.clone(),
         }
-        Ok(Planes {
-            planes: 1 + self.config.n_rays,
-            width: grid_width,
-            height: grid_height,
-            first,
-            rest,
-        })
     }
 }
 
-impl RawModel for StarDist {
-    type Settings = StarDistSettings;
-    type Output = StarDistOutput;
+/// `file`'s name in front of an invalid-file message.
+fn in_file(file: &Path) -> impl Fn(NnError) -> NnError + '_ {
+    move |e| match e {
+        NnError::InvalidModelFile(m) => {
+            NnError::InvalidModelFile(format!("{}: {m}", file.display()))
+        }
+        other => other,
+    }
+}
+
+impl Model for StarDist {
+    type Header = StarDistHeader;
+    type Params = StarDistParams;
+    type Input<'a> = StarDistInput<'a>;
+    type Raw = StarDistRaw;
+    type Plan = StarDistPlan;
+
+    /// Measured 0.37 KB for the layout of StarDist's `2D_versatile_fluo`
+    /// (BENCHMARK.md "AI models: RAM per inference").
+    const NET_BYTES_PER_PIXEL: f64 = 400.0;
+    /// The answer (probability and 32 rays per grid cell) and the
+    /// candidates' polygons and bit masks - ~100 bytes per pixel on cells of
+    /// 24 px (core's `tests::tile_ram`, a well-fitting model's outputs); more
+    /// candidates (a lower threshold, larger objects) take more.
+    const POST_BYTES_PER_PIXEL: f64 = 100.0;
+
+    fn header(file: &Path) -> Result<StarDistHeader, NnError> {
+        let metadata = crate::weights::read_header(file)?;
+        StarDistHeader::from_metadata(&metadata).map_err(in_file(file))
+    }
 
     fn load(file: &Path, device: &Device, gpu: bool) -> Result<Self, NnError> {
         let bytes = std::fs::read(file)?;
-        let mut net = Self::from_bytes(&bytes, device).map_err(|e| match e {
-            NnError::InvalidModelFile(m) => {
-                NnError::InvalidModelFile(format!("{}: {m}", file.display()))
-            }
-            other => other,
-        })?;
+        let mut net = Self::from_bytes(&bytes, device).map_err(in_file(file))?;
         net.set_half_convs(gpu);
         Ok(net)
     }
 
-    fn infer(
-        &self,
-        image: Image<'_>,
-        settings: &StarDistSettings,
-    ) -> Result<StarDistOutput, NnError> {
-        let (width, height, channels) = (image.width, image.height, image.channels);
-        if width == 0 || height == 0 {
-            return Err(NnError::InvalidInput("StarDist: an empty image".into()));
-        }
-        if channels != self.config.in_channels {
-            return Err(NnError::InvalidInput(format!(
-                "StarDist: the model takes {} channel(s), the image has {channels}",
-                self.config.in_channels
-            )));
-        }
-        let len = width * height * channels;
-        if image.data.len() < len {
-            return Err(NnError::InvalidInput(format!(
-                "StarDist: the image has {} values, {len} expected",
-                image.data.len()
-            )));
-        }
-        let pixels = &image.data[..len];
-        let predict = |p: &[f32], w: usize, h: usize| self.predict(p, w, h);
-        // The receptive field's halo (measured once).
-        let local_halo = || {
-            if let Some(halo) = self.halo.get() {
-                return Ok(*halo);
-            }
-            let halo = pieces::receptive_halo(channels, predict)?;
-            Ok(*self.halo.get_or_init(|| halo))
+    fn pre<'a>(
+        header: &StarDistHeader,
+        image: Image<'a>,
+        params: &StarDistParams,
+    ) -> Result<(StarDistInput<'a>, StarDistPlan), NnError> {
+        let pixels = pre::checked_pixels(&header.config, &image)?;
+        let normalization = pre::normalization(pixels, params.normalization);
+        let input = StarDistInput {
+            pixels,
+            width: image.width,
+            height: image.height,
+            channels: image.channels,
+            normalization,
+            pieces: params.pieces,
         };
-        let gpu_bytes =
-            GPU_BYTES_PER_PIXEL_PER_32_FILTERS * self.config.unet_filter_base as f64 / 32.0;
-        let fitted = pieces::fit_gpu(settings.pieces, self.gpu_memory, gpu_bytes, width, height);
-        let plan = pieces::plan(width, height, fitted, local_halo, "StarDist")?;
-        let planes = pieces::run_fitting(
-            pixels, channels, width, height, plan, local_halo, predict, "StarDist",
-        )?;
-        Ok(StarDistOutput {
-            prob: planes.first,
-            dist: planes.rest,
-            grid_height: planes.height,
-            grid_width: planes.width,
-            n_rays: planes.planes - 1,
-        })
+        let plan = StarDistPlan {
+            width: image.width,
+            height: image.height,
+        };
+        Ok((input, plan))
+    }
+
+    fn infer(&self, input: &StarDistInput<'_>) -> Result<StarDistRaw, NnError> {
+        let planes = infer::in_pieces(self, input)?;
+        Ok(infer::raw(planes))
+    }
+
+    fn post(
+        raw: StarDistRaw,
+        plan: StarDistPlan,
+        params: &StarDistParams,
+        out: &mut [u32],
+    ) -> Result<Written, NnError> {
+        let (width, height) = (plan.width, plan.height);
+        post::check_size(out, width, height)?;
+        let candidates = post::candidates(&raw, width, height, params.probability_threshold);
+        drop(raw);
+        let kept = post::non_max_suppression(candidates, params.nms_threshold);
+        let objects = post::rasterize(&kept, width, out);
+        Ok(Written::Instances(objects))
     }
 }
 

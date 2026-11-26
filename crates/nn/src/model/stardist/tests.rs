@@ -36,10 +36,24 @@ fn image(data: &[f32], width: usize, height: usize) -> Image<'_> {
     }
 }
 
-fn whole() -> StarDistSettings {
-    StarDistSettings {
-        pieces: Pieces::fixed(2048),
+/// The whole tile at once, the pixels as they are (as before the move).
+fn whole() -> StarDistParams {
+    in_pieces(2048)
+}
+
+fn in_pieces(side: usize) -> StarDistParams {
+    StarDistParams {
+        normalization: Normalization::None,
+        pieces: Pieces::fixed(side),
+        probability_threshold: 0.5,
+        nms_threshold: 0.3,
     }
+}
+
+/// `pre` and `infer`, as the engine runs them (here without a slot).
+fn raw(net: &StarDist, image: Image<'_>, params: &StarDistParams) -> Result<StarDistRaw, NnError> {
+    let (input, _) = StarDist::pre(&net.to_header(), image, params)?;
+    net.infer(&input)
 }
 
 /// Any size gives `side / grid` cells (rounded down, at least 1) and every
@@ -50,7 +64,7 @@ fn any_size_gives_its_grid_cells() {
         let net = tiny_model(grid);
         for (w, h) in [(1, 1), (5, 3), (37, 23), (64, 48)] {
             let pixels = cells(w, h);
-            let out = net.infer(image(&pixels, w, h), &whole()).unwrap();
+            let out = raw(&net, image(&pixels, w, h), &whole()).unwrap();
             let (gw, gh) = ((w / grid[1]).max(1), (h / grid[0]).max(1));
             assert_eq!(
                 (out.grid_width, out.grid_height, out.n_rays),
@@ -70,15 +84,8 @@ fn pieces_give_the_whole_tile() {
     let net = tiny_model([2, 2]);
     let (w, h) = (600, 300);
     let pixels = cells(w, h);
-    let whole_tile = net.infer(image(&pixels, w, h), &whole()).unwrap();
-    let pieces = net
-        .infer(
-            image(&pixels, w, h),
-            &StarDistSettings {
-                pieces: Pieces::fixed(256),
-            },
-        )
-        .unwrap();
+    let whole_tile = raw(&net, image(&pixels, w, h), &whole()).unwrap();
+    let pieces = raw(&net, image(&pixels, w, h), &in_pieces(256)).unwrap();
     assert!(net.halo.get().copied().flatten().is_some(), "measured");
     assert_eq!(
         (pieces.grid_width, pieces.grid_height),
@@ -108,7 +115,7 @@ fn wrong_input_and_misshaped_files_are_refused() {
         ..image(&[], 4, 4)
     };
     assert!(matches!(
-        net.infer(two, &whole()),
+        raw(&net, two, &whole()),
         Err(NnError::InvalidInput(_))
     ));
     let config = StarDistConfig {
@@ -185,14 +192,7 @@ fn real_stardist_gives_stardists_output() {
             shape["grid_height"].as_u64().unwrap() as usize,
         );
         let start = std::time::Instant::now();
-        let out = net
-            .infer(
-                image(&input, w, h),
-                &StarDistSettings {
-                    pieces: Pieces::fixed(piece),
-                },
-            )
-            .unwrap();
+        let out = raw(&net, image(&input, w, h), &in_pieces(piece)).unwrap();
         let secs = start.elapsed().as_secs_f64();
         let (gw, gh) = (out.grid_width, out.grid_height);
         assert!(
@@ -246,14 +246,7 @@ fn real_stardist_in_f16_on_the_gpu_stays_within_f16_rounding() {
             .unwrap();
     let egw = shape["grid_width"].as_u64().unwrap() as usize;
     let egh = shape["grid_height"].as_u64().unwrap() as usize;
-    let out = net
-        .infer(
-            image(&input, w, h),
-            &StarDistSettings {
-                pieces: Pieces::fixed(2048),
-            },
-        )
-        .unwrap();
+    let out = raw(&net, image(&input, w, h), &in_pieces(2048)).unwrap();
     let (gw, gh) = (out.grid_width, out.grid_height);
     let (mut prob, mut dist, mut flips) = (0.0f32, 0.0f32, 0);
     for plane in 0..=out.n_rays {
@@ -273,4 +266,89 @@ fn real_stardist_in_f16_on_the_gpu_stays_within_f16_rounding() {
     }
     eprintln!("f16: probability {prob:.2e}, distances {dist:.2e}, flips {flips}");
     assert!(prob < 5e-3 && dist < 0.1 && flips as f64 <= 2e-4 * (gw * gh) as f64);
+}
+
+/// Normalized while each piece is copied for the network: the same answer,
+/// to the bit, as the tile normalized up front (csbdeep's percentiles) and
+/// run without - and the default is StarDist's 1 / 99.8.
+#[test]
+fn normalizing_on_the_way_equals_normalizing_up_front() {
+    let net = tiny_model([2, 2]);
+    let (w, h) = (600, 300);
+    let pixels: Vec<f32> = cells(w, h).iter().map(|v| v * 0.05 + 0.01).collect();
+    let range = crate::libs::percentile::percentiles(&pixels, &[1.0, 99.8]).unwrap();
+    let affine = pre::Affine {
+        offset: range[0],
+        scale: 1.0 / (range[1] - range[0] + 1e-20),
+    };
+    let mut normalized = pixels.clone();
+    affine.apply(&mut normalized);
+    let up_front = raw(&net, image(&normalized, w, h), &in_pieces(256)).unwrap();
+    let default = StarDistParams {
+        normalization: Normalization::ModelDefault,
+        ..in_pieces(256)
+    };
+    assert_eq!(raw(&net, image(&pixels, w, h), &default).unwrap(), up_front);
+    let explicit = StarDistParams {
+        normalization: Normalization::Percentile {
+            low: 1.0,
+            high: 99.8,
+        },
+        ..in_pieces(256)
+    };
+    assert_eq!(
+        raw(&net, image(&pixels, w, h), &explicit).unwrap(),
+        up_front
+    );
+}
+
+/// Through the engine: pre, infer in a slot, post - labels 1..=n where the
+/// candidates are, the same as post on `infer`'s answer.
+#[test]
+fn the_engine_runs_pre_infer_and_post() {
+    use crate::runtime::{DeviceSelection, Engine, EngineConfig};
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("stardist.safetensors");
+    std::fs::write(&path, stardist_file(&tiny_config([2, 2]))).unwrap();
+    assert_eq!(
+        StarDist::header(&path).unwrap(),
+        tiny_model([2, 2]).to_header()
+    );
+    let engine = Engine::new(&EngineConfig {
+        devices: DeviceSelection::Cpu,
+        gpu_slots: 1,
+        cores: 2,
+    });
+    let (w, h) = (64, 48);
+    let pixels = cells(w, h);
+    let params = StarDistParams {
+        probability_threshold: 0.0,
+        ..whole()
+    };
+    let mut out = vec![7u32; w * h];
+    let written = engine
+        .run::<StarDist>(&path, image(&pixels, w, h), &params, &mut out)
+        .unwrap();
+    let Written::Instances(n) = written else {
+        panic!("{written:?}")
+    };
+    assert!(n > 0, "threshold 0: candidates everywhere");
+    assert!(out.iter().all(|&l| l <= n));
+    let answer = raw(&tiny_model([2, 2]), image(&pixels, w, h), &params).unwrap();
+    let plan = StarDistPlan {
+        width: w,
+        height: h,
+    };
+    let mut expected = vec![0u32; w * h];
+    StarDist::post(answer, plan, &params, &mut expected).unwrap();
+    assert_eq!(out, expected);
+    assert!(matches!(
+        StarDist::post(
+            raw(&tiny_model([2, 2]), image(&pixels, w, h), &params).unwrap(),
+            plan,
+            &params,
+            &mut [0; 5],
+        ),
+        Err(NnError::InvalidInput(_))
+    ));
 }
