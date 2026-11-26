@@ -91,6 +91,20 @@ impl FileSystem for RemoteFiles {
         }
     }
 
+    fn read_file_start(&self, path: &Path, len: usize) -> Result<Vec<u8>, InternalErrors> {
+        let request = Request::ReadFileStart {
+            path: path.to_path_buf(),
+            len: len as u64,
+        };
+        match self.call(request, Vec::new())? {
+            Frame {
+                msg: Reply::FileData,
+                mut blobs,
+            } if blobs.len() == 1 => Ok(blobs.remove(0)),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
     fn write_file(&self, path: &Path, data: &[u8]) -> Result<(), InternalErrors> {
         let request = Request::WriteFile {
             path: path.to_path_buf(),

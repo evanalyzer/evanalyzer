@@ -126,27 +126,60 @@ const MAX_HEADER_BYTES: u64 = 100_000_000;
 /// before an engine slot is taken.
 pub fn read_header(path: &Path) -> Result<ModelMetadata, NnError> {
     use std::io::Read;
-    let invalid = |why: String| NnError::InvalidModelFile(format!("{}: {why}", path.display()));
+    let in_file = |e: NnError| match e {
+        NnError::InvalidModelFile(m) => {
+            NnError::InvalidModelFile(format!("{}: {m}", path.display()))
+        }
+        other => other,
+    };
     let mut file = std::fs::File::open(path)?;
-    let mut length = [0u8; 8];
-    file.read_exact(&mut length)
-        .map_err(|_| invalid("no safetensors file (too short)".into()))?;
+    let mut start = [0u8; 8];
+    file.read_exact(&mut start)
+        .map_err(|_| in_file(not_safetensors("too short")))?;
+    let size = header_size(&start).map_err(in_file)?;
+    let mut bytes = start.to_vec();
+    bytes.resize(size, 0);
+    file.read_exact(&mut bytes[8..])
+        .map_err(|_| in_file(not_safetensors("header cut off")))?;
+    parse_header(&bytes).map_err(in_file)
+}
+
+/// How many bytes from the start of a model file hold its header (the 8
+/// bytes of its length included), from at least its first 8 bytes.
+pub fn header_size(start: &[u8]) -> Result<usize, NnError> {
+    let length: [u8; 8] = start
+        .get(..8)
+        .and_then(|b| b.try_into().ok())
+        .ok_or_else(|| not_safetensors("too short"))?;
     let length = u64::from_le_bytes(length);
     if length > MAX_HEADER_BYTES {
-        return Err(invalid(format!("a header of {length} bytes")));
+        return Err(NnError::InvalidModelFile(format!(
+            "a header of {length} bytes"
+        )));
     }
-    let mut header = vec![0u8; length as usize];
-    file.read_exact(&mut header)
-        .map_err(|_| invalid("no safetensors file (header cut off)".into()))?;
-    let header: HashMap<String, serde_json::Value> = serde_json::from_slice(&header)
-        .map_err(|e| invalid(format!("no safetensors header: {e}")))?;
+    Ok(8 + length as usize)
+}
+
+/// The metadata from the start of a model file (at least
+/// [`header_size`] bytes; more are ignored) - for a file read elsewhere,
+/// e.g. through the app's file access.
+pub fn parse_header(bytes: &[u8]) -> Result<ModelMetadata, NnError> {
+    let size = header_size(bytes)?;
+    let header = bytes
+        .get(8..size)
+        .ok_or_else(|| not_safetensors("header cut off"))?;
+    let header: HashMap<String, serde_json::Value> = serde_json::from_slice(header)
+        .map_err(|e| NnError::InvalidModelFile(format!("no safetensors header: {e}")))?;
     let metadata: HashMap<String, String> = match header.get("__metadata__") {
-        Some(value) => {
-            serde_json::from_value(value.clone()).map_err(|e| invalid(format!("metadata: {e}")))?
-        }
+        Some(value) => serde_json::from_value(value.clone())
+            .map_err(|e| NnError::InvalidModelFile(format!("metadata: {e}")))?,
         None => HashMap::new(),
     };
     ModelMetadata::from_map(&metadata)
+}
+
+fn not_safetensors(why: &str) -> NnError {
+    NnError::InvalidModelFile(format!("no safetensors file ({why})"))
 }
 
 impl ModelMetadata {

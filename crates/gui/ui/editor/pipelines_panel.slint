@@ -1473,6 +1473,61 @@ component ParamNotes inherits VerticalLayout {
         wrap: word-wrap;
         height: self.preferred-height;
     }
+    // An AI model that fits the step: what it is (its file's header).
+    if p.model-card.kind != "": Rectangle {
+        background: Ink.field;
+        border-width: 1px;
+        border-color: Ink.border;
+        border-radius: Ink.radius-md;
+        accessible-role: groupbox;
+        accessible-label: "\{p.model-card.kind} model: \{p.model-card.name}";
+        VerticalLayout {
+            padding-left: 10px;
+            padding-right: 10px;
+            padding-top: 7px;
+            padding-bottom: 7px;
+            spacing: 3px;
+            HorizontalLayout {
+                spacing: 4px;
+                Text {
+                    text: "✓ \{p.model-card.kind}";
+                    font-size: Ink.fs-caption;
+                    font-weight: 600;
+                    color: Ink.ok;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: "· runs in this step";
+                    font-size: Ink.fs-caption;
+                    color: Ink.text-dim;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+            }
+            Text {
+                text: p.model-card.name;
+                font-size: Ink.fs-secondary;
+                font-weight: 500;
+                color: Ink.text;
+                wrap: word-wrap;
+                height: self.preferred-height;
+            }
+            if p.model-card.description != "": Text {
+                text: p.model-card.description;
+                font-size: Ink.fs-secondary;
+                color: Ink.text-dim;
+                wrap: word-wrap;
+                height: self.preferred-height;
+            }
+            if p.model-card.details != "": Text {
+                text: p.model-card.details;
+                font-size: Ink.fs-caption;
+                color: Ink.text-dim;
+                wrap: word-wrap;
+                height: self.preferred-height;
+            }
+        }
+    }
 }
 
 // One problem: what it is, where (`show-where`), and its fix. Clicking the

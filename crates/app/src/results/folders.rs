@@ -304,6 +304,9 @@ mod tests {
         fn read_file(&self, path: &Path) -> Result<Vec<u8>, InternalErrors> {
             self.inner.read_file(path)
         }
+        fn read_file_start(&self, path: &Path, len: usize) -> Result<Vec<u8>, InternalErrors> {
+            self.inner.read_file_start(path, len)
+        }
         fn write_file(&self, path: &Path, data: &[u8]) -> Result<(), InternalErrors> {
             self.inner.write_file(path, data)
         }

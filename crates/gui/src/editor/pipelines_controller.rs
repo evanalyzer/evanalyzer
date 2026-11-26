@@ -22,13 +22,14 @@ use crate::{
 use crate::{
     CardTable, CardTableRow, ClassItemData, CommandDef, CommandParameter, CommandPickerState,
     CreateModuleState, DefaultParamPreview, ExposeChoiceState, GlobalAppState, GroupItem,
-    InPlaceCopyState, LeafParam, ModuleBindingRow, ModuleClassRow, ModuleClassesState,
-    ModuleParamRow, ModuleSettingsState, ModuleUpdateState, ParamType, Pipeline,
-    PipelineCommand as SlintPipelineCommand, PipelineStatus, PipelinesPanelState, ProblemItem,
-    RunAnalysisState, SectionView, StepCategory, TunedSetting, UiState, WarningState,
+    InPlaceCopyState, LeafParam, ModelFileCard, ModuleBindingRow, ModuleClassRow,
+    ModuleClassesState, ModuleParamRow, ModuleSettingsState, ModuleUpdateState, ParamType,
+    Pipeline, PipelineCommand as SlintPipelineCommand, PipelineStatus, PipelinesPanelState,
+    ProblemItem, RunAnalysisState, SectionView, StepCategory, TunedSetting, UiState, WarningState,
 };
 use crate::{ResultItemData, ResultsListState};
 use evanalyzer_app::ai::learning::load_classifier_settings;
+use evanalyzer_app::ai::model_file;
 use evanalyzer_app::files::FileSystem;
 use evanalyzer_app::modules::ClassRole;
 use evanalyzer_app::modules::{step_roles, tracker_after};
@@ -130,6 +131,16 @@ pub struct PipelinesController {
     /// setting path, the parameters it could be added to).
     pending_expose: Mutex<Option<(u32, usize, String, Vec<ModuleParamKey>)>>,
 
+    /// What the AI steps' model files are (their headers, read once per
+    /// file and kind - a few hundred bytes each): the card below the file
+    /// field. A file that couldn't be read isn't kept (it may come).
+    model_notes: Mutex<
+        std::collections::HashMap<
+            (model_file::ModelKind, std::path::PathBuf),
+            model_file::ModelFileNote,
+        >,
+    >,
+
     /// The module library: `.evamodule` files of the templates folders,
     /// reloaded whenever the picker is opened.
     module_library: Mutex<Vec<(PathBuf, ModuleTemplate)>>,
@@ -187,6 +198,7 @@ impl PipelinesController {
             focus_controller,
             open_module: Mutex::new(None),
             pending_expose: Mutex::new(None),
+            model_notes: Mutex::default(),
             pending_in_place: Mutex::new(None),
             module_library: Mutex::new(Vec::new()),
             pending_update: Mutex::new(None),
@@ -3739,6 +3751,68 @@ impl PipelinesController {
     /// step's `model_path` and shows its metadata via the shared warning/info
     /// dialog - see `pipelines_controller`'s module doc comment on why this
     /// reuses that dialog instead of a bespoke one.
+    /// The card of an AI segmentation step's model file - or, for a file
+    /// that doesn't fit the step, its problem at the file field in `notes`.
+    fn step_model_card(
+        &self,
+        command: &evanalyzer_cfg::settings::pipeline_command::PipelineCommand,
+        notes: &mut std::collections::HashMap<String, ParamNote>,
+    ) -> Option<model_file::ModelCard> {
+        use evanalyzer_cfg::settings::pipeline_command::PipelineCommand as C;
+        let path = match command {
+            C::UNet(s) => &s.model_path,
+            C::Stardist(s) => &s.model_path,
+            C::Cellpose(s) => &s.model_path,
+            _ => return None,
+        };
+        let kind = model_file::ModelKind::of_step(command.name())?;
+        if path.as_os_str().is_empty() {
+            return None;
+        }
+        let (problem, error) = match self.model_file_note(kind, path) {
+            model_file::ModelFileNote::Fits(card) => return Some(card),
+            model_file::ModelFileNote::WrongKind(problem) => (problem, false),
+            model_file::ModelFileNote::Unusable(problem) => (problem, true),
+        };
+        let note = notes.entry("model_path".to_string()).or_default();
+        if note.problem.is_empty() {
+            note.problem = problem;
+            note.error = error;
+        }
+        None
+    }
+
+    /// What model file `path` of a step running `kind` models is - from its
+    /// header only (Cellpose-SAM's file is 1.2 GB), kept per file and kind.
+    fn model_file_note(
+        &self,
+        kind: model_file::ModelKind,
+        path: &std::path::Path,
+    ) -> model_file::ModelFileNote {
+        let key = (kind, path.to_path_buf());
+        if let Some(note) = self.model_notes.lock().unwrap().get(&key) {
+            return note.clone();
+        }
+        let backend = self.app_state.backend();
+        let files = backend.files();
+        let read = |len: usize| files.read_file_start(path, len).map_err(|e| e.to_string());
+        let start = read(model_file::FIRST_READ).and_then(|start| {
+            match model_file::header_size(&start) {
+                // A header larger than the first read: read again, all of it.
+                Ok(size) if size > start.len() && start.len() == model_file::FIRST_READ => {
+                    read(size)
+                }
+                _ => Ok(start),
+            }
+        });
+        let readable = start.is_ok();
+        let note = model_file::model_file_note(kind, path, start.as_deref().map_err(Clone::clone));
+        if readable {
+            self.model_notes.lock().unwrap().insert(key, note.clone());
+        }
+        note
+    }
+
     /// The modules opened in pipeline `pipeline_id`'s panel, outermost
     /// first; empty if none.
     fn open_module_path(&self, pipeline_id: u32) -> Vec<OpenModule> {
@@ -5354,6 +5428,8 @@ impl PipelinesController {
             problems: Vec<ProblemData>,
             /// Per setting (its name): what it's wired to, what a check found.
             notes: std::collections::HashMap<String, ParamNote>,
+            /// An AI segmentation step: its model file's card.
+            model_card: Option<model_file::ModelCard>,
         }
         // The opened module's name, or empty. A module that's gone (e.g. undone)
         // is closed - and the ones opened inside it.
@@ -5543,7 +5619,7 @@ impl PipelinesController {
                     .iter()
                     .enumerate()
                     .map(|(idx, step)| {
-                        let (step_problems, notes) = step_marks(
+                        let (step_problems, mut notes) = step_marks(
                             &Marks {
                                 project: &project,
                                 problems: &problems,
@@ -5557,46 +5633,56 @@ impl PipelinesController {
                             step,
                         );
                         match &step.content {
-                            StepContent::Command(command) => StepData {
-                                idx: idx as i32,
-                                id: step.id,
-                                name: command.name().to_owned(),
-                                // What a run would refuse (e.g. a module's class
-                                // outside a module), else the settings' summary.
-                                summary: match open_module {
-                                    Some(_) => command.to_summary(),
-                                    None => evanalyzer_app::modules::step_problem(&project, step)
-                                        .map(|problem| format!("⚠ {problem}"))
-                                        .unwrap_or_else(|| command.to_summary()),
-                                },
-                                category: step_category(roles[idx].unwrap_or(*command.category())),
-                                enabled: step.enabled,
-                                parameters: {
-                                    let mut parameters =
-                                        evanalyzer_app::modules::command_parameters(command);
-                                    // Measurement settings: the project's
-                                    // measurements, by label.
-                                    evanalyzer_app::modules::show_measurement_choices(
-                                        &mut parameters,
-                                        &measurements,
-                                    );
-                                    // Several categories: the place decides
-                                    // what it works on - shown, not set.
-                                    if command.categories().len() > 1
-                                        && let Some(role) = roles[idx]
-                                    {
-                                        parameters.push(works_on_parameter(role));
-                                    }
-                                    parameters
-                                },
-                                exposed: open_definition
-                                    .map(|d| evanalyzer_app::modules::exposed_settings(d, step.id))
-                                    .unwrap_or_default(),
-                                update_version: String::new(),
-                                help: command_help(command.name()),
-                                problems: step_problems,
-                                notes,
-                            },
+                            StepContent::Command(command) => {
+                                let model_card = self.step_model_card(command, &mut notes);
+                                StepData {
+                                    idx: idx as i32,
+                                    id: step.id,
+                                    name: command.name().to_owned(),
+                                    // What a run would refuse (e.g. a module's class
+                                    // outside a module), else the settings' summary.
+                                    summary: match open_module {
+                                        Some(_) => command.to_summary(),
+                                        None => {
+                                            evanalyzer_app::modules::step_problem(&project, step)
+                                                .map(|problem| format!("⚠ {problem}"))
+                                                .unwrap_or_else(|| command.to_summary())
+                                        }
+                                    },
+                                    category: step_category(
+                                        roles[idx].unwrap_or(*command.category()),
+                                    ),
+                                    enabled: step.enabled,
+                                    parameters: {
+                                        let mut parameters =
+                                            evanalyzer_app::modules::command_parameters(command);
+                                        // Measurement settings: the project's
+                                        // measurements, by label.
+                                        evanalyzer_app::modules::show_measurement_choices(
+                                            &mut parameters,
+                                            &measurements,
+                                        );
+                                        // Several categories: the place decides
+                                        // what it works on - shown, not set.
+                                        if command.categories().len() > 1
+                                            && let Some(role) = roles[idx]
+                                        {
+                                            parameters.push(works_on_parameter(role));
+                                        }
+                                        parameters
+                                    },
+                                    exposed: open_definition
+                                        .map(|d| {
+                                            evanalyzer_app::modules::exposed_settings(d, step.id)
+                                        })
+                                        .unwrap_or_default(),
+                                    update_version: String::new(),
+                                    help: command_help(command.name()),
+                                    problems: step_problems,
+                                    notes,
+                                    model_card,
+                                }
+                            }
                             // The module's name and parameters - each shown with the
                             // control of the inner setting it's bound to.
                             StepContent::Module(module) => {
@@ -5660,6 +5746,7 @@ impl PipelinesController {
                                         .unwrap_or_default(),
                                     problems: step_problems,
                                     notes,
+                                    model_card: None,
                                 }
                             }
                         }
@@ -5791,6 +5878,7 @@ impl PipelinesController {
                         let options_in = advanced_options_in(&d.parameters);
                         let exposed = d.exposed.clone();
                         let notes = d.notes.clone();
+                        let model_card = d.model_card.clone();
                         // The pinned settings, advanced ones too: for the Tuning panel.
                         let pinned_defs: Vec<ParameterDef> = d
                             .parameters
@@ -5968,6 +6056,15 @@ impl PipelinesController {
                                 exposed: exposed.contains(&p_name),
                                 group_items: ModelRc::new(VecModel::from(group_items)),
                                 has_model_info,
+                                model_card: match &model_card {
+                                    Some(card) if p_name == "model_path" => ModelFileCard {
+                                        kind: card.kind.into(),
+                                        name: card.name.clone().into(),
+                                        description: card.description.clone().into(),
+                                        details: card.details.clone().into(),
+                                    },
+                                    _ => ModelFileCard::default(),
+                                },
                                 section_header: SharedString::new(),
                                 section: SharedString::new(),
                                 short_description: SharedString::new(),
@@ -9232,6 +9329,71 @@ mod tests {
             .filter_map(|i| params.row_data(i))
             .find(|p| p.name.as_str() == name)
             .unwrap_or_else(|| panic!("no UI parameter {name}"))
+    }
+
+    /// A model file: a safetensors header only (no tensors), with
+    /// EVAnalyzer's metadata - what the card reads.
+    fn model_file(dir: &Path, arch: &str, name: &str) -> PathBuf {
+        let header = serde_json::json!({ "__metadata__": {
+            "evanalyzer_arch": arch,
+            "arch_version": "1",
+            "config": "{}",
+            "name": name,
+            "description": "Nuclei in fluorescence",
+            "license": "CC-BY-4.0",
+        }})
+        .to_string();
+        let mut bytes = (header.len() as u64).to_le_bytes().to_vec();
+        bytes.extend(header.as_bytes());
+        let path = dir.join(format!("{name}.evanet"));
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    /// A U-Net step with a U-Net model: its card below the file field. A
+    /// StarDist step with the same file: no card, a warning naming the
+    /// step that runs it. A file that's no model: an error.
+    #[test]
+    fn an_ai_steps_model_file_gets_a_card_or_a_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let shark = model_file(dir.path(), "unet2d", "shark");
+        let junk = dir.path().join("cpsam.pt");
+        std::fs::write(&junk, b"PK\x03\x04 not a model").unwrap();
+        let with_model = |name: &str, path: &Path| {
+            let mut s = step(name);
+            match s.command_mut().unwrap() {
+                PipelineCommand::UNet(c) => c.model_path = path.to_path_buf(),
+                PipelineCommand::Stardist(c) => c.model_path = path.to_path_buf(),
+                _ => unreachable!(),
+            }
+            s
+        };
+        let (ui, _ui_state, _controller) = selected(vec![
+            with_model("AI UNet Segmentation", &shark),
+            with_model("AI Stardist Segmentation", &shark),
+            with_model("AI Stardist Segmentation", &junk),
+        ]);
+
+        let card = ui_param(&ui, 0, "model_path");
+        assert_eq!(card.model_card.kind, "U-Net");
+        assert_eq!(card.model_card.name, "shark");
+        assert_eq!(card.model_card.description, "Nuclei in fluorescence");
+        assert_eq!(card.model_card.details, "CC-BY-4.0");
+        assert_eq!(card.problem, "");
+
+        let wrong = ui_param(&ui, 1, "model_path");
+        assert_eq!(wrong.model_card.kind, "");
+        assert!(
+            wrong.problem.contains("is a U-Net model")
+                && wrong.problem.contains("AI UNet Segmentation"),
+            "{}",
+            wrong.problem
+        );
+        assert!(!wrong.problem_error, "a warning");
+
+        let not_a_model = ui_param(&ui, 2, "model_path");
+        assert!(not_a_model.problem.contains("no EVAnalyzer model"));
+        assert!(not_a_model.problem_error);
     }
 
     #[test]

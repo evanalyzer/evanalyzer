@@ -18,3 +18,4 @@ pub use evanalyzer_core::ai_devices::AiDeviceSelection;
 pub use evanalyzer_core::ai_devices::DEFAULT_GPU_SLOTS;
 pub use evanalyzer_core::ai_devices::configure_ai_devices;
 pub use evanalyzer_core::ai_devices::parse_gpu_slots;
+pub use evanalyzer_core::model_file;

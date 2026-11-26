@@ -10,6 +10,7 @@
 pub mod cellpose;
 pub(crate) mod classifier_cache;
 pub mod input_normalization;
+pub mod model_file;
 pub mod piece_size;
 pub mod pixel_classifier;
 pub mod stardist;

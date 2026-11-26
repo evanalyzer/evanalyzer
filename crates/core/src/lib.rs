@@ -32,6 +32,8 @@ static ALLOCATOR: tests::counting_allocator::CountingAllocator =
 
 // System resource sizing (parallelism, reader pool size) based on available RAM
 pub use crate::ai_devices::gpus;
+/// What an AI step's model file is - for its card in the step settings.
+pub use crate::algos::ai_segmentation::model_file;
 pub use crate::job::job_generator::{check_image_paths, random_job_name};
 pub use crate::memory::analysis::{MAX_TILE_SIZE, estimate_ram_budget, recommended_parallelism};
 pub use crate::memory::cpu_ram_diagnostics;
