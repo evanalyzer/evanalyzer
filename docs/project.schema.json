@@ -389,7 +389,7 @@
           "minimum": 0
         },
         "modelPath": {
-          "description": "The Cellpose-SAM model file (EVAnalyzer's `.evanet`, converted\nonce from Cellpose's own, e.g. `cpsam_v2`).",
+          "description": "The Cellpose-SAM model file (EVAnalyzer's `.evanet` or `.safetensors`, converted\nonce from Cellpose's own, e.g. `cpsam_v2`).",
           "type": "string",
           "default": ""
         },
@@ -7522,7 +7522,7 @@
       "type": "object",
       "properties": {
         "modelPath": {
-          "description": "The StarDist model file (EVAnalyzer's `.evanet`).",
+          "description": "The StarDist model file (EVAnalyzer's `.evanet` or `.safetensors`).",
           "type": "string",
           "default": ""
         },
@@ -8385,7 +8385,7 @@
           "minimum": 0
         },
         "modelPath": {
-          "description": "The U-Net model file (EVAnalyzer's `.evanet`).",
+          "description": "The U-Net model file (EVAnalyzer's `.evanet` or `.safetensors`).",
           "type": "string",
           "default": ""
         },

@@ -34,7 +34,7 @@ use evanalyzer_app::backend::Backend;
 use evanalyzer_app::files::DirEntry;
 use evanalyzer_app::files::{Place, PlaceKind};
 use evanalyzer_cfg::{
-    EVANALYZER_TRAINED_AI_MODELS, MODULE_TEMPLATE_EXTENSION, NN_MODEL_EXTENSION,
+    EVANALYZER_TRAINED_AI_MODELS, MODULE_TEMPLATE_EXTENSION, NN_MODEL_EXTENSIONS,
     PROJECT_FILE_EXTENSIONS, PROJECT_FILE_TEMPLATE_EXTENSIONS, RESULTS_FILE_EXTENSION,
 };
 use log::warn;
@@ -928,7 +928,7 @@ fn entry_kind(entry: &DirEntry, image_formats: &[String]) -> i32 {
     .any(|ext| has(ext))
     {
         2
-    } else if has(EVANALYZER_TRAINED_AI_MODELS) || has(NN_MODEL_EXTENSION) {
+    } else if has(EVANALYZER_TRAINED_AI_MODELS) || NN_MODEL_EXTENSIONS.split(',').any(has) {
         3
     } else if has(RESULTS_FILE_EXTENSION) {
         4
@@ -1058,6 +1058,7 @@ mod tests {
         assert_eq!(entry_kind(&file("p.evaproj"), &formats), 2);
         assert_eq!(entry_kind(&file("m.evamodel"), &formats), 3);
         assert_eq!(entry_kind(&file("cpsam_v2.evanet"), &formats), 3);
+        assert_eq!(entry_kind(&file("cpsam_v2.safetensors"), &formats), 3);
         assert_eq!(entry_kind(&file("r.evadb"), &formats), 4);
         assert_eq!(entry_kind(&file("notes.txt"), &formats), 5);
         // Not one of the backend's formats: not shown as an image.

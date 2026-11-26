@@ -45,9 +45,9 @@ use crate::{
     display_name = "AI Cellpose Segmentation"
 )]
 pub struct Cellpose {
-    /// The Cellpose-SAM model file (EVAnalyzer's `.evanet`, converted
+    /// The Cellpose-SAM model file (EVAnalyzer's `.evanet` or `.safetensors`, converted
     /// once from Cellpose's own, e.g. `cpsam_v2`).
-    #[cmdsmeta(file_extensions = NN_MODEL_EXTENSION)]
+    #[cmdsmeta(file_extensions = NN_MODEL_EXTENSIONS)]
     pub model_path: PathBuf,
 
     /// The class assigned to pixels of every detected object. All other

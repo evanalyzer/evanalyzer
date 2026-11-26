@@ -56,8 +56,8 @@ pub enum UNetOutputMode {
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "segment", display_name = "AI UNet Segmentation")]
 pub struct UNet {
-    /// The U-Net model file (EVAnalyzer's `.evanet`).
-    #[cmdsmeta(file_extensions = NN_MODEL_EXTENSION)]
+    /// The U-Net model file (EVAnalyzer's `.evanet` or `.safetensors`).
+    #[cmdsmeta(file_extensions = NN_MODEL_EXTENSIONS)]
     pub model_path: PathBuf,
 
     /// The class assigned to pixels whose predicted probability reaches

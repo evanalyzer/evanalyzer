@@ -2825,7 +2825,7 @@ fn _serde_default_cellpose_normalization()
 #[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct CellposeSettings {
-    /// The Cellpose-SAM model file (EVAnalyzer's `.evanet`, converted
+    /// The Cellpose-SAM model file (EVAnalyzer's `.evanet` or `.safetensors`, converted
     /// once from Cellpose's own, e.g. `cpsam_v2`).
     pub model_path: PathBuf,
     /// The class assigned to pixels of every detected object. All other
@@ -3054,7 +3054,7 @@ fn _serde_default_stardist_normalization()
 #[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct StardistSettings {
-    /// The StarDist model file (EVAnalyzer's `.evanet`).
+    /// The StarDist model file (EVAnalyzer's `.evanet` or `.safetensors`).
     pub model_path: PathBuf,
     /// The class assigned to pixels of every detected object. All other
     /// pixels are assigned `SegmentationClass::BACKGROUND`.
@@ -3190,7 +3190,7 @@ fn _serde_default_unet_normalization() -> AiSegmentationInputNormalizationInputN
 #[serde(default)]
 #[serde(rename_all = "camelCase")]
 pub struct UNetSettings {
-    /// The U-Net model file (EVAnalyzer's `.evanet`).
+    /// The U-Net model file (EVAnalyzer's `.evanet` or `.safetensors`).
     pub model_path: PathBuf,
     /// The class assigned to pixels whose predicted probability reaches
     /// `probability_threshold`. All other pixels are assigned `SegmentationClass::BACKGROUND`.

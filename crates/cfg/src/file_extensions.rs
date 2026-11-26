@@ -9,7 +9,7 @@
 //
 // The extensions (no leading dot) of EVAnalyzer's own files. Also
 // include!()-d into the build script, so a command's
-// `#[cmdsmeta(file_extensions = NN_MODEL_EXTENSION)]` names one of these
+// `#[cmdsmeta(file_extensions = NN_MODEL_EXTENSIONS)]` names one of these
 // instead of repeating the string.
 
 /// A project.
@@ -23,5 +23,7 @@ pub const RESULTS_FILE_EXTENSION: &str = "evadb";
 /// A classifier trained in the AI training dialog (KNN, random forest, MLP).
 pub const EVANALYZER_TRAINED_AI_MODELS: &str = "evamodel";
 /// A neural network model (StarDist, U-Net, Cellpose-SAM): a safetensors
-/// file with EVAnalyzer's metadata in `__metadata__`.
-pub const NN_MODEL_EXTENSION: &str = "evanet";
+/// file with EVAnalyzer's metadata in `__metadata__`, comma-separated:
+/// `evanet` is EVAnalyzer's own, `safetensors` is the same file under the
+/// name model hubs (e.g. Hugging Face) expect.
+pub const NN_MODEL_EXTENSIONS: &str = "evanet,safetensors";

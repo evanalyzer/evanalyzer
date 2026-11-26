@@ -804,7 +804,7 @@ fn scan_directory(
 enum FileExtensions {
     /// Comma-separated, e.g. "pt,pth".
     Literal(String),
-    /// A constant of `src/file_extensions.rs`, e.g. `NN_MODEL_EXTENSION`.
+    /// A constant of `src/file_extensions.rs`, e.g. `NN_MODEL_EXTENSIONS`.
     Constant(String),
 }
 
@@ -1540,7 +1540,7 @@ fn parse_custom_meta(field: &syn::Field) -> FieldMetadata {
                     );
                 } else if meta.path.is_ident("file_extensions") {
                     // A string ("pt,pth") or the name of a constant in
-                    // `src/file_extensions.rs` (`NN_MODEL_EXTENSION`).
+                    // `src/file_extensions.rs` (`NN_MODEL_EXTENSIONS`).
                     let value: syn::Expr = meta.value()?.parse()?;
                     metadata.file_extensions = Some(match value {
                         syn::Expr::Lit(syn::ExprLit {

@@ -42,8 +42,8 @@ use crate::{
     display_name = "AI Stardist Segmentation"
 )]
 pub struct Stardist {
-    /// The StarDist model file (EVAnalyzer's `.evanet`).
-    #[cmdsmeta(file_extensions = NN_MODEL_EXTENSION)]
+    /// The StarDist model file (EVAnalyzer's `.evanet` or `.safetensors`).
+    #[cmdsmeta(file_extensions = NN_MODEL_EXTENSIONS)]
     pub model_path: PathBuf,
 
     /// The class assigned to pixels of every detected object. All other
