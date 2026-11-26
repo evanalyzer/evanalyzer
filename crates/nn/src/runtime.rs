@@ -101,6 +101,35 @@ pub struct Engine {
     slots: Mutex<Vec<SlotState>>,
     freed: Condvar,
     pool: rayon::ThreadPool,
+    /// Held by a run the GPU had no memory for while it runs on the CPU:
+    /// one at a time, as the RAM plan has one CPU inference.
+    cpu_fallback: Mutex<()>,
+}
+
+/// A panic's message.
+fn panic_text(panic: &Box<dyn Any + Send>) -> String {
+    panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .unwrap_or("a panic")
+        .to_string()
+}
+
+/// The memory a GPU states it can hold (Vulkan: its largest device-local
+/// heap, Metal: the recommended working set), `None` for the CPU or when the
+/// driver gives no figure. Opens the device - call it for one models run on.
+pub(crate) fn gpu_memory(device: &Device) -> Option<u64> {
+    use burn_dispatch::DispatchDevice;
+    use burn_dispatch::devices::CubeDevice;
+    match device.as_dispatch() {
+        DispatchDevice::Cube(cube @ CubeDevice::Wgpu(_)) => {
+            catch_unwind(|| cube.client().properties().memory.max_memory())
+                .ok()
+                .flatten()
+        }
+        _ => None,
+    }
 }
 
 /// What a device wgpu lists is, as far as choosing one goes.
@@ -286,6 +315,7 @@ impl Engine {
             slots: Mutex::new(slots),
             freed: Condvar::new(),
             pool,
+            cpu_fallback: Mutex::new(()),
         };
         info!(
             "AI models: {:?} ({} threads)",
@@ -401,22 +431,65 @@ impl Engine {
                 })
                 .join()
             });
+            let gpu = self.devices[index].gpu;
             let failure = match result {
+                Ok(Ok(Err(NnError::GpuOutOfMemory(why)))) if gpu => {
+                    drop(model);
+                    drop(lease);
+                    return self.run_on_cpu_once(index, path, &work, &why);
+                }
                 Ok(Ok(result)) => return result,
                 Ok(Err(panic)) | Err(panic) => panic,
             };
-            let why = failure
-                .downcast_ref::<String>()
-                .map(String::as_str)
-                .or_else(|| failure.downcast_ref::<&str>().copied())
-                .unwrap_or("a panic")
-                .to_string();
+            let why = panic_text(&failure);
             drop(model);
             drop(lease);
-            if !self.devices[index].gpu {
+            if !gpu {
                 return Err(NnError::Internal(format!("the model run failed: {why}")));
             }
+            if crate::errors::is_out_of_memory(&why) {
+                return self.run_on_cpu_once(index, path, &work, &why);
+            }
             self.device_failed(index, &why);
+        }
+    }
+
+    /// A run GPU `gpu` had no memory for (even in its smallest pieces, or a
+    /// model whose pieces are part of its result): this one on the CPU -
+    /// the same pieces, so the same result up to float rounding - and the
+    /// GPU stays in use for the next runs (an image too large for it says
+    /// nothing about the others).
+    fn run_on_cpu_once<M: Model, T: Send>(
+        &self,
+        gpu: usize,
+        path: &Path,
+        work: &(impl Fn(&M) -> Result<T, NnError> + Sync),
+        why: &str,
+    ) -> Result<T, NnError> {
+        warn!(
+            "{} ran out of memory ({}); this run goes to the CPU, the GPU stays in use",
+            self.devices[gpu].name,
+            why.lines().last().unwrap_or("")
+        );
+        let _one_at_a_time = self
+            .cpu_fallback
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let cpu = self.devices.len() - 1;
+        let model = self.model::<M>(cpu, path)?;
+        let result = std::thread::scope(|s| {
+            s.spawn(|| {
+                self.pool
+                    .install(|| catch_unwind(AssertUnwindSafe(|| work(&model))))
+            })
+            .join()
+        });
+        match result {
+            Ok(Ok(result)) => result,
+            Ok(Err(panic)) | Err(panic) => Err(NnError::Internal(format!(
+                "the model run failed: {}",
+                panic_text(&panic)
+            ))),
         }
     }
 
@@ -544,6 +617,50 @@ mod tests {
             engine.info().devices,
             [DeviceInfo {
                 name: "CPU".into(),
+                slots: 1
+            }]
+        );
+    }
+
+    /// A "model" the GPU never has memory for: out of memory on a GPU,
+    /// fine on the CPU.
+    struct TooBigForTheGpu {
+        gpu: bool,
+    }
+
+    impl Model for TooBigForTheGpu {
+        type Settings = ();
+        type Output = &'static str;
+        fn load(_: &Path, _: &Device, gpu: bool) -> Result<Self, NnError> {
+            Ok(Self { gpu })
+        }
+        fn infer(&self, _: Image<'_>, _: &()) -> Result<&'static str, NnError> {
+            if self.gpu {
+                return Err(NnError::GpuOutOfMemory(
+                    "out of device memory allocating 2216689664 bytes".into(),
+                ));
+            }
+            Ok("cpu")
+        }
+    }
+
+    /// Out of GPU memory: that run on the CPU, and the GPU stays in use (a
+    /// device failure would give it up).
+    #[test]
+    fn out_of_gpu_memory_runs_once_on_the_cpu_and_keeps_the_gpu() {
+        // burn-flex standing in for a GPU (the engine only reads `gpu`).
+        let engine = Engine::with_devices(vec![(Device::flex(), "Test GPU".into())], 1, 2);
+        let path = PathBuf::from("too-big");
+        for _ in 0..2 {
+            let out = engine
+                .run::<TooBigForTheGpu, _>(&path, |m| m.infer(image(), &()))
+                .unwrap();
+            assert_eq!(out, "cpu");
+        }
+        assert_eq!(
+            engine.info().devices,
+            [DeviceInfo {
+                name: "Test GPU".into(),
                 slots: 1
             }]
         );

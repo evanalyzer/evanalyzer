@@ -56,17 +56,31 @@ pub struct StarDist {
     /// The receptive-field halo, measured on the first tile that needs
     /// pieces.
     halo: OnceLock<Option<usize>>,
+    /// The memory of the GPU it runs on (`set_half_convs`), `None` on the
+    /// CPU: the pieces must fit into it (`pieces::fit_gpu`).
+    gpu_memory: Option<u64>,
 }
+
+/// What the network takes on the GPU per pixel of its input, per 32 filters
+/// of its first level: half of the 400 bytes the RAM plan has in f32 for
+/// `2D_versatile_fluo` (32 filters) - f16.
+const GPU_BYTES_PER_PIXEL_PER_32_FILTERS: f64 = 200.0;
 
 impl StarDist {
     pub fn config(&self) -> &StarDistConfig {
         &self.config
     }
 
-    /// The network in f16 (the GPU's tensor cores, see the network's
-    /// `set_half`) or f32 - set once after loading.
+    /// The GPU mode (what `load` sets on a GPU): the network in f16 (its
+    /// tensor cores, the network's `set_half`) and the pieces sized to the
+    /// GPU's memory (`pieces::fit_gpu`) - set once after loading.
     pub fn set_half_convs(&mut self, half: bool) {
         self.network.set_half(half);
+        self.gpu_memory = if half {
+            crate::runtime::gpu_memory(&self.device)
+        } else {
+            None
+        };
     }
 
     /// A StarDist from a model file's bytes (see `config.rs`).
@@ -82,6 +96,7 @@ impl StarDist {
             network,
             device: device.clone(),
             halo: OnceLock::new(),
+            gpu_memory: None,
         })
     }
 
@@ -89,16 +104,25 @@ impl StarDist {
     /// `config.div_by()`): the probability plane and the ray planes at the
     /// grid's cells.
     pub fn forward_raw(&self, input: &[f32], height: usize, width: usize) -> (Vec<f32>, Vec<f32>) {
+        self.try_forward_raw(input, height, width)
+            .expect("StarDist output")
+    }
+
+    /// [`Self::forward_raw`] with a failing device (out of memory) as an
+    /// error.
+    fn try_forward_raw(
+        &self,
+        input: &[f32],
+        height: usize,
+        width: usize,
+    ) -> Result<(Vec<f32>, Vec<f32>), NnError> {
         let shape = [1, self.config.in_channels, height, width];
         let x = Tensor::<4>::from_data(TensorData::new(input.to_vec(), shape), &self.device);
         let (prob, dist) = self.network.forward(x);
-        let read = |t: Tensor<4>| {
-            t.into_data()
-                .as_slice::<f32>()
-                .expect("f32 output")
-                .to_vec()
-        };
-        (read(prob), read(dist))
+        Ok((
+            crate::errors::read_f32(prob)?,
+            crate::errors::read_f32(dist)?,
+        ))
     }
 
     /// The network on one `width x height` image (`in_channels` planes),
@@ -119,7 +143,7 @@ impl StarDist {
             }
             padded
         };
-        let (prob, dist) = self.forward_raw(&input, ph, pw);
+        let (prob, dist) = self.try_forward_raw(&input, ph, pw)?;
         let [gy, gx] = self.config.grid;
         let (ow, oh) = (pw / gx, ph / gy);
         // The grid cells of the image itself (not of the padding).
@@ -185,25 +209,21 @@ impl Model for StarDist {
         }
         let pixels = &image.data[..len];
         let predict = |p: &[f32], w: usize, h: usize| self.predict(p, w, h);
-        let plan = pieces::plan(
-            width,
-            height,
-            settings.pieces,
-            || {
-                if let Some(halo) = self.halo.get() {
-                    return Ok(*halo);
-                }
-                let halo = pieces::receptive_halo(channels, predict)?;
-                Ok(*self.halo.get_or_init(|| halo))
-            },
-            "StarDist",
-        )?;
-        let planes = match plan {
-            Some((halo, piece)) => {
-                pieces::run(pixels, channels, width, height, halo, piece, predict)?
+        // The receptive field's halo (measured once).
+        let local_halo = || {
+            if let Some(halo) = self.halo.get() {
+                return Ok(*halo);
             }
-            None => predict(pixels, width, height)?,
+            let halo = pieces::receptive_halo(channels, predict)?;
+            Ok(*self.halo.get_or_init(|| halo))
         };
+        let gpu_bytes =
+            GPU_BYTES_PER_PIXEL_PER_32_FILTERS * self.config.unet_filter_base as f64 / 32.0;
+        let fitted = pieces::fit_gpu(settings.pieces, self.gpu_memory, gpu_bytes, width, height);
+        let plan = pieces::plan(width, height, fitted, local_halo, "StarDist")?;
+        let planes = pieces::run_fitting(
+            pixels, channels, width, height, plan, local_halo, predict, "StarDist",
+        )?;
         Ok(StarDistOutput {
             prob: planes.first,
             dist: planes.rest,

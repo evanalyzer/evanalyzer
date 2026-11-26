@@ -93,7 +93,15 @@ pub struct UNet {
     /// The receptive-field halo (`crate::pieces::receptive_halo`), measured
     /// on the first tile that needs pieces.
     halo: OnceLock<Option<usize>>,
+    /// The memory of the GPU it runs on (`set_half_convs`), `None` on the
+    /// CPU: the pieces must fit into it (`pieces::fit_gpu`).
+    gpu_memory: Option<u64>,
 }
+
+/// What the network takes on the GPU per pixel of its input, per 64 filters
+/// of its first level (where most of it lies): half of the 1650 bytes
+/// measured in f32 for romantic-shark (64 filters, `tests::tile_ram`) - f16.
+const GPU_BYTES_PER_PIXEL_PER_64_FILTERS: f64 = 825.0;
 
 impl UNet {
     fn new(
@@ -108,6 +116,7 @@ impl UNet {
             network,
             device: device.clone(),
             halo: OnceLock::new(),
+            gpu_memory: None,
         }
     }
 
@@ -119,10 +128,16 @@ impl UNet {
         self.preprocessing
     }
 
-    /// Convolutions in f16 (GPU tensor cores, `network::conv_forward`) -
-    /// off unless asked for (not decided yet, see the migration plan).
+    /// The GPU mode (what `load` sets on a GPU): the network in f16 (its
+    /// tensor cores, `network::set_half`) and the pieces sized to the GPU's
+    /// memory (`pieces::fit_gpu`) - set once after loading.
     pub fn set_half_convs(&mut self, half: bool) {
         self.network.set_half(half);
+        self.gpu_memory = if half {
+            crate::runtime::gpu_memory(&self.device)
+        } else {
+            None
+        };
     }
 
     /// A U-Net of `config` with random weights - for benchmarks and tests.
@@ -197,10 +212,22 @@ impl UNet {
         width: usize,
         device: &Device,
     ) -> Vec<f32> {
+        self.try_forward_raw(input, height, width, device)
+            .expect("U-Net output")
+    }
+
+    /// [`Self::forward_raw`] with a failing device (out of memory) as an
+    /// error.
+    fn try_forward_raw(
+        &self,
+        input: &[f32],
+        height: usize,
+        width: usize,
+        device: &Device,
+    ) -> Result<Vec<f32>, NnError> {
         let shape = [1, self.config.in_channels, height, width];
         let x = Tensor::<4>::from_data(TensorData::new(input.to_vec(), shape), device);
-        let y = self.network.forward(x).into_data();
-        y.as_slice::<f32>().expect("f32 output").to_vec()
+        crate::errors::read_f32(self.network.forward(x))
     }
 
     /// The network on one `width x height` image (`in_channels` planes),
@@ -226,7 +253,7 @@ impl UNet {
                 &mut padded,
             );
         }
-        let output = self.forward_raw(&padded, ph, pw, &self.device);
+        let output = self.try_forward_raw(&padded, ph, pw, &self.device)?;
         let channels = self.config.out_channels;
         if output.len() != channels * pw * ph {
             return Err(NnError::Internal(format!(
@@ -320,28 +347,25 @@ impl Model for UNet {
         let normalized = self.preprocessing.apply(&image.data[..len]);
         let pixels = normalized.as_deref().unwrap_or(&image.data[..len]);
         let predict = |p: &[f32], w: usize, h: usize| self.predict(p, w, h, settings);
-        let plan = pieces::plan(
-            width,
-            height,
-            settings.pieces,
-            || {
-                if self.config.sees_whole_image() {
-                    return Ok(None);
-                }
-                if let Some(halo) = self.halo.get() {
-                    return Ok(*halo);
-                }
-                let halo = pieces::receptive_halo(channels, predict)?;
-                Ok(*self.halo.get_or_init(|| halo))
-            },
-            "U-Net",
-        )?;
-        let planes = match plan {
-            Some((halo, piece)) => {
-                pieces::run(pixels, channels, width, height, halo, piece, predict)?
+        // The receptive field's halo, `None` for a model seeing the whole
+        // image (measured once).
+        let local_halo = || {
+            if self.config.sees_whole_image() {
+                return Ok(None);
             }
-            None => predict(pixels, width, height)?,
+            if let Some(halo) = self.halo.get() {
+                return Ok(*halo);
+            }
+            let halo = pieces::receptive_halo(channels, predict)?;
+            Ok(*self.halo.get_or_init(|| halo))
         };
+        let gpu_bytes =
+            GPU_BYTES_PER_PIXEL_PER_64_FILTERS * self.config.initial_features as f64 / 64.0;
+        let fitted = pieces::fit_gpu(settings.pieces, self.gpu_memory, gpu_bytes, width, height);
+        let plan = pieces::plan(width, height, fitted, local_halo, "U-Net")?;
+        let planes = pieces::run_fitting(
+            pixels, channels, width, height, plan, local_halo, predict, "U-Net",
+        )?;
         Ok(UNetOutput {
             probabilities: planes.first,
             boundary: (planes.planes > 1).then_some(planes.rest),

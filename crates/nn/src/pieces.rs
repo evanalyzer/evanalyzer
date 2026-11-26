@@ -172,6 +172,97 @@ pub fn piece_side(requested: usize) -> usize {
     requested.max(MIN_PIECE).next_multiple_of(ALIGN)
 }
 
+/// `pieces` on a GPU stating `gpu_memory` bytes, for a network taking
+/// `bytes_per_pixel` of its input there: the local side (a model seeing a
+/// limited neighbourhood - the same result up to float rounding whatever
+/// the pieces) no larger than [`PIECE_SIDES`]' largest whose largest input
+/// ([`largest_model_input`]) takes at most half of it, at least the smallest.
+/// The whole-image side stays: it is part of the model's result. Without a
+/// figure (`None`, the CPU) `pieces` as they are. Running out of GPU memory
+/// can hang the GPU backend instead of failing (seen with burn 0.22 on
+/// wgpu), so the pieces must fit before they run.
+pub fn fit_gpu(
+    pieces: Pieces,
+    gpu_memory: Option<u64>,
+    bytes_per_pixel: f64,
+    width: usize,
+    height: usize,
+) -> Pieces {
+    let Some(memory) = gpu_memory else {
+        return pieces;
+    };
+    let budget = memory as f64 / 2.0;
+    let fits = |side: usize| {
+        let pixels = largest_model_input(width, side) * largest_model_input(height, side);
+        bytes_per_pixel * pixels as f64 <= budget
+    };
+    let requested = piece_side(pieces.local_side);
+    if fits(requested) {
+        return pieces;
+    }
+    let local_side = PIECE_SIDES
+        .into_iter()
+        .filter(|&side| side < requested)
+        .find(|&side| fits(side))
+        .unwrap_or(PIECE_SIDES[PIECE_SIDES.len() - 1]);
+    log::debug!(
+        "AI model on a GPU of {memory} bytes: {local_side}² pieces instead of {requested}²"
+    );
+    Pieces {
+        local_side,
+        whole_image_side: pieces.whole_image_side,
+    }
+}
+
+/// The smallest piece side a model that ran out of GPU memory is tried
+/// again with ([`run_fitting`]).
+pub const SMALLEST_RETRY_PIECE: usize = 512;
+
+/// [`run`] as [`plan`] decided (`None`: the whole tile at once) - and when
+/// the GPU runs out of memory ([`NnError::GpuOutOfMemory`]) again in pieces
+/// half as large, down to [`SMALLEST_RETRY_PIECE`]. Only for a model that
+/// sees a limited neighbourhood (`local_halo` gives its halo): its result is
+/// the same up to float rounding whatever the pieces. A model that sees the
+/// whole image keeps its pieces (they are part of its result) and gets the
+/// error; the engine then runs it on the CPU.
+#[allow(clippy::too_many_arguments)]
+pub fn run_fitting(
+    pixels: &[f32],
+    channels: usize,
+    width: usize,
+    height: usize,
+    plan: Option<(usize, usize)>,
+    local_halo: impl Fn() -> Result<Option<usize>, NnError>,
+    mut predict: impl FnMut(&[f32], usize, usize) -> Result<Planes, NnError>,
+    model: &str,
+) -> Result<Planes, NnError> {
+    let (mut side, mut result) = match plan {
+        Some((halo, piece)) => (
+            piece,
+            run(pixels, channels, width, height, halo, piece, &mut predict),
+        ),
+        None => (width.max(height), predict(pixels, width, height)),
+    };
+    loop {
+        let Err(NnError::GpuOutOfMemory(why)) = &result else {
+            return result;
+        };
+        if side <= SMALLEST_RETRY_PIECE {
+            return result;
+        }
+        let Some(halo) = local_halo()? else {
+            return result;
+        };
+        let smaller = piece_side((side / 2).max(SMALLEST_RETRY_PIECE));
+        log::warn!(
+            "AI model {model}: out of GPU memory in {side}² pieces, again in {smaller}² ({})",
+            why.lines().last().unwrap_or("")
+        );
+        side = smaller;
+        result = run(pixels, channels, width, height, halo, side, &mut predict);
+    }
+}
+
 /// Whether a `width x height` tile runs in more than one piece of `piece`.
 pub fn needs_pieces(width: usize, height: usize, piece: usize) -> bool {
     width > piece || height > piece
@@ -569,6 +660,82 @@ mod tests {
         };
         assert_eq!(auto.largest(), 2048);
         assert_eq!(Pieces::fixed(512).largest(), 512);
+    }
+
+    /// On a GPU of 8 GB a U-Net (825 bytes per pixel in f16) gets 1024²
+    /// pieces instead of 2048² - a 2048² piece with its halo needs 4.4 GB of
+    /// the 4 GB budget; 16 GB keep 2048². The whole-image side and the CPU
+    /// (no figure) keep theirs.
+    #[test]
+    fn the_pieces_fit_into_half_the_gpu_memory() {
+        let auto = Pieces {
+            local_side: 2048,
+            whole_image_side: WHOLE_IMAGE_PIECE_SIDE,
+        };
+        let fit = |memory: Option<u64>| fit_gpu(auto, memory, 825.0, 4096, 4096);
+        assert_eq!(fit(Some(8 * GB)).local_side, 1024);
+        assert_eq!(fit(Some(16 * GB)).local_side, 2048);
+        assert_eq!(
+            fit(Some(2 * GB)).local_side,
+            512,
+            "the smallest when none fits"
+        );
+        assert_eq!(fit(None), auto);
+        assert_eq!(fit(Some(8 * GB)).whole_image_side, WHOLE_IMAGE_PIECE_SIDE);
+        // A small image fits whole whatever was asked.
+        assert_eq!(fit_gpu(auto, Some(8 * GB), 825.0, 1100, 900), auto);
+    }
+
+    /// A model the GPU has memory for only up to `max` pixels per side: a
+    /// local one runs in smaller pieces - the same result as running in
+    /// those pieces directly (here exactly the whole tile's, the halo being
+    /// wide enough); a whole-image one keeps its pieces and gets the error.
+    #[test]
+    fn out_of_gpu_memory_runs_again_in_smaller_pieces_for_a_local_model() {
+        let (width, height) = (2100, 1300);
+        let pixels = image(width, height);
+        let max = 700;
+        let mut sizes = Vec::new();
+        let mut limited = |p: &[f32], w: usize, h: usize| {
+            sizes.push(w.max(h));
+            if w.max(h) > max {
+                return Err(NnError::GpuOutOfMemory("out of device memory".into()));
+            }
+            box_filter(5, 2)(p, w, h)
+        };
+        let halo = receptive_halo(1, box_filter(5, 2)).unwrap().unwrap();
+        let out = run_fitting(
+            &pixels,
+            1,
+            width,
+            height,
+            Some((halo, 2048)),
+            || Ok(Some(halo)),
+            &mut limited,
+            "test",
+        )
+        .unwrap();
+        assert_eq!(out, box_filter(5, 2)(&pixels, width, height).unwrap());
+        // 2048: the whole tile (2100 wide) failed, 1024 pieces failed, 512
+        // pieces (with their halo) fit.
+        assert!(sizes.iter().filter(|&&s| s > max).count() >= 2, "{sizes:?}");
+
+        let whole_image = run_fitting(
+            &pixels,
+            1,
+            width,
+            height,
+            Some((WHOLE_IMAGE_HALO, 1024)),
+            || Ok(None),
+            |p: &[f32], w: usize, h: usize| {
+                if w.max(h) > max {
+                    return Err(NnError::GpuOutOfMemory("out of device memory".into()));
+                }
+                box_filter(5, 2)(p, w, h)
+            },
+            "test",
+        );
+        assert!(matches!(whole_image, Err(NnError::GpuOutOfMemory(_))));
     }
 
     #[test]

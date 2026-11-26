@@ -94,13 +94,19 @@ impl CellposeSam {
     /// The network on one tile `[C, S, S]` (row-major planes): `[3, S, S]`
     /// (dY, dX, the cell logit) - no resizing, no tiles, no sigmoid.
     pub fn forward_tile(&self, tile: &[f32], channels: usize) -> Vec<f32> {
+        self.try_forward_tile(tile, channels)
+            .expect("Cellpose-SAM output")
+    }
+
+    /// [`Self::forward_tile`] with a failing device (out of memory) as an
+    /// error.
+    fn try_forward_tile(&self, tile: &[f32], channels: usize) -> Result<Vec<f32>, NnError> {
         let s = self.config.tile_size;
         let x = Tensor::<4>::from_data(
             TensorData::new(tile.to_vec(), [1, channels, s, s]),
             &self.device,
         );
-        let y = self.network.forward(x).into_data();
-        y.as_slice::<f32>().expect("f32 output").to_vec()
+        crate::errors::read_f32(self.network.forward(x))
     }
 }
 
@@ -232,7 +238,7 @@ impl Model for CellposeSam {
                         }
                     }
                 }
-                let out = self.forward_tile(&tile, channels);
+                let out = self.try_forward_tile(&tile, channels)?;
                 for o in 0..n_out {
                     for ty in 0..s {
                         let row = ((o * ph) + y0 + ty) * pw + x0;

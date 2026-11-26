@@ -167,6 +167,47 @@ fn main() {
                 }
             }
         }
+        // romantic-shark's size (depth 4, 64 filters) without InstanceNorm -
+        // a model seeing a limited neighbourhood, random weights, on a
+        // 4096² image: speed and the out-of-GPU-memory retry only.
+        "unet-local" => {
+            use evanalyzer_nn::model::unet::{FinalActivation, Norm, UNetConfig};
+            let config = UNetConfig {
+                in_channels: 1,
+                out_channels: 2,
+                depth: 4,
+                initial_features: 64,
+                gain: 2,
+                norm: Norm::None,
+                final_activation: FinalActivation::Sigmoid,
+            };
+            let mut net = UNet::with_random_weights(config, &device);
+            net.set_half_convs(half);
+            let side = 4096;
+            let input = tiled(
+                &read_f32(&tests.join("romantic-shark/reference/cells1024.input.f32")),
+                1024,
+                1024,
+                side,
+            );
+            let image = Image {
+                width: side,
+                height: side,
+                channels: 1,
+                data: &input,
+            };
+            let settings = UNetSettings {
+                foreground_channel: 0,
+                softmax: false,
+                boundary_channel: Some(1),
+                pieces,
+            };
+            for _ in 0..repeats {
+                let start = Instant::now();
+                net.infer(image, &settings).unwrap();
+                times.push(start.elapsed().as_secs_f64());
+            }
+        }
         other => panic!("unknown model {other}"),
     }
     let mut later = times[1.min(times.len() - 1)..].to_vec();

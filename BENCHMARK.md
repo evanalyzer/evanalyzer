@@ -2750,7 +2750,17 @@ slower. **Found:** the U-Net's 2048² piece needs a 2.2 GB buffer and
 sometimes runs out of the 8 GB GPU's memory ("out of device memory",
 before and after) - the engine then runs the image on the CPU. 1024² pieces
 never failed (1.75 s at 2048², 512²: 2.56 s). Pieces are sized from the
-computer's RAM, not the GPU's memory - open.
+computer's RAM, not the GPU's memory. **Fixed (same day):** running out of
+GPU memory sometimes even hung CubeCL (GPU idle, no error) instead of
+failing. Now a model seeing a limited neighbourhood gets pieces that need
+at most half the GPU's memory (`pieces::fit_gpu`, the GPU's figure from
+CubeCL: 8 GB → 1024², 16 GB → 2048²; same result up to float rounding);
+an out-of-memory error is retried in smaller pieces (`run_fitting`) and
+otherwise runs that one image on the CPU with the GPU kept (it used to be
+given up for the whole analysis). Romantic-shark's size without
+InstanceNorm on 4096², 2048² and 4096² pieces asked: 4.8 s per image, no
+failure (before: hung or out of memory). InstanceNorm models keep their
+pieces (they are part of the result).
 Tests: `real_stardist_in_f16_on_the_gpu_stays_within_f16_rounding`,
 `real_romantic_shark_in_f16_on_the_gpu_stays_within_f16_rounding`.
 
