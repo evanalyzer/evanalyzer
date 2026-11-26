@@ -41,8 +41,8 @@ use safetensors::SafeTensors;
 
 /// `conv` on `x` (stride 1, `padding` on every side).
 ///
-/// When `half` (the GPU): the convolution in f16 - input and weights rounded
-/// to f16, the result back in f32 - because burn's CubeCL implicit-GEMM
+/// When `half` (the GPU): `x`, the weights (converted once, `set_half`) and
+/// the result in f16 - because burn's CubeCL implicit-GEMM
 /// (tensor core) kernels take only f16/bf16 here (f32 runs a direct
 /// convolution, 20-60x slower), and the bias added after it: with a bias
 /// those kernels decline too (seen on wgpu, burn 0.22). Else `conv`'s own
@@ -53,13 +53,7 @@ fn conv_forward(conv: &Conv2d, x: Tensor<4>, padding: usize, half: bool) -> Tens
         return conv.forward(x);
     }
     let options = ConvOptions::new([1, 1], [padding, padding], [1, 1], 1);
-    let y = conv2d(
-        x.cast(DType::F16),
-        conv.weight.val().cast(DType::F16),
-        None,
-        options,
-    )
-    .cast(DType::F32);
+    let y = conv2d(x, conv.weight.val(), None, options);
     match &conv.bias {
         Some(bias) => {
             let channels = bias.dims()[0];
@@ -121,10 +115,19 @@ impl NormLayer {
         }
     }
 
-    /// `gpu`: the GPU path (see `conv_forward`, `instance_norm_channels_last`).
+    /// `gpu`: the GPU path (see `conv_forward`, `instance_norm_channels_last`)
+    /// - `x` f16 there, the statistics computed in f32, the result f16.
     fn forward(&self, x: Tensor<4>, gpu: bool) -> Tensor<4> {
+        if gpu {
+            let x = x.cast(DType::F32);
+            let y = match self {
+                Self::Instance(norm) => instance_norm_channels_last(x, norm.epsilon),
+                Self::Batch(norm) => norm.forward(x),
+                Self::Group(norm) => norm.forward(x),
+            };
+            return y.cast(DType::F16);
+        }
         match self {
-            Self::Instance(norm) if gpu => instance_norm_channels_last(x, norm.epsilon),
             Self::Instance(norm) => norm.forward(x),
             Self::Batch(norm) => norm.forward(x),
             Self::Group(norm) => norm.forward(x),
@@ -190,9 +193,9 @@ pub(crate) struct UNet2d {
     pool: MaxPool2d,
     #[module(skip)]
     final_activation: FinalActivation,
-    /// Convolutions in f16 (see `conv_forward`).
+    /// The network in f16 (see `conv_forward`); set with [`Self::set_half`].
     #[module(skip)]
-    pub(crate) half: bool,
+    half: bool,
 }
 
 /// `config` with `init` (`None`: burn's default, random).
@@ -255,9 +258,37 @@ impl UNet2d {
         }
     }
 
-    /// `[batch, in_channels, H, W]` → `[batch, out_channels, H, W]`; H and W
-    /// multiples of `2^depth`.
+    /// The network in f16 (`true`, the GPU's tensor cores: convolution
+    /// weights converted once, activations f16 from the input to the output
+    /// convolution, norms computed in f32) or f32. Back to f32 keeps the f16
+    /// rounding - set it once.
+    pub(crate) fn set_half(&mut self, half: bool) {
+        let dtype = if half { DType::F16 } else { DType::F32 };
+        let blocks = self
+            .encoder
+            .iter_mut()
+            .chain([&mut self.base])
+            .chain(self.decoder.iter_mut());
+        let mut convs: Vec<&mut Conv2d> = Vec::new();
+        for block in blocks {
+            convs.push(&mut block.conv1);
+            convs.push(&mut block.conv2);
+        }
+        convs.extend(self.samplers.iter_mut());
+        convs.push(&mut self.out_conv);
+        for conv in convs {
+            conv.weight = conv.weight.clone().map(|w| w.cast(dtype));
+            conv.bias = conv.bias.clone().map(|b| b.map(|b| b.cast(dtype)));
+        }
+        self.half = half;
+    }
+
+    /// `[batch, in_channels, H, W]` → `[batch, out_channels, H, W]`, f32; H
+    /// and W multiples of `2^depth`.
     pub(crate) fn forward(&self, mut x: Tensor<4>) -> Tensor<4> {
+        if self.half {
+            x = x.cast(DType::F16);
+        }
         let mut skips = Vec::with_capacity(self.encoder.len());
         for block in &self.encoder {
             x = block.forward(x, self.half);
@@ -284,7 +315,7 @@ impl UNet2d {
                 self.half,
             );
         }
-        x = conv_forward(&self.out_conv, x, 0, self.half);
+        x = conv_forward(&self.out_conv, x, 0, self.half).cast(DType::F32);
         match self.final_activation {
             FinalActivation::None => x,
             FinalActivation::Sigmoid => sigmoid(x),

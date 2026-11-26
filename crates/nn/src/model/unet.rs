@@ -122,7 +122,7 @@ impl UNet {
     /// Convolutions in f16 (GPU tensor cores, `network::conv_forward`) -
     /// off unless asked for (not decided yet, see the migration plan).
     pub fn set_half_convs(&mut self, half: bool) {
-        self.network.half = half;
+        self.network.set_half(half);
     }
 
     /// A U-Net of `config` with random weights - for benchmarks and tests.

@@ -224,3 +224,53 @@ fn real_stardist_gives_stardists_output() {
         );
     }
 }
+
+/// The GPU path (the whole network in f16, as `load` sets it on a GPU)
+/// against StarDist's own `predict` on 1100x600: within f16 rounding
+/// (measured 2026-11-26: probability 9.4e-4, distances 3.4e-2, 10 of 165,000
+/// cells on the other side of the threshold). Needs a discrete GPU; release
+/// build.
+#[test]
+#[ignore = "needs tests/stardist and a discrete GPU"]
+fn real_stardist_in_f16_on_the_gpu_stays_within_f16_rounding() {
+    use burn::tensor::DeviceKind;
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/stardist");
+    let device = Device::wgpu(DeviceKind::DiscreteGpu(0));
+    let net = StarDist::load(&dir.join("2D_versatile_fluo.safetensors"), &device, true).unwrap();
+    let reference = dir.join("reference");
+    let (w, h) = (1100, 600);
+    let input = read_f32(&reference.join("cells1100x600.input.f32"));
+    let expected = read_f32(&reference.join("cells1100x600.output.f32"));
+    let shape: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(reference.join("cells1100x600.shape.json")).unwrap())
+            .unwrap();
+    let egw = shape["grid_width"].as_u64().unwrap() as usize;
+    let egh = shape["grid_height"].as_u64().unwrap() as usize;
+    let out = net
+        .infer(
+            image(&input, w, h),
+            &StarDistSettings {
+                pieces: Pieces::fixed(2048),
+            },
+        )
+        .unwrap();
+    let (gw, gh) = (out.grid_width, out.grid_height);
+    let (mut prob, mut dist, mut flips) = (0.0f32, 0.0f32, 0);
+    for plane in 0..=out.n_rays {
+        for y in 0..gh {
+            for x in 0..gw {
+                let theirs = expected[(plane * egh + y) * egw + x];
+                if plane == 0 {
+                    let ours = out.prob[y * gw + x];
+                    prob = prob.max((ours - theirs).abs());
+                    flips += usize::from((ours > 0.479) != (theirs > 0.479));
+                } else {
+                    let ours = out.dist[((plane - 1) * gh + y) * gw + x].max(1e-3);
+                    dist = dist.max((ours - theirs).abs());
+                }
+            }
+        }
+    }
+    eprintln!("f16: probability {prob:.2e}, distances {dist:.2e}, flips {flips}");
+    assert!(prob < 5e-3 && dist < 0.1 && flips as f64 <= 2e-4 * (gw * gh) as f64);
+}

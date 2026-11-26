@@ -63,10 +63,10 @@ impl StarDist {
         &self.config
     }
 
-    /// Convolutions in f16 with the bias added after (the GPU's tensor
-    /// cores, see the U-Net's `network::conv_forward`).
+    /// The network in f16 (the GPU's tensor cores, see the network's
+    /// `set_half`) or f32 - set once after loading.
     pub fn set_half_convs(&mut self, half: bool) {
-        self.network.half = half;
+        self.network.set_half(half);
     }
 
     /// A StarDist from a model file's bytes (see `config.rs`).

@@ -326,3 +326,32 @@ fn real_romantic_shark_gives_pytorchs_results() {
         eprintln!("{name}: infer vs libtorch engine: max {max:.2e}, {flips} flips");
     }
 }
+
+/// The GPU path (the network in f16, norms in f32, as `load` sets it on a
+/// GPU) against the libtorch engine on romantic-shark's 1024² image: within
+/// f16 rounding (measured 2026-11-26: max 1.2e-2, 99 of 1,048,576 pixels on
+/// the other side of 0.5 - libtorch's own GPU run used TF32). Needs a
+/// discrete GPU; release build.
+#[test]
+#[ignore = "needs tests/romantic-shark and a discrete GPU"]
+fn real_romantic_shark_in_f16_on_the_gpu_stays_within_f16_rounding() {
+    use burn::tensor::DeviceKind;
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/romantic-shark");
+    let device = Device::wgpu(DeviceKind::DiscreteGpu(0));
+    let net = UNet::load(&dir.join("romantic-shark.safetensors"), &device, true).unwrap();
+    let reference = dir.join("reference");
+    let side = 1024;
+    let input = read_f32(&reference.join("cells1024.input.f32"));
+    let engine = read_f32(&reference.join("cells1024.engine.f32"));
+    let out = net
+        .infer(image(&input, side, side), &settings(Pieces::fixed(1024)))
+        .unwrap();
+    let mut ours = out.probabilities;
+    ours.extend(out.boundary.unwrap());
+    let (max, flips) = difference(&ours, &engine, side * side);
+    eprintln!("f16: max {max:.2e}, {flips} flips");
+    assert!(
+        max < 0.05 && flips <= side * side / 5_000,
+        "max {max}, {flips} flips"
+    );
+}

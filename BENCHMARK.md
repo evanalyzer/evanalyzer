@@ -2729,6 +2729,31 @@ startup 11 / 12 ms; AI engine on the CPU +10 MB both; small images
 1180 MB; one 16384² image 1.259 / 1.277 s, peak RAM within the run-to-run
 spread (1939-2286 MB both).
 
+## StarDist and U-Net on the GPU: f16 from input to output (2026-11-26)
+
+Both already ran their convolutions in f16 on the GPU (since the wire-up),
+but converted the weights to f16 on every forward pass and every result
+back to f32. Now the weights are converted once and the activations stay
+f16 through the network (U-Net: norm statistics in f32). `bench_gpu_cnn`
+(real models, `infer` with 2048² pieces, RTX 3000 Ada Laptop, images after
+the first):
+
+| Case | f32 | f16 before | f16 now | f16 now vs reference |
+|---|---|---|---|---|
+| StarDist 1100 x 600 | 0.239 s | 0.032-0.035 s | 0.027-0.028 s | prob. 9.4e-4, dist. 3.4e-2, 10 of 165,000 flips |
+| StarDist 2048² | 1.62 s | 0.232-0.237 s | 0.200-0.208 s | |
+| U-Net (romantic-shark) 1024² | 17.5 s | 0.391-0.397 s | 0.339-0.346 s | max 1.2e-2, 99 of 1,048,576 flips (vs the libtorch engine) |
+| U-Net 2048² | 69.6 s | 1.60 s | 1.38 s | |
+
+f32 on the GPU runs burn's direct convolution (no tensor cores) - 7-45x
+slower. **Found:** the U-Net's 2048² piece needs a 2.2 GB buffer and
+sometimes runs out of the 8 GB GPU's memory ("out of device memory",
+before and after) - the engine then runs the image on the CPU. 1024² pieces
+never failed (1.75 s at 2048², 512²: 2.56 s). Pieces are sized from the
+computer's RAM, not the GPU's memory - open.
+Tests: `real_stardist_in_f16_on_the_gpu_stays_within_f16_rounding`,
+`real_romantic_shark_in_f16_on_the_gpu_stays_within_f16_rounding`.
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers

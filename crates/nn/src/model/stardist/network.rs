@@ -58,9 +58,9 @@ impl Conv {
     }
 
     /// "same"-padded convolution (odd kernel: the same on both sides). When
-    /// `half` (the GPU) in f16 with the bias added after: CubeCL's tensor
-    /// core kernels take neither f32 nor a bias (the U-Net's
-    /// `network::conv_forward`).
+    /// `half` (the GPU) `x`, the weights and the result are f16 and the bias
+    /// is added after: CubeCL's tensor core kernels take neither f32 nor a
+    /// bias (the U-Net's `network::conv_forward`).
     fn forward(&self, x: Tensor<4>, half: bool) -> Tensor<4> {
         let pad = self.weight.dims()[2] / 2;
         let options = ConvOptions::new([1, 1], [pad, pad], [1, 1], 1);
@@ -68,14 +68,13 @@ impl Conv {
             return conv2d(x, self.weight.clone(), Some(self.bias.clone()), options);
         }
         let n = self.bias.dims()[0];
-        conv2d(
-            x.cast(DType::F16),
-            self.weight.clone().cast(DType::F16),
-            None,
-            options,
-        )
-        .cast(DType::F32)
-            + self.bias.clone().reshape([1, n, 1, 1])
+        conv2d(x, self.weight.clone(), None, options) + self.bias.clone().reshape([1, n, 1, 1])
+    }
+
+    /// Weights and bias in `dtype`.
+    fn cast(&mut self, dtype: DType) {
+        self.weight = self.weight.clone().cast(dtype);
+        self.bias = self.bias.clone().cast(dtype);
     }
 }
 
@@ -106,9 +105,10 @@ pub(crate) struct StarDistNet {
     dist: Conv,
     #[module(skip)]
     grid_pools: Vec<[usize; 2]>,
-    /// Convolutions in f16 (the GPU, see `Conv::forward`).
+    /// The whole network in f16 (the GPU, see `Conv::forward`); set with
+    /// [`Self::set_half`].
     #[module(skip)]
-    pub(crate) half: bool,
+    half: bool,
 }
 
 impl StarDistNet {
@@ -203,9 +203,32 @@ impl StarDistNet {
         })
     }
 
+    /// The whole network in f16 (`true`, the GPU's tensor cores: weights
+    /// converted once, activations stay f16 from the input to the two
+    /// outputs) or f32. Back to f32 keeps the f16 rounding - set it once.
+    pub(crate) fn set_half(&mut self, half: bool) {
+        let dtype = if half { DType::F16 } else { DType::F32 };
+        let all = self
+            .grid
+            .iter_mut()
+            .chain(self.down.iter_mut())
+            .chain(self.up.iter_mut())
+            .flatten()
+            .chain(self.middle.iter_mut())
+            .chain(self.features.iter_mut())
+            .chain([&mut self.prob, &mut self.dist]);
+        for conv in all {
+            conv.cast(dtype);
+        }
+        self.half = half;
+    }
+
     /// `[B, C, H, W]` (sides multiples of `config.div_by()`) →
-    /// `(prob [B, 1, H/gy, W/gx], dist [B, n_rays, H/gy, W/gx])`.
+    /// `(prob [B, 1, H/gy, W/gx], dist [B, n_rays, H/gy, W/gx])`, f32.
     pub(crate) fn forward(&self, mut x: Tensor<4>) -> (Tensor<4>, Tensor<4>) {
+        if self.half {
+            x = x.cast(DType::F16);
+        }
         for (round, pool_size) in self.grid.iter().zip(&self.grid_pools) {
             x = pool(convs(round, x, self.half), *pool_size);
         }
@@ -228,8 +251,8 @@ impl StarDistNet {
             x = relu(features.forward(x, self.half));
         }
         (
-            sigmoid(self.prob.forward(x.clone(), self.half)),
-            self.dist.forward(x, self.half),
+            sigmoid(self.prob.forward(x.clone(), self.half).cast(DType::F32)),
+            self.dist.forward(x, self.half).cast(DType::F32),
         )
     }
 }
