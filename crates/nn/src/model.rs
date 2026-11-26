@@ -45,6 +45,8 @@ pub use unet::UNet;
 /// An AI model: [`Model::pre`] → [`Model::infer`] → [`Model::post`] (see
 /// the module docs).
 pub trait Model: Sized + Send + Sync + 'static {
+    /// The architecture its model files name (`evanalyzer_arch`).
+    const ARCH: &'static str;
     /// What the model file says without its weights: architecture and
     /// defaults ([`Model::header`]).
     type Header: Send + Sync;

@@ -707,6 +707,7 @@ mod tests {
     struct Stages;
 
     impl Model for Stages {
+        const ARCH: &'static str = "stages";
         type Header = ();
         type Params = u32;
         type Input<'a> = &'a [f32];

@@ -191,6 +191,7 @@ fn in_file(file: &Path) -> impl Fn(NnError) -> NnError + '_ {
 }
 
 impl Model for StarDist {
+    const ARCH: &'static str = ARCH;
     type Header = StarDistHeader;
     type Params = StarDistParams;
     type Input<'a> = StarDistInput<'a>;

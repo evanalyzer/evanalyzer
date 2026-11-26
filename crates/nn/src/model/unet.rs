@@ -278,6 +278,7 @@ fn in_file(file: &Path) -> impl Fn(NnError) -> NnError + '_ {
 }
 
 impl Model for UNet {
+    const ARCH: &'static str = ARCH;
     type Header = UNetHeader;
     type Params = UNetParams;
     type Input<'a> = UNetInput<'a>;

@@ -91,7 +91,32 @@ pub(crate) fn run<M: Model>(
     out: &mut [u32],
 ) -> Result<Written, InternalErrors> {
     evanalyzer_nn::run::<M>(file, image, params, out, engine_config)
-        .map_err(|e| InternalErrors::Generic(e.to_string()))
+        .map_err(|e| run_error::<M>(file, e))
+}
+
+/// A failed run of `M` as the user reads it: when the model file is the
+/// reason (missing, no model, another kind of model), what it is and which
+/// step runs it - like the card at the step's file field; else nn's message.
+fn run_error<M: Model>(file: &std::path::Path, error: evanalyzer_nn::NnError) -> InternalErrors {
+    use crate::algos::ai_segmentation::model_file::{
+        ModelFileNote, ModelKind, model_file_note, read_start,
+    };
+    use evanalyzer_nn::NnError;
+    let about_the_file = matches!(
+        error,
+        NnError::Io(_) | NnError::UnsupportedArchitecture(_) | NnError::InvalidModelFile(_)
+    );
+    if about_the_file && let Some(kind) = ModelKind::of_arch(M::ARCH) {
+        let start = read_start(file);
+        match model_file_note(kind, file, start.as_deref().map_err(Clone::clone)) {
+            ModelFileNote::WrongKind(message) | ModelFileNote::Unusable(message) => {
+                return InternalErrors::Generic(format!("{}: {message}", kind.step()));
+            }
+            // The right kind, its contents don't fit: nn's message says what.
+            ModelFileNote::Fits(_) => {}
+        }
+    }
+    InternalErrors::Generic(error.to_string())
 }
 
 fn engine_config() -> EngineConfig {

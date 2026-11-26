@@ -35,7 +35,7 @@ impl ModelKind {
     const ALL: [Self; 3] = [Self::UNet, Self::StarDist, Self::CellposeSam];
 
     /// The kind of a model file's architecture (its `evanalyzer_arch`).
-    fn of_arch(arch: &str) -> Option<Self> {
+    pub fn of_arch(arch: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|k| k.arch() == arch)
     }
 
@@ -95,6 +95,25 @@ pub enum ModelFileNote {
     /// No model, or none this version runs, or the file can't be read: what
     /// to tell the user (an error).
     Unusable(String),
+}
+
+/// The start of the local file `path`: [`FIRST_READ`] bytes, or the whole
+/// header if it is larger - or why it can't be read.
+pub fn read_start(path: &Path) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let read = |len: usize| -> Result<Vec<u8>, String> {
+        let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+        let mut data = Vec::new();
+        file.take(len as u64)
+            .read_to_end(&mut data)
+            .map_err(|e| e.to_string())?;
+        Ok(data)
+    };
+    let start = read(FIRST_READ)?;
+    match header_size(&start) {
+        Ok(size) if size > start.len() && start.len() == FIRST_READ => read(size),
+        _ => Ok(start),
+    }
 }
 
 /// What the file `path` of a step that runs `kind` models is, from the

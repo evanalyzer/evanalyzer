@@ -241,4 +241,40 @@ mod tests {
         let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
         assert!(matches!(err, InternalErrors::Generic(_)));
     }
+
+    /// A run with the wrong kind of model file, or none: the error says
+    /// what the file is and which step runs it - not nn's architecture
+    /// names.
+    #[test]
+    fn a_wrong_model_file_names_the_step_that_runs_it() {
+        use evanalyzer_nn::model::unet::Preprocessing;
+        let dir = tempfile::tempdir().unwrap();
+        let unet = dir.path().join("shark.evanet");
+        let unet_file = evanalyzer_nn::test_support::unet_file(
+            evanalyzer_nn::test_support::tiny_unet_config(),
+            Preprocessing::None,
+        );
+        std::fs::write(&unet, unet_file).unwrap();
+        let run = |model_path: PathBuf| {
+            let cmd = Stardist {
+                model_path,
+                ..stardist(0.5, 0.3)
+            };
+            let mut ctx = gray_ctx(8, 8, vec![0.0; 64]);
+            cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())
+                .unwrap_err()
+                .to_string()
+        };
+        let wrong = run(unet);
+        assert!(
+            wrong.contains("AI Stardist Segmentation: shark.evanet is a U-Net model")
+                && wrong.contains("Use the step AI UNet Segmentation"),
+            "{wrong}"
+        );
+        let missing = run(dir.path().join("missing.evanet"));
+        assert!(
+            missing.contains("The model file can't be read"),
+            "{missing}"
+        );
+    }
 }

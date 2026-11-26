@@ -191,6 +191,7 @@ fn in_file(file: &Path) -> impl Fn(NnError) -> NnError + '_ {
 }
 
 impl Model for CellposeSam {
+    const ARCH: &'static str = ARCH;
     type Header = CellposeSamHeader;
     type Params = CellposeSamParams;
     type Input<'a> = CellposeSamInput<'a>;
