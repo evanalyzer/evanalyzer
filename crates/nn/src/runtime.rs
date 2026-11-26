@@ -103,6 +103,30 @@ pub struct Engine {
     pool: rayon::ThreadPool,
 }
 
+/// What a device wgpu lists is, as far as choosing one goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GpuKind {
+    Discrete,
+    Integrated,
+    /// Anything else: software adapters (llvmpipe, lavapipe, WARP report
+    /// themselves as CPUs), virtual GPUs, other backends.
+    Unused,
+}
+
+/// The kind of `device`, read from wgpu's adapter type (without opening it).
+fn gpu_kind(device: &Device) -> GpuKind {
+    use burn_dispatch::DispatchDevice;
+    use burn_dispatch::devices::{CubeDevice, WgpuDevice, WgpuDeviceKind};
+    match device.as_dispatch() {
+        DispatchDevice::Cube(CubeDevice::Wgpu(WgpuDevice { kind, .. })) => match kind {
+            WgpuDeviceKind::DiscreteGpu(_) => GpuKind::Discrete,
+            WgpuDeviceKind::IntegratedGpu(_) => GpuKind::Integrated,
+            _ => GpuKind::Unused,
+        },
+        _ => GpuKind::Unused,
+    }
+}
+
 /// The GPUs wgpu finds, discrete ones with their device and name (opened to
 /// read it); integrated ones are only counted - never opened, models don't
 /// run on them.
@@ -111,12 +135,13 @@ fn wgpu_gpus() -> (Vec<(Device, String)>, usize) {
         let mut discrete = Vec::new();
         let mut integrated = 0;
         for d in Device::enumerate(DeviceType::Wgpu).into_vec() {
-            let kind = format!("{d:?}");
-            if kind.contains("DiscreteGpu") {
-                let name = d.identity().map_or_else(|| "GPU".to_string(), |id| id.name);
-                discrete.push((d, name));
-            } else if kind.contains("IntegratedGpu") {
-                integrated += 1;
+            match gpu_kind(&d) {
+                GpuKind::Discrete => {
+                    let name = d.identity().map_or_else(|| "GPU".to_string(), |id| id.name);
+                    discrete.push((d, name));
+                }
+                GpuKind::Integrated => integrated += 1,
+                GpuKind::Unused => {}
             }
         }
         (discrete, integrated)
@@ -521,6 +546,29 @@ mod tests {
         assert_eq!(selected_gpus(&DeviceSelection::Gpus(vec![0, 3]), 2), [0]);
         assert_eq!(selected_gpus(&DeviceSelection::Auto, 2), [0, 1]);
         assert!(selected_gpus(&DeviceSelection::Cpu, 2).is_empty());
+    }
+
+    /// Devices are told apart by their wgpu kind: only discrete GPUs run
+    /// models, software adapters (wgpu kind `Cpu`) and the CPU backend never
+    /// count as GPUs. Lazy devices - nothing is opened, no GPU needed.
+    #[test]
+    fn devices_are_classified_by_their_wgpu_kind() {
+        use burn::tensor::DeviceKind;
+        assert_eq!(
+            gpu_kind(&Device::wgpu(DeviceKind::DiscreteGpu(1))),
+            GpuKind::Discrete
+        );
+        assert_eq!(
+            gpu_kind(&Device::wgpu(DeviceKind::IntegratedGpu(0))),
+            GpuKind::Integrated
+        );
+        for unused in [
+            Device::wgpu(DeviceKind::Cpu),
+            Device::wgpu(DeviceKind::VirtualGpu(0)),
+            Device::flex(),
+        ] {
+            assert_eq!(gpu_kind(&unused), GpuKind::Unused, "{unused:?}");
+        }
     }
 
     /// Many callers on a pipeline's rayon pool, each running a model whose
