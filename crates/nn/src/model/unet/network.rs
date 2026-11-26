@@ -484,7 +484,7 @@ mod tests {
                 (t.name.clone(), view)
             })
             .collect();
-        let file = safetensors::serialize(views, &None).unwrap();
+        let file = safetensors::serialize(views, None).unwrap();
         let file = SafeTensors::deserialize(&file).unwrap();
         let mut loaded = UNet2d::new(&config(Norm::Instance), Some(Initializer::Zeros), &device);
         loaded.load_torch_em(&file, &device).unwrap();

@@ -337,7 +337,7 @@ mod tests {
         use safetensors::tensor::{Dtype, TensorView};
         let data = 1.0f32.to_le_bytes();
         let view = TensorView::new(Dtype::F32, vec![1], &data).unwrap();
-        safetensors::serialize_to_file([("x", view)], &None, &path).unwrap();
+        safetensors::serialize_to_file([("x", view)], None, &path).unwrap();
         let bytes = std::fs::read(&path).unwrap();
         assert!(matches!(
             ModelFile::parse(&bytes),

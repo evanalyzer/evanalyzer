@@ -15,7 +15,7 @@
 //! - [`accounting`]: what the process really has allocated in large blocks
 //!   (the application's global allocator counts them).
 //!
-//! Also here: what the computer has ([`SystemRam`], [`SystemDiagnostics`]) -
+//! Also here: what the computer has ([`SystemRam`], [`cpu_ram_diagnostics`]) -
 //! within a container's memory limit and the user's [`ResourceLimits`]
 //! (`--max-threads`, `--max-ram`, Settings › Performance).
 //!
@@ -165,38 +165,11 @@ pub fn return_freed_memory_to_os() {
     }
 }
 
-/// Snapshot of host machine capabilities, surfaced read-only (e.g. in the
-/// About dialog's System tab). Not used for any sizing decision - see
-/// [`SystemRam`] and the submodules for that.
-pub struct SystemDiagnostics {
-    pub cpu_cores: usize,
-    pub total_ram_bytes: u64,
-    /// The GPUs, and which ones AI models run on.
-    pub gpus: Vec<crate::GpuInfo>,
-}
-
 /// The CPU cores and total RAM EVAnalyzer may use ([`cpu_cores`],
 /// [`SystemRam::total`]) - within the user's [`ResourceLimits`]. Cheap and
 /// fast (no driver/device probing) - safe to call on a startup path.
 pub fn cpu_ram_diagnostics() -> (usize, u64) {
     (cpu_cores(), SystemRam::now().total)
-}
-
-/// Reads current host CPU/RAM/GPU availability once, for display purposes.
-///
-/// Includes the GPU probe (see [`gpus`]), which is slow - don't call this on
-/// a UI startup path; use [`cpu_ram_diagnostics`] plus a backgrounded
-/// [`gpus`] instead (see `evanalyzer_gui`).
-///
-/// [`gpus`]: crate::gpus
-pub fn system_diagnostics() -> SystemDiagnostics {
-    let (cpu_cores, total_ram_bytes) = cpu_ram_diagnostics();
-
-    SystemDiagnostics {
-        cpu_cores,
-        total_ram_bytes,
-        gpus: crate::gpus(),
-    }
 }
 
 /// Formats a byte count in binary (1024-based) units - GiB/MiB - not the
@@ -262,9 +235,9 @@ mod tests {
     }
 
     #[test]
-    fn system_diagnostics_reports_at_least_one_core_and_nonzero_ram() {
-        let diag = system_diagnostics();
-        assert!(diag.cpu_cores >= 1);
-        assert!(diag.total_ram_bytes > 0);
+    fn cpu_ram_diagnostics_reports_at_least_one_core_and_nonzero_ram() {
+        let (cores, ram) = cpu_ram_diagnostics();
+        assert!(cores >= 1);
+        assert!(ram > 0);
     }
 }

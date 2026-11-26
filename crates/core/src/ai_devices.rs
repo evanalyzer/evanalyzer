@@ -104,6 +104,15 @@ fn device_selection(devices: &AiDeviceSelection) -> DeviceSelection {
     }
 }
 
+/// How many GPUs AI models run on with this process' options - 0 for
+/// `--ai-devices cpu` without looking for any; else see [`gpus`].
+pub(crate) fn used_gpu_count() -> usize {
+    match OPTIONS.get().map(|o| &o.devices) {
+        Some(AiDeviceSelection::Cpu) => 0,
+        _ => gpus().iter().filter(|gpu| gpu.used).count(),
+    }
+}
+
 /// The computer's GPUs and which ones AI models run on with this process'
 /// options (`--ai-devices`; nothing is fixed by asking). Opens the discrete
 /// GPUs once: slow, keep it off startup paths.

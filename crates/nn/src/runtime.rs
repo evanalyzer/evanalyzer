@@ -380,11 +380,6 @@ impl Engine {
     }
 }
 
-/// Whether wgpu sees a discrete GPU (opens the adapters once).
-pub fn gpu_available() -> bool {
-    found_gpus().iter().any(|gpu| gpu.discrete)
-}
-
 /// A GPU of the computer, as [`gpus`] reports it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GpuInfo {
@@ -420,8 +415,8 @@ fn found_gpus() -> &'static [GpuInfo] {
 }
 
 /// The computer's GPUs and which ones models run on with `selection` (for
-/// display, e.g. the About dialog). Slow on the first call, see
-/// [`gpu_available`].
+/// display, e.g. the About dialog). Slow on the first call: opens the
+/// discrete GPUs (once per process).
 pub fn gpus(selection: &DeviceSelection) -> Vec<GpuInfo> {
     let found = found_gpus();
     let chosen = selected_gpus(selection, found.iter().filter(|g| g.discrete).count());
@@ -439,18 +434,26 @@ pub fn gpus(selection: &DeviceSelection) -> Vec<GpuInfo> {
 mod tests {
     use super::*;
     use crate::model::Image;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    /// A "model" counting its loads, failing (panicking) on the first runs
-    /// it is told to.
+    /// A "model" counting its loads per file - per file, so tests running
+    /// at the same time don't count each other's.
     struct Counting;
-    static LOADS: AtomicUsize = AtomicUsize::new(0);
+    static LOADS: Mutex<Vec<(PathBuf, usize)>> = Mutex::new(Vec::new());
+
+    fn loads(path: &Path) -> usize {
+        let loads = LOADS.lock().unwrap();
+        loads.iter().find(|(p, _)| p == path).map_or(0, |(_, n)| *n)
+    }
 
     impl Model for Counting {
         type Settings = usize;
         type Output = usize;
-        fn load(_: &Path, _: &Device, _: bool) -> Result<Self, NnError> {
-            LOADS.fetch_add(1, Ordering::SeqCst);
+        fn load(path: &Path, _: &Device, _: bool) -> Result<Self, NnError> {
+            let mut loads = LOADS.lock().unwrap();
+            match loads.iter_mut().find(|(p, _)| p == path) {
+                Some((_, n)) => *n += 1,
+                None => loads.push((path.to_path_buf(), 1)),
+            }
             Ok(Self)
         }
         fn infer(&self, _: Image<'_>, settings: &usize) -> Result<usize, NnError> {
@@ -473,19 +476,18 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("m");
         std::fs::write(&path, b"x").unwrap();
-        let before = LOADS.load(Ordering::SeqCst);
         for i in 0..3 {
             let out = engine
                 .run::<Counting, _>(&path, |m| m.infer(image(), &i))
                 .unwrap();
             assert_eq!(out, 2 * i);
         }
-        assert_eq!(LOADS.load(Ordering::SeqCst) - before, 1);
+        assert_eq!(loads(&path), 1);
         engine.release_models();
         engine
             .run::<Counting, _>(&path, |m| m.infer(image(), &1))
             .unwrap();
-        assert_eq!(LOADS.load(Ordering::SeqCst) - before, 2);
+        assert_eq!(loads(&path), 2);
         assert_eq!(
             engine.info().devices,
             [DeviceInfo {

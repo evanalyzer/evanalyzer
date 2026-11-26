@@ -610,8 +610,8 @@ DuckDB (`win` | `win-arm64` | `mac`). burn and its crates are workspace dependen
 dialog names the GPU AI runs on. `burn-tch`/`torch-sys` stay in Cargo.lock only
 (optional deps of burn-dispatch, never built - `cargo tree -i` prints nothing).
 U-Net conversion: `docs/export_unet_weights.py` → `convert_unet`. burn 0.22's MPL-2.0 crates `buildid`, `colored` and `rustc_apfloat` (Apache-2.0
-WITH LLVM-exception) accepted per crate in `about.toml` (2026-11-26). Open: `AI_ENGINE_BYTES` (320 MB,
-measured for libtorch) to measure again for burn.
+WITH LLVM-exception) accepted per crate in `about.toml` (2026-11-26). `AI_ENGINE_BYTES` measured again (2026-11-26, `measure_engine_ram`): 16 MB on the CPU
++ 448 MB per GPU used (`ai_engine_bytes`, BENCHMARK.md).
 
 ### P8 - Final measurement and merge (1-2 days)
 

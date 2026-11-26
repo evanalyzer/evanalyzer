@@ -1063,13 +1063,28 @@ fn load_licenses(ui: &AppWindow) {
 /// The About dialog's GPU card: the GPUs AI models run on by name (so one
 /// sees whether it is e.g. the NVIDIA card), else why the CPU is used.
 fn gpu_summary(gpus: &[evanalyzer_app::backend::Gpu]) -> (String, String) {
-    let used: Vec<&str> = gpus
-        .iter()
-        .filter(|g| g.used)
-        .map(|g| g.name.as_str())
-        .collect();
+    // Identical cards once, with their count: "2 × NVIDIA GeForce RTX 4090".
+    let mut used: Vec<(&str, usize)> = Vec::new();
+    for gpu in gpus.iter().filter(|g| g.used) {
+        match used.iter_mut().find(|(name, _)| *name == gpu.name) {
+            Some((_, count)) => *count += 1,
+            None => used.push((&gpu.name, 1)),
+        }
+    }
     if !used.is_empty() {
-        return (used.join(", "), "AI runs on the GPU".into());
+        let names: Vec<String> = used
+            .iter()
+            .map(|(name, count)| match count {
+                1 => name.to_string(),
+                n => format!("{n} × {name}"),
+            })
+            .collect();
+        let note = if gpus.iter().filter(|g| g.used).count() > 1 {
+            "AI runs on these GPUs"
+        } else {
+            "AI runs on the GPU"
+        };
+        return (names.join(", "), note.into());
     }
     match gpus.first() {
         None => ("None found".into(), "AI runs on the CPU".into()),
@@ -1402,6 +1417,13 @@ mod ui_state_tests {
             (
                 "NVIDIA GeForce RTX 3060".into(),
                 "AI runs on the GPU".into()
+            )
+        );
+        assert_eq!(
+            gpu_summary(&[nvidia.clone(), nvidia.clone(), intel.clone()]),
+            (
+                "2 × NVIDIA GeForce RTX 3060".into(),
+                "AI runs on these GPUs".into()
             )
         );
         let not_chosen = Gpu {

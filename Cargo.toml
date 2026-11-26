@@ -65,7 +65,7 @@ sysinfo = "0.40.4"
 petname = "3.2.0"
 smartcore = { version = "0.7.0", features = ["serde"] }
 # Model files (D2).
-safetensors = "0.3.3"
+safetensors = "0.8.0"
 # `std` and `optim`: MLP training. No `cpu` (CubeCL CPU links the C++ LLVM
 # library) - burn-flex is the CPU backend.
 burn = { version = "0.22.1", default-features = false, features = ["flex", "wgpu", "vulkan", "autotune", "fusion", "std", "optim"] }

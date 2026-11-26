@@ -11,7 +11,7 @@ package's TorchScript (`weights-torchscript.pt`) or PyTorch state dict
 writes the model file EVAnalyzer reads.
 
     pip install torch safetensors
-    python export_unet_weights.py tests/romantic-shark/weights-torchscript.pt weights.safetensors
+    python export_unet_weights.py tests/romantic-shark/weights.pt weights.safetensors
 """
 
 import argparse

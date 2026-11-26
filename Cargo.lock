@@ -4121,7 +4121,7 @@ dependencies = [
  "libc",
  "log",
  "rayon",
- "safetensors 0.3.3",
+ "safetensors 0.8.0",
  "serde",
  "serde_json",
  "smartcore",

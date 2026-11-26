@@ -2636,6 +2636,42 @@ build of 34bb18e1, one run each).
   0.2-0.3 s).
 - Not covered: a weak computer; XLSX at this size (over a sheet's rows).
 
+## libtorch removed, the AI engine's own RAM on burn (2026-11-25/26)
+
+**The AI engine's own RAM** (`AI_ENGINE_BYTES`, what the planner reserves
+once for a job with an AI step). `evanalyzer_nn` example
+`measure_engine_ram cpu|gpu`: a tiny U-Net (2 levels, 4 filters) through
+`evanalyzer_nn::infer` on 64², so the growth is the engine itself; one
+process per device, three runs each, 22 cores:
+
+| Device | RSS after the first run | after ten runs |
+|---|---|---|
+| CPU (burn-flex) | +7.5-7.9 MB | +9.4-10.0 MB |
+| NVIDIA RTX 3000 Ada (wgpu/Vulkan) | +380-420 MB | +380-420 MB |
+
+Was 320 MB for every job (libtorch's libraries, ~280 MB). Now 16 MB on the
+CPU plus 448 MB per GPU used (`ai_engine_bytes`): a computer without a GPU
+plans 304 MB less, one with a GPU ~140 MB more. The GPU part is the graphics
+driver in the process (host RAM), not the GPU's own memory.
+
+**libtorch, crates/ai and the burn-dispatch patch removed** (b08f48ff;
+HEAD 1273124c already ran every model on burn). Release builds,
+alternated, 10 s pauses:
+
+| Case | Before | After |
+|---|---|---|
+| Startup (`--version`) | 11 ms, 31 MB | 10 ms, 32 MB |
+| `bench_pipeline` 200 x 2048², 8 threads, pinned to the P cores (8 runs) | 7.06 s wall, 51.5 s CPU, 1193 MB | 7.15 s, 52.6 s, 1193 MB |
+| `bench_pipeline` one 16384² image (tiled) | 1.227 s, 2026 MB | 1.217 s, 2052 MB |
+| Program size (`evanalyzer`) | 276.50 MB | 276.40 MB |
+
+The small images are 1-2 % slower in every series (two copies of the same
+binary: 0.03 %). The analysis code is unchanged: same features and versions,
+the patch put back changes nothing, `crates/core/src` from before (only the
+`gpus()` / plugin-field edits, none in that path) gives the old instruction
+count (perf, P cores: 5.430e11 vs 5.441e11) - code placement by the
+compiler, not more work. Packages lose libtorch (CPU ~0.5 GB, CUDA ~2 GB).
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -2646,6 +2682,7 @@ graphics driver).
 |---|---|---|---|
 | App idle after start (AI not loaded) | 207 MB | 2026-10-19 | The real app above |
 | Analysis of 50 images 2048², 1 / 2 / 4 threads | 226 / 326 / 499 MB | 2026-10-29 | Everyday images on a small computer |
+| AI engine itself (burn), CPU / per NVIDIA GPU (driver) | +10 MB / +380-420 MB | 2026-11-26 | libtorch removed, the AI engine's own RAM on burn |
 | Image viewer, whole slide, default caches | ~280 MB above start | 2026-10-17 | Image viewer |
 | Image viewer, 2 threads, small caches | ~190 MB above start | 2026-10-17 | Image viewer |
 | Viewer with a breakpoint tile compared | ~400 MB | 2026-10-18 | Breakpoint compare |

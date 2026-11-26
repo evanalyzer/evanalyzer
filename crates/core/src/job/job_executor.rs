@@ -2043,8 +2043,8 @@ impl<'a> JobExecutor {
     /// several tiles the merged cache's smallest share, the results file's
     /// smallest share (DuckDB, [`RESULTS_FILE_MIN_MB`](crate::memory::storage::RESULTS_FILE_MIN_MB))
     /// and the program itself ([`PROGRAM_BYTES`](crate::memory::analysis::PROGRAM_BYTES),
-    /// with an AI step its engine's libraries:
-    /// [`AI_ENGINE_BYTES`](crate::memory::analysis::AI_ENGINE_BYTES)). Less,
+    /// with an AI step its engine:
+    /// [`ai_engine_bytes`](crate::memory::analysis::ai_engine_bytes)). Less,
     /// and it runs out of memory or swaps; more makes it faster (threads,
     /// caches).
     pub fn minimum_ram_bytes(&self) -> u64 {
@@ -2061,10 +2061,10 @@ impl<'a> JobExecutor {
             true => crate::memory::analysis::MERGED_CACHE_MIN_TILES * budget.min_image_cache_bytes,
             false => 0,
         };
-        use crate::memory::analysis::{AI_ENGINE_BYTES, PROGRAM_BYTES};
+        use crate::memory::analysis::{PROGRAM_BYTES, ai_engine_bytes};
         // Only an AI step takes RAM once for the job (`shared_ram_bytes`).
         let ai_engine = if budget.shared_bytes > 0 {
-            AI_ENGINE_BYTES
+            ai_engine_bytes()
         } else {
             0
         };
@@ -6054,7 +6054,7 @@ mod estimate_ram_per_worker_bytes_tests {
             }
             job
         };
-        use crate::memory::analysis::{AI_ENGINE_BYTES, PROGRAM_BYTES};
+        use crate::memory::analysis::{PROGRAM_BYTES, ai_engine_bytes};
         let small = job(1024, false);
         let budget = small.estimate_ram_budget();
         assert_eq!(
@@ -6076,7 +6076,7 @@ mod estimate_ram_per_worker_bytes_tests {
         let ai = with_ai.estimate_ram_budget();
         assert_eq!(
             with_ai.minimum_ram_bytes() - slide.minimum_ram_bytes(),
-            AI_ENGINE_BYTES + ai.shared_bytes + (ai.total_bytes() - budget.total_bytes())
+            ai_engine_bytes() + ai.shared_bytes + (ai.total_bytes() - budget.total_bytes())
         );
     }
 
