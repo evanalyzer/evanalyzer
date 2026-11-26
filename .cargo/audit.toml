@@ -13,15 +13,14 @@ ignore = [
     # in the tree before re-adding an ignore for it.
 
     # bincode (RUSTSEC-2025-0141, "Bincode is unmaintained"; informational,
-    # covers every version, nothing to upgrade to) - not used by evanalyzer's
-    # own crates (models are JSON, tile scratch files are postcard), but still
-    # pulled in by burn-core (trained classifiers' ML framework). Remove this
-    # ignore once it has migrated away.
+    # covers every version, nothing to upgrade to) - not built: only in
+    # Cargo.lock, as an optional dependency of `typed-index-collections`
+    # (Slint's compiler). Remove this ignore once it is out of the lock.
     "RUSTSEC-2025-0141",
 
     # paste 1.0.15 (RUSTSEC-2024-0436, "no longer maintained") - pulled in
-    # by burn-ndarray (trained classifiers). A tiny, extremely widely-used
-    # proc-macro (identifier concatenation) with no unresolved issues; the
+    # by burn-dispatch (AI models and the MLP classifier, crates/nn). A tiny,
+    # extremely widely-used proc-macro (identifier concatenation) with no unresolved issues; the
     # unmaintained status is about the repository, not a known defect.
     "RUSTSEC-2024-0436",
 

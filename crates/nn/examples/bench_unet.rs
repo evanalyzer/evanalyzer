@@ -10,8 +10,8 @@
 //! P0 of the burn migration: the U-Net (torch-em `UNet2d`, InstanceNorm,
 //! depth 4, gain 2 - romantic-shark's layout) in burn with random weights,
 //! one inference on a `side`² image - the same image and measurement as
-//! `crates/ai`'s `bench_ai_ram` (`unet-file=` romantic-shark's TorchScript),
-//! to compare against libtorch:
+//! the removed libtorch engine's `bench_ai_ram` (`unet-file=` romantic-shark's
+//! TorchScript, in git history before 2026-11-25), to compare against it:
 //!
 //!   cargo build-linux -p evanalyzer_nn --example bench_unet
 //!   target/x86_64-unknown-linux-gnu/release/examples/bench_unet <features> <side> [threads] [flex|wgpu|dgpu|igpu|vulkan] [f32|f16]

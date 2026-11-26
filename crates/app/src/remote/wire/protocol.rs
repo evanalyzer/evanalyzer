@@ -78,7 +78,9 @@ use std::sync::Arc;
 // of all images sends no list of paths per page.
 // 60: `ExportResults` (the old results export, a `ResultExport`) is
 // `ExportParquet` (a folder): the tables are written by `RunExport`.
-pub const PROTOCOL_VERSION: u32 = 60;
+// 61: `SystemInfo::gpus` (every GPU, its name, whether AI runs on it)
+// replaces `cuda_available`.
+pub const PROTOCOL_VERSION: u32 = 61;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 

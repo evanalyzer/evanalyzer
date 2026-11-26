@@ -11,7 +11,7 @@
 # Ubuntu 24.04+, Debian 13+, Fedora 40+, RHEL 10+).
 #
 # Checks every ELF file (program and libraries) under the given folders or
-# files - ours and the bundled ones (libtorch, NVIDIA's).
+# files.
 #
 # Usage: check-glibc.sh <max version, e.g. 2.39> <file or folder>...
 

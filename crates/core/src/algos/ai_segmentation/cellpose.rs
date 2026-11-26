@@ -189,7 +189,7 @@ impl ImageAlgorithm for Cellpose {
     /// One inference at a time on the CPU: the network on one 256² piece
     /// (Cellpose-SAM's ViT; estimated from a 1024² run: ~1.7 GB peak with
     /// its 1.2 GB of weights - BENCHMARK.md "AI models: Cellpose through the
-    /// plugin") plus the pieces blended over the image, 46 bytes per pixel
+    /// plugin", libtorch) plus the pieces blended over the image, 46 bytes per pixel
     /// (measured with a stand-in: 766 MB at 4096²), and the model's
     /// weights. The image is only ever scaled down (`max_resize`), so the
     /// tile's pixels bound it.

@@ -7,9 +7,8 @@
 # the server and its workers - made from the release's command-line
 # packages, nothing is compiled here:
 #
-#   evanalyzer-cli-linux-x86_64.tar.gz       -> linux/amd64 (AI on the CPU)
-#   evanalyzer-cli-linux-arm64.tar.gz        -> linux/arm64 (no AI)
-#   evanalyzer-cli-linux-x86_64-cuda.tar.xz  -> linux/amd64 (AI with CUDA)
+#   evanalyzer-cli-linux-x86_64.tar.gz  -> linux/amd64
+#   evanalyzer-cli-linux-arm64.tar.gz   -> linux/arm64
 #
 # The packages come in as the build context `package`, unpacked into one
 # folder per architecture (amd64/, arm64/):
@@ -57,8 +56,7 @@ LABEL org.opencontainers.image.title="EVAnalyzer" \
       org.opencontainers.image.licenses="PolyForm-Noncommercial-1.0.0" \
       org.opencontainers.image.authors="Joachim Danmayr"
 
-# The package as released: the program, ai/ (the plugin and its libtorch),
-# templates/, the licences.
+# The package as released: the program, templates/, the licences.
 COPY --from=package /${TARGETARCH}/ /opt/evanalyzer/
 # The server's container defaults: listen on every interface, state in a
 # volume, users may work in /data. Override with your own --config file.

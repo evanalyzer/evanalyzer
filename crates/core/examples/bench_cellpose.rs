@@ -12,16 +12,13 @@
 // generator + JobExecutor. Prints the wall time and the process's peak RAM.
 // See BENCHMARK.md ("AI models: Cellpose").
 //
-// Usage: cargo run --release -p evanalyzer_core --features libtorch --example bench_cellpose -- \
-//     <workdir> --model <model.pt> [--plugin <file>] [--images N] [--size PX] [--threads N] [--channels N] [--repeat N]
+// Usage: cargo build-linux -p evanalyzer_core --example bench_cellpose, then
+//   target/x86_64-unknown-linux-gnu/release/examples/bench_cellpose \
+//     <workdir> --model <model.safetensors> [--cpu] [--images N] [--size PX] [--threads N] [--channels N] [--repeat N]
 //
 // `--repeat N` runs the job N times in one process: the first run includes
-// setting up the engine, loading the model and libtorch's warm-up; the
-// others are the steady state (their median is printed).
-//
-// `--features libtorch` runs the model through the plugin (build it with
-// `cargo build-ai-plugin --release`, point at it with `--plugin <file>`),
-// `--features libtorch-in-process` with libtorch linked in.
+// setting up the engine, loading the model and the warm-up; the others are
+// the steady state (their median is printed). `--cpu` never uses a GPU.
 
 use evanalyzer_cfg::core_types::{ImageAddress, SegmentationClass};
 use evanalyzer_cfg::settings::images_settings::ImageEntry;
@@ -91,11 +88,11 @@ fn peak_rss_mb() -> u64 {
 fn main() {
     env_logger::init();
     let workdir = PathBuf::from(std::env::args().nth(1).expect("workdir"));
-    let model = PathBuf::from(arg("--model").expect("--model <model.pt>"));
-    if let Some(plugin) = arg("--plugin") {
+    let model = PathBuf::from(arg("--model").expect("--model <model.safetensors>"));
+    if std::env::args().any(|a| a == "--cpu") {
         evanalyzer_core::ai_devices::configure_ai_devices(
             evanalyzer_core::ai_devices::AiDeviceOptions {
-                plugin: Some(PathBuf::from(plugin)),
+                devices: evanalyzer_core::ai_devices::AiDeviceSelection::Cpu,
                 ..Default::default()
             },
         );

@@ -7,7 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 //!
-//! StarDist 2D as the libtorch engine ran it (`crates/ai/src/torch/stardist.rs`):
+//! StarDist 2D as the libtorch engine ran it (removed `crates/ai/src/torch/stardist.rs`):
 //! the object probability and the ray distances per grid cell. The tile is
 //! padded at the end (mirrored, as StarDist) to the network's multiple, run
 //! whole or in pieces (`crate::pieces`, the receptive field probed once),

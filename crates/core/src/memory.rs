@@ -171,9 +171,8 @@ pub fn return_freed_memory_to_os() {
 pub struct SystemDiagnostics {
     pub cpu_cores: usize,
     pub total_ram_bytes: u64,
-    /// A GPU AI models can run on (the name is older than wgpu: CUDA
-    /// before 2026-11-25).
-    pub cuda_available: bool,
+    /// The GPUs, and which ones AI models run on.
+    pub gpus: Vec<crate::GpuInfo>,
 }
 
 /// The CPU cores and total RAM EVAnalyzer may use ([`cpu_cores`],
@@ -183,20 +182,20 @@ pub fn cpu_ram_diagnostics() -> (usize, u64) {
     (cpu_cores(), SystemRam::now().total)
 }
 
-/// Reads current host CPU/RAM/CUDA availability once, for display purposes.
+/// Reads current host CPU/RAM/GPU availability once, for display purposes.
 ///
-/// Includes the CUDA probe (see [`cuda_is_available`]), which is slow - don't
-/// call this on a UI startup path; use [`cpu_ram_diagnostics`] plus a
-/// backgrounded [`cuda_is_available`] instead (see `evanalyzer_gui`).
+/// Includes the GPU probe (see [`gpus`]), which is slow - don't call this on
+/// a UI startup path; use [`cpu_ram_diagnostics`] plus a backgrounded
+/// [`gpus`] instead (see `evanalyzer_gui`).
 ///
-/// [`cuda_is_available`]: crate::cuda_is_available
+/// [`gpus`]: crate::gpus
 pub fn system_diagnostics() -> SystemDiagnostics {
     let (cpu_cores, total_ram_bytes) = cpu_ram_diagnostics();
 
     SystemDiagnostics {
         cpu_cores,
         total_ram_bytes,
-        cuda_available: crate::cuda_is_available(),
+        gpus: crate::gpus(),
     }
 }
 

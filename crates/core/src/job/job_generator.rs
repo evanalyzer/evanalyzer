@@ -892,8 +892,7 @@ fn name_measurements(
 }
 
 /// The enabled dataset steps of `config`'s enabled pipelines, in pipeline
-/// and step order. Image steps aren't built, so an image step this build
-/// can't run (e.g. an AI step in a build without the `libtorch` feature) doesn't matter.
+/// and step order. Image steps aren't built here.
 pub(crate) fn dataset_steps_from_project_settings(
     config: &ProjectSettings,
 ) -> Result<Vec<Box<dyn DatasetAlgorithm>>, InternalErrors> {

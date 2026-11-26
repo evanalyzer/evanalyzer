@@ -8,7 +8,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 //!
 //! U-Net (torch-em `UNet2d`, bioimage.io's U-Nets) as the libtorch engine
-//! ran it (`crates/ai/src/torch/unet.rs`): the tile normalized if the model
+//! ran it (removed `crates/ai/src/torch/unet.rs`): the tile normalized if the model
 //! file asks for it, mirror-padded to a multiple of `2^depth` with at least
 //! [`MARGIN`] px of context, run whole or in pieces (`crate::pieces`), the
 //! prediction cropped back and reduced to the foreground (and boundary)

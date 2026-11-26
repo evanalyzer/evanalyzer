@@ -136,7 +136,7 @@ pub trait Backend: Send + Sync {
     }
 
     /// The machine the work runs on - the worker's in remote mode - for the
-    /// About dialog. Slow on first call (probing CUDA loads the driver), so
+    /// About dialog. Slow on first call (probing the GPUs opens them), so
     /// call it off the UI thread.
     fn system_info(&self) -> Result<SystemInfo, InternalErrors>;
 
@@ -176,8 +176,21 @@ pub struct SystemInfo {
     pub cpu_cores: usize,
     /// Total RAM in bytes.
     pub ram_total_bytes: u64,
-    /// Whether a CUDA device is usable.
-    pub cuda_available: bool,
+    /// The GPUs there, discrete ones first; AI models run on the `used`
+    /// ones, else on the CPU.
+    pub gpus: Vec<Gpu>,
+}
+
+/// A GPU of the machine a backend computes on.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Gpu {
+    /// As its driver names it (e.g. "NVIDIA GeForce RTX 3060"), or
+    /// "Integrated GPU".
+    pub name: String,
+    /// Has its own memory - AI models run only on discrete GPUs.
+    pub discrete: bool,
+    /// AI models run on it (`--ai-devices`).
+    pub used: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

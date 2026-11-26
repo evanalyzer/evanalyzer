@@ -215,7 +215,7 @@ fn real_cpsam_gives_cellposes_output() {
 }
 
 /// `infer` (resize, channel fill, tiles, blending, sigmoid) on cpsam_v2
-/// against the libtorch engine as the app ran it (`crates/ai` example
+/// against the libtorch engine as the app ran it (the removed `crates/ai` example
 /// `cellpose_reference`): one tile, an odd size, a resize, 1024² in 25
 /// tiles. Two references:
 ///
@@ -223,9 +223,9 @@ fn real_cpsam_gives_cellposes_output() {
 ///   weights (traced from Cellpose's `CPSAM`) - the same network, so the
 ///   app path (tiles, blending, resize) is compared: strict;
 /// - `reference/`: the engine with the TorchScript the app shipped
-///   (`docs/convert_cellpose.py`, which loads through `CellposeModel` and
-///   so rounds the weights to bfloat16 first - 0.044 off Cellpose's f32
-///   network already in PyTorch): within that rounding.
+///   (the removed `docs/convert_cellpose.py`, which loads through
+///   `CellposeModel` and so rounds the weights to bfloat16 first - 0.044
+///   off Cellpose's f32 network already in PyTorch): within that rounding.
 ///
 /// Release build, see `real_cpsam_gives_cellposes_output`.
 #[test]

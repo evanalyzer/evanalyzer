@@ -9,7 +9,7 @@
 //!
 //! Backend and devices, chosen once per process on the first model run -
 //! nothing is set up before (idle RAM, startup). Ported from the libtorch
-//! engine's scheduler (`crates/ai/src/torch/scheduler.rs`), the same rules:
+//! engine's scheduler (removed `crates/ai/src/torch/scheduler.rs`), the same rules:
 //!
 //! - every discrete GPU wgpu finds (or the ones asked for), else the CPU
 //!   (burn-flex); integrated GPUs and software adapters are not used;
@@ -103,23 +103,33 @@ pub struct Engine {
     pool: rayon::ThreadPool,
 }
 
-/// The discrete GPUs wgpu finds: their devices and names.
-fn discrete_gpus() -> Vec<(Device, String)> {
+/// The GPUs wgpu finds, discrete ones with their device and name (opened to
+/// read it); integrated ones are only counted - never opened, models don't
+/// run on them.
+fn wgpu_gpus() -> (Vec<(Device, String)>, usize) {
     let found = catch_unwind(|| {
-        Device::enumerate(DeviceType::Wgpu)
-            .into_vec()
-            .into_iter()
-            .filter(|d| format!("{d:?}").contains("DiscreteGpu"))
-            .map(|d| {
+        let mut discrete = Vec::new();
+        let mut integrated = 0;
+        for d in Device::enumerate(DeviceType::Wgpu).into_vec() {
+            let kind = format!("{d:?}");
+            if kind.contains("DiscreteGpu") {
                 let name = d.identity().map_or_else(|| "GPU".to_string(), |id| id.name);
-                (d, name)
-            })
-            .collect::<Vec<_>>()
+                discrete.push((d, name));
+            } else if kind.contains("IntegratedGpu") {
+                integrated += 1;
+            }
+        }
+        (discrete, integrated)
     });
     found.unwrap_or_else(|_| {
         warn!("Looking for GPUs failed - models run on the CPU");
-        Vec::new()
+        (Vec::new(), 0)
     })
+}
+
+/// The discrete GPUs wgpu finds: their devices and names.
+fn discrete_gpus() -> Vec<(Device, String)> {
+    wgpu_gpus().0
 }
 
 /// The GPU indexes to use out of `count`; asked-for ones that don't exist
@@ -372,9 +382,57 @@ impl Engine {
 
 /// Whether wgpu sees a discrete GPU (opens the adapters once).
 pub fn gpu_available() -> bool {
+    found_gpus().iter().any(|gpu| gpu.discrete)
+}
+
+/// A GPU of the computer, as [`gpus`] reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GpuInfo {
+    /// As its driver names it (e.g. "NVIDIA GeForce RTX 3060"); an
+    /// integrated GPU is not opened, so "Integrated GPU".
+    pub name: String,
+    /// Has its own memory. Models run only on discrete GPUs; integrated
+    /// ones (sharing the RAM, e.g. Intel's in most laptops) are not used.
+    pub discrete: bool,
+    /// Models run on it: discrete and chosen by the [`DeviceSelection`].
+    pub used: bool,
+}
+
+/// Discrete GPUs (number order) then integrated ones, found once per
+/// process - slow the first time (opens the discrete GPUs).
+fn found_gpus() -> &'static [GpuInfo] {
     use std::sync::OnceLock;
-    static FOUND: OnceLock<bool> = OnceLock::new();
-    *FOUND.get_or_init(|| !discrete_gpus().is_empty())
+    static FOUND: OnceLock<Vec<GpuInfo>> = OnceLock::new();
+    FOUND.get_or_init(|| {
+        let (discrete, integrated) = wgpu_gpus();
+        let discrete = discrete.into_iter().map(|(_, name)| GpuInfo {
+            name,
+            discrete: true,
+            used: false,
+        });
+        let integrated = (0..integrated).map(|_| GpuInfo {
+            name: "Integrated GPU".into(),
+            discrete: false,
+            used: false,
+        });
+        discrete.chain(integrated).collect()
+    })
+}
+
+/// The computer's GPUs and which ones models run on with `selection` (for
+/// display, e.g. the About dialog). Slow on the first call, see
+/// [`gpu_available`].
+pub fn gpus(selection: &DeviceSelection) -> Vec<GpuInfo> {
+    let found = found_gpus();
+    let chosen = selected_gpus(selection, found.iter().filter(|g| g.discrete).count());
+    found
+        .iter()
+        .enumerate()
+        .map(|(index, gpu)| GpuInfo {
+            used: gpu.discrete && chosen.contains(&index),
+            ..gpu.clone()
+        })
+        .collect()
 }
 
 #[cfg(test)]

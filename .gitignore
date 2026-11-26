@@ -43,10 +43,6 @@ tests/cellpose-sam/
 # StarDist models (official zips), converted files and references for the burn migration.
 tests/stardist/
 
-# Real Cellpose-SAM TorchScript export (~1.2GB) used by
-# crates/core/tests/cellpose_sam_real_model.rs - too large to commit.
-# Regenerate locally with docs/convert_cellpose.py.
-crates/core/tests/models/
 tests/__pycache__
 # Written by job_executor's pipeline test.
 crates/core/tests/project_test/output/

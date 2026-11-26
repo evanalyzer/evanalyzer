@@ -8,7 +8,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 //!
 //! The burn U-Net against libtorch on romantic-shark's real weights: the
-//! files `crates/ai`'s `unet_reference` writes (weights, normalized inputs,
+//! files the removed libtorch engine's `unet_reference` wrote (git history) (weights, normalized inputs,
 //! libtorch's CPU/GPU outputs, the package's expected output) - burn on
 //! burn-flex (f32) and the GPU (wgpu, f32 and f16 convolutions), each output
 //! against each reference: max and mean absolute difference, and the pixels

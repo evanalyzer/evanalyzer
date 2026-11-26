@@ -38,9 +38,8 @@ RUN cargo install --locked cargo-edit --version 0.13.14
 RUN cargo install --locked ssign --version 0.1.8
 RUN cargo install --locked tokei --version 15.0.0
 
-# Packaging: zip/unzip (Windows zips, signing job), 7z (CUDA packages),
-# xz (CLI CUDA package).
-RUN apt-get update && apt-get install -y zip unzip p7zip-full xz-utils \
+# Packaging: zip/unzip (Windows zips, signing job).
+RUN apt-get update && apt-get install -y zip unzip \
     && rm -rf /var/lib/apt/lists/*
 
 # Cross build

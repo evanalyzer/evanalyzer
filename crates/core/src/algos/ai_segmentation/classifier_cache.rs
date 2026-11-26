@@ -244,7 +244,7 @@ mod tests {
     }
 
     // -- load_cached_classifier (real end-to-end -
-    // a `SavedClassifier` is a plain in-memory value, no TorchScript fixture
+    // a `SavedClassifier` is a plain in-memory value, no model fixture
     // file needed to exercise the real cache) ------------------------------
 
     fn sample_classifier() -> SavedClassifier {

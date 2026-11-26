@@ -8,8 +8,8 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 //!
 //! Dev converter (by hand, once per supported model): a torch-em `UNet2d`
-//! state dict as safetensors with PyTorch's names (e.g. what `crates/ai`'s
-//! `unet_reference` exports from a bioimage.io package) plus the
+//! state dict as safetensors with PyTorch's names (what
+//! `docs/export_unet_weights.py` exports from a bioimage.io package) plus the
 //! architecture's arguments from the package's `rdf.yaml` → our model file
 //! (`crate::weights`): the same tensors, `config`, the preprocessing and
 //! where the weights come from. The written file is loaded back as a check.

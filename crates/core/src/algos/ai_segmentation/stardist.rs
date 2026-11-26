@@ -1029,7 +1029,7 @@ mod tests {
     // ---- NaN model output no longer panics ----
     //
     // A degenerate/blank tile or an incompatible model export can make the
-    // TorchScript model emit NaN. Fixed at three points: `build_candidates`
+    // model emit NaN. Fixed at three points: `build_candidates`
     // skips non-finite scores before a `Candidate` is even built,
     // `build_candidate` rejects any polygon with a non-finite vertex, and
     // both `partial_cmp(...).unwrap()` sort call sites were changed to

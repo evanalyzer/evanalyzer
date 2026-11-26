@@ -26,12 +26,12 @@ pub const DEFAULT_GPU_SLOTS: usize = 1;
 /// The devices AI inference may use.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum AiDeviceSelection {
-    /// Every CUDA GPU, or the CPU when there is none.
+    /// Every discrete GPU, or the CPU when there is none.
     #[default]
     Auto,
     /// Never use a GPU.
     Cpu,
-    /// These CUDA GPUs (indexes as CUDA numbers them); ones that don't exist
+    /// These discrete GPUs (numbered from 0 in the order the system lists them); ones that don't exist
     /// are ignored, and with none left the CPU is used.
     Gpus(Vec<usize>),
 }
@@ -41,9 +41,6 @@ pub struct AiDeviceOptions {
     pub devices: AiDeviceSelection,
     /// Parallel inferences per GPU, at least 1 (see [`parse_gpu_slots`]).
     pub gpu_slots: usize,
-    /// `--ai-plugin`: unused since the libtorch plugin is gone - the option
-    /// goes with crates/ai (burn migration P2.3).
-    pub plugin: Option<std::path::PathBuf>,
 }
 
 impl Default for AiDeviceOptions {
@@ -51,7 +48,6 @@ impl Default for AiDeviceOptions {
         Self {
             devices: AiDeviceSelection::default(),
             gpu_slots: DEFAULT_GPU_SLOTS,
-            plugin: None,
         }
     }
 }
@@ -62,8 +58,6 @@ static OPTIONS: OnceLock<AiDeviceOptions> = OnceLock::new();
 /// before the first AI step runs; returns `false` (and changes nothing) if
 /// options were already set or AI inference already started.
 pub fn configure_ai_devices(options: AiDeviceOptions) -> bool {
-    // `plugin`: the libtorch plugin is gone - ignored until the option goes
-    // with crates/ai (burn migration P2.3).
     OPTIONS
         .set(AiDeviceOptions {
             gpu_slots: options.gpu_slots.max(1),
@@ -96,14 +90,26 @@ where
 fn engine_config() -> EngineConfig {
     let options = ai_device_options();
     EngineConfig {
-        devices: match &options.devices {
-            AiDeviceSelection::Auto => DeviceSelection::Auto,
-            AiDeviceSelection::Cpu => DeviceSelection::Cpu,
-            AiDeviceSelection::Gpus(gpus) => DeviceSelection::Gpus(gpus.clone()),
-        },
+        devices: device_selection(&options.devices),
         gpu_slots: options.gpu_slots,
         cores: crate::memory::cpu_cores(),
     }
+}
+
+fn device_selection(devices: &AiDeviceSelection) -> DeviceSelection {
+    match devices {
+        AiDeviceSelection::Auto => DeviceSelection::Auto,
+        AiDeviceSelection::Cpu => DeviceSelection::Cpu,
+        AiDeviceSelection::Gpus(gpus) => DeviceSelection::Gpus(gpus.clone()),
+    }
+}
+
+/// The computer's GPUs and which ones AI models run on with this process'
+/// options (`--ai-devices`; nothing is fixed by asking). Opens the discrete
+/// GPUs once: slow, keep it off startup paths.
+pub fn gpus() -> Vec<evanalyzer_nn::GpuInfo> {
+    let devices = OPTIONS.get().map(|o| o.devices.clone()).unwrap_or_default();
+    evanalyzer_nn::gpus(&device_selection(&devices))
 }
 
 /// Parses `--gpu-slots`: a number of at least 1.

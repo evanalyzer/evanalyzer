@@ -1128,7 +1128,7 @@ dependencies = [
  "regex",
  "rustc-hash 2.1.3",
  "shlex 2.0.1",
- "syn 2.0.119",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -1498,6 +1498,8 @@ dependencies = [
 [[package]]
 name = "burn-dispatch"
 version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64d255d7609901f7aaf2138b394a6fe8dd8c7b526d1ed2736ba2c643944028fa"
 dependencies = [
  "burn-autodiff",
  "burn-backend",
@@ -1506,6 +1508,7 @@ dependencies = [
  "burn-flex",
  "burn-ndarray",
  "burn-remote",
+ "burn-tch",
  "paste",
  "portable-atomic",
 ]
@@ -1749,6 +1752,20 @@ dependencies = [
  "regex",
  "safetensors 0.8.0",
  "textdistance",
+]
+
+[[package]]
+name = "burn-tch"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e68ff71e7316e060fff716c127dce49e52d51e143ec52e1f0108720d37161e00"
+dependencies = [
+ "burn-backend",
+ "cc",
+ "libc",
+ "log",
+ "tch",
+ "torch-sys",
 ]
 
 [[package]]
@@ -2235,7 +2252,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3936,19 +3953,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "evanalyzer_ai"
-version = "0.0.0-dev"
-dependencies = [
- "libc",
- "libloading 0.9.1",
- "log",
- "postcard",
- "serde",
- "tch",
- "tempfile",
-]
-
-[[package]]
 name = "evanalyzer_app"
 version = "0.0.0-dev"
 dependencies = [
@@ -3981,7 +3985,7 @@ dependencies = [
  "sha2 0.11.1",
  "tempfile",
  "tungstenite",
- "webpki-roots",
+ "webpki-roots 1.0.12",
  "zmij",
 ]
 
@@ -6268,7 +6272,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tar",
- "ureq",
+ "ureq 3.3.0",
  "vcpkg",
  "zip 6.0.0",
 ]
@@ -9936,9 +9940,9 @@ dependencies = [
 
 [[package]]
 name = "tch"
-version = "0.26.0"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "975b1fb3b612ba925f03dd08b56e5c9452bb7102891d5d9f58c19b49a0b2ec1e"
+checksum = "9e09b91610202dc4820c21eb474a42b386ef69f323b1c0902b5472ba7456ebb5"
 dependencies = [
  "half",
  "lazy_static",
@@ -10293,13 +10297,16 @@ checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
 
 [[package]]
 name = "torch-sys"
-version = "0.26.0"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ae60ab95333c42adcc1a9e74057357e4324a1f344c403e48712a144ab731019"
+checksum = "aef40c585e342df95b66a1fa7c923188623999c2b657227befb481dfb03a6a42"
 dependencies = [
  "anyhow",
  "cc",
  "libc",
+ "serde",
+ "serde_json",
+ "ureq 2.12.1",
  "zip 0.6.6",
 ]
 
@@ -10329,7 +10336,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tar",
- "ureq",
+ "ureq 3.3.0",
  "walkdir",
 ]
 
@@ -10852,6 +10859,24 @@ checksum = "6d49784317cd0d1ee7ec5c716dd598ec5b4483ea832a2dced265471cc0f690ae"
 
 [[package]]
 name = "ureq"
+version = "2.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02d1a66277ed75f640d608235660df48c8e3c19f3b4edb6a263315626cc3c01d"
+dependencies = [
+ "base64 0.22.1",
+ "flate2",
+ "log",
+ "once_cell",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "url",
+ "webpki-roots 0.26.11",
+]
+
+[[package]]
+name = "ureq"
 version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dea7109cdcd5864d4eeb1b58a1648dc9bf520360d7af16ec26d0a9354bafcfc0"
@@ -10863,7 +10888,7 @@ dependencies = [
  "rustls-pki-types",
  "ureq-proto",
  "utf8-zero",
- "webpki-roots",
+ "webpki-roots 1.0.12",
 ]
 
 [[package]]
@@ -11290,6 +11315,15 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "url",
  "web-sys",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "0.26.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
+dependencies = [
+ "webpki-roots 1.0.12",
 ]
 
 [[package]]

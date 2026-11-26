@@ -171,8 +171,7 @@ evanalyzer worker --listen 127.0.0.1:<port> --token <token> \
     --home <user home> --root <allowed folder>... --log-level <log_level> \
     --idle-timeout <workers.idle_timeout_minutes> \
     [--ai-devices <workers.ai_devices>] [--gpu-slots <workers.gpu_slots>] \
-    [--ai-plugin <workers.ai_plugin>] [--max-threads <workers.max_threads>] \
-    [--max-ram <workers.max_ram_mb>]
+    [--max-threads <workers.max_threads>] [--max-ram <workers.max_ram_mb>]
 ```
 
 `max_threads` and `max_ram_mb` are each worker's - one per logged-in user -

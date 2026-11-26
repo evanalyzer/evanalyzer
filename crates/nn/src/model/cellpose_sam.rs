@@ -8,7 +8,7 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 //!
 //! Cellpose-SAM (Cellpose BSD-3 + SAM ViT-L encoder Apache-2.0) as the
-//! libtorch engine ran it (`crates/ai/src/torch/cellpose.rs`): the image's
+//! libtorch engine ran it (removed `crates/ai/src/torch/cellpose.rs`): the image's
 //! first channel resized (bilinear) to the size the model runs at, its
 //! channels filled up (zeros, or the image repeated), run in overlapping
 //! 256 x 256 tiles blended with Cellpose's taper (`transforms.average_tiles`)

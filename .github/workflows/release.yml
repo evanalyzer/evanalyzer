@@ -207,19 +207,8 @@ jobs:
           cargo set-version --workspace "${VERSION}"
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
-      - name: Download native dependencies
-        run: ./libs/download.sh linux-cpu
-
-      - name: Unzip libtorch
-        run: unzip -q "libs/libtorch-"*.zip -d libs
-
       - name: Build
-        # The app, then the libtorch plugin it loads on the first AI step
-        # (evanalyzer_ai as a cdylib with its `torch` engine - in a
-        # separate command, so the app itself never links libtorch).
-        run: |
-          cargo build-linux --locked
-          cargo build-ai-plugin --release --target x86_64-unknown-linux-gnu --locked
+        run: cargo build-linux --locked
 
       - name: Download templates
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -230,17 +219,9 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist
-          # Our license and every third-party license text (NVIDIA's terms ask
-          # for theirs to travel with the libraries, not only in the About dialog).
+          # Our license and every third-party license text.
           cp LICENSE THIRD-PARTY-NOTICES.txt dist/
           cp target/x86_64-unknown-linux-gnu/release/evanalyzer   dist/
-          # The AI plugin with its libtorch in ai/cpu: the plugin's $ORIGIN
-          # rpath (see .cargo/config.toml) finds them there. The glob must be
-          # *.so* (not *.so) to include versioned deps like
-          # libgomp-<hash>.so.1 that libtorch_cpu.so requires.
-          mkdir -p dist/ai/cpu
-          cp target/x86_64-unknown-linux-gnu/release/libevanalyzer_ai.so dist/ai/cpu/
-          cp libs/libtorch/lib/*.so*                               dist/ai/cpu/ 2>/dev/null || true
           tar -czf evanalyzer-linux-x86_64.tar.gz -C dist .
 
       - name: Check the oldest glibc it runs on
@@ -272,7 +253,7 @@ jobs:
           mkdir -p dist-cli
           cp LICENSE THIRD-PARTY-NOTICES.txt dist-cli/
           cp target/x86_64-unknown-linux-gnu/release/evanalyzer dist-cli/
-          cp -r dist/ai dist/templates dist-cli/
+          cp -r dist/templates dist-cli/
           tar -czf evanalyzer-cli-linux-x86_64.tar.gz -C dist-cli .
 
       - name: Check the oldest glibc the command-line version runs on
@@ -317,54 +298,13 @@ jobs:
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
       - name: Download native dependencies
-        run: ./libs/download.sh win-cpu
+        run: ./libs/download.sh win
 
       - name: Unzip DuckDB Windows library
         run: unzip -q libs/libduckdb-windows-amd64.zip -d libs/libduckdb-windows-amd64
 
-      - name: Unzip libtorch
-        run: unzip -q "libs/libtorch-"*.zip -d libs
-
-      - name: Work around torch-sys clang-cl define bug
-        # torch-sys 0.24.0 hands clang-cl an MSBuild property
-        # (/p:DefineConstants=GLOG_USE_GLOG_EXPORT) instead of a /D define, which
-        # clang-cl rejects as a missing input file (its Linux/macOS path uses the
-        # correct -DGLOG_USE_GLOG_EXPORT). Shim clang-cl on PATH to rewrite just
-        # that one argument to /DGLOG_USE_GLOG_EXPORT. POSIX sh only - the
-        # toolchain container has no bash (steps run under `sh`).
-        run: |
-          mkdir -p "$HOME/ccshim"
-          cat > "$HOME/ccshim/clang-cl" <<'EOF'
-          #!/bin/sh
-          # Locate the real clang-cl: first one on PATH that isn't this shim.
-          selfdir=$(cd "$(dirname "$0")" && pwd)
-          real=
-          IFS=:
-          for d in $PATH; do
-            if [ "$d" != "$selfdir" ] && [ -x "$d/clang-cl" ]; then real="$d/clang-cl"; break; fi
-          done
-          unset IFS
-          # Rebuild the argument list, swapping the bad flag for the real define.
-          n=0
-          for a in "$@"; do
-            if [ "$a" = "/p:DefineConstants=GLOG_USE_GLOG_EXPORT" ]; then
-              set -- "$@" "/DGLOG_USE_GLOG_EXPORT"
-            else
-              set -- "$@" "$a"
-            fi
-            n=$((n + 1))
-          done
-          shift "$n"
-          exec "$real" "$@"
-          EOF
-          chmod +x "$HOME/ccshim/clang-cl"
-          echo "$HOME/ccshim" >> "$GITHUB_PATH"
-
       - name: Build
-        # The app, then the libtorch plugin it loads on the first AI step.
-        run: |
-          cargo build-win --locked
-          cargo xwin rustc -p evanalyzer_ai --features torch --crate-type cdylib --release --target x86_64-pc-windows-msvc
+        run: cargo build-win --locked
 
       - name: Download templates
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -375,19 +315,13 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist
-          # Our license and every third-party license text (NVIDIA's terms ask
-          # for theirs to travel with the libraries, not only in the About dialog).
+          # Our license and every third-party license text.
           cp LICENSE THIRD-PARTY-NOTICES.txt dist/
           cp target/x86_64-pc-windows-msvc/release/evanalyzer.exe dist/
           cp libs/libduckdb-windows-amd64/duckdb.dll           dist/
-          # The AI plugin with its libtorch in ai\cpu - the app loads it with
-          # its own folder searched first (LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR).
-          mkdir -p dist/ai/cpu
-          cp target/x86_64-pc-windows-msvc/release/evanalyzer_ai.dll dist/ai/cpu/
-          cp libs/libtorch/lib/*.dll                           dist/ai/cpu/
 
       # Not packed here: package-windows packs it, on release tags with the
-      # signed exe and plugin from sign-windows.
+      # signed exe from sign-windows.
       - name: Upload the build for packing
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -399,297 +333,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: windows-unsigned-x86_64
-          path: |
-            dist/evanalyzer.exe
-            dist/ai/cpu/evanalyzer_ai.dll
-          retention-days: 1
-
-  build-linux-cuda:
-    needs: [templates]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write   # adds its files to the GitHub release
-    container:
-      image: joda001/evanalyzer-toolchain:0.3.2@sha256:b56ac9d19a5d1d4149eb71608286afe48af3f12ddb201ef5fbf9c4e155c34a9f
-      credentials:
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_TOKEN }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-
-      - name: Cache Cargo registry & build artifacts
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          key: linux-x86_64-cuda
-
-      - name: Set version
-        run: |
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            TAG="${GITHUB_REF#refs/tags/}"
-            VERSION="${TAG#v}"
-          else
-            VERSION="0.0.0-dev"
-          fi
-          cargo set-version --workspace "${VERSION}"
-          echo "VERSION=${VERSION}" >> $GITHUB_ENV
-
-      - name: Download native dependencies
-        run: ./libs/download.sh linux-cuda
-
-      - name: Unzip libtorch
-        run: unzip -q "libs/libtorch-"*.zip -d libs
-
-      - name: Build
-        # The app, then the libtorch plugin it loads on the first AI step
-        # (evanalyzer_ai as a cdylib with its `torch` engine - in a
-        # separate command, so the app itself never links libtorch).
-        run: |
-          cargo build-linux --locked
-          cargo build-ai-plugin --release --target x86_64-unknown-linux-gnu --locked
-
-      - name: Download templates
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: templates
-          path: dist/templates
-
-      - name: Package
-        run: |
-          mkdir -p dist
-          # Our license and every third-party license text (NVIDIA's terms ask
-          # for theirs to travel with the libraries, not only in the About dialog).
-          cp LICENSE THIRD-PARTY-NOTICES.txt dist/
-          cp target/x86_64-unknown-linux-gnu/release/evanalyzer   dist/
-          # The AI plugin with its CUDA libtorch in ai/cuda (it runs on the CPU
-          # too where there is no GPU), and beside it the NVIDIA libraries
-          # libtorch needs - its zip has none, they come from NVIDIA's wheels
-          # (see libs/download.sh). Most are versioned objects
-          # (libcudart.so.13, libcudnn*.so.9, libgomp.so.1, …), so the globs
-          # must be *.so* - a plain *.so would ship none of them and the
-          # plugin would fail to load.
-          mkdir -p dist/ai/cuda
-          cp target/x86_64-unknown-linux-gnu/release/libevanalyzer_ai.so dist/ai/cuda/
-          cp libs/libtorch/lib/*.so*                               dist/ai/cuda/ 2>/dev/null || true
-          cp libs/nvidia-cu13/lib/*.so*                            dist/ai/cuda/
-          # Drop LibTorch components this app never reaches regardless of
-          # which model is loaded (Python bindings, distributed/profiling/
-          # GPUDirect libs, PyTorch's own test fixtures, the Android
-          # backend) - see .github/NOT_SHIP_LIST.txt for why each entry is
-          # safe. Deliberately conservative: cuDNN's dlopen'd plugins and
-          # anything TorchScript's automatic op fusion could reach are kept.
-          # Patterns must stay unquoted so the shell glob-expands them (most
-          # entries carry a version hash, e.g. libnvshmem_host-<hash>.so.3);
-          # the -e guard skips a pattern that matched nothing instead of
-          # trying to rm a literal, non-existent "*" filename.
-          while IFS= read -r pattern; do
-            case "$pattern" in ""|"#"*) continue ;; esac
-            for f in dist/ai/cuda/$pattern; do
-              [ -e "$f" ] && rm -f "$f"
-            done
-          done < .github/NOT_SHIP_LIST.txt
-          # CUDA is libtorch_cuda, loaded by the app beside the plugin (it
-          # registers itself - nothing links it): without it the build runs
-          # CPU-only.
-          [ -f dist/ai/cuda/libtorch_cuda.so ] || { echo "::error::dist/ai/cuda/libtorch_cuda.so missing - the CUDA build would run CPU-only"; exit 1; }
-          # Every library libtorch's CUDA part needs is in the package (its
-          # RUNPATH is $ORIGIN) - a missing one only shows on a user's GPU
-          # machine. libtorch_cuda_linalg is opened on the first GPU linear-
-          # algebra op. Not the driver's own (libcuda, NVML): they come with
-          # the user's NVIDIA driver.
-          for lib in libtorch_cuda.so libtorch_cuda_linalg.so; do
-            if ldd "dist/ai/cuda/$lib" | grep "not found" | grep -v -e "libcuda\.so" -e "libnvidia-ml\.so"; then
-              echo "::error::libraries $lib needs are missing from dist/ai/cuda"; exit 1
-            fi
-          done
-          # 7-Zip at maximum compression (-mx=9) keeps it one file below
-          # GitHub's 2 GiB release asset limit.
-          ( cd dist && 7z a -t7z -mx=9 ../evanalyzer-linux-x86_64-cuda.7z . )
-          size=$(stat -c %s evanalyzer-linux-x86_64-cuda.7z)
-          echo "evanalyzer-linux-x86_64-cuda.7z: $((size / 1048576)) MiB"
-          [ "$size" -lt 2147483648 ] || { echo "::error::evanalyzer-linux-x86_64-cuda.7z is over GitHub's 2 GiB release asset limit"; exit 1; }
-
-      - name: Check the oldest glibc it runs on
-        # Every program and library in the package must run with glibc
-        # 2.39 (Ubuntu 24.04+, Debian 13+, Fedora 40+, RHEL 10+ - see the
-        # download page). Fails when the toolchain image moved to a newer
-        # base and raised that floor unnoticed.
-        run: bash .github/scripts/check-glibc.sh 2.39 dist
-
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: evanalyzer-linux-x86_64-cuda
-          path: evanalyzer-linux-x86_64-cuda.7z
-
-      - name: Add to the GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
-        with:
-          files: evanalyzer-linux-x86_64-cuda.7z
-
-      # The command line, server and worker without the desktop app, with
-      # the CUDA plugin: for GPU compute clusters without a desktop. After
-      # the package above - it overwrites target/…/release/evanalyzer.
-      - name: Build the command-line version
-        run: cargo build-linux-cli --locked
-
-      - name: Package the command-line version
-        run: |
-          mkdir -p dist-cli
-          cp LICENSE THIRD-PARTY-NOTICES.txt dist-cli/
-          cp target/x86_64-unknown-linux-gnu/release/evanalyzer dist-cli/
-          # ai/cuda as packaged above (already without the NOT_SHIP_LIST).
-          cp -r dist/ai dist/templates dist-cli/
-          # tar.xz, not 7z: unpacks with plain tar on servers without 7-Zip.
-          # xz at its highest level keeps it below GitHub's 2 GiB limit like
-          # the 7z above.
-          tar -I 'xz -9 -T0' -cf evanalyzer-cli-linux-x86_64-cuda.tar.xz -C dist-cli .
-          size=$(stat -c %s evanalyzer-cli-linux-x86_64-cuda.tar.xz)
-          echo "evanalyzer-cli-linux-x86_64-cuda.tar.xz: $((size / 1048576)) MiB"
-          [ "$size" -lt 2147483648 ] || { echo "::error::evanalyzer-cli-linux-x86_64-cuda.tar.xz is over GitHub's 2 GiB release asset limit"; exit 1; }
-
-      - name: Check the oldest glibc the command-line version runs on
-        run: bash .github/scripts/check-glibc.sh 2.39 dist-cli
-
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: evanalyzer-cli-linux-x86_64-cuda
-          path: evanalyzer-cli-linux-x86_64-cuda.tar.xz
-
-      - name: Add the command-line version to the GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
-        with:
-          files: evanalyzer-cli-linux-x86_64-cuda.tar.xz
-
-  build-windows-cuda:
-    needs: [templates]
-    runs-on: ubuntu-latest
-    container:
-      image: joda001/evanalyzer-toolchain:0.3.2@sha256:b56ac9d19a5d1d4149eb71608286afe48af3f12ddb201ef5fbf9c4e155c34a9f
-      credentials:
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_TOKEN }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-
-      - name: Cache Cargo registry & build artifacts
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          key: windows-x86_64-cuda
-
-      - name: Set version
-        run: |
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            TAG="${GITHUB_REF#refs/tags/}"
-            VERSION="${TAG#v}"
-          else
-            VERSION="0.0.0-dev"
-          fi
-          cargo set-version --workspace "${VERSION}"
-          echo "VERSION=${VERSION}" >> $GITHUB_ENV
-
-      - name: Download native dependencies
-        run: ./libs/download.sh win-cuda
-
-      - name: Unzip DuckDB Windows library
-        run: unzip -q libs/libduckdb-windows-amd64.zip -d libs/libduckdb-windows-amd64
-
-      - name: Unzip libtorch
-        run: unzip -q "libs/libtorch-"*.zip -d libs
-
-      - name: Work around torch-sys clang-cl define bug
-        # torch-sys 0.24.0 hands clang-cl an MSBuild property
-        # (/p:DefineConstants=GLOG_USE_GLOG_EXPORT) instead of a /D define, which
-        # clang-cl rejects as a missing input file (its Linux/macOS path uses the
-        # correct -DGLOG_USE_GLOG_EXPORT). Shim clang-cl on PATH to rewrite just
-        # that one argument to /DGLOG_USE_GLOG_EXPORT. POSIX sh only - the
-        # toolchain container has no bash (steps run under `sh`).
-        run: |
-          mkdir -p "$HOME/ccshim"
-          cat > "$HOME/ccshim/clang-cl" <<'EOF'
-          #!/bin/sh
-          # Locate the real clang-cl: first one on PATH that isn't this shim.
-          selfdir=$(cd "$(dirname "$0")" && pwd)
-          real=
-          IFS=:
-          for d in $PATH; do
-            if [ "$d" != "$selfdir" ] && [ -x "$d/clang-cl" ]; then real="$d/clang-cl"; break; fi
-          done
-          unset IFS
-          # Rebuild the argument list, swapping the bad flag for the real define.
-          n=0
-          for a in "$@"; do
-            if [ "$a" = "/p:DefineConstants=GLOG_USE_GLOG_EXPORT" ]; then
-              set -- "$@" "/DGLOG_USE_GLOG_EXPORT"
-            else
-              set -- "$@" "$a"
-            fi
-            n=$((n + 1))
-          done
-          shift "$n"
-          exec "$real" "$@"
-          EOF
-          chmod +x "$HOME/ccshim/clang-cl"
-          echo "$HOME/ccshim" >> "$GITHUB_PATH"
-
-      - name: Build
-        # The app, then the libtorch plugin it loads on the first AI step.
-        run: |
-          cargo build-win --locked
-          cargo xwin rustc -p evanalyzer_ai --features torch --crate-type cdylib --release --target x86_64-pc-windows-msvc
-
-      - name: Download templates
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: templates
-          path: dist/templates
-
-      - name: Package
-        run: |
-          mkdir -p dist
-          # Our license and every third-party license text (NVIDIA's terms ask
-          # for theirs to travel with the libraries, not only in the About dialog).
-          cp LICENSE THIRD-PARTY-NOTICES.txt dist/
-          cp target/x86_64-pc-windows-msvc/release/evanalyzer.exe dist/
-          cp libs/libduckdb-windows-amd64/duckdb.dll           dist/
-          # The AI plugin with its CUDA libtorch in ai\cuda.
-          mkdir -p dist/ai/cuda
-          cp target/x86_64-pc-windows-msvc/release/evanalyzer_ai.dll dist/ai/cuda/
-          cp libs/libtorch/lib/*.dll                           dist/ai/cuda/
-          # Drop LibTorch components this app never reaches regardless of
-          # which model is loaded - see .github/NOT_SHIP_LIST.txt for why
-          # each entry is safe (and what's deliberately kept: cuDNN's
-          # dlopen'd plugins, anything TorchScript's automatic op fusion
-          # could reach). Patterns must stay unquoted so the shell
-          # glob-expands them; the -e guard skips a pattern that matched
-          # nothing instead of trying to rm a literal "*" filename.
-          while IFS= read -r pattern; do
-            case "$pattern" in ""|"#"*) continue ;; esac
-            for f in dist/ai/cuda/$pattern; do
-              [ -e "$f" ] && rm -f "$f"
-            done
-          done < .github/NOT_SHIP_LIST.txt
-          # CUDA is libtorch_cuda, loaded by the app beside the plugin (it
-          # registers itself - nothing links it): without it the build runs
-          # CPU-only.
-          [ -f dist/ai/cuda/torch_cuda.dll ] || { echo "::error::dist/ai/cuda/torch_cuda.dll missing - the CUDA build would run CPU-only"; exit 1; }
-
-      # Not packed here: package-windows packs it, on release tags with the
-      # signed exe and plugin from sign-windows.
-      - name: Upload the build for packing
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: windows-build-x86_64-cuda
-          path: dist/
-          retention-days: 1
-
-      - name: Upload the files to sign
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: windows-unsigned-x86_64-cuda
-          path: |
-            dist/evanalyzer.exe
-            dist/ai/cuda/evanalyzer_ai.dll
+          path: dist/evanalyzer.exe
           retention-days: 1
 
   build-macos:
@@ -724,10 +368,7 @@ jobs:
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
       - name: Download native dependencies
-        run: ./libs/download.sh mac-cpu
-
-      - name: Unzip libtorch
-        run: unzip -q "libs/libtorch-"*.zip -d libs
+        run: ./libs/download.sh mac
 
       - name: Unzip DuckDB macOS library
         run: unzip -q libs/libduckdb-osx-universal.zip -d libs/libduckdb-osx-universal
@@ -737,9 +378,7 @@ jobs:
           # DuckDB is not bundled on macOS; point libduckdb-sys at the prebuilt lib.
           DUCKDB_LIB_DIR: ${{ github.workspace }}/libs/libduckdb-osx-universal
           DUCKDB_INCLUDE_DIR: ${{ github.workspace }}/libs/libduckdb-osx-universal
-        run: |
-          cargo build-mac --locked
-          cargo build-ai-plugin --release --target aarch64-apple-darwin --locked
+        run: cargo build-mac --locked
 
       - name: Download templates
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -751,19 +390,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          # Our license and every third-party license text (NVIDIA's terms ask
-          # for theirs to travel with the libraries, not only in the About dialog).
+          # Our license and every third-party license text.
           cp LICENSE THIRD-PARTY-NOTICES.txt dist/
           cp target/aarch64-apple-darwin/release/evanalyzer       dist/
-          # DuckDB next to the binary; the AI plugin with its libtorch in
-          # ai/cpu (loaded on the first AI step).
+          # DuckDB next to the binary.
           cp libs/libduckdb-osx-universal/*.dylib                  dist/ 2>/dev/null || true
-          mkdir -p dist/ai/cpu
-          cp target/aarch64-apple-darwin/release/libevanalyzer_ai.dylib dist/ai/cpu/
-          cp libs/libtorch/lib/*.dylib                             dist/ai/cpu/ 2>/dev/null || true
 
           # ---- Make the bundle relocatable (adapted from the legacy mac packer) ----
-          # libtorch's / DuckDB's dylibs and the binary reference each other by
+          # DuckDB's dylib and the binary reference each other by
           # their install names, which on a build machine are @rpath/... or
           # absolute paths that don't exist on a user's Mac. Each library
           # finds its neighbours in its own folder: rewrite every non-system
@@ -782,17 +416,15 @@ jobs:
               fi
             done
           }
-          for dir in dist dist/ai/cpu; do
-            for lib in "$dir"/*.dylib; do
-              install_name_tool -id "@loader_path/$(basename "$lib")" "$lib" || true
-              relink "$lib" "@loader_path" "$dir"
-            done
+          for lib in dist/*.dylib; do
+            install_name_tool -id "@loader_path/$(basename "$lib")" "$lib" || true
+            relink "$lib" "@loader_path" dist
           done
           relink dist/evanalyzer "@executable_path" dist
 
           # install_name_tool invalidates code signatures - re-sign ad-hoc so
           # macOS will load the rewritten binaries.
-          for f in dist/evanalyzer dist/*.dylib dist/ai/cpu/*.dylib; do
+          for f in dist/evanalyzer dist/*.dylib; do
             codesign --force --sign - "$f"
           done
 
@@ -811,7 +443,7 @@ jobs:
                  ./evanalyzer
 
           Keep every file in this folder together - the bundled libraries
-          (*.dylib, and the AI plugin in ai/cpu) are resolved relative to the
+          (*.dylib) are resolved relative to the
           `evanalyzer` binary.
           EOF
 
@@ -833,8 +465,6 @@ jobs:
     # sysroot for fontconfig (the GUI's font lookup), the native runner
     # has it. In the toolchain image's arm64 build (same tools, versions
     # and glibc as the amd64 jobs).
-    # No AI plugin: pytorch.org publishes no libtorch for Linux ARM64 - AI
-    # steps report the plugin as not installed.
     needs: [templates]
     runs-on: ubuntu-24.04-arm
     permissions:
@@ -875,18 +505,9 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist
-          # Our license and every third-party license text (NVIDIA's terms ask
-          # for theirs to travel with the libraries, not only in the About dialog).
+          # Our license and every third-party license text.
           cp LICENSE THIRD-PARTY-NOTICES.txt dist/
           cp target/aarch64-unknown-linux-gnu/release/evanalyzer dist/
-          cat > dist/README.txt <<'EOF'
-          EVAnalyzer for Linux ARM64
-          ==========================
-
-          This build has no support for AI models (PyTorch): PyTorch publishes
-          no libtorch for Linux ARM64. Everything else works as on the other
-          platforms.
-          EOF
           tar -czf evanalyzer-linux-arm64.tar.gz -C dist .
 
       - name: Check the oldest glibc it runs on
@@ -915,7 +536,7 @@ jobs:
       - name: Package the command-line version
         run: |
           mkdir -p dist-cli
-          cp LICENSE THIRD-PARTY-NOTICES.txt dist/README.txt dist-cli/
+          cp LICENSE THIRD-PARTY-NOTICES.txt dist-cli/
           cp target/aarch64-unknown-linux-gnu/release/evanalyzer dist-cli/
           cp -r dist/templates dist-cli/
           tar -czf evanalyzer-cli-linux-arm64.tar.gz -C dist-cli .
@@ -935,8 +556,7 @@ jobs:
           files: evanalyzer-cli-linux-arm64.tar.gz
 
   build-windows-arm64:
-    # Cross-compiled with xwin like the x86_64 build, with the CPU libtorch
-    # pytorch.org publishes for Windows ARM64.
+    # Cross-compiled with xwin like the x86_64 build.
     needs: [templates]
     runs-on: ubuntu-latest
     container:
@@ -964,53 +584,16 @@ jobs:
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
       - name: Download native dependencies
-        run: ./libs/download.sh win-arm64-cpu
+        run: ./libs/download.sh win-arm64
 
       - name: Unzip DuckDB Windows library
         run: unzip -q libs/libduckdb-windows-arm64.zip -d libs/libduckdb-windows-arm64
 
-      - name: Unzip libtorch
-        run: unzip -q "libs/libtorch-"*.zip -d libs
-
-      - name: Work around torch-sys clang-cl define bug
-        # Same shim as in build-windows - see there.
-        run: |
-          mkdir -p "$HOME/ccshim"
-          cat > "$HOME/ccshim/clang-cl" <<'EOF'
-          #!/bin/sh
-          # Locate the real clang-cl: first one on PATH that isn't this shim.
-          selfdir=$(cd "$(dirname "$0")" && pwd)
-          real=
-          IFS=:
-          for d in $PATH; do
-            if [ "$d" != "$selfdir" ] && [ -x "$d/clang-cl" ]; then real="$d/clang-cl"; break; fi
-          done
-          unset IFS
-          # Rebuild the argument list, swapping the bad flag for the real define.
-          n=0
-          for a in "$@"; do
-            if [ "$a" = "/p:DefineConstants=GLOG_USE_GLOG_EXPORT" ]; then
-              set -- "$@" "/DGLOG_USE_GLOG_EXPORT"
-            else
-              set -- "$@" "$a"
-            fi
-            n=$((n + 1))
-          done
-          shift "$n"
-          exec "$real" "$@"
-          EOF
-          chmod +x "$HOME/ccshim/clang-cl"
-          echo "$HOME/ccshim" >> "$GITHUB_PATH"
-
       - name: Build
-        # The app, then the libtorch plugin it loads on the first AI step.
-        # The app uses cargo-xwin's `clang` mode: ring always compiles with
-        # plain clang on aarch64-pc-windows-msvc, which can't read the
-        # clang-cl style flags (/imsvc) of the default mode. The plugin keeps
-        # clang-cl, which the torch-sys shim above relies on.
-        run: |
-          cargo build-win-arm --cross-compiler clang --locked
-          cargo xwin rustc -p evanalyzer_ai --features torch --crate-type cdylib --release --target aarch64-pc-windows-msvc
+        # cargo-xwin's `clang` mode: ring always compiles with plain clang on
+        # aarch64-pc-windows-msvc, which can't read the clang-cl style flags
+        # (/imsvc) of the default mode.
+        run: cargo build-win-arm --cross-compiler clang --locked
 
       - name: Download templates
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -1021,17 +604,13 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist
-          # Our license and every third-party license text (NVIDIA's terms ask
-          # for theirs to travel with the libraries, not only in the About dialog).
+          # Our license and every third-party license text.
           cp LICENSE THIRD-PARTY-NOTICES.txt dist/
           cp target/aarch64-pc-windows-msvc/release/evanalyzer.exe dist/
           cp libs/libduckdb-windows-arm64/duckdb.dll           dist/
-          mkdir -p dist/ai/cpu
-          cp target/aarch64-pc-windows-msvc/release/evanalyzer_ai.dll dist/ai/cpu/
-          cp libs/libtorch/lib/*.dll                           dist/ai/cpu/
 
       # Not packed here: package-windows packs it, on release tags with the
-      # signed exe and plugin from sign-windows.
+      # signed exe from sign-windows.
       - name: Upload the build for packing
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -1043,15 +622,13 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: windows-unsigned-arm64
-          path: |
-            dist/evanalyzer.exe
-            dist/ai/cpu/evanalyzer_ai.dll
+          path: dist/evanalyzer.exe
           retention-days: 1
 
   sign-windows:
-    # Authenticode-signs our own exe and AI plugin of every Windows build
-    # with the Certum SimplySign cloud certificate; the third-party DLLs
-    # (DuckDB, libtorch) stay as their vendors ship them.
+    # Authenticode-signs our own exe of every Windows build with the Certum
+    # SimplySign cloud certificate; the third-party DLL (DuckDB) stays as
+    # its vendor ships it.
     #
     # Only on release tags, and only in the `release` environment: it
     # holds the CERTUM_* secrets and the TAG_SIGNERS variable and accepts
@@ -1061,14 +638,14 @@ jobs:
     # GitHub login alone signs nothing.
     # Nothing of the repository runs next to the secret: no checkout, no
     # build, no build script of any dependency - only the tag object is
-    # fetched (to check its signature, nothing of it runs) and the two
-    # unsigned files per build come in and go out signed, with tools from
+    # fetched (to check its signature, nothing of it runs) and the unsigned
+    # exe of each build comes in and goes out signed, with tools from
     # the pinned toolchain image.
     #
     # One job for all Windows builds: the logins one after another
     # (SimplySign may refuse the same one-time code twice).
     # `!cancelled()`: one failed Windows build doesn't stop the others.
-    needs: [templates, build-windows, build-windows-cuda, build-windows-arm64]
+    needs: [templates, build-windows, build-windows-arm64]
     if: startsWith(github.ref, 'refs/tags/') && !cancelled() && needs.templates.result == 'success'
     runs-on: ubuntu-latest
     environment: release
@@ -1103,7 +680,7 @@ jobs:
             exit 1
           fi
           shopt -s nullglob
-          files=(windows/*/evanalyzer.exe windows/*/ai/*/evanalyzer_ai.dll)
+          files=(windows/*/evanalyzer.exe)
           [ "${#files[@]}" -gt 0 ] || { echo "::error::No Windows build to sign."; exit 1; }
           for file in "${files[@]}"; do
             before=$(sha256sum < "$file")
@@ -1124,13 +701,11 @@ jobs:
           retention-days: 1
 
   package-windows:
-    # One download per Windows build with everything in it: zip, or 7z at
-    # maximum compression for CUDA (keeps it below GitHub's 2 GiB release
-    # asset limit). On a release tag with the signed exe and plugin from
-    # sign-windows - a release is never packed unsigned; on other runs
+    # One download per Windows build with everything in it (a zip). On a
+    # release tag with the signed exe from sign-windows - a release is never packed unsigned; on other runs
     # (pipeline_start, a manual run on a branch) unsigned.
     # Runs when sign-windows succeeded, or was skipped (not a tag).
-    needs: [templates, build-windows, build-windows-cuda, build-windows-arm64, sign-windows]
+    needs: [templates, build-windows, build-windows-arm64, sign-windows]
     if: ${{ !cancelled() && needs.templates.result == 'success' && needs.sign-windows.result != 'failure' }}
     strategy:
       fail-fast: false
@@ -1138,8 +713,6 @@ jobs:
         include:
           - build: x86_64
             archive: evanalyzer-windows-x86_64.zip
-          - build: x86_64-cuda
-            archive: evanalyzer-windows-x86_64-cuda.7z
           - build: arm64
             archive: evanalyzer-windows-arm64.zip
     runs-on: ubuntu-latest
@@ -1174,10 +747,7 @@ jobs:
             [ -f "$src/evanalyzer.exe" ] || { echo "::error::No signed files for ${BUILD} - a release is never packed unsigned."; exit 1; }
             cp -r "$src/." dist/
           fi
-          case "$ARCHIVE" in
-            *.zip) (cd dist && zip -qr "../$ARCHIVE" .) ;;
-            *.7z)  (cd dist && 7z a -t7z -mx=9 "../$ARCHIVE" .) ;;
-          esac
+          (cd dist && zip -qr "../$ARCHIVE" .)
           size=$(stat -c %s "$ARCHIVE")
           echo "$ARCHIVE: $((size / 1048576)) MiB"
           [ "$size" -lt 2147483648 ] || { echo "::error::$ARCHIVE is over GitHub's 2 GiB release asset limit"; exit 1; }
@@ -1205,7 +775,7 @@ jobs:
     # attestations) is never given to a job that runs build scripts of
     # dependencies. No checkout - only the finished files come in.
     # `!cancelled()`: the files of the builds that succeeded are attested.
-    needs: [templates, build-linux, build-linux-cuda, build-macos, build-linux-arm64, package-windows, sbom, audit, coverage]
+    needs: [templates, build-linux, build-macos, build-linux-arm64, package-windows, sbom, audit, coverage]
     if: startsWith(github.ref, 'refs/tags/') && !cancelled() && needs.templates.result == 'success'
     runs-on: ubuntu-latest
     permissions:
@@ -1240,7 +810,7 @@ jobs:
   # The container images (docker.yml), from the Linux builds' command-line
   # packages.
   docker:
-    needs: [build-linux, build-linux-cuda, build-linux-arm64]
+    needs: [build-linux, build-linux-arm64]
     if: startsWith(github.ref, 'refs/tags/')
     uses: ./.github/workflows/docker.yml
     permissions:
@@ -1257,9 +827,8 @@ jobs:
     # SBOM for the shipped `evanalyzer` binary (crates/bin), covering its full
     # dependency graph - workspace crates and third-party alike, ~800
     # components. One SBOM for the whole release: Cargo.lock (and so the
-    # dependency graph cargo-cyclonedx reads) doesn't vary by target platform
-    # or the CPU/CUDA feature split, so per-platform SBOMs would be
-    # duplicates.
+    # dependency graph cargo-cyclonedx reads) doesn't vary by target platform,
+    # so per-platform SBOMs would be duplicates.
     needs: [templates]   # uploads into the release created there
     runs-on: ubuntu-latest
     permissions:
@@ -1295,10 +864,6 @@ jobs:
         run: |
           cargo cyclonedx --format json --manifest-path crates/bin/Cargo.toml
           mv crates/bin/evanalyzer_bin.cdx.json evanalyzer-${VERSION}-sbom.cdx.json
-          # The AI plugin (evanalyzer_ai with libtorch/tch) is its own
-          # library, not linked into the app - its own SBOM.
-          cargo cyclonedx --format json --manifest-path crates/ai/Cargo.toml --features torch
-          mv crates/ai/evanalyzer_ai.cdx.json evanalyzer-ai-plugin-${VERSION}-sbom.cdx.json
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -1393,15 +958,8 @@ jobs:
           fi
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
-      - name: Download native dependencies (libtorch CPU)
-        run: ./libs/download.sh linux-cpu
-
-      - name: Unzip libtorch
-        run: unzip -q "libs/libtorch-"*.zip -d libs
-
       - name: Run tests with coverage instrumentation
         env:
-          LD_LIBRARY_PATH: ${{ github.workspace }}/libs/libtorch/lib
           # The instrumented build got OOM-killed (exit 137) on the runner.
           # Coverage needs no debug info, and fewer parallel rustc/linker
           # processes keep the peak below the runner's RAM.
@@ -1409,7 +967,6 @@ jobs:
           CARGO_BUILD_JOBS: "2"
         run: >-
           cargo llvm-cov --workspace --no-report --locked
-          --features evanalyzer_core/libtorch,evanalyzer_core/libtorch-in-process
 
       - name: Generate coverage reports
         run: |

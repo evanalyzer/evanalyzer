@@ -26,8 +26,15 @@ pub fn cpu_ram_diagnostics() -> (usize, u64) {
 /// `--max-ram`, Settings › Performance) - set once at startup.
 pub use evanalyzer_core::memory::{ResourceLimits, set_resource_limits};
 
-/// Whether a CUDA device is usable. Slow on first call (loads the driver and
-/// creates a context), so call it off the UI thread.
-pub fn cuda_is_available() -> bool {
-    evanalyzer_core::cuda_is_available()
+/// The GPUs and which ones AI models run on. Slow on first call (opens the
+/// discrete GPUs), so call it off the UI thread.
+pub fn gpus() -> Vec<crate::backend::Gpu> {
+    evanalyzer_core::gpus()
+        .into_iter()
+        .map(|gpu| crate::backend::Gpu {
+            name: gpu.name,
+            discrete: gpu.discrete,
+            used: gpu.used,
+        })
+        .collect()
 }

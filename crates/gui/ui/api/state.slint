@@ -102,7 +102,10 @@ export global AppInfoState {
         in-out property <bool> prerelease: false;
         in-out property <int> cpu_cores: 1;
         in-out property <string> ram_total: "-";
-        in-out property <bool> cuda_available: false;
+        // The GPU AI models run on (its name), or why none: "None found",
+        // "Integrated GPU", ... - and the note under it.
+        in-out property <string> gpu: "-";
+        in-out property <string> gpu_note: "";
     // The machine the numbers above describe - where the work runs: "This
     // computer", or the worker in remote mode. Filled by
     // `refresh_system_info`, which the About dialog calls whenever its System

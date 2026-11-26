@@ -1,6 +1,6 @@
 # Plan: libtorch → Burn, crate `evanalyzer_nn`
 
-Status: planned (2026-11-25; D1-D5 decided), branch `remove-libtorch`. The `crates/nn` skeleton (traits, types, `todo!()` bodies) is built (2026-11-25).
+Status: P0-P7 done (2026-11-25; D1-D5 decided), branch `remove-libtorch` - libtorch is removed (see the state note before P8). P8 open.
 
 ## Why now
 
@@ -598,6 +598,20 @@ core (P7).
    "Model files are code-like", libtorch thread determinism note, glibc floor, the
    "Another engine (e.g. Burn)" note; memories `burn-migration-deferred`,
    `cuda13-switch`, `release-tests-libtorch` updated.
+
+**State (2026-11-26):** P7 done with P2.3 - `crates/ai`, `patches/`
+(burn-dispatch without burn-tch), `tch`, `libloading`, the workspace burn 0.21, the
+features `libtorch` / `libtorch-in-process`, `build-ai-plugin`, `LIBTORCH*`,
+`--ai-plugin` / `workers.ai_plugin` (server config: a breaking change), the CUDA jobs
+and packages (`build-linux-cuda`, `build-windows-cuda`, `.7z`, docker `-cuda`),
+`NOT_SHIP_LIST.txt`, `docs/convert_cellpose.py` removed; `libs/download.sh` fetches only
+DuckDB (`win` | `win-arm64` | `mac`). burn and its crates are workspace dependencies.
+`cuda_available` → `SystemInfo::gpus` (name, discrete, used; protocol 61), the About
+dialog names the GPU AI runs on. `burn-tch`/`torch-sys` stay in Cargo.lock only
+(optional deps of burn-dispatch, never built - `cargo tree -i` prints nothing).
+U-Net conversion: `docs/export_unet_weights.py` → `convert_unet`. burn 0.22's MPL-2.0 crates `buildid`, `colored` and `rustc_apfloat` (Apache-2.0
+WITH LLVM-exception) accepted per crate in `about.toml` (2026-11-26). Open: `AI_ENGINE_BYTES` (320 MB,
+measured for libtorch) to measure again for burn.
 
 ### P8 - Final measurement and merge (1-2 days)
 

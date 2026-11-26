@@ -278,7 +278,7 @@ fn difference(a: &[f32], b: &[f32], pixels: usize) -> (f32, usize) {
 /// - the network alone on the package's 256² test input (normalized) vs
 ///   the package's own expected output;
 /// - `infer` (preprocessing, mirror padding, pieces) vs the libtorch engine
-///   as the app ran it (`crates/ai` example `unet_reference` →
+///   as the app ran it (the removed `crates/ai` example `unet_reference` →
 ///   `tests/romantic-shark/reference/`), on 256² and 1024². The padding
 ///   changes InstanceNorm's statistics, so `infer` differs from the
 ///   package's unpadded output at the borders (up to 0.8) - as libtorch did.

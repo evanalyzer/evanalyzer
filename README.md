@@ -28,7 +28,7 @@ whole slides. Results go into one database you can explore, chart and export.
   OME-TIFF, SVS, NDPI, MRXS and more, with pyramids, z-stacks, time series and
   multi-well plates.
 - **Pipelines you tune on the image** - filters, thresholds, watershed, AI
-  segmentation (Cellpose, StarDist, U-Net, YOLOv5), trained pixel and object
+  segmentation (Cellpose-SAM, StarDist, U-Net), trained pixel and object
   classifiers; every change is previewed right away.
 - **Measurements that match the reference tools** - intensity, shape, texture,
   colocalization, neighbors and parent/child relations, checked against
@@ -45,7 +45,8 @@ whole slides. Results go into one database you can explore, chart and export.
 Get the latest version for Linux, Windows or macOS from the
 [releases page](https://github.com/evanalyzer/evanalyzer/releases/latest).
 Unpack the archive and start `evanalyzer` - everything it needs is included.
-GPU (CUDA) builds for AI models are available for Linux and Windows.
+AI models run on a discrete GPU when there is one (only the normal graphics
+driver is needed), else on the CPU.
 
 **Checking a download.** Every file of a release comes with a provenance
 attestation: proof that exactly this file was built by this repository's
@@ -163,17 +164,12 @@ methods of the steps you used:
 ### Prerequisites
 
 - **Rust** 1.95 or later (2024 edition): `rustup update`
-- **Native libraries** (libtorch for the AI plugin, DuckDB on Windows/macOS),
-  downloaded once into `libs/`:
+- **Native libraries** (DuckDB on Windows/macOS; Linux compiles it), downloaded
+  once into `libs/`:
 
   ```sh
-  libs/download.sh linux-cpu      # or linux-cuda | win-cpu | win-cuda | win-arm64-cpu | mac-cpu
+  libs/download.sh win            # or win-arm64 | mac
   ```
-
-  Then unpack libtorch: `unzip libs/libtorch-*.zip -d libs` (gives
-  `libs/libtorch`). `linux-cuda` also puts NVIDIA's CUDA libraries into
-  `libs/nvidia-cu13/lib` (the Linux libtorch zip has none) - see
-  [AI models: the libtorch plugin](#ai-models-the-libtorch-plugin).
 
 - **Linux system libraries** for the GUI:
 
@@ -191,18 +187,14 @@ methods of the steps you used:
 | `evanalyzer_gui` | Slint desktop GUI |
 | `evanalyzer_cli` | Headless command line (`evanalyzer cli ...`) |
 | `evanalyzer_server` | Multi-user server (`evanalyzer server`, see [docs/server.md](docs/server.md)) |
-| `evanalyzer_ai` | AI model interface and the libtorch plugin |
+| `evanalyzer_nn` | AI models (U-Net, StarDist, Cellpose-SAM on [burn](https://burn.dev)), trained classifiers, GPU/CPU runtime |
 | `evanalyzer_bin` | The `evanalyzer` binary: GUI, CLI or server |
 
 ### Building
 
-The app and the AI plugin are built separately - only the plugin links
-libtorch:
-
 ```sh
 cargo build                          # the app
-cargo build-ai-plugin                # the libtorch plugin (alias in .cargo/config.toml)
-cargo build --no-default-features    # the app without AI model support
+cargo build --no-default-features    # without the desktop app (command line, server, worker)
 cargo run -p evanalyzer_bin -- --project my.evaproj   # start the GUI with a project
 ```
 
@@ -210,77 +202,31 @@ Release builds per platform (aliases in `.cargo/config.toml`):
 
 | Target | Command | Notes |
 |---|---|---|
-| Linux x86-64 | `cargo build-linux` | plugin: `cargo build-ai-plugin --release --target x86_64-unknown-linux-gnu` |
-| Linux ARM64 | `cargo build-linux-arm` | no AI plugin (no libtorch for Linux ARM64); cross-compiling needs an arm64 sysroot with fontconfig - release builds run on an ARM runner |
+| Linux x86-64 | `cargo build-linux` | |
+| Linux ARM64 | `cargo build-linux-arm` | cross-compiling needs an arm64 sysroot with fontconfig - release builds run on an ARM runner |
 | Windows x86-64 / ARM64 | `cargo build-win` / `cargo build-win-arm` | cross-compiled with [`cargo-xwin`](https://github.com/rust-cross/cargo-xwin) |
-| macOS Apple Silicon | `cargo build-mac` | native; set `DUCKDB_LIB_DIR`/`DUCKDB_INCLUDE_DIR` (see `libs/download.sh mac-cpu`) |
+| macOS Apple Silicon | `cargo build-mac` | native; set `DUCKDB_LIB_DIR`/`DUCKDB_INCLUDE_DIR` (see `libs/download.sh mac`) |
 
-### AI models: the libtorch plugin
+### AI models
 
-The AI model steps (Cellpose, StarDist, U-Net, YOLOv5) run on libtorch, but
-the app never links it: libtorch lives in a separate library, the **AI
-plugin** - the `evanalyzer_ai` crate built as a cdylib with its `torch`
-feature (`cargo build-ai-plugin`). The app loads it on the first model run;
-without it everything else works and model steps report the plugin as not
-installed.
+The AI model steps (Cellpose-SAM, StarDist, U-Net) run on
+[burn](https://burn.dev) in `evanalyzer_nn`, built into the program: on
+discrete GPUs through wgpu (only the normal graphics driver, no CUDA), else
+on the CPU (burn-flex). `--ai-devices` picks the devices, `--gpu-slots` the
+parallel inferences per GPU. A GPU that fails an inference hands it to the
+CPU.
 
-| | Version | Where it is set |
-|---|---|---|
-| libtorch | 2.13.0 | `LIBTORCH_VERSION` in `libs/download.sh` |
-| tch (Rust bindings) | 0.26 - built for exactly libtorch 2.13 | `tch` in `Cargo.toml` |
-| CUDA | 13.0 (`cu130`): NVIDIA GPUs with compute capability 7.5+ (RTX 20xx / GTX 16xx and newer), driver 580+ | `CUDA_VARIANT` in `libs/download.sh`, `MIN_COMPUTE_CAPABILITY` in `crates/ai/src/runtime/cuda_probe.rs` |
-| NVIDIA libraries (Linux) | the versions torch 2.13 pins on PyPI | `NVIDIA_WHEELS` in `libs/download.sh` |
-
-The plugin is compiled against `libs/libtorch` (`LIBTORCH` in
-`.cargo/config.toml`), and must run with exactly that libtorch.
-
-**Where the app looks for it** (first found wins):
-
-1. `--ai-plugin /path/to/libevanalyzer_ai.so` (a command-line option of every mode)
-2. next to the `evanalyzer` binary
-3. `ai/cuda/` next to the binary - first when the NVIDIA driver sees a GPU new
-   enough for this build
-4. `ai/cpu/` next to the binary
-5. `ai/cuda/` otherwise (CUDA libtorch runs on the CPU too)
-
-The plugin's libtorch must be in the plugin's own folder (its RUNPATH is
-`$ORIGIN`; on Windows the app searches the plugin's folder); the CUDA part
-(`libtorch_cuda.so` / `torch_cuda.dll`) is loaded from there by the app. GPUs
-older than the build supports are skipped - models run on the CPU.
-
-**Development (CPU):**
-
-```sh
-libs/download.sh linux-cpu && unzip -q libs/libtorch-*.zip -d libs
-cargo build-ai-plugin                # target/debug/libevanalyzer_ai.so, next to the binary
-LD_LIBRARY_PATH=$PWD/libs/libtorch/lib cargo run -p evanalyzer_bin
-```
-
-**A runnable build with GPU support** - the package layout, in the target
-folder:
-
-```sh
-libs/download.sh linux-cuda && unzip -q libs/libtorch-*.zip -d libs
-cargo build-linux
-cargo build-ai-plugin --release --target x86_64-unknown-linux-gnu
-
-R=target/x86_64-unknown-linux-gnu/release
-mkdir -p $R/ai/cuda
-mv $R/libevanalyzer_ai.so $R/ai/cuda/          # not next to the binary: that copy would win
-cp libs/libtorch/lib/*.so* libs/nvidia-cu13/lib/*.so* $R/ai/cuda/
-ldd $R/ai/cuda/libtorch_cuda.so | grep "not found"   # only libcuda/libnvidia-ml may show: the driver's
-$R/evanalyzer
-```
-
-After rebuilding the plugin, move the new `libevanalyzer_ai.so` into
-`ai/cuda` again.
+Models are EVAnalyzer's own safetensors files (architecture and settings in
+`__metadata__`), converted once by hand with the dev tools in `docs/`
+(`convert_cellpose_sam.py`, `convert_stardist.py`,
+`export_unet_weights.py` + the `convert_unet` example) - see
+[docs/nn_burn_migration_plan.md](docs/nn_burn_migration_plan.md).
 
 **Shipping.** The release pipeline (`.github/workflows/release.yml`)
 builds and packages every platform; a tag (`v0.2.0` or `0.2.0`) publishes
 a GitHub release, each platform's files added as soon as its build is done.
 Pushing to the `pipeline_start` branch runs the same builds without a
-release, and nothing is signed. On a tag the Windows exe and AI plugin
-are signed with the Certum certificate, only if the tag itself is signed
+release, and nothing is signed. On a tag the Windows exe is signed with the Certum certificate, only if the tag itself is signed
 with the release key - see [Release tag signing](#release-tag-signing).
 Package layout:
 
@@ -288,49 +234,18 @@ Package layout:
 evanalyzer(.exe)            the app
 duckdb.dll / libduckdb.dylib  Windows / macOS only (Linux has DuckDB built in)
 templates/                  project and module templates
-ai/cpu/  or  ai/cuda/       the plugin + its libtorch (+ NVIDIA's libraries in ai/cuda)
 ```
 
-| Package | AI | Built from |
-|---|---|---|
-| Linux / Windows x86-64 | CPU (`ai/cpu`) | `download.sh linux-cpu` / `win-cpu` |
-| Linux / Windows x86-64 CUDA | GPU (`ai/cuda`), one `.7z` < 2 GiB | `download.sh linux-cuda` / `win-cuda` |
-| Windows ARM64 | CPU | `download.sh win-arm64-cpu` |
-| macOS Apple Silicon | CPU, dylibs relinked to `@loader_path` and ad-hoc signed | `download.sh mac-cpu` |
-| Linux ARM64 | none - PyTorch publishes no libtorch for it | - |
-
-Files in `.github/NOT_SHIP_LIST.txt` (Python bindings, test fixtures,
-profiler and multi-GPU libraries) are left out of the CUDA packages, and the
-Linux CUDA job fails if `ldd` finds a library libtorch needs missing, or if
-the archive reaches GitHub's 2 GiB limit.
-
-**Updating libtorch:**
-
-1. Pick a version a `tch` release supports (its CHANGELOG: "PyTorch v2.x
-   support") and for which pytorch.org has every zip we use (CPU, `cu130`
-   Linux/Windows, Windows ARM64, macOS).
-2. Set `tch` in `Cargo.toml` and `LIBTORCH_VERSION` in `libs/download.sh`.
-3. Update `NVIDIA_WHEELS` in `libs/download.sh` to the versions that torch
-   version pins on PyPI (`requires_dist` of `torch` and of its
-   `cuda-toolkit`), and check with `readelf -d libs/libtorch/lib/*.so` that
-   every NVIDIA library libtorch links is in the list.
-4. Delete `libs/libtorch` and any old libtorch copies (e.g. in
-   `target/debug/deps` - `cargo test` puts that folder first on the library
-   path), download again, run the AI tests (below) and one model on a GPU.
+macOS: `libduckdb.dylib` relinked to `@loader_path` and ad-hoc signed.
 
 ### Testing
 
 ```sh
-cargo test                           # everything except the AI model steps
-LD_LIBRARY_PATH=$PWD/libs/libtorch/lib \
-  cargo test --features evanalyzer_core/libtorch,evanalyzer_core/libtorch-in-process
+cargo test
 ```
 
-With the CUDA libtorch add `libs/nvidia-cu13/lib` to `LD_LIBRARY_PATH`.
-
-`libtorch-in-process` links libtorch into the test process for the AI model
-steps' tests; `libtorch` adds the plugin loader, whose test builds and loads
-the real plugin. Benchmarks and how to compare runs are in
+The tests on real models (`#[ignore]`d, release build) need the model files
+in `tests/` (see `.gitignore`). Benchmarks and how to compare runs are in
 [BENCHMARK.md](BENCHMARK.md).
 
 ### Adding a pipeline command
@@ -464,8 +379,8 @@ After changing dependencies (adding or updating a crate, `cargo update`),
 regenerate the license list and commit both files:
 
 ```sh
-# 1. The About dialog's license list (all crates, incl. the AI plugin's)
-cargo about generate --locked --workspace --features evanalyzer_ai/torch \
+# 1. The About dialog's license list (all crates)
+cargo about generate --locked --workspace \
   docs/about.hbs -o crates/gui/src/generated/third_party_licenses.json
 
 # 2. THIRD-PARTY-NOTICES.txt, built from that list and
@@ -477,8 +392,7 @@ cargo-about must be exactly 0.9.3 (`about.toml` works around a bug of that
 version, and another version may format the output differently):
 `cargo install cargo-about --locked --version 0.9.3 --features cli` - the
 devcontainer image has it. What isn't a crate (code ported from other
-projects, fonts, icons, native libraries such as libtorch, DuckDB and NVIDIA's
-CUDA libraries) is kept by hand in `crates/gui/src/third_party_notices.json`;
+projects, fonts, icons, native libraries such as DuckDB) is kept by hand in `crates/gui/src/third_party_notices.json`;
 after editing it, only step 2 is needed.
 
 `about.toml` lists the accepted licenses. Copyleft licenses are rejected unless
@@ -488,7 +402,8 @@ reviewed and listed per crate there.
 
 EVAnalyzer is a clean-room implementation: no GPL/LGPL/AGPL code, and new
 dependencies must be permissive (the only MPL-2.0 crates, `smartstring` via
-`rhai` and `option-ext` via `dirs`, are reviewed per-crate exceptions).
+`rhai`, `option-ext` via `dirs`, and `buildid` / `colored` via `burn`, are
+reviewed per-crate exceptions).
 
 - **Algorithms come from papers.** Implement a method from its publication and
   cite it (`CitationMetadata`); other tools may only serve as black boxes for
@@ -504,24 +419,13 @@ dependencies must be permissive (the only MPL-2.0 crates, `smartstring` via
   with its attribution in `crates/core/tests/README.md`. Not usable: BBBC035
   and other Cell Tracking Challenge data (copying forbidden, commercial use
   needs permission).
-- **On a libtorch/CUDA update**, check the native libraries again:
-  - libgomp is GPL-3.0 with the GCC Runtime Library Exception; its notice holds
-    a written source offer. Look up the GCC version it was built with
-    (`strings libgomp.so.1 | grep annobin` - 2.13.0: GCC 8.5.0, Red Hat
-    8.5.0-28), update the notice and keep a copy of that source package.
-  - Every NVIDIA library shipped must be redistributable: listed in
-    Attachment A of the [CUDA EULA](https://docs.nvidia.com/cuda/eula/index.html)
-    (e.g. `libcufile` as "NVIDIA CUDA File IO Libraries"), or allowed by its own
-    license (NVSHMEM's SLA: "any portion of the SDK"). Update their license
-    texts in `third_party_notices.json` from the wheels'
-    `*.dist-info/licenses/License.txt`.
 
 ---
 
 ## Release tag signing
 
 A release starts with a version tag (`v1.2.0` or `1.2.0`). The Windows exe
-and AI plugin are signed with the Certum certificate (job `sign-windows`
+is signed with the Certum certificate (job `sign-windows`
 in `.github/workflows/release.yml`) only when the tag is signed with the
 release key - an SSH key on a YubiKey, kept apart from the key that signs
 commits. A tag pushed with a stolen GitHub login alone signs nothing.

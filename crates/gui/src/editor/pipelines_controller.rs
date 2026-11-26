@@ -2730,7 +2730,7 @@ impl PipelinesController {
                     manager.show_classifier_model_info(step_id as usize);
                 });
 
-            // Browse for a file (e.g. a TorchScript model path) - opens the
+            // Browse for a file (e.g. a model file) - opens the
             // file browser filtered by the given comma-separated extensions,
             // starting next to `current_path`. The result goes back to the
             // row that asked via its `token` (see `browse-file` in Slint).

@@ -13,8 +13,8 @@
 //! so the result equals the whole tile's up to float rounding - except for a
 //! model that normalizes by the whole image (InstanceNorm).
 //!
-//! Ported from `crates/ai/src/torch/pieces.rs` (framework-free) with its
-//! tests; the sizes come from `crates/ai/src/api.rs` as they are. Piece
+//! Ported from the removed `crates/ai/src/torch/pieces.rs` (framework-free) with its
+//! tests; the sizes come from its `api.rs` as they are. Piece
 //! starts are multiples of [`ALIGN`], so the model's poolings fall on the
 //! whole tile's grid. A model seeing the whole image runs in pieces anyway,
 //! with [`WHOLE_IMAGE_HALO`] (`joyful-pig` on 1024² pieces: 0.06 % of its

@@ -38,9 +38,10 @@ pub const MAX_TILE_SIZE: usize = 4096;
 /// for the analysis' thread pools and the results writer.
 pub const PROGRAM_BYTES: u64 = 256 << 20;
 
-/// The AI engine's libraries (libtorch, loaded on the first model run:
-/// ~280 MB), for a job with an AI step - its network and weights are the
-/// step's own (`ImageAlgorithm::shared_ram_bytes`).
+/// The AI engine's own RAM, for a job with an AI step - its network and
+/// weights are the step's own (`ImageAlgorithm::shared_ram_bytes`).
+/// Measured for libtorch's libraries (~280 MB, loaded on the first model
+/// run); burn's engine is built in - not measured again yet (TODO).
 pub const AI_ENGINE_BYTES: u64 = 320 << 20;
 
 /// Peak per-worker RAM broken into the pieces that scale differently, so a

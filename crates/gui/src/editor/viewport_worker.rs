@@ -3397,7 +3397,7 @@ mod tests {
     /// linked (Relate) to one large parent region - zoomed in (a few objects
     /// on screen) without and with the parent selected, and fitted (every
     /// object on screen). Prints the best and the median of 5 redraws.
-    /// LD_LIBRARY_PATH=$PWD/libs/libtorch/lib cargo test --release
+    /// cargo test --release
     /// -p evanalyzer_gui --lib bench_object_layer -- --ignored --nocapture
     #[test]
     #[ignore]
@@ -3497,7 +3497,7 @@ mod tests {
     /// [BENCH_OVERVIEW_CACHE_MB=256] [BENCH_TRIM=1] [BENCH_PAN_STEPS=8]
     /// [BENCH_VIEWPORT=1920x1080] [BENCH_SERIES=0]
     /// RAYON_NUM_THREADS=2
-    /// LD_LIBRARY_PATH=$PWD/libs/libtorch/lib cargo test --release
+    /// cargo test --release
     /// -p evanalyzer_gui bench_viewport -- --ignored --nocapture
     #[test]
     #[ignore]

@@ -13,24 +13,16 @@ name = "evanalyzer_nn"
 doctest = false
 
 [dependencies]
-serde = { workspace = true, features = ["derive"] }
+serde = { workspace = true }
 serde_json = { workspace = true }
 rayon = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }
-smartcore = { workspace = true, features = ["serde"] }
-# Model files (D2). 0.3.3 = the version tch already pulls in; newer once tch
-# is gone.
-safetensors = "0.3.3"
-# Not the workspace burn (0.21, core's MLP until it moves here). `std` and
-# `optim` (MLP training) need the burn-dispatch patch while `tch` exists
-# (patches/README.md). No `cpu` (CubeCL CPU links the C++ LLVM library) -
-# burn-flex is the CPU backend.
-burn = { version = "0.22.1", default-features = false, features = ["flex", "wgpu", "vulkan", "autotune", "fusion", "std", "optim"] }
-# Its default features (std, simd, rayon): a multi-threaded CPU backend
-# without burn's own `std`.
-burn-flex = "0.22.1"
-burn-dispatch = { version = "0.22.1", default-features = false, features = ["rayon", "simd"] }
+smartcore = { workspace = true }
+safetensors = { workspace = true }
+burn = { workspace = true }
+burn-flex = { workspace = true }
+burn-dispatch = { workspace = true }
 
 [dev-dependencies]
 libc = { workspace = true }
