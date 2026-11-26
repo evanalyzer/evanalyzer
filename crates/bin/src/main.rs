@@ -80,6 +80,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         configure_ai_devices(AiDeviceOptions {
             devices: args.ai_devices.clone().unwrap_or_default(),
             gpu_slots: args.gpu_slots.unwrap_or(DEFAULT_GPU_SLOTS),
+            gpu_cache: Some(gpu_cache_folder(&args.command)),
         });
     }
 
@@ -292,6 +293,24 @@ fn resource_limits(args: &args::Args) -> ResourceLimits {
     saved.with_overrides(args.max_threads, args.max_ram)
 }
 
+/// Where the GPU keeps its autotune results and compiled kernels across
+/// runs: `cache/gpu` in the user folder - a worker's below its `--home`, so
+/// each user served by a server has their own.
+fn gpu_cache_folder(command: &Option<TopCommand>) -> PathBuf {
+    let user_folder = match command {
+        Some(TopCommand::Worker {
+            home: Some(home), ..
+        }) => evanalyzer_app::user::folder::user_folder_in(home),
+        _ => evanalyzer_app::user::folder::get_user_folder(),
+    };
+    gpu_cache_folder_in(&user_folder)
+}
+
+/// `<user folder>/cache/gpu`.
+fn gpu_cache_folder_in(user_folder: &std::path::Path) -> PathBuf {
+    user_folder.join("cache").join("gpu")
+}
+
 fn server_config(
     file: Option<&std::path::Path>,
     listen: Option<String>,
@@ -403,6 +422,14 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.0);
         }
+    }
+
+    #[test]
+    fn the_gpu_cache_lies_in_the_user_folder() {
+        assert_eq!(
+            gpu_cache_folder_in(std::path::Path::new("/home/alice/.evanalyzer")),
+            PathBuf::from("/home/alice/.evanalyzer/cache/gpu")
+        );
     }
 
     #[test]

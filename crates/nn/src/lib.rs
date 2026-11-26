@@ -39,7 +39,9 @@ pub use classifier::{Classifier, Predictions, Samples, TrainedClassifier};
 pub use errors::NnError;
 pub use model::{Image, Model, Trainable};
 pub use pieces::Pieces;
-pub use runtime::{DeviceInfo, DeviceSelection, EngineConfig, EngineInfo, GpuInfo, gpus};
+pub use runtime::{
+    DeviceInfo, DeviceSelection, EngineConfig, EngineInfo, GpuInfo, configure_gpu, gpus,
+};
 pub use train::{TrainControl, TrainProgress, TrainStats};
 
 use std::path::Path;

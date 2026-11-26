@@ -21,7 +21,7 @@
 //!
 //!   cargo build-linux -p evanalyzer_nn --example bench_cellpose_sam
 //!   target/x86_64-unknown-linux-gnu/release/examples/bench_cellpose_sam \
-//!     tests/cellpose-sam cells300x200-replicate 6 dgpu f16
+//!     tests/cellpose-sam cells300x200-replicate 6 dgpu f16 [cache folder]
 
 use burn::tensor::{Device, DeviceKind};
 use evanalyzer_nn::Model;
@@ -45,6 +45,8 @@ fn main() {
     let repeats: usize = args.get(3).map_or(6, |s| s.parse().unwrap());
     let device_name = args.get(4).map_or("dgpu", String::as_str);
     let half = args.get(5).map_or("f32", String::as_str) == "f16";
+    // The GPU's disk cache (autotune results, compiled kernels), if given.
+    evanalyzer_nn::configure_gpu(args.get(6).map(Path::new));
     let (w, h, replicate) = match case {
         "cells300x200-replicate" => (300, 200, true),
         "cells1024-replicate" => (1024, 1024, true),
@@ -57,8 +59,8 @@ fn main() {
         other => panic!("unknown device {other}"),
     };
     let start = Instant::now();
-    let mut net = CellposeSam::load(&dir.join("cpsam_v2.safetensors"), &device, true).unwrap();
-    net.set_half(half);
+    // As the engine loads it: f16 when asked for (`load`'s GPU path).
+    let net = CellposeSam::load(&dir.join("cpsam_v2.safetensors"), &device, half).unwrap();
     eprintln!("loaded in {:.1} s", start.elapsed().as_secs_f64());
 
     let input = read_f32(&dir.join("reference-f32").join(format!("{case}.input.f32")));

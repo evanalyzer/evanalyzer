@@ -2650,8 +2650,9 @@ process per device, three runs each, 22 cores:
 | NVIDIA RTX 3000 Ada (wgpu/Vulkan) | +380-420 MB | +380-420 MB |
 
 Was 320 MB for every job (libtorch's libraries, ~280 MB). Now 16 MB on the
-CPU plus 448 MB per GPU used (`ai_engine_bytes`): a computer without a GPU
-plans 304 MB less, one with a GPU ~140 MB more. The GPU part is the graphics
+CPU plus 512 MB per GPU used (`ai_engine_bytes`; first 448 MB, raised after
+later runs of the same measurement gave +400-490 MB, peaks up to 506 MB): a
+computer without a GPU plans 304 MB less, one with a GPU ~210 MB more. The GPU part is the graphics
 driver in the process (host RAM), not the GPU's own memory.
 
 **libtorch, crates/ai and the burn-dispatch patch removed** (b08f48ff;
@@ -2703,6 +2704,31 @@ during the later images (batching tiles would gain little); GPU memory peak
 (autotune + shader compilation + loading the 1.2 GB model) - open.
 Test: `real_cpsam_in_f16_on_the_gpu_stays_within_the_bf16_rounding`.
 
+## GPU cache on disk: autotune results and compiled kernels (2026-11-26)
+
+Each process tuned (autotune) and compiled every GPU kernel again: a user
+run of Cellpose-SAM took 50.8 s for the first image, 23 s for the next in
+the same process. burn's `persistence` (CubeCL's own store, turso/SQLite)
+keeps both in `<user folder>/cache/gpu` (`evanalyzer_nn::configure_gpu`),
+keyed by GPU, operation/shape and CubeCL version - not the weights.
+
+`bench_cellpose_sam … cells300x200-replicate 3 dgpu f16 [cache]`, separate
+processes:
+
+| Run | First image | Later images |
+|---|---|---|
+| no cache | 20.65 s | 0.31 s |
+| cache, first run (empty) | 11.50 s | 0.34 s |
+| cache, second run | 0.32 s | 0.32 s |
+| cache, third run | 0.35 s | 0.32 s |
+
+Cache size after Cellpose-SAM: 1.2 MB. Cost of the feature (126 more
+crates): program 276.5 → 295.1 MB (+18.5 MB), resident at start +1.5-2 MB;
+startup 11 / 12 ms; AI engine on the CPU +10 MB both; small images
+(`bench_pipeline` 200 x 2048², P cores, 8 runs) 7.90 → 7.87 s, 1181 /
+1180 MB; one 16384² image 1.259 / 1.277 s, peak RAM within the run-to-run
+spread (1939-2286 MB both).
+
 ## Peak RAM overview - for the system requirements
 
 The highest peaks measured so far, per activity. "Test process" numbers
@@ -2713,7 +2739,7 @@ graphics driver).
 |---|---|---|---|
 | App idle after start (AI not loaded) | 207 MB | 2026-10-19 | The real app above |
 | Analysis of 50 images 2048², 1 / 2 / 4 threads | 226 / 326 / 499 MB | 2026-10-29 | Everyday images on a small computer |
-| AI engine itself (burn), CPU / per NVIDIA GPU (driver) | +10 MB / +380-420 MB | 2026-11-26 | libtorch removed, the AI engine's own RAM on burn |
+| AI engine itself (burn), CPU / per NVIDIA GPU (driver) | +10 MB / +380-506 MB | 2026-11-26 | libtorch removed, the AI engine's own RAM on burn |
 | Image viewer, whole slide, default caches | ~280 MB above start | 2026-10-17 | Image viewer |
 | Image viewer, 2 threads, small caches | ~190 MB above start | 2026-10-17 | Image viewer |
 | Viewer with a breakpoint tile compared | ~400 MB | 2026-10-18 | Breakpoint compare |

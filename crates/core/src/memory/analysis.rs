@@ -46,8 +46,9 @@ pub const AI_ENGINE_BYTES: u64 = 16 << 20;
 
 /// More per GPU the engine runs on: the graphics driver and the device in
 /// the computer's RAM. Measured 2026-11-26 (`measure_engine_ram gpu`):
-/// +380-420 MB on an NVIDIA RTX 3000 Ada (Vulkan).
-pub const AI_ENGINE_GPU_BYTES: u64 = 448 << 20;
+/// +380-490 MB, peaks up to 506 MB, on an NVIDIA RTX 3000 Ada (Vulkan) -
+/// it varies from run to run.
+pub const AI_ENGINE_GPU_BYTES: u64 = 512 << 20;
 
 /// The AI engine's own RAM with this process' AI devices: CPU part plus
 /// [`AI_ENGINE_GPU_BYTES`] per GPU it runs on. `--ai-devices cpu` never

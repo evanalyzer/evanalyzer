@@ -41,6 +41,10 @@ pub struct AiDeviceOptions {
     pub devices: AiDeviceSelection,
     /// Parallel inferences per GPU, at least 1 (see [`parse_gpu_slots`]).
     pub gpu_slots: usize,
+    /// Where the GPU keeps its autotune results and compiled kernels across
+    /// runs (`<user folder>/cache/gpu`, see [`evanalyzer_nn::configure_gpu`]);
+    /// `None`: nothing kept.
+    pub gpu_cache: Option<std::path::PathBuf>,
 }
 
 impl Default for AiDeviceOptions {
@@ -48,6 +52,7 @@ impl Default for AiDeviceOptions {
         Self {
             devices: AiDeviceSelection::default(),
             gpu_slots: DEFAULT_GPU_SLOTS,
+            gpu_cache: None,
         }
     }
 }
@@ -58,6 +63,10 @@ static OPTIONS: OnceLock<AiDeviceOptions> = OnceLock::new();
 /// before the first AI step runs; returns `false` (and changes nothing) if
 /// options were already set or AI inference already started.
 pub fn configure_ai_devices(options: AiDeviceOptions) -> bool {
+    // Only a path: nothing is opened or written until a model runs on a GPU.
+    if options.devices != AiDeviceSelection::Cpu {
+        evanalyzer_nn::configure_gpu(options.gpu_cache.as_deref());
+    }
     OPTIONS
         .set(AiDeviceOptions {
             gpu_slots: options.gpu_slots.max(1),

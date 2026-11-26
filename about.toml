@@ -201,3 +201,13 @@ accepted = ["MPL-2.0"]
 # Apache-2.0 with an extra permission - permissive, reviewed 2026-11-26.
 [rustc_apfloat]
 accepted = ["Apache-2.0 WITH LLVM-exception"]
+
+# cfg_block (via turso, burn's GPU cache) states its license only as a file
+# (Apache-2.0 notice, Copyright 2022 Trevor Gross) - no `license` field, so
+# cargo-about can't read it. The checksum is that file's sha256.
+[cfg_block.clarify]
+license = "Apache-2.0"
+[[cfg_block.clarify.files]]
+path = "LICENSE"
+license = "Apache-2.0"
+checksum = "408bbc4d10bdf74d8c9b74b64ea4910603257e24133da18edc4d16198e3b4010"

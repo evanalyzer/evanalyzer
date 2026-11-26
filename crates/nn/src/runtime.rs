@@ -127,10 +127,37 @@ fn gpu_kind(device: &Device) -> GpuKind {
     }
 }
 
+/// Sets CubeCL's (the GPU backend's) configuration once per process, before
+/// any GPU is opened: with `cache`, the autotune results (which kernel is
+/// fastest for each operation and tensor shape on this GPU) and the compiled
+/// kernels are kept in that folder, so only the first model run on a GPU
+/// tunes and compiles - measured 2026-11-26: Cellpose-SAM's first image
+/// ~28 s slower than the next. Without one, nothing is written. Either way
+/// CubeCL reads no `cubecl.toml` / `burn.toml` from the current folder and
+/// keeps no cache in a `target/` folder above it (its defaults). The cache
+/// is keyed by the GPU, the shapes and CubeCL's version - not the weights;
+/// a folder that can't be written falls back to memory. Returns `false` when
+/// the configuration was already set (or read) - the first call wins.
+pub fn configure_gpu(cache: Option<&Path>) -> bool {
+    use burn::cubecl::config::cache::CacheConfig;
+    use burn::cubecl::config::{CubeClRuntimeConfig, RuntimeConfig};
+    let mut config = CubeClRuntimeConfig::default();
+    match cache {
+        Some(dir) => {
+            config.environment.path = CacheConfig::Directory(dir.to_path_buf());
+            config.compilation.cache = true;
+        }
+        None => config.autotune.disable_cache = true,
+    }
+    CubeClRuntimeConfig::try_set(config)
+}
+
 /// The GPUs wgpu finds, discrete ones with their device and name (opened to
 /// read it); integrated ones are only counted - never opened, models don't
 /// run on them.
 fn wgpu_gpus() -> (Vec<(Device, String)>, usize) {
+    // Nobody configured CubeCL: no disk cache, no config files read.
+    configure_gpu(None);
     let found = catch_unwind(|| {
         let mut discrete = Vec::new();
         let mut integrated = 0;
