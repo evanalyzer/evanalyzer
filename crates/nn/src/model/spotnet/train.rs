@@ -65,6 +65,9 @@ pub struct SpotNetTrainParams {
     pub augment: AugmentParams,
     /// What the training checks itself on.
     pub validation: Validation,
+    /// Stop after this many epochs without a better check (see
+    /// [`stop_early`]); `None` = run every epoch. Needs validation.
+    pub patience: Option<usize>,
 }
 
 /// A finished training.
@@ -203,6 +206,10 @@ pub fn train(
             train_loss: final_train_loss,
             val_loss: final_val_loss,
         });
+        let best_so_far = best.as_ref().map(|(e, score, _)| (*e, score.f1()));
+        if stop_early(params.patience, epoch, best_so_far) {
+            break;
+        }
     }
 
     let stats = TrainStats::Epochs {
@@ -236,6 +243,20 @@ fn better(score: &ValidationScore, best: &ValidationScore) -> bool {
     f1 > best_f1 || (f1 == best_f1 && score.loss < best.loss)
 }
 
+/// Whether to stop after `epoch`: `patience` epochs have passed since the
+/// best check (`best`: its epoch and F1) without a better one.
+///
+/// Counted only once the best model finds spots (F1 above 0): before that
+/// the loss of the held-back areas may rise for many epochs while the
+/// network forms its first filters - stopping there would end a training
+/// right before it starts to find anything.
+fn stop_early(patience: Option<usize>, epoch: usize, best: Option<(usize, f32)>) -> bool {
+    match (patience, best) {
+        (Some(patience), Some((best_epoch, f1))) if f1 > 0.0 => epoch - best_epoch >= patience,
+        _ => false,
+    }
+}
+
 /// Refuses settings no training can run with.
 fn check_params(params: &SpotNetTrainParams) -> Result<(), NnError> {
     let bad = |what: &str| Err(NnError::InvalidInput(format!("SpotNet training: {what}")));
@@ -250,6 +271,9 @@ fn check_params(params: &SpotNetTrainParams) -> Result<(), NnError> {
     }
     if !(params.sigma > 0.0) {
         return bad("sigma must be above 0");
+    }
+    if params.patience == Some(0) {
+        return bad("the patience must be at least 1 epoch");
     }
     if let Validation::Auto { fraction } = params.validation
         && !(fraction > 0.0 && fraction < 1.0)
@@ -566,7 +590,7 @@ mod tests {
 
     use super::{
         Patch, Plan, Sample, SpotLabels, SpotNetTrainParams, SpotNetTraining, ValidationOutcome,
-        cut_patch, masked_loss, patch_origin, plan, train,
+        cut_patch, masked_loss, patch_origin, plan, stop_early, train,
     };
     use crate::NnError;
     use crate::augment::{AugmentParams, Augmentation};
@@ -689,6 +713,7 @@ mod tests {
             sigma: 1.5,
             augment: AugmentParams::none(),
             validation: Validation::Off,
+            patience: None,
         }
     }
 
@@ -1004,12 +1029,9 @@ mod tests {
         assert!(sample.area_pixels.iter().all(|&i| i % 16 >= 8));
     }
 
-    #[test]
-    fn a_trained_model_is_checked_on_its_validation_area() {
-        // One 32 x 32 image: the top half training (4 spots), the bottom
-        // half validation (2 spots), augmentation on. The model never sees
-        // the bottom spots' labels - finding them shows it learned spots,
-        // not places.
+    /// One 32 x 32 image: the top half training (4 spots), the bottom half
+    /// validation (2 spots), augmentation on - trained up to 150 epochs.
+    fn train_on_half_with_validation(patience: Option<usize>) -> SpotNetTraining {
         const SIZE: usize = 32;
         let spots = vec![
             Spot { x: 5.5, y: 4.5 },
@@ -1027,10 +1049,17 @@ mod tests {
         let training = SpotNetTrainParams {
             augment: AugmentParams::default(),
             validation: Validation::Areas,
+            patience,
             ..params(150)
         };
-        let result =
-            with_control(7, false, |c| train(&data, &small_config(), &training, c)).unwrap();
+        with_control(7, false, |c| train(&data, &small_config(), &training, c)).unwrap()
+    }
+
+    #[test]
+    fn a_trained_model_is_checked_on_its_validation_area() {
+        // The model never sees the bottom spots' labels - finding them shows
+        // it learned spots, not places.
+        let result = train_on_half_with_validation(None);
         let ValidationOutcome::Scored { epoch, score } = result.validation else {
             panic!("not validated: {:?}", result.validation)
         };
@@ -1040,13 +1069,59 @@ mod tests {
         let crate::TrainStats::Epochs {
             best_val_epoch,
             best_val_loss,
+            epochs_run,
             ..
         } = result.stats
         else {
             panic!()
         };
+        assert_eq!(epochs_run, 150);
         assert_eq!(best_val_epoch, Some(epoch));
         assert_eq!(best_val_loss, Some(score.loss));
+    }
+
+    #[test]
+    fn a_training_stops_after_patience_epochs_without_a_better_check() {
+        let result = train_on_half_with_validation(Some(10));
+        let ValidationOutcome::Scored { epoch, score } = result.validation else {
+            panic!("not validated: {:?}", result.validation)
+        };
+        let crate::TrainStats::Epochs { epochs_run, .. } = result.stats else {
+            panic!()
+        };
+        println!(
+            "stopped after {epochs_run} epochs, best {epoch}: f1 {}",
+            score.f1()
+        );
+        assert!(score.f1() > 0.0);
+        assert!(epochs_run < 150, "never stopped");
+        assert_eq!(epochs_run, epoch + 10 + 1, "10 epochs after the best one");
+    }
+
+    #[test]
+    fn early_stopping_waits_for_patience_epochs_after_the_best() {
+        // Best at epoch 5 finding spots: stop at 15 with a patience of 10.
+        assert!(!stop_early(Some(10), 14, Some((5, 0.8))));
+        assert!(stop_early(Some(10), 15, Some((5, 0.8))));
+    }
+
+    #[test]
+    fn early_stopping_never_stops_before_anything_is_found_or_without_patience() {
+        // F1 0: the network may still be forming its filters.
+        assert!(!stop_early(Some(10), 90, Some((5, 0.0))));
+        assert!(!stop_early(None, 90, Some((5, 0.8))));
+        assert!(!stop_early(Some(10), 90, None));
+    }
+
+    #[test]
+    fn a_patience_of_zero_is_refused() {
+        let data = one_image(16, vec![Spot { x: 8.5, y: 8.5 }]);
+        let training = SpotNetTrainParams {
+            patience: Some(0),
+            ..params(1)
+        };
+        let result = with_control(1, false, |c| train(&data, &small_config(), &training, c));
+        assert!(matches!(result, Err(NnError::InvalidInput(m)) if m.contains("patience")));
     }
 
     /// A 1-channel test image like a microscope would take it: background
