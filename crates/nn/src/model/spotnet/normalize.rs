@@ -54,18 +54,46 @@ impl PercentileNormalization {
         Ok(())
     }
 
-    /// `image` normalised in place, channel by channel:
-    /// `(x - lo) / (hi - lo + 1e-6)` - a channel without contrast stays
-    /// finite. A channel of only NaN stays as it is.
+    /// The scaling of each channel of `pixels` (`plane` values per channel,
+    /// one after the other): its `low` and `high` percentiles become 0 and
+    /// 1, `(x - lo) / (hi - lo + 1e-6)` - a channel without contrast stays
+    /// finite; `None` for a channel of only NaN (left as it is).
+    pub(crate) fn channels(&self, pixels: &[f32], plane: usize) -> Vec<Option<Affine>> {
+        pixels
+            .chunks(plane)
+            .map(|channel| {
+                let range = percentiles(channel, &[self.low, self.high])?;
+                Some(Affine {
+                    offset: range[0],
+                    scale: 1.0 / (range[1] - range[0] + 1e-6),
+                })
+            })
+            .collect()
+    }
+
+    /// `image` normalised in place, channel by channel (see
+    /// [`Self::channels`]).
     pub fn apply(&self, image: &mut OwnedImage) {
         let plane = image.width * image.height;
-        for channel in image.data.chunks_mut(plane) {
-            let Some(range) = percentiles(channel, &[self.low, self.high]) else {
-                continue;
-            };
-            let (lo, scale) = (range[0], 1.0 / (range[1] - range[0] + 1e-6));
+        let affines = self.channels(&image.data, plane);
+        apply_per_channel(&affines, &mut image.data, plane);
+    }
+}
+
+/// `(x - offset) * scale`, in f64.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Affine {
+    pub(crate) offset: f64,
+    pub(crate) scale: f64,
+}
+
+/// `data` (`plane` values per channel) scaled in place by each channel's
+/// `affines` entry (`None`: as it is).
+pub(crate) fn apply_per_channel(affines: &[Option<Affine>], data: &mut [f32], plane: usize) {
+    for (channel, affine) in data.chunks_mut(plane).zip(affines) {
+        if let Some(Affine { offset, scale }) = *affine {
             for v in channel {
-                *v = ((f64::from(*v) - lo) * scale) as f32;
+                *v = ((f64::from(*v) - offset) * scale) as f32;
             }
         }
     }

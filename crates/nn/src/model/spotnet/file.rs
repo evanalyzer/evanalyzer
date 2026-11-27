@@ -54,6 +54,22 @@ impl SpotNetSettings {
     }
 }
 
+/// What a SpotNet's model file says without its weights.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpotNetHeader {
+    pub settings: SpotNetSettings,
+}
+
+impl SpotNetHeader {
+    pub(crate) fn from_metadata(metadata: &ModelMetadata) -> Result<Self, NnError> {
+        metadata.expect_arch(ARCH, ARCH_VERSION)?;
+        let settings: SpotNetSettings = serde_json::from_str(&metadata.config)
+            .map_err(|e| NnError::InvalidModelFile(format!("SpotNet config: {e}")))?;
+        settings.check()?;
+        Ok(Self { settings })
+    }
+}
+
 /// A SpotNet ready to predict: its network and settings.
 #[derive(Debug, Clone)]
 pub struct SpotNetModel {
@@ -61,6 +77,8 @@ pub struct SpotNetModel {
     pub settings: SpotNetSettings,
     /// How it was made (`seed`, `training`, ...) - shown, never interpreted.
     pub info: BTreeMap<String, String>,
+    /// Where its weights are.
+    pub(crate) device: Device,
 }
 
 impl SpotNetModel {
@@ -79,15 +97,13 @@ impl SpotNetModel {
     /// A model from a model file's bytes, every size and shape checked.
     pub fn from_bytes(bytes: &[u8], device: &Device) -> Result<Self, NnError> {
         let file = ModelFile::parse(bytes)?;
-        let metadata = file.expect_arch(ARCH, ARCH_VERSION)?;
-        let settings: SpotNetSettings = serde_json::from_str(&metadata.config)
-            .map_err(|e| NnError::InvalidModelFile(format!("SpotNet config: {e}")))?;
-        settings.check()?;
+        let SpotNetHeader { settings } = SpotNetHeader::from_metadata(&file.metadata)?;
         let network = SpotNet::from_tensors(&settings.network, &file.tensors, device)?;
         Ok(Self {
             network,
             settings,
-            info: metadata.info.clone(),
+            info: file.metadata.info.clone(),
+            device: device.clone(),
         })
     }
 
@@ -98,14 +114,26 @@ impl SpotNetModel {
     }
 
     /// Reads the model file `path` (errors name the file).
-    pub fn load(path: &Path, device: &Device) -> Result<Self, NnError> {
+    pub fn read(path: &Path, device: &Device) -> Result<Self, NnError> {
         let bytes = std::fs::read(path)?;
-        Self::from_bytes(&bytes, device).map_err(|e| match e {
-            NnError::InvalidModelFile(m) => {
-                NnError::InvalidModelFile(format!("{}: {m}", path.display()))
-            }
-            other => other,
-        })
+        Self::from_bytes(&bytes, device).map_err(in_file(path))
+    }
+
+    /// What this SpotNet's model file says without its weights.
+    pub fn to_header(&self) -> SpotNetHeader {
+        SpotNetHeader {
+            settings: self.settings.clone(),
+        }
+    }
+}
+
+/// `file`'s name in front of an invalid-file message.
+pub(crate) fn in_file(file: &Path) -> impl Fn(NnError) -> NnError + '_ {
+    move |e| match e {
+        NnError::InvalidModelFile(m) => {
+            NnError::InvalidModelFile(format!("{}: {m}", file.display()))
+        }
+        other => other,
     }
 }
 
@@ -137,6 +165,7 @@ mod tests {
             network: SpotNet::new(&settings.network, 5, &Device::flex()),
             settings,
             info: BTreeMap::from([("seed".into(), "5".into())]),
+            device: Device::flex(),
         }
     }
 
@@ -160,7 +189,7 @@ mod tests {
         let path = dir.path().join("spots.evanet");
         let original = model();
         original.save(&path).unwrap();
-        let loaded = SpotNetModel::load(&path, &Device::flex()).unwrap();
+        let loaded = SpotNetModel::read(&path, &Device::flex()).unwrap();
         assert_eq!(loaded.settings, original.settings);
         assert_eq!(loaded.info, original.info);
         assert_eq!(predict(&loaded), predict(&original));

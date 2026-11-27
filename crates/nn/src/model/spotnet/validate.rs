@@ -17,16 +17,18 @@
 //!   precision (how many found are real), recall (how many real are found)
 //!   and F1, what a user reads.
 //!
-//! The network runs on the held-back region in tiles with a margin of half
-//! its receptive field, so every pixel is judged with its full surroundings
-//! and only one tile is in RAM at a time.
+//! The network runs on the held-back region plus a halo of half its
+//! receptive field, in pieces as in prediction ([`super::infer`]), so every
+//! pixel is judged with its full surroundings.
 
+use crate::errors::NnError;
 use crate::model::OwnedImage;
-use crate::model::spotnet::network::SpotNet;
+use crate::model::spotnet::file::SpotNetModel;
+use crate::model::spotnet::infer::probabilities;
+use crate::model::spotnet::post::find_spots;
 use crate::model::spotnet::target::gaussian_map;
 use crate::model::spotnet::train::{SPOT_WEIGHT, Spot};
-use burn::Tensor;
-use burn::tensor::{Device, TensorData};
+use crate::pieces::Pieces;
 
 /// A peak counts as a found spot from this probability on.
 pub(crate) const THRESHOLD: f32 = 0.5;
@@ -97,21 +99,20 @@ impl Tally {
         })
     }
 
-    /// Checks `model` on the pixels of `image` where `held_back` is true.
+    /// Checks `model` on the pixels of `image` (already normalised) where
+    /// `held_back` is true.
     pub(crate) fn add(
         &mut self,
-        model: &SpotNet,
+        model: &SpotNetModel,
         image: &OwnedImage,
         spots: &[Spot],
         held_back: &[bool],
-        sigma: f32,
-        tile: usize,
-        margin: usize,
-    ) {
+        pieces: Pieces,
+    ) -> Result<(), NnError> {
         let Some(region) = Region::around(held_back, image.width, image.height) else {
-            return;
+            return Ok(());
         };
-        let probability = probabilities(model, image, region, tile, margin);
+        let probability = region_probabilities(model, image, region, pieces)?;
         let mask = region.cut(held_back, image.width);
         let local: Vec<Spot> = spots
             .iter()
@@ -120,6 +121,7 @@ impl Tally {
                 y: s.y - region.y as f32,
             })
             .collect();
+        let sigma = model.settings.sigma;
         let target = gaussian_map(region.width, region.height, &local, sigma);
 
         for ((&p, &t), &inside) in probability.iter().zip(&target).zip(&mask) {
@@ -131,7 +133,13 @@ impl Tally {
                 self.weight_sum += f64::from(weight);
             }
         }
-        let found = find_spots(&probability, region.width, region.height, &mask, THRESHOLD);
+        let found = find_spots(
+            &probability,
+            region.width,
+            region.height,
+            Some(&mask),
+            THRESHOLD,
+        );
         let annotated: Vec<Spot> = local
             .into_iter()
             .filter(|s| region.contains_local(s, &mask))
@@ -139,7 +147,48 @@ impl Tally {
         self.matched += count_matches(&found, &annotated, TOLERANCE_PX);
         self.found += found.len();
         self.annotated += annotated.len();
+        Ok(())
     }
+}
+
+/// The spot probability of every pixel of `region`: the region plus the
+/// receptive field's halo (as far as the image goes) through the network,
+/// the region cut out of the answer.
+fn region_probabilities(
+    model: &SpotNetModel,
+    image: &OwnedImage,
+    region: Region,
+    pieces: Pieces,
+) -> Result<Vec<f32>, NnError> {
+    let halo = model.settings.network.receptive_field() / 2;
+    let x0 = region.x.saturating_sub(halo);
+    let y0 = region.y.saturating_sub(halo);
+    let window = Region {
+        x: x0,
+        y: y0,
+        width: (region.x + region.width + halo).min(image.width) - x0,
+        height: (region.y + region.height + halo).min(image.height) - y0,
+    };
+    let plane = image.width * image.height;
+    let pixels: Vec<f32> = (0..image.channels)
+        .flat_map(|c| window.cut(&image.data[c * plane..(c + 1) * plane], image.width))
+        .collect();
+    let p = probabilities(
+        model,
+        &pixels,
+        window.width,
+        window.height,
+        image.channels,
+        None,
+        pieces,
+    )?;
+    let inner = Region {
+        x: region.x - window.x,
+        y: region.y - window.y,
+        width: region.width,
+        height: region.height,
+    };
+    Ok(inner.cut(&p, window.width))
 }
 
 /// A rectangle of an image, in px.
@@ -189,106 +238,6 @@ impl Region {
     }
 }
 
-/// The spot probability of every pixel of `region`, computed in tiles of up
-/// to `tile` px: each tile reaches `margin` px further on every side (as far
-/// as the image goes), and only its inner part is kept - so a pixel near a
-/// tile's edge sees the same surroundings as in one big pass.
-pub(crate) fn probabilities(
-    model: &SpotNet,
-    image: &OwnedImage,
-    region: Region,
-    tile: usize,
-    margin: usize,
-) -> Vec<f32> {
-    let device = Device::flex();
-    let step = tile.saturating_sub(2 * margin).max(16);
-    let mut out = vec![0.0f32; region.width * region.height];
-    for ty in (0..region.height).step_by(step) {
-        for tx in (0..region.width).step_by(step) {
-            // The kept part, in image coordinates.
-            let (kx, ky) = (region.x + tx, region.y + ty);
-            let (kw, kh) = (step.min(region.width - tx), step.min(region.height - ty));
-            // The window run through the network: the kept part plus margin.
-            let wx = kx.saturating_sub(margin);
-            let wy = ky.saturating_sub(margin);
-            let ww = (kx + kw + margin).min(image.width) - wx;
-            let wh = (ky + kh + margin).min(image.height) - wy;
-            let window = Region {
-                x: wx,
-                y: wy,
-                width: ww,
-                height: wh,
-            };
-            let plane = image.width * image.height;
-            let input: Vec<f32> = (0..image.channels)
-                .flat_map(|c| window.cut(&image.data[c * plane..(c + 1) * plane], image.width))
-                .collect();
-            let x = Tensor::<4>::from_data(
-                TensorData::new(input, [1, image.channels, wh, ww]),
-                &device,
-            );
-            let p = model
-                .forward(x)
-                .into_data()
-                .try_to_vec::<f32>()
-                .expect("f32 output");
-            for y in 0..kh {
-                let from = (ky + y - wy) * ww + (kx - wx);
-                let to = (ty + y) * region.width + tx;
-                out[to..to + kw].copy_from_slice(&p[from..from + kw]);
-            }
-        }
-    }
-    out
-}
-
-/// The peaks of `probability` (`width x height`) above `threshold` on `mask`
-/// pixels: a pixel at least as high as its 8 neighbours - on a plateau of
-/// equal values only the first in reading order. As spots at pixel centres.
-pub(crate) fn find_spots(
-    probability: &[f32],
-    width: usize,
-    height: usize,
-    mask: &[bool],
-    threshold: f32,
-) -> Vec<Spot> {
-    let mut spots = Vec::new();
-    for y in 0..height {
-        for x in 0..width {
-            let p = probability[y * width + x];
-            if !mask[y * width + x] || p <= threshold {
-                continue;
-            }
-            let mut peak = true;
-            'neighbours: for dy in -1isize..=1 {
-                for dx in -1isize..=1 {
-                    if (dx, dy) == (0, 0) {
-                        continue;
-                    }
-                    let (nx, ny) = (x as isize + dx, y as isize + dy);
-                    if nx < 0 || ny < 0 || nx >= width as isize || ny >= height as isize {
-                        continue;
-                    }
-                    let q = probability[ny as usize * width + nx as usize];
-                    // A neighbour before this pixel in reading order wins a tie.
-                    let before = dy < 0 || (dy == 0 && dx < 0);
-                    if q > p || (before && q == p) {
-                        peak = false;
-                        break 'neighbours;
-                    }
-                }
-            }
-            if peak {
-                spots.push(Spot {
-                    x: x as f32 + 0.5,
-                    y: y as f32 + 0.5,
-                });
-            }
-        }
-    }
-    spots
-}
-
 /// How many `found` spots match an `annotated` one at most `tolerance` px
 /// away - one to one, the closest pairs first.
 pub(crate) fn count_matches(found: &[Spot], annotated: &[Spot], tolerance: f32) -> usize {
@@ -317,86 +266,11 @@ pub(crate) fn count_matches(found: &[Spot], annotated: &[Spot], tolerance: f32) 
 
 #[cfg(test)]
 mod tests {
-    use super::{Region, ValidationScore, count_matches, find_spots, probabilities};
-    use crate::model::OwnedImage;
-    use crate::model::spotnet::network::{SpotNet, SpotNetConfig};
+    use super::{Region, ValidationScore, count_matches};
     use crate::model::spotnet::train::Spot;
-    use burn::tensor::Device;
-
-    #[test]
-    fn tiles_with_margin_give_what_one_pass_over_the_image_gives() {
-        // A 2-channel 50 x 37 image of varied values and a random network:
-        // small tiles (each with a margin of half the receptive field) match
-        // one pass over the whole region.
-        let config = SpotNetConfig {
-            channels: 4,
-            ..SpotNetConfig::default()
-        };
-        let model = SpotNet::new(&config, 3, &Device::flex());
-        let (width, height) = (50, 37);
-        let data = (0..2 * width * height)
-            .map(|i| ((i * 7919) % 101) as f32 / 100.0)
-            .collect();
-        let image = OwnedImage {
-            width,
-            height,
-            channels: 2,
-            data,
-        };
-        let region = Region {
-            x: 3,
-            y: 5,
-            width: 41,
-            height: 30,
-        };
-        let margin = config.receptive_field() / 2;
-        let whole = probabilities(&model, &image, region, 1000, margin);
-        let tiled = probabilities(&model, &image, region, 2 * margin + 16, margin);
-        let worst = whole
-            .iter()
-            .zip(&tiled)
-            .map(|(a, b)| (a - b).abs())
-            .fold(0.0f32, f32::max);
-        assert!(worst < 1e-5, "tiles differ by {worst}");
-    }
 
     fn spot(x: f32, y: f32) -> Spot {
         Spot { x, y }
-    }
-
-    #[test]
-    fn a_peak_above_the_threshold_is_a_spot_at_its_pixel_centre() {
-        // 5 x 3 with one hill at (3, 1).
-        #[rustfmt::skip]
-        let p = [
-            0.0, 0.1, 0.3, 0.4, 0.2,
-            0.0, 0.2, 0.6, 0.9, 0.5,
-            0.0, 0.1, 0.3, 0.4, 0.2,
-        ];
-        assert_eq!(find_spots(&p, 5, 3, &[true; 15], 0.5), vec![spot(3.5, 1.5)]);
-    }
-
-    #[test]
-    fn peaks_below_the_threshold_or_outside_the_mask_are_no_spots() {
-        let p = [0.0, 0.4, 0.0, 0.0, 0.9, 0.0];
-        assert!(find_spots(&p, 3, 2, &[true; 6], 0.5).len() == 1);
-        assert!(find_spots(&p, 3, 2, &[true, true, true, false, false, false], 0.5).is_empty());
-        assert!(find_spots(&[0.0, 0.4, 0.0], 3, 1, &[true; 3], 0.5).is_empty());
-    }
-
-    #[test]
-    fn a_plateau_is_one_spot() {
-        let p = [0.0, 0.8, 0.8, 0.0, 0.0, 0.8, 0.8, 0.0];
-        assert_eq!(find_spots(&p, 4, 2, &[true; 8], 0.5), vec![spot(1.5, 0.5)]);
-    }
-
-    #[test]
-    fn two_close_peaks_are_two_spots() {
-        let p = [0.0, 0.9, 0.5, 0.9, 0.0];
-        assert_eq!(
-            find_spots(&p, 5, 1, &[true; 5], 0.5),
-            vec![spot(1.5, 0.5), spot(3.5, 0.5)]
-        );
     }
 
     #[test]

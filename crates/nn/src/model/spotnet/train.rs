@@ -22,6 +22,7 @@ use crate::{
             target::{area_mask, gaussian_map},
         },
     },
+    pieces::Pieces,
     train::{MIN_IMAGES_FOR_AUTO_SPLIT, SeededUniform, TrainProgress, Validation},
 };
 use burn::Tensor;
@@ -139,7 +140,14 @@ pub fn train(
 
     let mut final_train_loss = f32::NAN;
     let mut final_val_loss = None;
-    let mut best: Option<(usize, ValidationScore, SpotNet)> = None;
+    let settings = SpotNetSettings {
+        network: config.clone(),
+        normalization: params.normalization,
+        sigma: params.sigma,
+    };
+    // Validation pieces: a training patch plus its halo on every side.
+    let pieces = Pieces::fixed(params.patch_size + 2 * margin);
+    let mut best: Option<(usize, ValidationScore, SpotNetModel)> = None;
     let mut epochs_run = 0;
     for epoch in 0..params.epochs {
         let (mut loss_sum, mut batches) = (0.0f32, 0usize);
@@ -180,7 +188,12 @@ pub fn train(
         epochs_run = epoch + 1;
 
         if !plan.validate.is_empty() {
-            let checked = model.valid();
+            let checked = SpotNetModel {
+                network: model.valid(),
+                settings: settings.clone(),
+                info: BTreeMap::new(),
+                device: Device::flex(),
+            };
             let mut tally = Tally::default();
             for &index in &plan.validate {
                 if control.is_cancelled() {
@@ -193,16 +206,7 @@ pub fn train(
                 } else {
                     &labels.area
                 };
-                let tile = params.patch_size + 2 * margin;
-                tally.add(
-                    &checked,
-                    &image,
-                    &labels.spots,
-                    held_back,
-                    params.sigma,
-                    tile,
-                    margin,
-                );
+                tally.add(&checked, &image, &labels.spots, held_back, pieces)?;
             }
             if let Some(score) = tally.score() {
                 final_val_loss = Some(score.loss);
@@ -231,26 +235,26 @@ pub fn train(
         best_val_loss: best.as_ref().map(|(_, score, _)| score.loss),
         best_val_epoch: best.as_ref().map(|(epoch, _, _)| *epoch),
     };
-    let (network, validation) = match best {
-        Some((epoch, score, network)) => (network, ValidationOutcome::Scored { epoch, score }),
-        None => (model.valid(), plan.outcome),
+    let (mut model, validation) = match best {
+        Some((epoch, score, model)) => (model, ValidationOutcome::Scored { epoch, score }),
+        None => (
+            SpotNetModel {
+                network: model.valid(),
+                settings,
+                info: BTreeMap::new(),
+                device: Device::flex(),
+            },
+            plan.outcome,
+        ),
     };
-    let model = SpotNetModel {
-        network,
-        settings: SpotNetSettings {
-            network: config.clone(),
-            normalization: params.normalization,
-            sigma: params.sigma,
-        },
-        info: BTreeMap::from([
-            ("seed".into(), control.seed.to_string()),
-            (
-                "training".into(),
-                serde_json::to_string(params).expect("params serialize"),
-            ),
-            ("epochs_run".into(), epochs_run.to_string()),
-        ]),
-    };
+    model.info = BTreeMap::from([
+        ("seed".into(), control.seed.to_string()),
+        (
+            "training".into(),
+            serde_json::to_string(params).expect("params serialize"),
+        ),
+        ("epochs_run".into(), epochs_run.to_string()),
+    ]);
     Ok(SpotNetTraining {
         model,
         stats,
@@ -1155,7 +1159,7 @@ mod tests {
         let path = dir.path().join("spots.evanet");
         trained.save(&path).unwrap();
         let loaded =
-            crate::model::spotnet::file::SpotNetModel::load(&path, &Device::flex()).unwrap();
+            crate::model::spotnet::file::SpotNetModel::read(&path, &Device::flex()).unwrap();
 
         assert_eq!(loaded.settings, trained.settings);
         assert_eq!(loaded.info["seed"], "9");

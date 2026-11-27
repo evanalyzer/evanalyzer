@@ -37,6 +37,7 @@ impl Brightness {
         Self { factors }
     }
 
+    #[cfg(test)]
     /// The factor of each channel.
     pub(crate) fn factors(&self) -> &[f32] {
         &self.factors

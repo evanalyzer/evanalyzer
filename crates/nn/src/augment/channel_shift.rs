@@ -42,6 +42,7 @@ impl ChannelShift {
         Self { shifts }
     }
 
+    #[cfg(test)]
     /// The shift of each channel: its content moves `dx` px to the right and
     /// `dy` px down.
     pub(crate) fn shifts(&self) -> &[(isize, isize)] {
