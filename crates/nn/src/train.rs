@@ -80,3 +80,32 @@ pub enum TrainStats {
         best_val_epoch: Option<usize>,
     },
 }
+
+/// Uniform random start weights from a generator of their own (xorshift64),
+/// seeded per training - not burn's global one: whatever else draws random
+/// numbers meanwhile (other trainings, parallel tests), the same seed gives
+/// the same model.
+pub(crate) struct SeededUniform {
+    state: u64,
+}
+
+impl SeededUniform {
+    pub(crate) fn new(seed: u64) -> Self {
+        Self {
+            state: seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).max(1),
+        }
+    }
+
+    /// `n` values uniform in `±bound`.
+    pub(crate) fn values(&mut self, n: usize, bound: f32) -> Vec<f32> {
+        (0..n)
+            .map(|_| {
+                self.state ^= self.state << 13;
+                self.state ^= self.state >> 7;
+                self.state ^= self.state << 17;
+                let unit = (self.state >> 40) as f32 / (1u64 << 24) as f32;
+                (2.0 * unit - 1.0) * bound
+            })
+            .collect()
+    }
+}

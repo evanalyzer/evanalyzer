@@ -57,7 +57,7 @@ pub fn train(
     params: &SpotNetTrainParams,
     control: &TrainControl<'_>,
 ) -> Result<(SpotNet, TrainStats), NnError> {
-    // 1. Prepare:   device = autodiff CPU, model = SpotNet::new(config, &device),
+    // 1. Prepare:   device = autodiff CPU, model = SpotNet::new(config, control.seed, &device),
     //               optimizer = Adam.
     // 2. Per epoch:
     //    a. pick `patches_per_epoch` random patches inside the training areas
@@ -145,9 +145,20 @@ mod tests {
     #[test]
     fn errors_outside_the_training_areas_do_not_count() {
         // Right inside the mask, completely wrong on the two pixels outside.
-        let inside_only = loss([-20.0, -20.0, 20.0, -20.0], [0.0, 0.0, 1.0, 0.0], [1.0, 1.0, 1.0, 1.0]);
-        let with_outside = loss([20.0, 20.0, 20.0, -20.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 1.0, 1.0]);
-        assert!(inside_only < 1e-6 && with_outside < 1e-6, "{inside_only}, {with_outside}");
+        let inside_only = loss(
+            [-20.0, -20.0, 20.0, -20.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [1.0, 1.0, 1.0, 1.0],
+        );
+        let with_outside = loss(
+            [20.0, 20.0, 20.0, -20.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0, 1.0],
+        );
+        assert!(
+            inside_only < 1e-6 && with_outside < 1e-6,
+            "{inside_only}, {with_outside}"
+        );
     }
 
     #[test]
@@ -164,7 +175,10 @@ mod tests {
         let target = [1.0, 0.0, 0.0, 0.0];
         let missed = loss([-3.0, -20.0, -20.0, -20.0], target, [1.0; 4]);
         let false_alarm = loss([20.0, 3.0, -20.0, -20.0], target, [1.0; 4]);
-        assert!((missed / false_alarm - 11.0).abs() < 0.01, "{missed} / {false_alarm}");
+        assert!(
+            (missed / false_alarm - 11.0).abs() < 0.01,
+            "{missed} / {false_alarm}"
+        );
     }
 
     #[test]
@@ -181,7 +195,7 @@ mod tests {
     /// as the answer is right - checked every 10 steps.
     fn spotnet_learns_one_image() {
         const SIZE: usize = 32;
-        const MAX_STEPS: usize = 500;
+        const MAX_STEPS: usize = 300;
         let spots = vec![
             Spot { x: 8.5, y: 8.5 },
             Spot { x: 22.5, y: 12.5 },
@@ -192,11 +206,6 @@ mod tests {
         let target = gaussian_map(SIZE, SIZE, &spots, 1.5);
         let mask = vec![1.0f32; SIZE * SIZE]; // the whole image is a training area
         let device = Device::flex().autodiff();
-        // Fixed start weights when the test runs alone. burn's seed is global
-        // on burn-flex, so in a parallel `cargo test` other tests move it -
-        // hence the room up to MAX_STEPS (most runs need 50-150 steps).
-        // Seeding SpotNet's own initialisation (as the MLP does) makes it exact.
-        device.seed(7);
         let image = test_image(SIZE, SIZE, &spots);
 
         let shape = [1, 1, SIZE, SIZE];
@@ -209,7 +218,8 @@ mod tests {
             channels: 8,
             ..SpotNetConfig::default()
         };
-        let mut model = SpotNet::new(&config, &device);
+        // Fixed start weights: the same run every time, also in parallel tests.
+        let mut model = SpotNet::new(&config, 7, &device);
         let mut optim = AdamConfig::new().init();
 
         // Right = above 0.5 on every spot centre, below 0.1 wherever the
@@ -232,7 +242,10 @@ mod tests {
         while steps < MAX_STEPS {
             let logits = model.forward_logits(x.clone());
             if steps % 10 == 0 {
-                let prediction = sigmoid(logits.clone()).into_data().try_to_vec::<f32>().expect("f32 output");
+                let prediction = sigmoid(logits.clone())
+                    .into_data()
+                    .try_to_vec::<f32>()
+                    .expect("f32 output");
                 if right(&prediction) {
                     learned = true;
                     break;
@@ -252,7 +265,10 @@ mod tests {
         let first = first.expect("at least one step ran");
         println!("{steps} steps: first loss {first:.5}, last {last:.5}");
 
-        assert!(learned, "not learned in {MAX_STEPS} steps (loss {first} → {last})");
+        assert!(
+            learned,
+            "not learned in {MAX_STEPS} steps (loss {first} → {last})"
+        );
         assert!(last < first, "the loss did not fall: {first} → {last}");
     }
 

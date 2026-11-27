@@ -9,11 +9,32 @@
 //!
 //! The SpotNet network in burn.
 
-use burn::module::Module;
-use burn::nn::PaddingConfig2d;
+use crate::train::SeededUniform;
+use burn::module::{Module, Param};
 use burn::nn::conv::{Conv2d, Conv2dConfig};
+use burn::nn::{Initializer, PaddingConfig2d};
 use burn::tensor::activation::{relu, sigmoid};
-use burn::tensor::{Device, Tensor};
+use burn::tensor::{Device, Tensor, TensorData};
+
+/// `conv` with start weights and bias from `random`, distributed as burn's
+/// own `Conv2d` default (Kaiming uniform, gain 1/sqrt(3)): uniform in
+/// ±1/sqrt(fan_in), fan_in = input channels x kernel height x width. The
+/// layer is built with zeros first (cheap) and then filled here.
+fn seeded(mut conv: Conv2d, random: &mut SeededUniform, device: &Device) -> Conv2d {
+    let [out_channels, in_channels, kh, kw] = conv.weight.dims();
+    let bound = 1.0 / ((in_channels * kh * kw) as f32).sqrt();
+    let weight = random.values(out_channels * in_channels * kh * kw, bound);
+    conv.weight = Param::from_tensor(Tensor::from_data(
+        TensorData::new(weight, [out_channels, in_channels, kh, kw]),
+        device,
+    ));
+    let bias = random.values(out_channels, bound);
+    conv.bias = Some(Param::from_tensor(Tensor::from_data(
+        TensorData::new(bias, [out_channels]),
+        device,
+    )));
+    conv
+}
 
 ///
 // input  [2 ch: spot, reference]
@@ -62,27 +83,31 @@ impl SpotNetConfig {
 }
 
 impl SpotNet {
-    pub(crate) fn new(config: &SpotNetConfig, device: &Device) -> Self {
-        let mut hidden: Vec<Conv2d> = Vec::with_capacity(config.dilations.len());
+    /// A network of `config` with fresh start weights from `seed`: the same
+    /// seed gives the same network, whatever else draws random numbers.
+    pub(crate) fn new(config: &SpotNetConfig, seed: u64, device: &Device) -> Self {
+        let mut random = SeededUniform::new(seed);
+        let mut hidden = Vec::with_capacity(config.dilations.len());
+        // The first layer reads the image channels, every later one the
+        // feature maps of the layer before.
         let mut channels_from = config.in_channels;
-
         for &dilation in &config.dilations {
-            // First hidden layer gets two input channels from the in and has 16 output channels
             let layer = Conv2dConfig::new([channels_from, config.channels], [3, 3])
                 .with_dilation([dilation, dilation])
                 .with_padding(PaddingConfig2d::Explicit(
                     dilation, dilation, dilation, dilation,
                 ))
+                .with_initializer(Initializer::Zeros)
                 .init(device);
-            hidden.push(layer);
-            // We come from an hidden layer which always has 16
+            hidden.push(seeded(layer, &mut random, device));
             channels_from = config.channels;
         }
 
-        // Output layer has one output channel
+        // Output layer: one channel, the spot-centre probability.
         let out = Conv2dConfig::new([channels_from, 1], [1, 1])
-            .with_dilation([1, 1])
+            .with_initializer(Initializer::Zeros)
             .init(device);
+        let out = seeded(out, &mut random, device);
 
         Self { hidden, out }
     }
@@ -120,7 +145,7 @@ mod tests {
     #[test]
     fn the_output_has_the_size_of_the_input_and_one_channel() {
         let device = Device::flex();
-        let net = SpotNet::new(&config(), &device);
+        let net = SpotNet::new(&config(), 1, &device);
         let x = Tensor::<4>::zeros([1, 2, 64, 48], &device);
         assert_eq!(net.forward(x).dims(), [1, 1, 64, 48]);
     }

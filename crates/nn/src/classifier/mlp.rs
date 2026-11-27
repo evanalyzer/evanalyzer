@@ -17,7 +17,7 @@
 
 use crate::classifier::{Classifier, Predictions, Samples, row_count};
 use crate::errors::NnError;
-use crate::train::{TrainControl, TrainProgress, TrainStats};
+use crate::train::{SeededUniform, TrainControl, TrainProgress, TrainStats};
 use crate::weights::{ModelFile, ModelMetadata, NamedTensor};
 use burn::module::{Module, Param};
 use burn::nn::Linear;
@@ -104,22 +104,12 @@ pub(super) struct Network {
 impl Network {
     /// Fresh layers, initialized as burn's `Linear` default (Kaiming uniform,
     /// gain 1/sqrt(3): weights and biases uniform in ±1/sqrt(inputs)) - but
-    /// from a generator of its own seeded with `seed` (xorshift64), not
-    /// burn's global one: whatever else draws random numbers meanwhile, the
-    /// same seed gives the same model.
+    /// from a generator of its own seeded with `seed` ([`SeededUniform`]),
+    /// not burn's global one: whatever else draws random numbers meanwhile,
+    /// the same seed gives the same model.
     fn new(architecture: &MlpArchitecture, seed: u64, device: &Device) -> Self {
-        let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).max(1);
-        let mut uniform = |n: usize, bound: f32| -> Vec<f32> {
-            (0..n)
-                .map(|_| {
-                    state ^= state << 13;
-                    state ^= state >> 7;
-                    state ^= state << 17;
-                    let unit = (state >> 40) as f32 / (1u64 << 24) as f32;
-                    (2.0 * unit - 1.0) * bound
-                })
-                .collect()
-        };
+        let mut random = SeededUniform::new(seed);
+        let mut uniform = |n: usize, bound: f32| random.values(n, bound);
         let layers = architecture
             .layer_sizes()
             .into_iter()
