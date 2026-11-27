@@ -30,7 +30,7 @@
 //! shared by every step using that file, whatever their settings.
 
 use crate::errors::NnError;
-use crate::train::{TrainControl, TrainStats};
+use crate::train::TrainControl;
 use burn::tensor::Device;
 use std::path::Path;
 
@@ -119,24 +119,27 @@ pub enum Normalization {
     None,
 }
 
-/// A model that can be trained from new weights or fine-tuned from a file.
-/// A later track (after `tch` is gone: training needs burn's `std` +
-/// `optim`); the targets are computed from [`Trainable::Target`] by each
-/// model itself (Cellpose: flows, StarDist: probability + ray distances,
-/// U-Net: class/boundary maps).
+/// A model that can be trained from new weights or fine-tuned from a file
+/// (SpotNet; U-Net, StarDist, Cellpose later); the targets are computed from
+/// [`Trainable::Target`] by each model itself (SpotNet: Gaussian hills,
+/// Cellpose: flows, StarDist: probability + ray distances, U-Net:
+/// class/boundary maps).
 pub trait Trainable: Model {
-    /// The labels a sample comes with ([`InstanceLabels`] or [`ClassMask`]).
+    /// The labels a sample comes with (`SpotLabels`, [`InstanceLabels`],
+    /// [`ClassMask`]).
     type Target;
-    /// Epochs, learning rate, batch, crop size, frozen layers, augmentations.
+    /// The model's settings: [`crate::train::NetworkTrainParams`] plus its
+    /// own.
     type TrainParams;
 
-    /// `start`: `None` = new weights, `Some(file)` = fine-tune those.
+    /// `start`: `None` = new weights, `Some(file)` = fine-tune those (the
+    /// architecture from the file).
     fn train(
         start: Option<&Path>,
         data: &dyn Dataset<Self::Target>,
         params: &Self::TrainParams,
         control: &TrainControl<'_>,
-    ) -> Result<(Self, TrainStats), NnError>;
+    ) -> Result<crate::train::Trained<Self>, NnError>;
 
     /// Writes the model as safetensors + metadata (architecture, base model,
     /// training params, seed - a training is reproducible from it).

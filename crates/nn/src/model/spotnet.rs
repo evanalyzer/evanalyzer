@@ -23,8 +23,9 @@
 //! [`file`].
 
 use crate::errors::NnError;
-use crate::model::{Image, Model, Normalization, Written};
+use crate::model::{Dataset, Image, Model, Normalization, Trainable, Written};
 use crate::pieces::Pieces;
+use crate::train::{TrainControl, Trained};
 use burn::tensor::Device;
 use std::path::Path;
 
@@ -40,8 +41,7 @@ mod validate;
 pub use file::{ARCH, ARCH_VERSION, SpotNetHeader, SpotNetModel, SpotNetSettings};
 pub use network::SpotNetConfig;
 pub use normalize::PercentileNormalization;
-pub use train::{Spot, SpotLabels, SpotNetTrainParams, SpotNetTraining, ValidationOutcome, train};
-pub use validate::ValidationScore;
+pub use train::{Spot, SpotLabels, SpotNetTrainParams, train};
 
 /// What a step chooses per run.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -195,6 +195,38 @@ impl Model for SpotNetModel {
         let spots = post::find_spots(&raw.probability, width, height, None, params.threshold);
         drop(raw);
         Ok(Written::Instances(post::write_spots(&spots, width, out)))
+    }
+}
+
+impl Trainable for SpotNetModel {
+    type Target = SpotLabels;
+    type TrainParams = SpotNetTrainParams;
+
+    fn train(
+        start: Option<&Path>,
+        data: &dyn Dataset<SpotLabels>,
+        params: &SpotNetTrainParams,
+        control: &TrainControl<'_>,
+    ) -> Result<Trained<Self>, NnError> {
+        let start = start
+            .map(|file| Self::read(file, &Device::flex()))
+            .transpose()?;
+        train::train(start.as_ref(), data, params, control)
+    }
+
+    fn save(&self, file: &Path) -> Result<(), NnError> {
+        SpotNetModel::save(self, file)
+    }
+
+    /// Estimated: per patch pixel the network's activations
+    /// ([`Model::NET_BYTES_PER_PIXEL`]) kept for the backward pass and their
+    /// gradients (x 3), plus the patch's input, target and mask (4 bytes
+    /// each, the input per channel).
+    fn ram_per_sample(params: &SpotNetTrainParams) -> u64 {
+        let pixels = (params.common.patch_size * params.common.patch_size) as f64;
+        let per_pixel =
+            3.0 * Self::NET_BYTES_PER_PIXEL + 4.0 * (params.network.in_channels + 2) as f64;
+        (pixels * per_pixel) as u64
     }
 }
 

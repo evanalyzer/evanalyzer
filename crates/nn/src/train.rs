@@ -81,6 +81,122 @@ pub enum TrainStats {
     },
 }
 
+/// What every network's training is set up with (each model adds its own,
+/// e.g. SpotNet's target width).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct NetworkTrainParams {
+    pub epochs: usize,
+    /// Patches per epoch (an image gives many patches).
+    pub patches_per_epoch: usize,
+    pub batch_size: usize,
+    /// Side of a square patch in px, e.g. 128.
+    pub patch_size: usize,
+    pub learning_rate: f64,
+    /// The random changes of every patch.
+    pub augment: crate::augment::AugmentParams,
+    /// What the training checks itself on.
+    pub validation: Validation,
+    /// Stop after this many epochs without a better check; `None` = run
+    /// every epoch. Needs validation.
+    pub patience: Option<usize>,
+}
+
+impl NetworkTrainParams {
+    /// Refuses settings no training can run with.
+    pub fn check(&self) -> Result<(), crate::NnError> {
+        let bad = |what: &str| Err(crate::NnError::InvalidInput(format!("training: {what}")));
+        if self.epochs == 0 {
+            return bad("at least one epoch");
+        }
+        if self.patches_per_epoch == 0 || self.batch_size == 0 || self.patch_size == 0 {
+            return bad("patches per epoch, batch size and patch size must be at least 1");
+        }
+        if !(self.learning_rate > 0.0) {
+            return bad("the learning rate must be above 0");
+        }
+        if self.patience == Some(0) {
+            return bad("the patience must be at least 1 epoch");
+        }
+        if let Validation::Auto { fraction } = self.validation
+            && !(fraction > 0.0 && fraction < 1.0)
+        {
+            return bad("the share held back for validation must be between 0 and 1");
+        }
+        Ok(())
+    }
+}
+
+/// A network's check on held-back areas - the same for every network: how
+/// many of the annotated objects (spots, cells) it found there, and how
+/// many it found wrongly.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct HeldBackScore {
+    /// The training loss there (lower is better).
+    pub loss: f32,
+    /// Annotated objects in the held-back areas.
+    pub annotated: usize,
+    /// Objects the network found there.
+    pub found: usize,
+    /// Found objects matched to an annotated one.
+    pub matched: usize,
+}
+
+impl HeldBackScore {
+    /// How many of the found objects are real (1 when none was found).
+    pub fn precision(&self) -> f32 {
+        if self.found == 0 {
+            1.0
+        } else {
+            self.matched as f32 / self.found as f32
+        }
+    }
+
+    /// How many of the annotated objects were found (1 when there are none).
+    pub fn recall(&self) -> f32 {
+        if self.annotated == 0 {
+            1.0
+        } else {
+            self.matched as f32 / self.annotated as f32
+        }
+    }
+
+    /// The harmonic mean of precision and recall.
+    pub fn f1(&self) -> f32 {
+        let (p, r) = (self.precision(), self.recall());
+        if p + r == 0.0 {
+            0.0
+        } else {
+            2.0 * p * r / (p + r)
+        }
+    }
+
+    /// Found objects that match none annotated.
+    pub fn wrongly_found(&self) -> usize {
+        self.found - self.matched
+    }
+}
+
+/// How a network's training was checked.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum HeldBack {
+    /// The score of the kept model on the held-back areas.
+    Scored { epoch: usize, score: HeldBackScore },
+    /// Switched off.
+    Off,
+    /// `Validation::Auto` without drawn validation areas and with fewer than
+    /// [`MIN_IMAGES_FOR_AUTO_SPLIT`] images: nothing to hold back.
+    TooFewImages { images: usize },
+}
+
+/// A finished network training: the kept model (the best epoch's when
+/// checked, else the last), its curve and its check.
+#[derive(Debug, Clone)]
+pub struct Trained<M> {
+    pub model: M,
+    pub stats: TrainStats,
+    pub held_back: HeldBack,
+}
+
 /// Which annotations a network's training checks itself on - never trained
 /// on, they show whether the model learned spots (or cells) in general or
 /// only its training areas by heart, and pick the best epoch.

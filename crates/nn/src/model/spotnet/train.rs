@@ -9,10 +9,10 @@
 //!
 //! Training a SpotNet from clicked spots and training areas.
 
-use super::validate::{Tally, ValidationScore};
+use super::validate::Tally;
 use crate::{
     NnError, TrainControl, TrainStats,
-    augment::{AugmentParams, Augmentation},
+    augment::Augmentation,
     model::{
         Dataset, OwnedImage,
         spotnet::{
@@ -23,7 +23,10 @@ use crate::{
         },
     },
     pieces::Pieces,
-    train::{MIN_IMAGES_FOR_AUTO_SPLIT, SeededUniform, TrainProgress, Validation},
+    train::{
+        HeldBack, HeldBackScore, MIN_IMAGES_FOR_AUTO_SPLIT, NetworkTrainParams, SeededUniform,
+        TrainProgress, Trained, Validation,
+    },
 };
 use burn::Tensor;
 use burn::module::Module;
@@ -53,54 +56,19 @@ pub struct SpotLabels {
     pub validation: Vec<bool>,
 }
 
-/// Settings of one training.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+/// Settings of one SpotNet training: every network's plus SpotNet's own.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SpotNetTrainParams {
-    pub epochs: usize,
-    /// Patches per epoch (an image gives many patches).
-    pub patches_per_epoch: usize,
-    pub batch_size: usize,
-    /// Side of a square patch in px, e.g. 128.
-    pub patch_size: usize,
-    pub learning_rate: f64,
-    /// Width of the Gaussian hills in px, e.g. 1.5.
+    pub common: NetworkTrainParams,
+    /// The architecture of a new model (a fine-tuned one keeps its file's).
+    pub network: SpotNetConfig,
+    /// Width of the Gaussian hills in px, e.g. 1.5 (a fine-tuned model keeps
+    /// its file's).
     pub sigma: f32,
     /// How every input channel is brought to 0..1 - stored in the model
-    /// file, prediction normalises the same way.
+    /// file, prediction normalises the same way (a fine-tuned model keeps
+    /// its file's).
     pub normalization: PercentileNormalization,
-    /// The random changes of every patch.
-    pub augment: AugmentParams,
-    /// What the training checks itself on.
-    pub validation: Validation,
-    /// Stop after this many epochs without a better check (see
-    /// [`stop_early`]); `None` = run every epoch. Needs validation.
-    pub patience: Option<usize>,
-}
-
-/// A finished training.
-#[derive(Debug, Clone)]
-pub struct SpotNetTraining {
-    /// The best model: of the epoch with the most spots found right on the
-    /// held-back areas (F1, then the lower loss), the last one without
-    /// validation - with its settings, ready to save.
-    pub model: SpotNetModel,
-    pub stats: TrainStats,
-    pub validation: ValidationOutcome,
-}
-
-/// How a training was checked.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ValidationOutcome {
-    /// The score of the kept model on the held-back areas.
-    Scored {
-        epoch: usize,
-        score: ValidationScore,
-    },
-    /// Switched off.
-    Off,
-    /// `Validation::Auto` without drawn validation areas and with fewer than
-    /// [`MIN_IMAGES_FOR_AUTO_SPLIT`] images: nothing to hold back.
-    TooFewImages { images: usize },
 }
 
 /// Trains a new SpotNet on `data`, on the CPU (the GPU follows later).
@@ -109,30 +77,47 @@ pub enum ValidationOutcome {
 /// image with pixels to train on gives its share of `patches_per_epoch`
 /// random patches (each centred on such a pixel), trained in batches of
 /// `batch_size`. Images smaller than `patch_size` give patches of the whole
-/// image. Every patch gets its own random changes (`params.augment`); its
+/// image. Every patch gets its own random changes (`params.common.augment`); its
 /// target is computed from its moved spots.
 ///
 /// After every epoch the model is checked on the held-back areas
-/// (`params.validation`, see [`plan`]) and the best epoch's model kept
+/// (`params.common.validation`, see [`plan`]) and the best epoch's model kept
 /// (see [`better`]); `stats.best_val_loss` is that epoch's loss.
 /// Start weights, patches, changes and the held-back images come from
 /// `control.seed`: the same data and seed give the same model.
+///
+/// `start`: `None` = new weights (`params.network`), `Some` = fine-tune that
+/// model - its architecture, target width and normalisation stay.
 pub fn train(
+    start: Option<&SpotNetModel>,
     data: &dyn Dataset<SpotLabels>,
-    config: &SpotNetConfig,
     params: &SpotNetTrainParams,
     control: &TrainControl<'_>,
-) -> Result<SpotNetTraining, NnError> {
+) -> Result<Trained<SpotNetModel>, NnError> {
     check_params(params)?;
+    let settings = match start {
+        Some(start) => start.settings.clone(),
+        None => SpotNetSettings {
+            network: params.network.clone(),
+            normalization: params.normalization,
+            sigma: params.sigma,
+        },
+    };
+    let config = &settings.network;
     config
         .check()
         .map_err(|e| NnError::InvalidInput(e.to_string()))?;
-    let plan = plan(data, config, params.validation, control.seed)?;
-    let patches_per_image = params.patches_per_epoch.div_ceil(plan.train.len());
+    let common = &params.common;
+    let plan = plan(data, config, common.validation, control.seed)?;
+    let patches_per_image = common.patches_per_epoch.div_ceil(plan.train.len());
     let margin = config.receptive_field() / 2;
 
     let device = Device::flex().autodiff();
-    let mut model = SpotNet::new(config, control.seed, &device);
+    let mut model = match start {
+        // The file's weights onto the training device (with gradients).
+        Some(start) => SpotNetModel::from_bytes(&start.to_bytes()?, &device)?.network,
+        None => SpotNet::new(config, control.seed, &device),
+    };
     let mut optim = AdamConfig::new().init();
     // Its own stream (seed + 1): the patches don't depend on how many
     // random numbers the start weights took.
@@ -140,25 +125,20 @@ pub fn train(
 
     let mut final_train_loss = f32::NAN;
     let mut final_val_loss = None;
-    let settings = SpotNetSettings {
-        network: config.clone(),
-        normalization: params.normalization,
-        sigma: params.sigma,
-    };
     // Validation pieces: a training patch plus its halo on every side.
-    let pieces = Pieces::fixed(params.patch_size + 2 * margin);
-    let mut best: Option<(usize, ValidationScore, SpotNetModel)> = None;
+    let pieces = Pieces::fixed(common.patch_size + 2 * margin);
+    let mut best: Option<(usize, HeldBackScore, SpotNetModel)> = None;
     let mut epochs_run = 0;
-    for epoch in 0..params.epochs {
+    for epoch in 0..common.epochs {
         let (mut loss_sum, mut batches) = (0.0f32, 0usize);
         for &index in &plan.train {
             if control.is_cancelled() {
                 return Err(NnError::Cancelled);
             }
             let (mut image, labels) = data.get(index)?;
-            params.normalization.apply(&mut image);
-            let sample = Sample::new(&image, &labels, params.sigma, plan.drawn_areas);
-            let size = params.patch_size.min(image.width).min(image.height);
+            settings.normalization.apply(&mut image);
+            let sample = Sample::new(&image, &labels, settings.sigma, plan.drawn_areas);
+            let size = common.patch_size.min(image.width).min(image.height);
             let patches: Vec<Patch> = (0..patches_per_image)
                 .map(|_| Patch {
                     origin: patch_origin(
@@ -169,19 +149,19 @@ pub fn train(
                         &mut random,
                     ),
                     augmentation: Augmentation::random(
-                        &params.augment,
+                        &common.augment,
                         image.channels,
                         &mut random,
                     ),
                 })
                 .collect();
-            for batch in patches.chunks(params.batch_size) {
+            for batch in patches.chunks(common.batch_size) {
                 let (x, target, mask) = sample.batch(batch, size, &device);
                 let loss = masked_loss(model.forward_logits(x), target, mask);
                 loss_sum += loss.clone().into_scalar::<f32>();
                 batches += 1;
                 let grads = GradientsParams::from_grads(loss.backward(), &model);
-                model = optim.step(params.learning_rate, model, grads);
+                model = optim.step(common.learning_rate, model, grads);
             }
         }
         final_train_loss = loss_sum / batches.max(1) as f32;
@@ -200,7 +180,7 @@ pub fn train(
                     return Err(NnError::Cancelled);
                 }
                 let (mut image, labels) = data.get(index)?;
-                params.normalization.apply(&mut image);
+                settings.normalization.apply(&mut image);
                 let held_back = if plan.drawn_areas {
                     &labels.validation
                 } else {
@@ -217,26 +197,26 @@ pub fn train(
         }
         (control.progress)(TrainProgress::Epoch {
             epoch,
-            total_epochs: params.epochs,
+            total_epochs: common.epochs,
             train_loss: final_train_loss,
             val_loss: final_val_loss,
         });
         let best_so_far = best.as_ref().map(|(e, score, _)| (*e, score.f1()));
-        if stop_early(params.patience, epoch, best_so_far) {
+        if stop_early(common.patience, epoch, best_so_far) {
             break;
         }
     }
 
     let stats = TrainStats::Epochs {
         epochs_run,
-        total_epochs: params.epochs,
+        total_epochs: common.epochs,
         final_train_loss,
         final_val_loss,
         best_val_loss: best.as_ref().map(|(_, score, _)| score.loss),
         best_val_epoch: best.as_ref().map(|(epoch, _, _)| *epoch),
     };
     let (mut model, validation) = match best {
-        Some((epoch, score, model)) => (model, ValidationOutcome::Scored { epoch, score }),
+        Some((epoch, score, model)) => (model, HeldBack::Scored { epoch, score }),
         None => (
             SpotNetModel {
                 network: model.valid(),
@@ -255,10 +235,10 @@ pub fn train(
         ),
         ("epochs_run".into(), epochs_run.to_string()),
     ]);
-    Ok(SpotNetTraining {
+    Ok(Trained {
         model,
         stats,
-        validation,
+        held_back: validation,
     })
 }
 
@@ -266,7 +246,7 @@ pub fn train(
 /// lower loss. Not the loss alone - a model still unsure everywhere has a
 /// lower loss than one that is sure and slightly off, while it finds
 /// nothing yet.
-fn better(score: &ValidationScore, best: &ValidationScore) -> bool {
+fn better(score: &HeldBackScore, best: &HeldBackScore) -> bool {
     let (f1, best_f1) = (score.f1(), best.f1());
     f1 > best_f1 || (f1 == best_f1 && score.loss < best.loss)
 }
@@ -287,27 +267,12 @@ fn stop_early(patience: Option<usize>, epoch: usize, best: Option<(usize, f32)>)
 
 /// Refuses settings no training can run with.
 fn check_params(params: &SpotNetTrainParams) -> Result<(), NnError> {
-    let bad = |what: &str| Err(NnError::InvalidInput(format!("SpotNet training: {what}")));
-    if params.epochs == 0 {
-        return bad("at least one epoch");
-    }
-    if params.patches_per_epoch == 0 || params.batch_size == 0 || params.patch_size == 0 {
-        return bad("patches per epoch, batch size and patch size must be at least 1");
-    }
-    if !(params.learning_rate > 0.0) {
-        return bad("the learning rate must be above 0");
-    }
-    if !(params.sigma > 0.0) {
-        return bad("sigma must be above 0");
-    }
+    params.common.check()?;
     params.normalization.check()?;
-    if params.patience == Some(0) {
-        return bad("the patience must be at least 1 epoch");
-    }
-    if let Validation::Auto { fraction } = params.validation
-        && !(fraction > 0.0 && fraction < 1.0)
-    {
-        return bad("the share held back for validation must be between 0 and 1");
+    if !(params.sigma > 0.0) {
+        return Err(NnError::InvalidInput(
+            "SpotNet training: sigma must be above 0".into(),
+        ));
     }
     Ok(())
 }
@@ -323,7 +288,7 @@ struct Plan {
     /// held-back images' training areas.
     drawn_areas: bool,
     /// How the training ends up checked when `validate` is empty.
-    outcome: ValidationOutcome,
+    outcome: HeldBack,
 }
 
 /// Checks every sample once (sizes, channels) and splits them:
@@ -407,7 +372,7 @@ fn plan(
             train,
             validate: images.iter().filter(|i| i.3).map(|i| i.0).collect(),
             drawn_areas: true,
-            outcome: ValidationOutcome::Off,
+            outcome: HeldBack::Off,
         });
     }
 
@@ -420,12 +385,12 @@ fn plan(
             train,
             validate: Vec::new(),
             drawn_areas: false,
-            outcome: ValidationOutcome::Off,
+            outcome: HeldBack::Off,
         });
     };
     if train.len() < MIN_IMAGES_FOR_AUTO_SPLIT {
         return Ok(Plan {
-            outcome: ValidationOutcome::TooFewImages {
+            outcome: HeldBack::TooFewImages {
                 images: train.len(),
             },
             train,
@@ -447,7 +412,7 @@ fn plan(
         train,
         validate,
         drawn_areas: false,
-        outcome: ValidationOutcome::Off,
+        outcome: HeldBack::Off,
     })
 }
 
@@ -619,13 +584,16 @@ mod tests {
     use crate::model::spotnet::train::Spot;
 
     use super::{
-        Patch, Plan, Sample, SpotLabels, SpotNetTrainParams, SpotNetTraining, ValidationOutcome,
-        cut_patch, masked_loss, patch_origin, plan, stop_early, train,
+        Patch, Plan, Sample, SpotLabels, SpotNetTrainParams, cut_patch, masked_loss, patch_origin,
+        plan, stop_early, train,
     };
     use crate::NnError;
     use crate::augment::{AugmentParams, Augmentation};
+    use crate::model::spotnet::file::SpotNetModel;
     use crate::model::{Dataset, OwnedImage};
-    use crate::train::{SeededUniform, TrainControl, TrainDevice, Validation};
+    use crate::train::{
+        HeldBack, NetworkTrainParams, SeededUniform, TrainControl, TrainDevice, Trained, Validation,
+    };
     use burn::Tensor;
     use burn::tensor::{Device, TensorData};
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -735,16 +703,19 @@ mod tests {
 
     fn params(epochs: usize) -> SpotNetTrainParams {
         SpotNetTrainParams {
-            epochs,
-            patches_per_epoch: 1,
-            batch_size: 1,
-            patch_size: 128,
-            learning_rate: 1e-2,
+            common: NetworkTrainParams {
+                epochs,
+                patches_per_epoch: 1,
+                batch_size: 1,
+                patch_size: 128,
+                learning_rate: 1e-2,
+                augment: AugmentParams::none(),
+                validation: Validation::Off,
+                patience: None,
+            },
+            network: small_config(),
             sigma: 1.5,
-            augment: AugmentParams::none(),
             normalization: PercentileNormalization::default(),
-            validation: Validation::Off,
-            patience: None,
         }
     }
 
@@ -784,8 +755,8 @@ mod tests {
             Spot { x: 1.5, y: 18.5 }, // near the left edge
         ];
         let data = one_image(SIZE, spots.clone());
-        let SpotNetTraining { model, stats, .. } = with_control(7, false, |control| {
-            train(&data, &small_config(), &params(150), control)
+        let Trained { model, stats, .. } = with_control(7, false, |control| {
+            train(None, &data, &params(150), control)
         })
         .unwrap();
         println!("{stats:?}");
@@ -878,13 +849,11 @@ mod tests {
     fn the_same_seed_trains_the_same_model() {
         // With every augmentation on: the changes come from the seed too.
         let data = one_image(16, vec![Spot { x: 8.5, y: 8.5 }]);
-        let augmented = SpotNetTrainParams {
-            augment: AugmentParams::default(),
-            ..params(3)
-        };
+        let mut augmented = params(3);
+        augmented.common.augment = AugmentParams::default();
         let run = |seed| {
             with_control(seed, false, |control| {
-                train(&data, &small_config(), &augmented, control)
+                train(None, &data, &augmented, control)
             })
             .unwrap()
             .stats
@@ -897,15 +866,16 @@ mod tests {
     fn a_training_without_any_training_area_is_refused() {
         let mut data = one_image(16, vec![Spot { x: 8.5, y: 8.5 }]);
         data.0[0].1.area = vec![false; 16 * 16];
-        let result = with_control(1, false, |c| train(&data, &small_config(), &params(1), c));
+        let result = with_control(1, false, |c| train(None, &data, &params(1), c));
         assert!(matches!(result, Err(NnError::InvalidInput(m)) if m.contains("no training area")));
     }
 
     #[test]
     fn an_image_with_other_channels_than_the_network_is_refused() {
         let data = one_image(16, vec![]);
-        let config = SpotNetConfig::default(); // 2 channels, the image has 1
-        let result = with_control(1, false, |c| train(&data, &config, &params(1), c));
+        let mut training = params(1);
+        training.network = SpotNetConfig::default(); // 2 channels, the image has 1
+        let result = with_control(1, false, |c| train(None, &data, &training, c));
         assert!(matches!(result, Err(NnError::InvalidInput(m)) if m.contains("1 channels")));
     }
 
@@ -913,14 +883,14 @@ mod tests {
     fn a_training_area_of_the_wrong_size_is_refused() {
         let mut data = one_image(16, vec![]);
         data.0[0].1.area.pop();
-        let result = with_control(1, false, |c| train(&data, &small_config(), &params(1), c));
+        let result = with_control(1, false, |c| train(None, &data, &params(1), c));
         assert!(matches!(result, Err(NnError::InvalidInput(m)) if m.contains("training area")));
     }
 
     #[test]
     fn a_cancelled_training_stops() {
         let data = one_image(16, vec![Spot { x: 8.5, y: 8.5 }]);
-        let result = with_control(1, true, |c| train(&data, &small_config(), &params(5), c));
+        let result = with_control(1, true, |c| train(None, &data, &params(5), c));
         assert!(matches!(result, Err(NnError::Cancelled)));
     }
 
@@ -941,7 +911,7 @@ mod tests {
             device: TrainDevice::Cpu,
             cores: 1,
         };
-        train(&data, &small_config(), &params(3), &control).unwrap();
+        train(None, &data, &params(3), &control).unwrap();
         assert_eq!(*epochs.lock().unwrap(), vec![0, 1, 2]);
         assert!(!cancel.load(Ordering::Relaxed));
     }
@@ -1014,7 +984,7 @@ mod tests {
         let plan = split(&images(4), Validation::default(), 1).unwrap();
         assert_eq!(plan.train.len(), 4);
         assert!(plan.validate.is_empty());
-        assert_eq!(plan.outcome, ValidationOutcome::TooFewImages { images: 4 });
+        assert_eq!(plan.outcome, HeldBack::TooFewImages { images: 4 });
     }
 
     #[test]
@@ -1047,7 +1017,7 @@ mod tests {
         data.0[2].1.validation[0] = true;
         let plan = split(&data, Validation::Off, 1).unwrap();
         assert!(plan.validate.is_empty());
-        assert_eq!(plan.outcome, ValidationOutcome::Off);
+        assert_eq!(plan.outcome, HeldBack::Off);
     }
 
     #[test]
@@ -1067,7 +1037,7 @@ mod tests {
 
     /// One 32 x 32 image: the top half training (4 spots), the bottom half
     /// validation (2 spots), augmentation on - trained up to 150 epochs.
-    fn train_on_half_with_validation(patience: Option<usize>) -> SpotNetTraining {
+    fn train_on_half_with_validation(patience: Option<usize>) -> Trained<SpotNetModel> {
         const SIZE: usize = 32;
         let spots = vec![
             Spot { x: 5.5, y: 4.5 },
@@ -1082,13 +1052,11 @@ mod tests {
         for i in 0..SIZE * SIZE {
             labels.validation[i] = i / SIZE >= 16;
         }
-        let training = SpotNetTrainParams {
-            augment: AugmentParams::default(),
-            validation: Validation::Areas,
-            patience,
-            ..params(150)
-        };
-        with_control(7, false, |c| train(&data, &small_config(), &training, c)).unwrap()
+        let mut training = params(150);
+        training.common.augment = AugmentParams::default();
+        training.common.validation = Validation::Areas;
+        training.common.patience = patience;
+        with_control(7, false, |c| train(None, &data, &training, c)).unwrap()
     }
 
     #[test]
@@ -1096,8 +1064,8 @@ mod tests {
         // The model never sees the bottom spots' labels - finding them shows
         // it learned spots, not places.
         let result = train_on_half_with_validation(None);
-        let ValidationOutcome::Scored { epoch, score } = result.validation else {
-            panic!("not validated: {:?}", result.validation)
+        let HeldBack::Scored { epoch, score } = result.held_back else {
+            panic!("not validated: {:?}", result.held_back)
         };
         println!("best epoch {epoch}: {score:?}, f1 {}", score.f1());
         assert_eq!(score.annotated, 2);
@@ -1119,8 +1087,8 @@ mod tests {
     #[test]
     fn a_training_stops_after_patience_epochs_without_a_better_check() {
         let result = train_on_half_with_validation(Some(10));
-        let ValidationOutcome::Scored { epoch, score } = result.validation else {
-            panic!("not validated: {:?}", result.validation)
+        let HeldBack::Scored { epoch, score } = result.held_back else {
+            panic!("not validated: {:?}", result.held_back)
         };
         let crate::TrainStats::Epochs { epochs_run, .. } = result.stats else {
             panic!()
@@ -1152,7 +1120,7 @@ mod tests {
     #[test]
     fn a_trained_model_saved_and_loaded_predicts_the_same_and_knows_its_training() {
         let data = one_image(16, vec![Spot { x: 8.5, y: 8.5 }]);
-        let trained = with_control(9, false, |c| train(&data, &small_config(), &params(3), c))
+        let trained = with_control(9, false, |c| train(None, &data, &params(3), c))
             .unwrap()
             .model;
         let dir = tempfile::TempDir::new().unwrap();
@@ -1187,11 +1155,9 @@ mod tests {
     #[test]
     fn a_patience_of_zero_is_refused() {
         let data = one_image(16, vec![Spot { x: 8.5, y: 8.5 }]);
-        let training = SpotNetTrainParams {
-            patience: Some(0),
-            ..params(1)
-        };
-        let result = with_control(1, false, |c| train(&data, &small_config(), &training, c));
+        let mut training = params(1);
+        training.common.patience = Some(0);
+        let result = with_control(1, false, |c| train(None, &data, &training, c));
         assert!(matches!(result, Err(NnError::InvalidInput(m)) if m.contains("patience")));
     }
 

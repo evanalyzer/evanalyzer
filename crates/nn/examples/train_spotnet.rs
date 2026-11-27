@@ -22,11 +22,12 @@
 use evanalyzer_nn::NnError;
 use evanalyzer_nn::augment::AugmentParams;
 use evanalyzer_nn::model::spotnet::{
-    PercentileNormalization, Spot, SpotLabels, SpotNetConfig, SpotNetTrainParams,
-    ValidationOutcome, train,
+    PercentileNormalization, Spot, SpotLabels, SpotNetConfig, SpotNetTrainParams, train,
 };
 use evanalyzer_nn::model::{Dataset, OwnedImage};
-use evanalyzer_nn::train::{TrainControl, TrainDevice, TrainProgress, Validation};
+use evanalyzer_nn::train::{
+    HeldBack, NetworkTrainParams, TrainControl, TrainDevice, TrainProgress, Validation,
+};
 use std::sync::atomic::AtomicBool;
 
 const SIDE: usize = 256;
@@ -117,21 +118,23 @@ fn main() {
 
     let mut random = Random(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).max(1));
     let data = Generated((0..IMAGES).map(|_| image(&mut random)).collect());
-    let config = SpotNetConfig {
-        in_channels: 1,
-        ..SpotNetConfig::default()
-    };
     let params = SpotNetTrainParams {
-        epochs,
-        patches_per_epoch: 32,
-        batch_size: 8,
-        patch_size: 64,
-        learning_rate: 1e-3,
+        common: NetworkTrainParams {
+            epochs,
+            patches_per_epoch: 32,
+            batch_size: 8,
+            patch_size: 64,
+            learning_rate: 1e-3,
+            augment: AugmentParams::default(),
+            validation: Validation::default(),
+            patience: Some(20),
+        },
+        network: SpotNetConfig {
+            in_channels: 1,
+            ..SpotNetConfig::default()
+        },
         sigma: 1.5,
         normalization: PercentileNormalization::default(),
-        augment: AugmentParams::default(),
-        validation: Validation::default(),
-        patience: Some(20),
     };
     let progress = |p| {
         if let TrainProgress::Epoch {
@@ -153,18 +156,18 @@ fn main() {
         cores: std::thread::available_parallelism().map_or(1, |n| n.get()),
     };
     let start = std::time::Instant::now();
-    let trained = train(&data, &config, &params, &control).expect("training");
+    let trained = train(None, &data, &params, &control).expect("training");
     println!(
         "trained in {:.1} s: {:?}",
         start.elapsed().as_secs_f64(),
         trained.stats
     );
-    if let ValidationOutcome::Scored { epoch, score } = trained.validation {
+    if let HeldBack::Scored { epoch, score } = trained.held_back {
         println!(
             "kept epoch {epoch}: found {} of {} held-back spots, {} wrongly (F1 {:.3})",
             score.matched,
             score.annotated,
-            score.found - score.matched,
+            score.wrongly_found(),
             score.f1()
         );
     }

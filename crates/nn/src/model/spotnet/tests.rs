@@ -11,13 +11,13 @@
 
 use super::{
     PercentileNormalization, Spot, SpotLabels, SpotNetConfig, SpotNetModel, SpotNetParams,
-    SpotNetSettings, SpotNetTrainParams, train,
+    SpotNetSettings, SpotNetTrainParams,
 };
 use crate::NnError;
 use crate::augment::AugmentParams;
-use crate::model::{Dataset, Model, Normalization, OwnedImage, Written};
+use crate::model::{Dataset, Model, Normalization, OwnedImage, Trainable, Written};
 use crate::pieces::Pieces;
-use crate::train::{TrainControl, TrainDevice, Validation};
+use crate::train::{NetworkTrainParams, TrainControl, TrainDevice, Validation};
 use burn::tensor::Device;
 use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
@@ -153,23 +153,7 @@ fn trained() -> (SpotNetModel, OwnedImage) {
         validation: vec![false; 32 * 32],
     };
     let data = Images(vec![(image.clone(), labels)]);
-    let config = SpotNetConfig {
-        in_channels: 1,
-        channels: 8,
-        ..SpotNetConfig::default()
-    };
-    let training = SpotNetTrainParams {
-        epochs: 150,
-        patches_per_epoch: 1,
-        batch_size: 1,
-        patch_size: 128,
-        learning_rate: 1e-2,
-        sigma: 1.5,
-        normalization: PercentileNormalization::default(),
-        augment: AugmentParams::none(),
-        validation: Validation::Off,
-        patience: None,
-    };
+    let training = training_params(150);
     let progress = |_| {};
     let cancel = AtomicBool::new(false);
     let control = TrainControl {
@@ -179,10 +163,102 @@ fn trained() -> (SpotNetModel, OwnedImage) {
         device: TrainDevice::Cpu,
         cores: 1,
     };
-    (
-        train(&data, &config, &training, &control).unwrap().model,
-        image,
-    )
+    // Through the trait the training job uses.
+    let trained = <SpotNetModel as Trainable>::train(None, &data, &training, &control).unwrap();
+    (trained.model, image)
+}
+
+/// The settings of [`trained`]: 1 channel, 8 feature maps, one patch (the
+/// whole image) per epoch, nothing held back.
+fn training_params(epochs: usize) -> SpotNetTrainParams {
+    SpotNetTrainParams {
+        common: NetworkTrainParams {
+            epochs,
+            patches_per_epoch: 1,
+            batch_size: 1,
+            patch_size: 128,
+            learning_rate: 1e-2,
+            augment: AugmentParams::none(),
+            validation: Validation::Off,
+            patience: None,
+        },
+        network: SpotNetConfig {
+            in_channels: 1,
+            channels: 8,
+            ..SpotNetConfig::default()
+        },
+        sigma: 1.5,
+        normalization: PercentileNormalization::default(),
+    }
+}
+
+/// One 32 x 32 image with [`SPOTS`], all of it a training area.
+fn one_image() -> Images {
+    let image = spot_image(32, 32, &SPOTS, 1.0, 1);
+    let labels = SpotLabels {
+        width: 32,
+        height: 32,
+        spots: SPOTS.to_vec(),
+        area: vec![true; 32 * 32],
+        validation: vec![false; 32 * 32],
+    };
+    Images(vec![(image, labels)])
+}
+
+fn quiet_training(
+    start: Option<&std::path::Path>,
+    params: &SpotNetTrainParams,
+) -> Result<crate::train::Trained<SpotNetModel>, NnError> {
+    let progress = |_| {};
+    let cancel = AtomicBool::new(false);
+    let control = TrainControl {
+        progress: &progress,
+        cancel: &cancel,
+        seed: 3,
+        device: TrainDevice::Cpu,
+        cores: 1,
+    };
+    <SpotNetModel as Trainable>::train(start, &one_image(), params, &control)
+}
+
+#[test]
+fn a_model_file_is_fine_tuned_and_keeps_its_settings() {
+    // A model of sigma 1.5 saved, then fine-tuned with settings asking for
+    // another sigma and network: the file's stay, the weights change.
+    let first = quiet_training(None, &training_params(2)).unwrap().model;
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("spots.evanet");
+    first.save(&path).unwrap();
+    let mut other = training_params(2);
+    other.sigma = 3.0;
+    other.network.channels = 16;
+    let tuned = quiet_training(Some(&path), &other).unwrap().model;
+    assert_eq!(tuned.settings, first.settings);
+    let image = spot_image(32, 32, &SPOTS, 1.0, 1);
+    let p = params(Pieces::fixed(4096));
+    assert_ne!(
+        probabilities(&first, &image, &p),
+        probabilities(&tuned, &image, &p)
+    );
+}
+
+#[test]
+fn a_missing_model_file_to_fine_tune_is_an_error() {
+    let dir = tempfile::TempDir::new().unwrap();
+    assert!(quiet_training(Some(&dir.path().join("none.evanet")), &training_params(1)).is_err());
+}
+
+#[test]
+fn a_larger_patch_takes_more_ram_per_sample() {
+    let small = training_params(1);
+    let mut large = training_params(1);
+    large.common.patch_size *= 2;
+    let (a, b) = (
+        SpotNetModel::ram_per_sample(&small),
+        SpotNetModel::ram_per_sample(&large),
+    );
+    // Twice the side, four times the pixels.
+    assert!(a > 0 && (b as f64 / a as f64 - 4.0).abs() < 0.01, "{a} {b}");
 }
 
 #[test]

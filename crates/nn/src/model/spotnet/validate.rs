@@ -29,54 +29,12 @@ use crate::model::spotnet::post::find_spots;
 use crate::model::spotnet::target::gaussian_map;
 use crate::model::spotnet::train::{SPOT_WEIGHT, Spot};
 use crate::pieces::Pieces;
+use crate::train::HeldBackScore;
 
 /// A peak counts as a found spot from this probability on.
 pub(crate) const THRESHOLD: f32 = 0.5;
 /// A found spot is a hit when an annotated one is at most this far away.
 pub(crate) const TOLERANCE_PX: f32 = 2.0;
-
-/// The result of checking on held-back areas.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ValidationScore {
-    /// The weighted cross-entropy there (lower is better).
-    pub loss: f32,
-    /// Annotated spots in the areas.
-    pub annotated: usize,
-    /// Spots the network found there.
-    pub found: usize,
-    /// Found spots matched to an annotated one.
-    pub matched: usize,
-}
-
-impl ValidationScore {
-    /// How many of the found spots are real (1 when none was found).
-    pub fn precision(&self) -> f32 {
-        if self.found == 0 {
-            1.0
-        } else {
-            self.matched as f32 / self.found as f32
-        }
-    }
-
-    /// How many of the annotated spots were found (1 when there are none).
-    pub fn recall(&self) -> f32 {
-        if self.annotated == 0 {
-            1.0
-        } else {
-            self.matched as f32 / self.annotated as f32
-        }
-    }
-
-    /// The harmonic mean of precision and recall.
-    pub fn f1(&self) -> f32 {
-        let (p, r) = (self.precision(), self.recall());
-        if p + r == 0.0 {
-            0.0
-        } else {
-            2.0 * p * r / (p + r)
-        }
-    }
-}
 
 /// The sums a score is made of, added up over the images.
 #[derive(Debug, Default)]
@@ -90,8 +48,8 @@ pub(crate) struct Tally {
 
 impl Tally {
     /// `None` without any held-back pixel.
-    pub(crate) fn score(&self) -> Option<ValidationScore> {
-        (self.weight_sum > 0.0).then(|| ValidationScore {
+    pub(crate) fn score(&self) -> Option<HeldBackScore> {
+        (self.weight_sum > 0.0).then(|| HeldBackScore {
             loss: (self.loss_sum / self.weight_sum) as f32,
             annotated: self.annotated,
             found: self.found,
@@ -266,8 +224,9 @@ pub(crate) fn count_matches(found: &[Spot], annotated: &[Spot], tolerance: f32) 
 
 #[cfg(test)]
 mod tests {
-    use super::{Region, ValidationScore, count_matches};
+    use super::{Region, count_matches};
     use crate::model::spotnet::train::Spot;
+    use crate::train::HeldBackScore;
 
     fn spot(x: f32, y: f32) -> Spot {
         Spot { x, y }
@@ -294,7 +253,7 @@ mod tests {
 
     #[test]
     fn the_score_reads_as_precision_recall_and_f1() {
-        let score = ValidationScore {
+        let score = HeldBackScore {
             loss: 0.1,
             annotated: 10,
             found: 8,
@@ -303,7 +262,7 @@ mod tests {
         assert_eq!(score.precision(), 0.75);
         assert_eq!(score.recall(), 0.6);
         assert!((score.f1() - 2.0 * 0.75 * 0.6 / 1.35).abs() < 1e-6);
-        let nothing = ValidationScore {
+        let nothing = HeldBackScore {
             loss: 0.0,
             annotated: 0,
             found: 0,
