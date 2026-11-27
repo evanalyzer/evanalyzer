@@ -84,7 +84,7 @@ pub enum TrainStats {
 /// Which annotations a network's training checks itself on - never trained
 /// on, they show whether the model learned spots (or cells) in general or
 /// only its training areas by heart, and pick the best epoch.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Validation {
     /// The validation areas the user drew, if there are any. Without: this
     /// share of the images with training areas is held back (from

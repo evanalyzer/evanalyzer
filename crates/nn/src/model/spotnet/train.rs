@@ -16,7 +16,9 @@ use crate::{
     model::{
         Dataset, OwnedImage,
         spotnet::{
+            file::{SpotNetModel, SpotNetSettings},
             network::{SpotNet, SpotNetConfig},
+            normalize::PercentileNormalization,
             target::{area_mask, gaussian_map},
         },
     },
@@ -27,6 +29,7 @@ use burn::module::Module;
 use burn::optim::{AdamConfig, GradientsParams};
 use burn::tensor::activation::log_sigmoid;
 use burn::tensor::{Device, TensorData};
+use std::collections::BTreeMap;
 
 /// One clicked spot: its centre in px (a pixel's centre is +0.5).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -50,7 +53,7 @@ pub struct SpotLabels {
 }
 
 /// Settings of one training.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SpotNetTrainParams {
     pub epochs: usize,
     /// Patches per epoch (an image gives many patches).
@@ -61,6 +64,9 @@ pub struct SpotNetTrainParams {
     pub learning_rate: f64,
     /// Width of the Gaussian hills in px, e.g. 1.5.
     pub sigma: f32,
+    /// How every input channel is brought to 0..1 - stored in the model
+    /// file, prediction normalises the same way.
+    pub normalization: PercentileNormalization,
     /// The random changes of every patch.
     pub augment: AugmentParams,
     /// What the training checks itself on.
@@ -75,8 +81,8 @@ pub struct SpotNetTrainParams {
 pub struct SpotNetTraining {
     /// The best model: of the epoch with the most spots found right on the
     /// held-back areas (F1, then the lower loss), the last one without
-    /// validation.
-    pub model: SpotNet,
+    /// validation - with its settings, ready to save.
+    pub model: SpotNetModel,
     pub stats: TrainStats,
     pub validation: ValidationOutcome,
 }
@@ -117,6 +123,9 @@ pub fn train(
     control: &TrainControl<'_>,
 ) -> Result<SpotNetTraining, NnError> {
     check_params(params)?;
+    config
+        .check()
+        .map_err(|e| NnError::InvalidInput(e.to_string()))?;
     let plan = plan(data, config, params.validation, control.seed)?;
     let patches_per_image = params.patches_per_epoch.div_ceil(plan.train.len());
     let margin = config.receptive_field() / 2;
@@ -138,7 +147,8 @@ pub fn train(
             if control.is_cancelled() {
                 return Err(NnError::Cancelled);
             }
-            let (image, labels) = data.get(index)?;
+            let (mut image, labels) = data.get(index)?;
+            params.normalization.apply(&mut image);
             let sample = Sample::new(&image, &labels, params.sigma, plan.drawn_areas);
             let size = params.patch_size.min(image.width).min(image.height);
             let patches: Vec<Patch> = (0..patches_per_image)
@@ -176,7 +186,8 @@ pub fn train(
                 if control.is_cancelled() {
                     return Err(NnError::Cancelled);
                 }
-                let (image, labels) = data.get(index)?;
+                let (mut image, labels) = data.get(index)?;
+                params.normalization.apply(&mut image);
                 let held_back = if plan.drawn_areas {
                     &labels.validation
                 } else {
@@ -220,17 +231,30 @@ pub fn train(
         best_val_loss: best.as_ref().map(|(_, score, _)| score.loss),
         best_val_epoch: best.as_ref().map(|(epoch, _, _)| *epoch),
     };
-    Ok(match best {
-        Some((epoch, score, model)) => SpotNetTraining {
-            model,
-            stats,
-            validation: ValidationOutcome::Scored { epoch, score },
+    let (network, validation) = match best {
+        Some((epoch, score, network)) => (network, ValidationOutcome::Scored { epoch, score }),
+        None => (model.valid(), plan.outcome),
+    };
+    let model = SpotNetModel {
+        network,
+        settings: SpotNetSettings {
+            network: config.clone(),
+            normalization: params.normalization,
+            sigma: params.sigma,
         },
-        None => SpotNetTraining {
-            model: model.valid(),
-            stats,
-            validation: plan.outcome,
-        },
+        info: BTreeMap::from([
+            ("seed".into(), control.seed.to_string()),
+            (
+                "training".into(),
+                serde_json::to_string(params).expect("params serialize"),
+            ),
+            ("epochs_run".into(), epochs_run.to_string()),
+        ]),
+    };
+    Ok(SpotNetTraining {
+        model,
+        stats,
+        validation,
     })
 }
 
@@ -272,6 +296,7 @@ fn check_params(params: &SpotNetTrainParams) -> Result<(), NnError> {
     if !(params.sigma > 0.0) {
         return bad("sigma must be above 0");
     }
+    params.normalization.check()?;
     if params.patience == Some(0) {
         return bad("the patience must be at least 1 epoch");
     }
@@ -585,6 +610,7 @@ fn masked_loss(logits: Tensor<4>, target: Tensor<4>, mask: Tensor<4>) -> Tensor<
 #[cfg(test)]
 mod tests {
     use crate::model::spotnet::network::SpotNetConfig;
+    use crate::model::spotnet::normalize::PercentileNormalization;
     use crate::model::spotnet::target::gaussian_map;
     use crate::model::spotnet::train::Spot;
 
@@ -712,6 +738,7 @@ mod tests {
             learning_rate: 1e-2,
             sigma: 1.5,
             augment: AugmentParams::none(),
+            normalization: PercentileNormalization::default(),
             validation: Validation::Off,
             patience: None,
         }
@@ -760,11 +787,16 @@ mod tests {
         println!("{stats:?}");
 
         let device = Device::flex();
-        let x = Tensor::<4>::from_data(
-            TensorData::new(data.0[0].0.data.clone(), [1, 1, SIZE, SIZE]),
-            &device,
-        );
-        let prediction = model.forward(x).into_data().try_to_vec::<f32>().unwrap();
+        // The input as the training saw it: normalised.
+        let mut input = data.0[0].0.clone();
+        model.settings.normalization.apply(&mut input);
+        let x = Tensor::<4>::from_data(TensorData::new(input.data, [1, 1, SIZE, SIZE]), &device);
+        let prediction = model
+            .network
+            .forward(x)
+            .into_data()
+            .try_to_vec::<f32>()
+            .unwrap();
         // Right = above 0.5 on every spot centre, below 0.1 wherever the
         // target is 0 (beyond every hill).
         for s in &spots {
@@ -1111,6 +1143,41 @@ mod tests {
         assert!(!stop_early(Some(10), 90, Some((5, 0.0))));
         assert!(!stop_early(None, 90, Some((5, 0.8))));
         assert!(!stop_early(Some(10), 90, None));
+    }
+
+    #[test]
+    fn a_trained_model_saved_and_loaded_predicts_the_same_and_knows_its_training() {
+        let data = one_image(16, vec![Spot { x: 8.5, y: 8.5 }]);
+        let trained = with_control(9, false, |c| train(&data, &small_config(), &params(3), c))
+            .unwrap()
+            .model;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("spots.evanet");
+        trained.save(&path).unwrap();
+        let loaded =
+            crate::model::spotnet::file::SpotNetModel::load(&path, &Device::flex()).unwrap();
+
+        assert_eq!(loaded.settings, trained.settings);
+        assert_eq!(loaded.info["seed"], "9");
+        assert!(
+            loaded.info["training"].contains("\"epochs\":3"),
+            "{}",
+            loaded.info["training"]
+        );
+        let predict = |m: &crate::model::spotnet::file::SpotNetModel| {
+            let mut input = data.0[0].0.clone();
+            m.settings.normalization.apply(&mut input);
+            let x = Tensor::<4>::from_data(
+                TensorData::new(input.data, [1, 1, 16, 16]),
+                &Device::flex(),
+            );
+            m.network
+                .forward(x)
+                .into_data()
+                .try_to_vec::<f32>()
+                .unwrap()
+        };
+        assert_eq!(predict(&loaded), predict(&trained));
     }
 
     #[test]

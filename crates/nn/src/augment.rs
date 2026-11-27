@@ -42,7 +42,7 @@ use rotate::Rotation;
 
 /// Which augmentations a training applies - the same switches for every
 /// network (part of each model's training settings).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AugmentParams {
     /// Random rotations by 0°, 90°, 180° and 270°.
     pub rotate: bool,
