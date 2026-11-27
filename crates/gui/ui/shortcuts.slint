@@ -286,7 +286,8 @@ export component GlobalShortcuts inherits FocusScope {
         // already means "switch sidebar tab" below - letters share no keys
         // with that at all. K (not M) for PaintMarker since M is already
         // Move, E (Ellipse) for PaintOval since O shows / hides the objects,
-        // L (line) for the Ruler since R is the rectangle; every other
+        // L (line) for the Ruler since R is the rectangle, X (a mark) for
+        // the Spot tool since S is Select; every other
         // letter is the tool's own first letter.
         if (!e.modifiers.control && (e.text == "m" || e.text == Key.Escape)) {
             ViewportObjectState.act_tool_state = ToolState.Move;
@@ -314,6 +315,10 @@ export component GlobalShortcuts inherits FocusScope {
         }
         if (!e.modifiers.control && e.text == "p") {
             ViewportObjectState.act_tool_state = ToolState.PaintPolygon;
+            return accept;
+        }
+        if (!e.modifiers.control && e.text == "x") {
+            ViewportObjectState.act_tool_state = ToolState.PaintSpot;
             return accept;
         }
         if (!e.modifiers.control && e.text == "w") {

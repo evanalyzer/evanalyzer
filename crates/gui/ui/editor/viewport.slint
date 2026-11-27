@@ -500,7 +500,7 @@ export component Viewport inherits Rectangle {
         y: 0;
         width: root.xy-w;
         height: root.xy-h;
-        mouse-cursor: root.brush-tool || ViewportObjectState.act_tool_state == ToolState.Ruler || (PipelinesPanelState.color-pick-step >= 0 && !root.split-mode) ? MouseCursor.crosshair : MouseCursor.default;
+        mouse-cursor: root.brush-tool || ViewportObjectState.act_tool_state == ToolState.Ruler || ViewportObjectState.act_tool_state == ToolState.PaintSpot || (PipelinesPanelState.color-pick-step >= 0 && !root.split-mode) ? MouseCursor.crosshair : MouseCursor.default;
         pointer-event(evt) => {
             if (evt.kind == PointerEventKind.down) {
                 root.last_mouse_x = self.mouse-x;
@@ -546,6 +546,17 @@ export component Viewport inherits Rectangle {
                     ViewportObjectState.ruler-shown = true;
                     ViewportObjectState.is_drawing = true;
                     root.ruler-to(self.mouse-x, self.mouse-y, false);
+                }
+
+                // Spot tool: a left-click places a spot (needs a class to
+                // paint as), a right-click removes the one under the cursor.
+                if ViewportObjectState.act_tool_state == ToolState.PaintSpot {
+                    if evt.button == PointerEventButton.left && ClassificationState.selected_class_id >= 0 {
+                        ViewportObjectState.spot-placed(root.last_mouse_x, root.last_mouse_y);
+                    }
+                    if evt.button == PointerEventButton.right {
+                        ViewportObjectState.spot-remove-at(root.last_mouse_x, root.last_mouse_y);
+                    }
                 }
 
                     // Marker tool

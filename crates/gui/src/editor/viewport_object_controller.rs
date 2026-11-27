@@ -114,6 +114,8 @@ impl ViewPortObjectController {
                         ToolState::Move => return,
                         ToolState::Select => return,
                         ToolState::PaintMarker | ToolState::Ruler => return,
+                        // Spots come through `spot_placed`.
+                        ToolState::PaintSpot => return,
                         // Strokes come through `brush_stroke`.
                         ToolState::Brush | ToolState::Wand | ToolState::Eraser => return,
                         ToolState::PaintRectangle => manager.add_object_from_rect(&points),
@@ -227,6 +229,23 @@ impl ViewPortObjectController {
                     if let Some(ui) = manager.ui.upgrade() {
                         ui.global::<ViewportObjectState>()
                             .set_ruler_label(label.into());
+                    }
+                });
+
+            // Spot tool: a left-click places a spot, a right-click removes
+            // the hand-drawn spot under the cursor.
+            let manager = self.clone();
+            ui.global::<ViewportObjectState>()
+                .on_spot_placed(move |screen_x, screen_y| {
+                    if manager.add_spot(screen_x, screen_y) {
+                        manager.objects_changed();
+                    }
+                });
+            let manager = self.clone();
+            ui.global::<ViewportObjectState>()
+                .on_spot_remove_at(move |screen_x, screen_y| {
+                    if manager.remove_spot_at(screen_x, screen_y) {
+                        manager.objects_changed();
                     }
                 });
 
@@ -893,6 +912,116 @@ impl ViewPortObjectController {
         true
     }
 
+    /// Redraws the objects and refreshes the lists after an edit.
+    fn objects_changed(&self) {
+        self.viewport_controller.trigger_image_redraw_objects();
+        self.image_list_controller.sync_image_list_to_slint();
+        self.object_list_controller.sync_objects_to_slint();
+        self.classification_controller
+            .sync_classification_to_slint();
+    }
+
+    /// The image pixel under the viewport point (`screen_x`, `screen_y`), or
+    /// `None` outside the image shown.
+    fn image_pixel_at(&self, screen_x: f32, screen_y: f32) -> Option<(u32, u32)> {
+        let read_context = self.viewport_cache.read_context();
+        let vp = self
+            .viewport_controller
+            .viewport_state
+            .read()
+            .expect("Poisoned")
+            .clone();
+        let fx = (screen_x - vp.offset_x) / vp.zoom;
+        let fy = (screen_y - vp.offset_y) / vp.zoom;
+        let inside = fx >= 0.0
+            && fy >= 0.0
+            && fx < read_context.full_image_w as f32
+            && fy < read_context.full_image_h as f32;
+        inside.then(|| (fx as u32, fy as u32))
+    }
+
+    /// Places a spot - an object of one pixel in the class painted as - at
+    /// the viewport point (`screen_x`, `screen_y`). Nothing outside the
+    /// image, without a class, or where a hand-drawn spot of that class
+    /// already is (the same pixel twice would be two spots).
+    pub fn add_spot(&self, screen_x: f32, screen_y: f32) -> bool {
+        let Some((x, y)) = self.image_pixel_at(screen_x, screen_y) else {
+            return false;
+        };
+        let bbox = [x, y, x, y];
+        {
+            let project = self.app_state.get_project();
+            let class = project.get_selected_object_class();
+            if class == ObjectClass::Unset {
+                return false;
+            }
+            let shown = project.get_shown_plane();
+            let taken = project.get_objects().unwrap_or(&[]).iter().any(|o| {
+                o.bbox == bbox
+                    && o.object_class.contains(&class)
+                    && o.mask_on_plane(shown)
+                        .is_some_and(|mask| is_point(o.bbox, mask))
+            });
+            if taken {
+                return false;
+            }
+        }
+        self.add_to_object_list(BitVec::repeat(true, 1), bbox);
+        true
+    }
+
+    /// Removes the hand-drawn spot (one-pixel object) under the viewport
+    /// point - where its dot is drawn, the one on top if several. Other
+    /// objects are left alone (the eraser is for them).
+    pub fn remove_spot_at(&self, screen_x: f32, screen_y: f32) -> bool {
+        let vp = self
+            .viewport_controller
+            .viewport_state
+            .read()
+            .expect("Poisoned")
+            .clone();
+        let id = {
+            let project = self.app_state.get_project();
+            let z = ZOrder::new(&*project);
+            let hide_unclassified = project.hide_unclassified_objects();
+            let shown = project.get_shown_plane();
+            let spots: Vec<_> = project
+                .get_objects()
+                .unwrap_or(&[])
+                .iter()
+                .filter(|o| is_object_drawn(&*project, hide_unclassified, &o.object_class))
+                .filter(|o| {
+                    o.mask_on_plane(shown)
+                        .is_some_and(|mask| is_point(o.bbox, mask))
+                })
+                .collect();
+            let hit = pick(spots.iter().map(|o| {
+                let holds = point_hit(
+                    o.bbox,
+                    screen_x,
+                    screen_y,
+                    vp.zoom,
+                    vp.offset_x,
+                    vp.offset_y,
+                );
+                (z.key(&o.object_class, false), holds)
+            }));
+            match hit {
+                Some(i) => spots[i].id.clone(),
+                None => return false,
+            }
+        };
+        self.app_state.begin_undo_step();
+        let mut project = self.app_state.get_project_write();
+        if project.get_selected_object_id() == Some(id.clone()) {
+            project.set_selected_object(None);
+        }
+        project.delete_object(id);
+        drop(project);
+        self.app_state.mark_dirty();
+        true
+    }
+
     fn add_to_object_list(&self, mask_data: BitVec<u64, Lsb0>, bbox: [u32; 4]) {
         // Each drawn object is an undo step of its own.
         self.app_state.begin_undo_step();
@@ -1413,6 +1542,102 @@ mod tests {
             objects[0].bbox[0] > 2,
             "its box shrank: {:?}",
             objects[0].bbox
+        );
+    }
+
+    #[test]
+    fn a_spot_is_an_object_of_one_pixel_in_the_class_painted_as() {
+        let (ui_state, controller) = controller_with_a_class();
+        assert!(controller.add_spot(7.6, 3.2));
+
+        let project = ui_state.get_project();
+        let objects = project.get_objects().unwrap();
+        assert_eq!(objects.len(), 1);
+        assert_eq!(objects[0].bbox, [7, 3, 7, 3], "the pixel under the click");
+        assert_eq!(objects[0].mask_data.count_ones(), 1);
+        assert!(is_point(objects[0].bbox, &objects[0].mask_data));
+        assert!(
+            objects[0]
+                .object_class
+                .contains(&project.get_selected_object_class())
+        );
+    }
+
+    #[test]
+    fn a_spot_needs_a_class_and_a_place_on_the_image() {
+        let (ui_state, controller, viewport_cache) = make_controller();
+        seed_image_cache(&viewport_cache);
+        assert!(!controller.add_spot(5.0, 5.0), "no class painted as");
+
+        let (ui_state_c, with_class) = controller_with_a_class();
+        assert!(!with_class.add_spot(-0.5, 5.0), "left of the image");
+        assert!(!with_class.add_spot(5.0, 20.0), "below the 20 x 20 image");
+        assert!(!with_class.add_spot(20.0, 5.0), "right of the image");
+        assert_eq!(ui_state.get_project().get_objects().unwrap().len(), 0);
+        assert_eq!(ui_state_c.get_project().get_objects().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn the_same_pixel_twice_stays_one_spot() {
+        let (ui_state, controller) = controller_with_a_class();
+        assert!(controller.add_spot(4.2, 4.2));
+        assert!(!controller.add_spot(4.8, 4.9), "same pixel");
+        assert!(
+            controller.add_spot(5.1, 4.2),
+            "the neighbour is a spot of its own"
+        );
+        assert_eq!(ui_state.get_project().get_objects().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn right_clicking_removes_the_spot_under_the_cursor_only() {
+        let (ui_state, controller) = controller_with_a_class();
+        controller.add_object_from_rect(&points(&[(10.0, 10.0), (15.0, 15.0)]));
+        assert!(controller.add_spot(3.5, 3.5));
+        assert!(controller.add_spot(12.5, 12.5), "a spot on the rectangle");
+        let spot = ui_state.get_project().get_objects().unwrap()[1].id.clone();
+        ui_state
+            .get_project_runtime_write()
+            .set_selected_object(Some(spot.clone()));
+
+        assert!(!controller.remove_spot_at(8.0, 8.0), "nothing there");
+        assert!(controller.remove_spot_at(4.0, 4.0), "within its dot");
+        assert!(controller.remove_spot_at(12.5, 12.5));
+        assert!(
+            !controller.remove_spot_at(12.5, 12.5),
+            "the rectangle is no spot (the eraser is for it)"
+        );
+
+        let project = ui_state.get_project();
+        let objects = project.get_objects().unwrap();
+        assert_eq!(objects.len(), 1);
+        assert_eq!(objects[0].bbox, [10, 10, 15, 15]);
+        assert_eq!(
+            project.get_selected_object_id(),
+            None,
+            "the removed one was selected"
+        );
+    }
+
+    #[test]
+    fn placing_and_removing_a_spot_are_undo_steps_of_their_own() {
+        let (ui_state, controller) = controller_with_a_class();
+        assert!(controller.add_spot(3.5, 3.5));
+        assert!(controller.add_spot(6.5, 6.5));
+        assert!(controller.remove_spot_at(3.5, 3.5));
+        assert_eq!(ui_state.get_project().get_objects().unwrap().len(), 1);
+
+        assert!(ui_state.undo());
+        assert_eq!(
+            ui_state.get_project().get_objects().unwrap().len(),
+            2,
+            "removal undone"
+        );
+        assert!(ui_state.undo());
+        assert_eq!(
+            ui_state.get_project().get_objects().unwrap().len(),
+            1,
+            "second spot undone"
         );
     }
 

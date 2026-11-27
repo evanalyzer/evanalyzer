@@ -129,6 +129,17 @@ export component AnnotateBar inherits Rectangle {
                         }
                     }
                     InkToolButton {
+                        icon: InkIcons.spot;
+                        label: "Spot - click to mark a spot (right-click removes it)";
+                        keys: ["X"];
+                        enabled: root.has-class;
+                        disabled-reason: "Pick the class to paint as first";
+                        active: root.tool == ToolState.PaintSpot;
+                        clicked => {
+                            ViewportObjectState.act_tool_state = ToolState.PaintSpot;
+                        }
+                    }
+                    InkToolButton {
                         icon: InkIcons.brush;
                         label: "Brush";
                         enabled: root.has-class;
