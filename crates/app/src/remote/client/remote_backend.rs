@@ -33,8 +33,8 @@ use crate::remote::wire::protocol::{Reply, Request};
 use crate::results::ResultsSource;
 use crate::training::RunningTraining;
 use crate::training::StartTrainingError;
-use crate::training::TrainedClassifier;
 use crate::training::TrainingRequest;
+use crate::training::{NetworkTrainingRequest, TrainedArtifact, TrainedNetworkModel};
 use crate::user::settings::AppSettings;
 use crate::user::trust::ScriptTrust;
 use evanalyzer_cfg::core_types::InternalErrors;
@@ -162,65 +162,14 @@ impl Backend for RemoteBackend {
     }
 
     fn start_training(&self, req: TrainingRequest) -> Result<RunningTraining, StartTrainingError> {
-        let session = &self.link.session();
-        let (id, rx) = session
-            .request(Request::StartTraining(req))
-            .map_err(StartTrainingError::Failed)?;
-        let reply = session.recv(&rx).map_err(StartTrainingError::Failed)?.msg;
-        let items = match reply {
-            Reply::TrainingStarted { items } => items,
-            other => {
-                session.finish(id);
-                return Err(match other {
-                    Reply::NoTrainingData => StartTrainingError::NoTrainingData,
-                    Reply::Failed(e) => StartTrainingError::Failed(e.into_internal()),
-                    _ => StartTrainingError::Failed(unexpected_reply()),
-                });
-            }
-        };
+        self.start_remote_training(Request::StartTraining(req))
+    }
 
-        let (events_tx, events_rx) = mpsc::channel();
-        let (done_tx, done_rx) = mpsc::channel();
-        let pump = Arc::clone(session);
-        std::thread::spawn(move || {
-            let result = loop {
-                match pump.recv(&rx) {
-                    Ok(Frame {
-                        msg: Reply::TrainingEvent(event),
-                        ..
-                    }) => {
-                        let _ = events_tx.send(event);
-                    }
-                    Ok(Frame {
-                        msg: Reply::TrainingDone(Ok(())),
-                        blobs,
-                    }) => {
-                        break match blobs.first() {
-                            Some(model) => TrainedClassifier::from_bytes(model),
-                            None => Err(InternalErrors::Internal(
-                                "server sent no trained model".into(),
-                            )),
-                        };
-                    }
-                    Ok(Frame {
-                        msg: Reply::TrainingDone(Err(e)) | Reply::Failed(e),
-                        ..
-                    }) => break Err(e.into_internal()),
-                    Ok(_) => break Err(unexpected_reply()),
-                    Err(e) => break Err(e),
-                }
-            };
-            pump.finish(id);
-            drop(events_tx);
-            let _ = done_tx.send(result);
-        });
-        let disconnected = session.disconnected();
-        Ok(RunningTraining::from_parts(
-            events_rx,
-            session.cancel_handle(id),
-            items,
-            Box::new(move || done_rx.recv().unwrap_or(Err(disconnected))),
-        ))
+    fn start_network_training(
+        &self,
+        req: NetworkTrainingRequest,
+    ) -> Result<RunningTraining<TrainedNetworkModel>, StartTrainingError> {
+        self.start_remote_training(Request::StartNetworkTraining(req))
     }
 
     fn open_image(&self, path: &Path) -> Result<Arc<dyn ImageSource>, InternalErrors> {
@@ -334,5 +283,74 @@ impl Backend for RemoteBackend {
 
     fn image_formats(&self) -> Vec<String> {
         self.link.session().image_formats().to_vec()
+    }
+}
+
+impl RemoteBackend {
+    /// Sends a training `request` and follows it: its events, then the
+    /// trained model (blob 0 of `TrainingDone`).
+    fn start_remote_training<T: TrainedArtifact>(
+        &self,
+        request: Request,
+    ) -> Result<RunningTraining<T>, StartTrainingError> {
+        let session = &self.link.session();
+        let (id, rx) = session
+            .request(request)
+            .map_err(StartTrainingError::Failed)?;
+        let reply = session.recv(&rx).map_err(StartTrainingError::Failed)?.msg;
+        let items = match reply {
+            Reply::TrainingStarted { items } => items,
+            other => {
+                session.finish(id);
+                return Err(match other {
+                    Reply::NoTrainingData => StartTrainingError::NoTrainingData,
+                    Reply::Failed(e) => StartTrainingError::Failed(e.into_internal()),
+                    _ => StartTrainingError::Failed(unexpected_reply()),
+                });
+            }
+        };
+
+        let (events_tx, events_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let pump = Arc::clone(session);
+        std::thread::spawn(move || {
+            let result = loop {
+                match pump.recv(&rx) {
+                    Ok(Frame {
+                        msg: Reply::TrainingEvent(event),
+                        ..
+                    }) => {
+                        let _ = events_tx.send(event);
+                    }
+                    Ok(Frame {
+                        msg: Reply::TrainingDone(Ok(())),
+                        blobs,
+                    }) => {
+                        break match blobs.first() {
+                            Some(model) => T::from_bytes(model),
+                            None => Err(InternalErrors::Internal(
+                                "server sent no trained model".into(),
+                            )),
+                        };
+                    }
+                    Ok(Frame {
+                        msg: Reply::TrainingDone(Err(e)) | Reply::Failed(e),
+                        ..
+                    }) => break Err(e.into_internal()),
+                    Ok(_) => break Err(unexpected_reply()),
+                    Err(e) => break Err(e),
+                }
+            };
+            pump.finish(id);
+            drop(events_tx);
+            let _ = done_tx.send(result);
+        });
+        let disconnected = session.disconnected();
+        Ok(RunningTraining::from_parts(
+            events_rx,
+            session.cancel_handle(id),
+            items,
+            Box::new(move || done_rx.recv().unwrap_or(Err(disconnected))),
+        ))
     }
 }

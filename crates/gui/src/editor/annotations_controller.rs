@@ -784,7 +784,7 @@ fn import_message(report: &ImportReport) -> String {
     }
     if report.skipped_features > 0 {
         lines.push(format!(
-            "{} skipped (points, lines or empty shapes).",
+            "{} skipped (lines, empty shapes or points outside the image).",
             plural(report.skipped_features, "feature", "features")
         ));
     }
@@ -881,7 +881,7 @@ mod tests {
             import_message(&report),
             "34 annotations added to the image.\n2 shapes not imported (their class is set to \"Don't import\").\n\
              1 annotation was already there (the same pixels).\nNew classes: Tumor.\n\
-             3 features skipped (points, lines or empty shapes)."
+             3 features skipped (lines, empty shapes or points outside the image)."
         );
     }
 
@@ -1931,7 +1931,7 @@ mod tests {
         assert_eq!(
             import_message(&report),
             "1 annotation added to the image.\n2 annotations were already there (the same pixels).\n\
-             1 feature skipped (points, lines or empty shapes).\n\
+             1 feature skipped (lines, empty shapes or points outside the image).\n\
              Not measured (the image file can't be read) - their intensities are missing."
         );
     }

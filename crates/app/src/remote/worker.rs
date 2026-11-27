@@ -241,6 +241,14 @@ fn native_paths(request: Request) -> Request {
             }
             Request::StartTraining(req)
         }
+        Request::StartNetworkTraining(mut req) => {
+            native_project_paths(&mut req.project);
+            if let Some(save_to) = &mut req.save_to {
+                save_to.project_dir = native_path(std::mem::take(&mut save_to.project_dir));
+            }
+            req.settings.start_from = req.settings.start_from.map(native_path);
+            Request::StartNetworkTraining(req)
+        }
         Request::OpenImage { path } => Request::OpenImage {
             path: native_path(path),
         },
@@ -560,7 +568,13 @@ impl Session {
             }
             Request::StartTraining(req) => {
                 let save_to = req.save_to.clone();
-                self.train(id, req, save_to)
+                let training = self.backend.start_training(req);
+                self.train(id, training, save_to)
+            }
+            Request::StartNetworkTraining(req) => {
+                let save_to = req.save_to.clone();
+                let training = self.backend.start_network_training(req);
+                self.train(id, training, save_to)
             }
             Request::OpenImage { path } => match self.backend.open_image(&path) {
                 Ok(source) => {
@@ -784,13 +798,13 @@ impl Session {
     /// Runs a training and streams its progress and model back. With
     /// `save_to` it survives the client: if the connection dropped by the
     /// time it's done, the model is saved there on this machine.
-    fn train(
+    fn train<T: crate::training::TrainedArtifact>(
         &self,
         id: u64,
-        req: crate::training::TrainingRequest,
+        training: Result<crate::training::RunningTraining<T>, StartTrainingError>,
         save_to: Option<crate::training::ModelDestination>,
     ) {
-        let training = match self.backend.start_training(req) {
+        let training = match training {
             Ok(training) => training,
             Err(StartTrainingError::NoTrainingData) => {
                 return self.reply(id, Reply::NoTrainingData, Vec::new());
@@ -823,9 +837,8 @@ impl Session {
         if let (Some(save_to), Ok(model), true) =
             (&save_to, &result, self.disconnected.load(Ordering::SeqCst))
         {
-            match crate::ai::learning::save_trained_model(
+            match model.save(
                 self.backend.files(),
-                model,
                 &save_to.project_dir,
                 &save_to.model_name,
             ) {

@@ -228,3 +228,25 @@ pub fn cellpose_sam_file(config: &CellposeSamConfig) -> Vec<u8> {
     };
     to_bytes(&tensors, &metadata).expect("a model file")
 }
+
+/// A tiny random SpotNet model file of `in_channels` (1 = the spot
+/// channel, 2 = plus a reference channel): 4 feature maps, the default
+/// dilations, weights from a fixed seed.
+pub fn spotnet_file(in_channels: usize) -> Vec<u8> {
+    use crate::model::spotnet::{
+        PercentileNormalization, SpotNetConfig, SpotNetModel, SpotNetSettings,
+    };
+    let network = SpotNetConfig {
+        in_channels,
+        channels: 4,
+        ..SpotNetConfig::default()
+    };
+    let settings = SpotNetSettings {
+        network,
+        normalization: PercentileNormalization::default(),
+        sigma: 1.5,
+    };
+    SpotNetModel::untrained(settings, 1, &burn::tensor::Device::flex())
+        .to_bytes()
+        .expect("a SpotNet file")
+}

@@ -311,6 +311,28 @@ pub fn save_trained_model(
     Ok(path)
 }
 
+/// Where a trained deep-learning network goes:
+/// `<project_dir>/models/<model_name>.evanet`.
+pub fn network_output_path(project_dir: &Path, model_name: &str) -> PathBuf {
+    project_dir
+        .join("models")
+        .join(format!("{model_name}.evanet"))
+}
+
+/// Persists a trained network under [`network_output_path`], creating the
+/// `models` directory if needed. Returns the path written to. Written
+/// through `files` (the backend's), next to the project.
+pub fn save_trained_network(
+    files: &dyn crate::files::FileSystem,
+    network: &crate::training::TrainedNetworkModel,
+    project_dir: &Path,
+    model_name: &str,
+) -> Result<PathBuf, InternalErrors> {
+    let path = network_output_path(project_dir, model_name);
+    files.write_file(&path, &network.0)?;
+    Ok(path)
+}
+
 /// Reads only the settings (metadata, backend, classes, features) a saved
 /// model file was trained with - all front ends need for info dialogs,
 /// class-mapping rows and "retrain from existing model", without exposing

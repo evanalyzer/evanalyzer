@@ -2009,6 +2009,83 @@ mod ui_state_tests {
         );
     }
 
+    /// The annotate bar's box (x, width, height) in a `width` px window
+    /// with the left panel of `mode` and the right column open, `tool`
+    /// picked; `details`: the selected object's details open beside the
+    /// column.
+    fn annotate_bar_box(
+        width: f32,
+        mode: WorkspaceMode,
+        tool: ToolState,
+        details: bool,
+    ) -> (f32, f32, f32) {
+        use i_slint_backend_testing::ElementHandle;
+        let ui = crate::editor::test_support::test_ui_window();
+        ui.window().set_size(slint::LogicalSize::new(width, 720.0));
+        let layout = ui.global::<LayoutState>();
+        layout.set_mode(mode);
+        ui.global::<ViewportObjectState>().set_act_tool_state(tool);
+        layout.set_steps_open(true);
+        layout.set_image_open(true);
+        layout.set_objects_open(true);
+        layout.set_objects_as_table(false);
+        layout.set_annotate(true);
+        if details {
+            let objects = ui.global::<ObjectListState>();
+            let mut selected = objects.get_selected_object();
+            selected.id = 1;
+            objects.set_selected_object(selected);
+            objects.set_details_open(true);
+        }
+        let bar = ElementHandle::find_by_accessible_label(&ui, "Annotate tools")
+            .next()
+            .expect("the annotate bar");
+        let (pos, size) = (bar.absolute_position(), bar.size());
+        (pos.x, size.width, size.height)
+    }
+
+    /// The bar never lies over the panels: centred in the space between
+    /// them (360 px left, 300 px right, 12 px gaps), compact at the
+    /// minimum window width, a column beside the object details.
+    #[test]
+    fn the_annotate_bar_stays_between_the_panels() {
+        use {ToolState::Brush, ToolState::Move, WorkspaceMode::Images, WorkspaceMode::Pipelines};
+        let (x, w, h) = annotate_bar_box(1600.0, Pipelines, Move, false);
+        let (free_l, free_r) = (384.0, 1600.0 - 324.0);
+        assert!(h < 60.0, "a row");
+        assert!(
+            (x - (free_l + (free_r - free_l - w) / 2.0)).abs() < 1.0,
+            "centred between the panels: x {x}, w {w}"
+        );
+        let full = w;
+
+        let (x, w, h) = annotate_bar_box(1280.0, Pipelines, Move, false);
+        assert!(h < 60.0, "still a row");
+        assert!(w < full, "compact: {w} < {full}");
+        assert!(
+            x >= 384.0 && x + w <= 1280.0 - 324.0,
+            "between the panels: x {x}, w {w}"
+        );
+        // The tightest rows: the brush size shown, the images list 20 px wider.
+        for (mode, tool, left) in [
+            (Pipelines, Brush, 384.0),
+            (Images, Move, 404.0),
+            (Images, Brush, 404.0),
+        ] {
+            let (x, w, h) = annotate_bar_box(1280.0, mode, tool, false);
+            assert!(h < 60.0, "{mode:?} {tool:?}: a row, not {w} x {h}");
+            assert!(
+                x >= left && x + w <= 1280.0 - 324.0,
+                "{mode:?} {tool:?}: x {x}, w {w}"
+            );
+        }
+
+        let (x, w, h) = annotate_bar_box(1280.0, Pipelines, Move, true);
+        assert!(h > w, "a column: {w} x {h}");
+        assert_eq!(x, 384.0, "at the left edge of the free space");
+        assert!(x + w <= 1280.0 - 324.0 - 312.0, "left of the details");
+    }
+
     #[test]
     fn opening_the_about_dialog_loads_the_licenses() {
         use i_slint_backend_testing::ElementHandle;

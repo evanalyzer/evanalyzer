@@ -1562,6 +1562,7 @@ fn describe_training_progress(event: &TrainingProgressEvent) -> Option<String> {
             total_epochs,
             train_loss,
             val_loss,
+            ..
         } => {
             let line = match val_loss {
                 Some(v) => format!(
@@ -1630,6 +1631,34 @@ fn format_training_stats(stats: &evanalyzer_cfg::core_types::TrainingStats) -> S
                 line.push('.');
             }
             line
+        }
+        TrainingStats::Network {
+            epochs_run,
+            total_epochs,
+            final_train_loss,
+            check,
+            ..
+        } => {
+            use evanalyzer_cfg::core_types::NetworkCheck;
+            let line = format!(
+                "{epochs_run}/{total_epochs} epoch(s), final train loss {final_train_loss:.4}"
+            );
+            match check {
+                NetworkCheck::Scored {
+                    epoch,
+                    annotated,
+                    found,
+                    matched,
+                } => format!(
+                    "{line}; kept epoch {}: found {matched} of {annotated} held-back object(s), {} wrongly.",
+                    epoch + 1,
+                    found - matched
+                ),
+                NetworkCheck::Off => format!("{line}; not checked on held-back areas."),
+                NetworkCheck::TooFewImages { images } => format!(
+                    "{line}; not checked: {images} image(s) - draw a validation area to check it."
+                ),
+            }
         }
     }
 }
@@ -2052,7 +2081,8 @@ mod tests {
                 epoch: 0,
                 total_epochs: 10,
                 train_loss: 0.5,
-                val_loss: Some(0.25)
+                val_loss: Some(0.25),
+                held_back: None,
             })
             .unwrap(),
             "Epoch 1/10 - train loss 0.5000, validation loss 0.2500"
@@ -2062,7 +2092,8 @@ mod tests {
                 epoch: 9,
                 total_epochs: 10,
                 train_loss: 0.125,
-                val_loss: None
+                val_loss: None,
+                held_back: None,
             })
             .unwrap(),
             "Epoch 10/10 - train loss 0.1250"

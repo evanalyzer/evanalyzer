@@ -39,6 +39,7 @@ use std::thread::JoinHandle;
 /// per-pixel coordinates instead would balloon memory for large painted
 /// regions (a compact bbox+bitmask is far smaller than one tuple per masked
 /// pixel).
+#[derive(Debug, Clone)]
 pub struct TrainingImage {
     pub path: PathBuf,
     pub series: i32,
@@ -79,6 +80,7 @@ pub fn fit_classifier(
             total_epochs,
             train_loss,
             val_loss,
+            ..
         } = p
         {
             let _ = progress.send(TrainingProgressEvent::Epoch {
@@ -86,6 +88,7 @@ pub fn fit_classifier(
                 total_epochs,
                 train_loss,
                 val_loss,
+                held_back: None,
             });
         }
     };
@@ -196,22 +199,19 @@ pub(crate) fn finish(settings: AiLearningSettings, classifier: Classifier) -> Sa
 /// training up the same way it already wires up pipeline execution. Shared by
 /// `PixelTrainingJob::run_async`/`ObjectTrainingJob::run_async` to dedupe the
 /// channel/flag/thread-spawn boilerplate between them.
-pub(crate) fn spawn_training_job<J>(
+pub(crate) fn spawn_training_job<J, R>(
     job: J,
-    run: impl FnOnce(
-        &J,
-        Sender<TrainingProgressEvent>,
-        Arc<AtomicBool>,
-    ) -> Result<SavedClassifier, InternalErrors>
+    run: impl FnOnce(&J, Sender<TrainingProgressEvent>, Arc<AtomicBool>) -> Result<R, InternalErrors>
     + Send
     + 'static,
 ) -> (
-    JoinHandle<Result<SavedClassifier, InternalErrors>>,
+    JoinHandle<Result<R, InternalErrors>>,
     Receiver<TrainingProgressEvent>,
     Arc<AtomicBool>,
 )
 where
     J: Send + 'static,
+    R: Send + 'static,
 {
     let (tx, rx) = std::sync::mpsc::channel();
     let cancel = Arc::new(AtomicBool::new(false));

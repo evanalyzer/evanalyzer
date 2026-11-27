@@ -555,8 +555,15 @@ export component Workspace inherits Rectangle {
     }
 
     // -- Top --
+    // The annotate bar in the free space between the panels shown (the
+    // object details beside the right column count too), never over
+    // them: centred there, compact or a column when it is narrow.
+    property <bool> details-shown: root.right-shown && root.side-objects && !root.split-image-panel && ObjectListState.details-open && ObjectListState.selected_object.id != 0;
+    property <length> bar-left: root.left-shown ? Float.left-w + (LayoutState.mode == WorkspaceMode.images ? 20px : 0px) + 2 * Float.gap : Float.gap;
+    property <length> bar-right: root.width - (root.right-shown ? Float.right-w + 2 * Float.gap : Float.gap) - (root.details-shown ? Float.right-w + Float.gap : 0px);
     if LayoutState.annotate && root.on-image: AnnotateBar {
-        x: (parent.width - self.width) / 2;
+        room: root.bar-right - root.bar-left;
+        x: self.vertical ? root.bar-left : root.bar-left + max(0px, (root.bar-right - root.bar-left - self.width) / 2);
         y: Float.gap;
     }
 

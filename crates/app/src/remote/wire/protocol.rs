@@ -26,7 +26,7 @@ use crate::remote::wire::pixels::RawImageInfo;
 use crate::remote::wire::pixels::image_from_raw;
 use crate::remote::wire::pixels::image_to_raw;
 use crate::training::TrainingItems;
-use crate::training::TrainingRequest;
+use crate::training::{NetworkTrainingRequest, TrainingRequest};
 use crate::user::settings::AppSettings;
 use crate::user::trust::ScriptTrust;
 use evanalyzer_cfg::core_types::{InternalErrors, PipelineId, StepId, TrainingProgressEvent};
@@ -82,7 +82,9 @@ use std::sync::Arc;
 // replaces `cuda_available`.
 // 62: `ReadFileStart` (the first bytes of a file - an AI model's header
 // for its card, without the weights).
-pub const PROTOCOL_VERSION: u32 = 62;
+// 63: `StartNetworkTraining` (a deep-learning network's training),
+// `TrainingStats::Network`, `TrainingProgressEvent::Epoch::held_back`.
+pub const PROTOCOL_VERSION: u32 = 63;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -126,6 +128,10 @@ pub(crate) enum Request {
     },
     StartPreview(PreviewRequest),
     StartTraining(TrainingRequest),
+    /// A deep-learning network's training - its replies are a training's
+    /// (`TrainingStarted`, `TrainingEvent`, `TrainingDone` with the model
+    /// file as blob 0).
+    StartNetworkTraining(NetworkTrainingRequest),
     OpenImage {
         path: PathBuf,
     },

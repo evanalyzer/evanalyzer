@@ -4,7 +4,9 @@
 //! through the backend's [`FileSystem`] (this computer, or the server the
 //! project is on): a `FeatureCollection` of `Polygon`/`MultiPolygon`
 //! features in image pixel coordinates (y down) - the common layout other
-//! annotation tools read and write, no schema of our own.
+//! annotation tools read and write, no schema of our own. A spot (an
+//! object of one pixel) is a `Point` at its pixel's centre; an imported
+//! `Point` is the pixel it lies in, a `MultiPoint` one spot per point.
 //!
 //! Properties written: `objectType: "annotation"`, `classification`
 //! (`{name, color: [r, g, b]}`, the first class), `classes` (all
@@ -56,7 +58,8 @@ pub struct ImportReport {
     pub duplicates: usize,
     /// Classes that did not exist yet and were created.
     pub created_classes: Vec<String>,
-    /// Features that are not (multi)polygons (points, lines) or are empty.
+    /// Features that are not (multi)polygons or (multi)points (lines), are
+    /// empty or lie outside the image; one per point of a `MultiPoint`.
     pub skipped_features: usize,
     /// Shapes left out: their classes were set to "don't import".
     pub skipped_by_class: usize,
@@ -286,6 +289,13 @@ fn rgb(color: u32) -> Value {
     json!([(color >> 16) & 0xff, (color >> 8) & 0xff, color & 0xff])
 }
 
+/// A spot: an object of one pixel (the Spot tool's, Find Maxima's).
+fn is_spot(object: &ObjectMetricSettings) -> bool {
+    object.bbox[0] == object.bbox[2]
+        && object.bbox[1] == object.bbox[3]
+        && object.mask_data.count_ones() == 1
+}
+
 /// One object as a GeoJSON feature: a manual annotation (`objectType`
 /// "annotation") or a pipeline object ("detection")
 fn feature(
@@ -294,11 +304,17 @@ fn feature(
     object: &ObjectMetricSettings,
     object_type: &str,
 ) -> Option<Value> {
-    let polygons = mask_to_polygons(&object.mask_data, object.bbox);
-    let geometry = match polygons.len() {
-        0 => return None,
-        1 => json!({ "type": "Polygon", "coordinates": polygons[0] }),
-        _ => json!({ "type": "MultiPolygon", "coordinates": polygons }),
+    let geometry = if is_spot(object) {
+        // At the pixel's centre: read back as that pixel.
+        let [x, y, ..] = object.bbox;
+        json!({ "type": "Point", "coordinates": [x as f64 + 0.5, y as f64 + 0.5] })
+    } else {
+        let polygons = mask_to_polygons(&object.mask_data, object.bbox);
+        match polygons.len() {
+            0 => return None,
+            1 => json!({ "type": "Polygon", "coordinates": polygons[0] }),
+            _ => json!({ "type": "MultiPolygon", "coordinates": polygons }),
+        }
     };
     // Class names in a stable order (by id).
     let mut classes: Vec<&Class> = object
@@ -435,32 +451,71 @@ pub fn export_image_geojson(
 // --- Import --------------------------------------------------------------
 
 fn parse_ring(value: &Value) -> Option<Ring> {
-    value
-        .as_array()?
-        .iter()
-        .map(|p| {
-            let p = p.as_array()?;
-            Some([p.first()?.as_f64()?, p.get(1)?.as_f64()?])
-        })
-        .collect()
+    value.as_array()?.iter().map(parse_point).collect()
 }
 
-/// All rings of a (multi)polygon, `None` for other geometries.
-fn geometry_rings(geometry: &Value) -> Option<Vec<Ring>> {
-    let coordinates = geometry.get("coordinates")?.as_array()?;
+/// What a feature's geometry is read as.
+enum Geometry {
+    /// A (multi)polygon's rings: one shape.
+    Rings(Vec<Ring>),
+    /// A (multi)point's points: a spot each.
+    Points(Vec<[f64; 2]>),
+}
+
+fn parse_point(value: &Value) -> Option<[f64; 2]> {
+    let p = value.as_array()?;
+    Some([p.first()?.as_f64()?, p.get(1)?.as_f64()?])
+}
+
+/// The rings of a (multi)polygon or the points of a (multi)point, `None`
+/// for other geometries.
+fn read_geometry(geometry: &Value) -> Option<Geometry> {
+    let coordinates = geometry.get("coordinates")?;
     match geometry.get("type")?.as_str()? {
-        "Polygon" => coordinates.iter().map(parse_ring).collect(),
+        "Polygon" => Some(Geometry::Rings(
+            coordinates
+                .as_array()?
+                .iter()
+                .map(parse_ring)
+                .collect::<Option<_>>()?,
+        )),
         "MultiPolygon" => {
             let mut rings = Vec::new();
-            for polygon in coordinates {
+            for polygon in coordinates.as_array()? {
                 for ring in polygon.as_array()? {
                     rings.push(parse_ring(ring)?);
                 }
             }
-            Some(rings)
+            Some(Geometry::Rings(rings))
         }
+        "Point" => Some(Geometry::Points(vec![parse_point(coordinates)?])),
+        "MultiPoint" => Some(Geometry::Points(
+            coordinates
+                .as_array()?
+                .iter()
+                .map(parse_point)
+                .collect::<Option<_>>()?,
+        )),
         _ => None,
     }
+}
+
+/// The pixel point (`x`, `y`) lies in, as a one-pixel mask, or `None`
+/// outside the `width` x `height` image (0: size unknown, any place).
+fn point_to_mask(
+    [x, y]: [f64; 2],
+    width: u32,
+    height: u32,
+) -> Option<(BitVec<u64, Lsb0>, [u32; 4])> {
+    let (px, py) = (x.floor(), y.floor());
+    let inside = |v: f64, size: u32| {
+        v.is_finite() && v >= 0.0 && v <= u32::MAX as f64 && (size == 0 || v < size as f64)
+    };
+    if !inside(px, width) || !inside(py, height) {
+        return None;
+    }
+    let (px, py) = (px as u32, py as u32);
+    Some((BitVec::repeat(true, 1), [px, py, px, py]))
 }
 
 /// Class names of a feature, and the colour of its `classification`.
@@ -631,7 +686,7 @@ pub fn read_image_geojson(
     let mut pending = PendingImport::default();
     let mut objects = Vec::new();
     for feature in &features {
-        let Some(rings) = feature.get("geometry").and_then(geometry_rings) else {
+        let Some(geometry) = feature.get("geometry").and_then(read_geometry) else {
             pending.report.skipped_features += 1;
             continue;
         };
@@ -643,9 +698,24 @@ pub fn read_image_geojson(
             .filter(|s| sizes.contains_key(s))
             .unwrap_or(series);
         let (width, height) = sizes.get(&series).copied().unwrap_or((0, 0));
-        let Some((mask, bbox)) = rings_to_mask(&rings, width, height) else {
-            pending.report.skipped_features += 1;
-            continue;
+        let shapes: Vec<_> = match geometry {
+            Geometry::Rings(rings) => match rings_to_mask(&rings, width, height) {
+                Some(shape) => vec![shape],
+                None => {
+                    pending.report.skipped_features += 1;
+                    continue;
+                }
+            },
+            Geometry::Points(points) => {
+                let shapes: Vec<_> = points
+                    .iter()
+                    .filter_map(|p| point_to_mask(*p, width, height))
+                    .collect();
+                // An empty `MultiPoint` is an empty shape.
+                pending.report.skipped_features +=
+                    (points.len() - shapes.len()).max(usize::from(points.is_empty()));
+                shapes
+            }
         };
         let plane = properties.get("plane");
         let plane_value = |key: &str| {
@@ -667,36 +737,38 @@ pub fn read_image_geojson(
                 height as usize
             },
         };
-        let mut object = Object::from_mask_geometry(
-            &size,
-            mask,
-            bbox,
-            // An annotation marks the object in every channel: of none.
-            ImagePlane {
-                z: plane_value("z"),
-                c: 0,
-                t: plane_value("t"),
-            },
-            evanalyzer_core::ObjectClasses::new(),
-        )
-        .to_object_settings();
-        object.z_projection = properties
-            .get("zProjection")
-            .and_then(|p| serde_json::from_value(p.clone()).ok())
-            .unwrap_or(ZProjection::None);
-        if object.z_projection != ZProjection::None {
-            object.z_stack = 0;
+        for (mask, bbox) in shapes {
+            let mut object = Object::from_mask_geometry(
+                &size,
+                mask,
+                bbox,
+                // An annotation marks the object in every channel: of none.
+                ImagePlane {
+                    z: plane_value("z"),
+                    c: 0,
+                    t: plane_value("t"),
+                },
+                evanalyzer_core::ObjectClasses::new(),
+            )
+            .to_object_settings();
+            object.z_projection = properties
+                .get("zProjection")
+                .and_then(|p| serde_json::from_value(p.clone()).ok())
+                .unwrap_or(ZProjection::None);
+            if object.z_projection != ZProjection::None {
+                object.z_stack = 0;
+            }
+            object.exclude_from_training = properties
+                .get("excludeFromTraining")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            objects.push(PendingObject {
+                series,
+                class_names: class_names.clone(),
+                color,
+                object,
+            });
         }
-        object.exclude_from_training = properties
-            .get("excludeFromTraining")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        objects.push(PendingObject {
-            series,
-            class_names,
-            color,
-            object,
-        });
     }
     pending.images.push(PendingImage {
         path: project
@@ -1329,7 +1401,7 @@ mod tests {
     /// A file from another tool: a JSON list, a point, classes named differently -
     /// mapped onto the project's, one class left out.
     #[test]
-    fn qupath_classes_are_mapped_onto_the_projects_and_points_skipped() {
+    fn qupath_classes_are_mapped_onto_the_projects_and_lines_skipped() {
         let mut project = project();
         let nuclei = project
             .settings
@@ -1352,7 +1424,7 @@ mod tests {
             shape(6.0, "Nucleus"),
             shape(11.0, "Stroma"),
             shape(15.0, "Tumor"),
-            { "type": "Feature", "geometry": { "type": "Point", "coordinates": [5.0, 5.0] }, "properties": {} }
+            { "type": "Feature", "geometry": { "type": "LineString", "coordinates": [[5.0, 5.0], [8.0, 8.0]] }, "properties": {} }
         ]);
         let file = dir.path().join("qupath export.geojson");
         std::fs::write(&file, text.to_string()).unwrap();
@@ -1388,7 +1460,7 @@ mod tests {
         ]);
         let report = import_file(&mut project, &file, "a.tif", false, &mapping);
         assert_eq!(report.objects, 3);
-        assert_eq!(report.skipped_features, 1, "the point");
+        assert_eq!(report.skipped_features, 1, "the line");
         assert_eq!(report.skipped_by_class, 1, "Stroma");
         assert_eq!(report.created_classes, vec!["Tumor".to_string()]);
         let objects = &project
@@ -1425,5 +1497,114 @@ mod tests {
                 .is_empty(),
             "only the chosen image"
         );
+    }
+
+    /// A spot (one pixel) goes out as a `Point` at its pixel's centre and
+    /// comes back as the same pixel, with its class.
+    #[test]
+    fn spots_go_out_as_points_and_come_back_as_the_same_pixel() {
+        let mut source = project();
+        let nuclei = source.settings.classification.classes()[0].id;
+        source
+            .settings
+            .images
+            .list
+            .get_mut(Path::new("a.tif"))
+            .unwrap()
+            .series
+            .get_mut(&0)
+            .unwrap()
+            .objects
+            .extend([
+                annotation(1, &["#"], 7, &[nuclei]),
+                annotation(2, &["##"], 12, &[nuclei]),
+            ]);
+        let dir = tempfile::tempdir().unwrap();
+        let files = crate::files::LocalFileSystem::default();
+        let file = dir.path().join("spots.geojson");
+        let written = export_image_geojson(
+            &source,
+            &files,
+            Path::new("a.tif"),
+            &HashSet::from([Some(nuclei)]),
+            &file,
+            NO_PIPELINE,
+        )
+        .unwrap();
+        assert_eq!(written, 2);
+        let value: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(
+            value["features"][0]["geometry"],
+            json!({ "type": "Point", "coordinates": [7.5, 0.5] })
+        );
+        assert_eq!(
+            value["features"][1]["geometry"]["type"], "Polygon",
+            "two pixels are no spot"
+        );
+
+        let mut target = project();
+        let report = import_file(&mut target, &file, "sub/b.tif", false, &HashMap::new());
+        assert_eq!(report.objects, 2);
+        assert_eq!(report.skipped_features, 0);
+        let objects = &target
+            .settings
+            .images
+            .list
+            .get(Path::new("sub/b.tif"))
+            .unwrap()
+            .series[&0]
+            .objects;
+        assert_eq!(objects[0].bbox, [7, 0, 7, 0]);
+        assert_eq!(objects[0].mask_data.count_ones(), 1);
+        assert_eq!(objects[0].area, 1);
+        assert_eq!(
+            objects[0].object_class,
+            std::collections::BTreeSet::from([ObjectClass::Global(nuclei)])
+        );
+        assert_eq!(objects[1].bbox, [12, 0, 13, 0]);
+    }
+
+    /// A `MultiPoint` is a spot per point, each the pixel it lies in; points
+    /// outside the image are skipped, one pixel twice is one spot.
+    #[test]
+    fn a_multipoint_is_one_spot_per_point_in_the_pixel_it_lies_in() {
+        let mut project = project();
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("points.geojson");
+        let text = json!({ "type": "FeatureCollection", "features": [
+            {
+                "type": "Feature",
+                "geometry": { "type": "MultiPoint", "coordinates": [
+                    [1.2, 1.7], [5.0, 5.0], [5.9, 5.1], [20.0, 3.0], [-0.1, 2.0], [19.99, 19.99]
+                ] },
+                "properties": { "classification": { "name": "Nuclei" } }
+            },
+            { "type": "Feature", "geometry": { "type": "MultiPoint", "coordinates": [] }, "properties": {} },
+            { "type": "Feature", "geometry": { "type": "Point", "coordinates": [3.0] }, "properties": {} }
+        ]});
+        std::fs::write(&file, text.to_string()).unwrap();
+
+        let report = import_file(&mut project, &file, "a.tif", false, &HashMap::new());
+        assert_eq!(report.objects, 3);
+        assert_eq!(
+            report.duplicates, 1,
+            "(5.0, 5.0) and (5.9, 5.1): pixel 5, 5"
+        );
+        assert_eq!(
+            report.skipped_features, 4,
+            "two points outside the image, the empty MultiPoint, the broken Point"
+        );
+        let boxes: Vec<[u32; 4]> = project
+            .settings
+            .images
+            .list
+            .get(Path::new("a.tif"))
+            .unwrap()
+            .series[&0]
+            .objects
+            .iter()
+            .map(|o| o.bbox)
+            .collect();
+        assert_eq!(boxes, vec![[1, 1, 1, 1], [5, 5, 5, 5], [19, 19, 19, 19]]);
     }
 }

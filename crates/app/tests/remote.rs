@@ -31,6 +31,7 @@ use evanalyzer_app::training::PixelTrainingParams;
 use evanalyzer_app::training::StartTrainingError;
 use evanalyzer_app::training::TrainingItems;
 use evanalyzer_app::training::TrainingRequest;
+use evanalyzer_app::training::{NetworkTrainingRequest, TrainedArtifact};
 use evanalyzer_cfg::core_types::{
     ImageTile, InternalErrors, ObjectClass, TrainingProgressEvent, ZProjection,
 };
@@ -455,6 +456,96 @@ fn a_remotely_trained_model_comes_back_and_saves_like_a_local_one() {
         serde_json::to_value(&settings).unwrap(),
         serde_json::to_value(two_class_object_settings()).unwrap()
     );
+}
+
+/// The Deep-Learning tab's settings for a SpotNet: one-pixel annotations of
+/// class 1 are spots, class 2 marks the training areas; a quick 2 epochs.
+fn spotnet_request(project: ProjectSettings) -> NetworkTrainingRequest {
+    use evanalyzer_cfg::settings::deep_learning_settings::{
+        DeepLearningSettings, NetworkTrainingSettings, ValidationSettings,
+    };
+    let mut settings = DeepLearningSettings::default();
+    settings.classes.objects = ObjectClass::Global(1);
+    settings.classes.area = ObjectClass::Global(2);
+    settings.training = NetworkTrainingSettings {
+        epochs: 2,
+        patches_per_epoch: 1,
+        batch_size: 1,
+        patch_size: 32,
+        validation: ValidationSettings::Off,
+        patience: None,
+        ..NetworkTrainingSettings::default()
+    };
+    NetworkTrainingRequest {
+        project,
+        settings,
+        z_stack_handling: Default::default(),
+        save_to: None,
+    }
+}
+
+#[test]
+fn network_training_without_annotations_maps_to_no_training_data() {
+    let remote = connect();
+    let result = remote.start_network_training(spotnet_request(ProjectSettings::default()));
+    assert!(matches!(result, Err(StartTrainingError::NoTrainingData)));
+}
+
+#[test]
+fn a_remotely_trained_network_comes_back_and_saves_as_a_model_file() {
+    use bitvec::prelude::*;
+    let dir = tempfile::tempdir().unwrap();
+    let image = image::ImageBuffer::<image::Luma<u16>, Vec<u16>>::from_fn(40, 32, |x, y| {
+        let d2 = (x as f32 - 12.0).powi(2) + (y as f32 - 10.0).powi(2);
+        image::Luma([(200.0 + 3000.0 * (-d2 / 8.0).exp()) as u16])
+    });
+    image.save(dir.path().join("spots.tif")).unwrap();
+    let area = ObjectMetricSettings {
+        object_class: [ObjectClass::Global(2)].into(),
+        bbox: [0, 0, 39, 31],
+        mask_data: bitvec![u64, Lsb0; 1; 40 * 32],
+        area: 40 * 32,
+        ..Default::default()
+    };
+    let spot = ObjectMetricSettings {
+        object_class: [ObjectClass::Global(1)].into(),
+        bbox: [12, 10, 12, 10],
+        mask_data: bitvec![u64, Lsb0; 1; 1],
+        area: 1,
+        ..Default::default()
+    };
+    let mut project = ProjectSettings::default();
+    project.images.root = Some(dir.path().to_path_buf());
+    let mut entry = ImageEntry::default();
+    entry.rel_path = PathBuf::from("spots.tif");
+    entry.series.insert(
+        0,
+        SeriesSettings {
+            objects: vec![area, spot],
+            ..Default::default()
+        },
+    );
+    project
+        .images
+        .list
+        .insert(PathBuf::from("spots.tif"), entry);
+
+    let remote = connect();
+    let training = remote
+        .start_network_training(spotnet_request(project))
+        .unwrap();
+    assert_eq!(training.items(), TrainingItems::Images(1));
+    let events: Vec<_> = training.events().iter().collect();
+    assert!(matches!(
+        events.last(),
+        Some(TrainingProgressEvent::Finished { .. })
+    ));
+    let model = training.wait().unwrap();
+    let path = model
+        .save(remote.files(), dir.path(), "remote-spots")
+        .unwrap();
+    assert_eq!(path, dir.path().join("models").join("remote-spots.evanet"));
+    assert!(std::fs::metadata(&path).unwrap().len() > 1000);
 }
 
 #[test]

@@ -172,6 +172,18 @@ impl Backend for LocalBackend {
         crate::training::local::start_training(&req.project, req.settings, req.pixel_params)
     }
 
+    fn start_network_training(
+        &self,
+        req: crate::training::NetworkTrainingRequest,
+    ) -> Result<
+        crate::training::RunningTraining<crate::training::TrainedNetworkModel>,
+        StartTrainingError,
+    > {
+        self.check_project_paths(None, &req.project)
+            .map_err(StartTrainingError::Failed)?;
+        crate::training::network::start_network_training(req)
+    }
+
     fn open_image(&self, path: &Path) -> Result<Arc<dyn ImageSource>, InternalErrors> {
         let path = self.files.check(path)?;
         Ok(Arc::new(open_image_source(&path)?))

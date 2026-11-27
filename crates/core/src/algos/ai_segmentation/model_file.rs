@@ -12,7 +12,7 @@
 //! warning when the file doesn't fit the step - before anything runs.
 
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
-use evanalyzer_nn::model::{cellpose_sam, stardist, unet};
+use evanalyzer_nn::model::{cellpose_sam, spotnet, stardist, unet};
 use evanalyzer_nn::weights::{ModelMetadata, parse_header};
 use std::path::Path;
 
@@ -29,10 +29,11 @@ pub enum ModelKind {
     UNet,
     StarDist,
     CellposeSam,
+    SpotNet,
 }
 
 impl ModelKind {
-    const ALL: [Self; 3] = [Self::UNet, Self::StarDist, Self::CellposeSam];
+    const ALL: [Self; 4] = [Self::UNet, Self::StarDist, Self::CellposeSam, Self::SpotNet];
 
     /// The kind of a model file's architecture (its `evanalyzer_arch`).
     pub fn of_arch(arch: &str) -> Option<Self> {
@@ -44,6 +45,7 @@ impl ModelKind {
             Self::UNet => unet::ARCH,
             Self::StarDist => stardist::ARCH,
             Self::CellposeSam => cellpose_sam::ARCH,
+            Self::SpotNet => spotnet::ARCH,
         }
     }
 
@@ -53,6 +55,7 @@ impl ModelKind {
             Self::UNet => "U-Net",
             Self::StarDist => "StarDist 2D",
             Self::CellposeSam => "Cellpose-SAM",
+            Self::SpotNet => "SpotNet",
         }
     }
 
@@ -62,6 +65,7 @@ impl ModelKind {
             Self::UNet => PipelineCommand::UNet(Default::default()),
             Self::StarDist => PipelineCommand::Stardist(Default::default()),
             Self::CellposeSam => PipelineCommand::Cellpose(Default::default()),
+            Self::SpotNet => PipelineCommand::Spotnet(Default::default()),
         };
         command.name().to_string()
     }
@@ -304,6 +308,29 @@ mod tests {
         assert_eq!(card.kind, "StarDist 2D");
         assert_eq!(card.name, "2D_versatile_fluo.evanet");
         assert_eq!(card.description, "");
+    }
+
+    #[test]
+    fn a_spotnet_file_gets_its_card_and_names_its_step_elsewhere() {
+        let file = evanalyzer_nn::test_support::spotnet_file(1);
+        let ModelFileNote::Fits(card) =
+            model_file_note(ModelKind::SpotNet, path("spots.evanet"), Ok(&file))
+        else {
+            panic!("fits")
+        };
+        assert_eq!((card.kind, card.name.as_str()), ("SpotNet", "spots.evanet"));
+        let ModelFileNote::WrongKind(problem) =
+            model_file_note(ModelKind::StarDist, path("spots.evanet"), Ok(&file))
+        else {
+            panic!("a problem")
+        };
+        assert!(
+            problem
+                .message
+                .contains("Use the step AI SpotNet Spot Detection"),
+            "{}",
+            problem.message
+        );
     }
 
     #[test]

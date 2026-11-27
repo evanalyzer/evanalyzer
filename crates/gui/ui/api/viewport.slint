@@ -11,6 +11,10 @@ export enum ToolState {
     PaintOval,
     PaintPolygon,
     PaintMarker,
+    // A click places a spot: an object of one pixel in the class painted
+    // as (`spot-placed`); a right-click removes the hand-drawn spot under
+    // the cursor (`spot-remove-at`).
+    PaintSpot,
     // A line dragged on the image, with its length - see `ruler-shown`.
     Ruler,
     // Paints a new object / erases pixels of the hand-drawn objects, along
@@ -180,6 +184,8 @@ export global ViewportObjectState {
     callback viewport_clicked(length, length);
     callback marker-placed(length, length);
     callback marker-remove-at(length, length);
+    callback spot-placed(length, length);
+    callback spot-remove-at(length, length);
 
     in-out property <[MarkerData]> markers: [];
     // The Ruler tool's line, from (x0, y0) to (x1, y1) in image pixels,

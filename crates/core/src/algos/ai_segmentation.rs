@@ -13,6 +13,7 @@ pub mod input_normalization;
 pub mod model_file;
 pub mod piece_size;
 pub mod pixel_classifier;
+pub mod spotnet;
 pub mod stardist;
 pub mod unet;
 
