@@ -9,6 +9,7 @@
 //!
 //! Training a SpotNet from clicked spots and training areas.
 
+use super::validate::{Tally, ValidationScore};
 use crate::{
     NnError, TrainControl, TrainStats,
     augment::{AugmentParams, Augmentation},
@@ -19,7 +20,7 @@ use crate::{
             target::{area_mask, gaussian_map},
         },
     },
-    train::{SeededUniform, TrainProgress},
+    train::{MIN_IMAGES_FOR_AUTO_SPLIT, SeededUniform, TrainProgress, Validation},
 };
 use burn::Tensor;
 use burn::module::Module;
@@ -42,6 +43,10 @@ pub struct SpotLabels {
     pub spots: Vec<Spot>,
     /// Per pixel: inside a training area. Spots outside are ignored.
     pub area: Vec<bool>,
+    /// Per pixel: inside a validation area the user drew - never trained on
+    /// (all `false` without any). Its spots must be annotated as completely
+    /// as in a training area.
+    pub validation: Vec<bool>,
 }
 
 /// Settings of one training.
@@ -58,27 +63,60 @@ pub struct SpotNetTrainParams {
     pub sigma: f32,
     /// The random changes of every patch.
     pub augment: AugmentParams,
+    /// What the training checks itself on.
+    pub validation: Validation,
+}
+
+/// A finished training.
+#[derive(Debug, Clone)]
+pub struct SpotNetTraining {
+    /// The best model: of the epoch with the most spots found right on the
+    /// held-back areas (F1, then the lower loss), the last one without
+    /// validation.
+    pub model: SpotNet,
+    pub stats: TrainStats,
+    pub validation: ValidationOutcome,
+}
+
+/// How a training was checked.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ValidationOutcome {
+    /// The score of the kept model on the held-back areas.
+    Scored {
+        epoch: usize,
+        score: ValidationScore,
+    },
+    /// Switched off.
+    Off,
+    /// `Validation::Auto` without drawn validation areas and with fewer than
+    /// [`MIN_IMAGES_FOR_AUTO_SPLIT`] images: nothing to hold back.
+    TooFewImages { images: usize },
 }
 
 /// Trains a new SpotNet on `data`, on the CPU (the GPU follows later).
 ///
 /// Image by image - only one image is in RAM at a time: per epoch every
-/// image with a training area gives its share of `patches_per_epoch`
-/// random patches (each centred on a training-area pixel), trained in
-/// batches of `batch_size`. Images smaller than `patch_size` give
-/// patches of the whole image. Every patch gets its own random changes
-/// (`params.augment`); its target is computed from its moved spots. Start
-/// weights, patches and changes come from `control.seed`: the same data and
-/// seed give the same model.
+/// image with pixels to train on gives its share of `patches_per_epoch`
+/// random patches (each centred on such a pixel), trained in batches of
+/// `batch_size`. Images smaller than `patch_size` give patches of the whole
+/// image. Every patch gets its own random changes (`params.augment`); its
+/// target is computed from its moved spots.
+///
+/// After every epoch the model is checked on the held-back areas
+/// (`params.validation`, see [`plan`]) and the best epoch's model kept
+/// (see [`better`]); `stats.best_val_loss` is that epoch's loss.
+/// Start weights, patches, changes and the held-back images come from
+/// `control.seed`: the same data and seed give the same model.
 pub fn train(
     data: &dyn Dataset<SpotLabels>,
     config: &SpotNetConfig,
     params: &SpotNetTrainParams,
     control: &TrainControl<'_>,
-) -> Result<(SpotNet, TrainStats), NnError> {
+) -> Result<SpotNetTraining, NnError> {
     check_params(params)?;
-    let images = images_with_area(data, config)?;
-    let patches_per_image = params.patches_per_epoch.div_ceil(images.len());
+    let plan = plan(data, config, params.validation, control.seed)?;
+    let patches_per_image = params.patches_per_epoch.div_ceil(plan.train.len());
+    let margin = config.receptive_field() / 2;
 
     let device = Device::flex().autodiff();
     let mut model = SpotNet::new(config, control.seed, &device);
@@ -88,15 +126,17 @@ pub fn train(
     let mut random = SeededUniform::new(control.seed.wrapping_add(1));
 
     let mut final_train_loss = f32::NAN;
+    let mut final_val_loss = None;
+    let mut best: Option<(usize, ValidationScore, SpotNet)> = None;
     let mut epochs_run = 0;
     for epoch in 0..params.epochs {
         let (mut loss_sum, mut batches) = (0.0f32, 0usize);
-        for &index in &images {
+        for &index in &plan.train {
             if control.is_cancelled() {
                 return Err(NnError::Cancelled);
             }
             let (image, labels) = data.get(index)?;
-            let sample = Sample::new(&image, &labels, params.sigma);
+            let sample = Sample::new(&image, &labels, params.sigma, plan.drawn_areas);
             let size = params.patch_size.min(image.width).min(image.height);
             let patches: Vec<Patch> = (0..patches_per_image)
                 .map(|_| Patch {
@@ -125,11 +165,43 @@ pub fn train(
         }
         final_train_loss = loss_sum / batches.max(1) as f32;
         epochs_run = epoch + 1;
+
+        if !plan.validate.is_empty() {
+            let checked = model.valid();
+            let mut tally = Tally::default();
+            for &index in &plan.validate {
+                if control.is_cancelled() {
+                    return Err(NnError::Cancelled);
+                }
+                let (image, labels) = data.get(index)?;
+                let held_back = if plan.drawn_areas {
+                    &labels.validation
+                } else {
+                    &labels.area
+                };
+                let tile = params.patch_size + 2 * margin;
+                tally.add(
+                    &checked,
+                    &image,
+                    &labels.spots,
+                    held_back,
+                    params.sigma,
+                    tile,
+                    margin,
+                );
+            }
+            if let Some(score) = tally.score() {
+                final_val_loss = Some(score.loss);
+                if best.as_ref().is_none_or(|(_, b, _)| better(&score, b)) {
+                    best = Some((epoch, score, checked));
+                }
+            }
+        }
         (control.progress)(TrainProgress::Epoch {
             epoch,
             total_epochs: params.epochs,
             train_loss: final_train_loss,
-            val_loss: None,
+            val_loss: final_val_loss,
         });
     }
 
@@ -137,11 +209,31 @@ pub fn train(
         epochs_run,
         total_epochs: params.epochs,
         final_train_loss,
-        final_val_loss: None,
-        best_val_loss: None,
-        best_val_epoch: None,
+        final_val_loss,
+        best_val_loss: best.as_ref().map(|(_, score, _)| score.loss),
+        best_val_epoch: best.as_ref().map(|(epoch, _, _)| *epoch),
     };
-    Ok((model.valid(), stats))
+    Ok(match best {
+        Some((epoch, score, model)) => SpotNetTraining {
+            model,
+            stats,
+            validation: ValidationOutcome::Scored { epoch, score },
+        },
+        None => SpotNetTraining {
+            model: model.valid(),
+            stats,
+            validation: plan.outcome,
+        },
+    })
+}
+
+/// Whether `score` beats `best`: more spots found right (F1), on a tie the
+/// lower loss. Not the loss alone - a model still unsure everywhere has a
+/// lower loss than one that is sure and slightly off, while it finds
+/// nothing yet.
+fn better(score: &ValidationScore, best: &ValidationScore) -> bool {
+    let (f1, best_f1) = (score.f1(), best.f1());
+    f1 > best_f1 || (f1 == best_f1 && score.loss < best.loss)
 }
 
 /// Refuses settings no training can run with.
@@ -159,15 +251,48 @@ fn check_params(params: &SpotNetTrainParams) -> Result<(), NnError> {
     if !(params.sigma > 0.0) {
         return bad("sigma must be above 0");
     }
+    if let Validation::Auto { fraction } = params.validation
+        && !(fraction > 0.0 && fraction < 1.0)
+    {
+        return bad("the share held back for validation must be between 0 and 1");
+    }
     Ok(())
 }
 
-/// The indices of the samples with at least one training-area pixel, after
-/// checking every sample once (sizes, channels). Loads each image once.
-fn images_with_area(
+/// Which images a training trains and checks on.
+#[derive(Debug, PartialEq)]
+struct Plan {
+    /// Images with pixels to train on.
+    train: Vec<usize>,
+    /// Images to check on (empty: no check).
+    validate: Vec<usize>,
+    /// Checked on the drawn validation areas (never trained on); else the
+    /// held-back images' training areas.
+    drawn_areas: bool,
+    /// How the training ends up checked when `validate` is empty.
+    outcome: ValidationOutcome,
+}
+
+/// Checks every sample once (sizes, channels) and splits them:
+///
+/// - drawn validation areas (`Areas`, or `Auto` when there are any) are
+///   checked on, and the training uses only training-area pixels outside
+///   them;
+/// - `Auto` without drawn areas holds back `fraction` of the images with a
+///   training area (at least one, chosen from `seed`) from
+///   [`MIN_IMAGES_FOR_AUTO_SPLIT`] images on - whole images, so nothing of
+///   them leaks into the training through a patch's surroundings;
+/// - `Off` trains on every training area.
+///
+/// Loads each image once.
+fn plan(
     data: &dyn Dataset<SpotLabels>,
     config: &SpotNetConfig,
-) -> Result<Vec<usize>, NnError> {
+    validation: Validation,
+    seed: u64,
+) -> Result<Plan, NnError> {
+    // Per image: has training pixels outside drawn validation areas, has
+    // training pixels at all, has drawn validation areas.
     let mut images = Vec::new();
     for index in 0..data.len() {
         let (image, labels) = data.get(index)?;
@@ -192,16 +317,85 @@ fn images_with_area(
         if labels.area.len() != labels.width * labels.height {
             return bad("the training area doesn't match the image size".into());
         }
-        if labels.area.iter().any(|&inside| inside) {
-            images.push(index);
+        if labels.validation.len() != labels.width * labels.height {
+            return bad("the validation area doesn't match the image size".into());
         }
+        let outside_validation = labels
+            .area
+            .iter()
+            .zip(&labels.validation)
+            .any(|(&a, &v)| a && !v);
+        let any_area = labels.area.iter().any(|&a| a);
+        let drawn = labels.validation.iter().any(|&v| v);
+        images.push((index, outside_validation, any_area, drawn));
     }
-    if images.is_empty() {
-        return Err(NnError::InvalidInput(
-            "no training area: draw at least one around annotated spots".into(),
-        ));
+
+    let any_drawn = images.iter().any(|i| i.3);
+    let use_drawn = match validation {
+        Validation::Areas if !any_drawn => {
+            return Err(NnError::InvalidInput(
+                "no validation area: draw one, or let the training choose (Auto)".into(),
+            ));
+        }
+        Validation::Areas => true,
+        Validation::Auto { .. } => any_drawn,
+        Validation::Off => false,
+    };
+    let no_training_area = || {
+        NnError::InvalidInput("no training area: draw at least one around annotated spots".into())
+    };
+
+    if use_drawn {
+        let train: Vec<usize> = images.iter().filter(|i| i.1).map(|i| i.0).collect();
+        if train.is_empty() {
+            return Err(no_training_area());
+        }
+        return Ok(Plan {
+            train,
+            validate: images.iter().filter(|i| i.3).map(|i| i.0).collect(),
+            drawn_areas: true,
+            outcome: ValidationOutcome::Off,
+        });
     }
-    Ok(images)
+
+    let mut train: Vec<usize> = images.iter().filter(|i| i.2).map(|i| i.0).collect();
+    if train.is_empty() {
+        return Err(no_training_area());
+    }
+    let Validation::Auto { fraction } = validation else {
+        return Ok(Plan {
+            train,
+            validate: Vec::new(),
+            drawn_areas: false,
+            outcome: ValidationOutcome::Off,
+        });
+    };
+    if train.len() < MIN_IMAGES_FOR_AUTO_SPLIT {
+        return Ok(Plan {
+            outcome: ValidationOutcome::TooFewImages {
+                images: train.len(),
+            },
+            train,
+            validate: Vec::new(),
+            drawn_areas: false,
+        });
+    }
+    // A seeded shuffle (its own stream, seed + 2); the first ones are held
+    // back, kept in their order.
+    let mut random = SeededUniform::new(seed.wrapping_add(2));
+    for i in (1..train.len()).rev() {
+        train.swap(i, random.index(i + 1));
+    }
+    let held_back = ((train.len() as f32 * fraction).round() as usize).clamp(1, train.len() - 1);
+    let mut validate: Vec<usize> = train.drain(..held_back).collect();
+    validate.sort_unstable();
+    train.sort_unstable();
+    Ok(Plan {
+        train,
+        validate,
+        drawn_areas: false,
+        outcome: ValidationOutcome::Off,
+    })
 }
 
 /// Where a patch is cut and how it is changed.
@@ -223,14 +417,30 @@ struct Sample<'a> {
 }
 
 impl<'a> Sample<'a> {
-    fn new(image: &'a OwnedImage, labels: &'a SpotLabels, sigma: f32) -> Self {
+    /// `without_validation`: the drawn validation areas are not trained on.
+    fn new(
+        image: &'a OwnedImage,
+        labels: &'a SpotLabels,
+        sigma: f32,
+        without_validation: bool,
+    ) -> Self {
+        let train: Vec<bool> = if without_validation {
+            labels
+                .area
+                .iter()
+                .zip(&labels.validation)
+                .map(|(&a, &v)| a && !v)
+                .collect()
+        } else {
+            labels.area.clone()
+        };
         Self {
             image,
             spots: &labels.spots,
             sigma,
-            mask: area_mask(labels),
-            area_pixels: (0..labels.area.len() as u32)
-                .filter(|&i| labels.area[i as usize])
+            mask: area_mask(&train),
+            area_pixels: (0..train.len() as u32)
+                .filter(|&i| train[i as usize])
                 .collect(),
         }
     }
@@ -324,7 +534,7 @@ fn patch_origin(
 /// loss (`weight = 1 + SPOT_WEIGHT * target`): almost every pixel is
 /// background, so without it "never a spot" is nearly right - and the
 /// network learns exactly that.
-const SPOT_WEIGHT: f32 = 10.0;
+pub(crate) const SPOT_WEIGHT: f32 = 10.0;
 
 /// How far the prediction is from the perfect answer, only where mask = 1:
 /// the binary cross-entropy of `logits` (the network before its sigmoid,
@@ -355,12 +565,13 @@ mod tests {
     use crate::model::spotnet::train::Spot;
 
     use super::{
-        Patch, Sample, SpotLabels, SpotNetTrainParams, cut_patch, masked_loss, patch_origin, train,
+        Patch, Plan, Sample, SpotLabels, SpotNetTrainParams, SpotNetTraining, ValidationOutcome,
+        cut_patch, masked_loss, patch_origin, plan, train,
     };
     use crate::NnError;
     use crate::augment::{AugmentParams, Augmentation};
     use crate::model::{Dataset, OwnedImage};
-    use crate::train::{SeededUniform, TrainControl, TrainDevice};
+    use crate::train::{SeededUniform, TrainControl, TrainDevice, Validation};
     use burn::Tensor;
     use burn::tensor::{Device, TensorData};
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -463,6 +674,7 @@ mod tests {
             height: size,
             spots,
             area: vec![true; size * size],
+            validation: vec![false; size * size],
         };
         Images(vec![(image, labels)])
     }
@@ -476,6 +688,7 @@ mod tests {
             learning_rate: 1e-2,
             sigma: 1.5,
             augment: AugmentParams::none(),
+            validation: Validation::Off,
         }
     }
 
@@ -515,7 +728,7 @@ mod tests {
             Spot { x: 1.5, y: 18.5 }, // near the left edge
         ];
         let data = one_image(SIZE, spots.clone());
-        let (model, stats) = with_control(7, false, |control| {
+        let SpotNetTraining { model, stats, .. } = with_control(7, false, |control| {
             train(&data, &small_config(), &params(150), control)
         })
         .unwrap();
@@ -558,7 +771,7 @@ mod tests {
         ];
         let data = one_image(24, spots.clone());
         let (image, labels) = &data.0[0];
-        let sample = Sample::new(image, labels, 1.5);
+        let sample = Sample::new(image, labels, 1.5, false);
         let params = AugmentParams {
             brightness: (1.0, 1.0),
             ..AugmentParams::default()
@@ -586,7 +799,7 @@ mod tests {
         // patch's left column (exp(-4 / 4.5) = 0.41 at distance 2).
         let data = one_image(24, vec![Spot { x: 6.5, y: 10.5 }]);
         let (image, labels) = &data.0[0];
-        let sample = Sample::new(image, labels, 1.5);
+        let sample = Sample::new(image, labels, 1.5, false);
         let patch = Patch {
             origin: (8, 8),
             augmentation: Augmentation::random(
@@ -613,7 +826,7 @@ mod tests {
                 train(&data, &small_config(), &augmented, control)
             })
             .unwrap()
-            .1
+            .stats
         };
         assert_eq!(run(3), run(3));
         assert_ne!(run(3), run(4));
@@ -697,6 +910,143 @@ mod tests {
             });
             assert!(covers, "({x0}, {y0}) misses the area");
         }
+    }
+
+    /// `n` copies of a 16 x 16 image with one spot, all of it a training area.
+    fn images(n: usize) -> Images {
+        let one = one_image(16, vec![Spot { x: 8.5, y: 8.5 }]);
+        Images(vec![one.0[0].clone(); n])
+    }
+
+    fn split(data: &Images, validation: Validation, seed: u64) -> Result<Plan, NnError> {
+        plan(data, &small_config(), validation, seed)
+    }
+
+    #[test]
+    fn auto_holds_back_a_fifth_of_the_images_chosen_by_the_seed() {
+        let data = images(10);
+        let plan = split(&data, Validation::default(), 3).unwrap();
+        assert_eq!(plan.validate.len(), 2);
+        assert_eq!(plan.train.len(), 8);
+        assert!(
+            plan.validate.iter().all(|i| !plan.train.contains(i)),
+            "{plan:?}"
+        );
+        assert!(!plan.drawn_areas);
+        assert_eq!(plan, split(&data, Validation::default(), 3).unwrap());
+        assert_ne!(
+            plan.validate,
+            split(&data, Validation::default(), 4).unwrap().validate
+        );
+    }
+
+    #[test]
+    fn auto_holds_back_at_least_one_image_and_never_all() {
+        let tiny = split(&images(5), Validation::Auto { fraction: 0.01 }, 1).unwrap();
+        assert_eq!((tiny.validate.len(), tiny.train.len()), (1, 4));
+        let huge = split(&images(5), Validation::Auto { fraction: 0.99 }, 1).unwrap();
+        assert_eq!((huge.validate.len(), huge.train.len()), (4, 1));
+    }
+
+    #[test]
+    fn auto_with_too_few_images_trains_on_all_and_says_so() {
+        let plan = split(&images(4), Validation::default(), 1).unwrap();
+        assert_eq!(plan.train.len(), 4);
+        assert!(plan.validate.is_empty());
+        assert_eq!(plan.outcome, ValidationOutcome::TooFewImages { images: 4 });
+    }
+
+    #[test]
+    fn drawn_validation_areas_win_over_the_image_split() {
+        let mut data = images(6);
+        data.0[2].1.validation[0] = true;
+        for validation in [Validation::default(), Validation::Areas] {
+            let plan = split(&data, validation, 1).unwrap();
+            assert!(plan.drawn_areas);
+            assert_eq!(plan.validate, vec![2]);
+            assert_eq!(
+                plan.train.len(),
+                6,
+                "the rest of image 2 is still trained on"
+            );
+        }
+    }
+
+    #[test]
+    fn areas_without_any_drawn_are_refused() {
+        let result = split(&images(6), Validation::Areas, 1);
+        assert!(
+            matches!(result, Err(NnError::InvalidInput(m)) if m.contains("no validation area"))
+        );
+    }
+
+    #[test]
+    fn off_checks_nothing() {
+        let mut data = images(6);
+        data.0[2].1.validation[0] = true;
+        let plan = split(&data, Validation::Off, 1).unwrap();
+        assert!(plan.validate.is_empty());
+        assert_eq!(plan.outcome, ValidationOutcome::Off);
+    }
+
+    #[test]
+    fn a_drawn_validation_area_is_never_trained_on() {
+        // The left half validation, the right half training: no training
+        // pixel - and so no patch centre - lies in the left half.
+        let mut data = one_image(16, vec![]);
+        let labels = &mut data.0[0].1;
+        for i in 0..16 * 16 {
+            labels.validation[i] = i % 16 < 8;
+        }
+        let (image, labels) = &data.0[0];
+        let sample = Sample::new(image, labels, 1.5, true);
+        assert_eq!(sample.area_pixels.len(), 16 * 8);
+        assert!(sample.area_pixels.iter().all(|&i| i % 16 >= 8));
+    }
+
+    #[test]
+    fn a_trained_model_is_checked_on_its_validation_area() {
+        // One 32 x 32 image: the top half training (4 spots), the bottom
+        // half validation (2 spots), augmentation on. The model never sees
+        // the bottom spots' labels - finding them shows it learned spots,
+        // not places.
+        const SIZE: usize = 32;
+        let spots = vec![
+            Spot { x: 5.5, y: 4.5 },
+            Spot { x: 14.5, y: 10.5 },
+            Spot { x: 21.5, y: 4.5 },
+            Spot { x: 28.5, y: 11.5 },
+            Spot { x: 10.5, y: 23.5 },
+            Spot { x: 23.5, y: 25.5 },
+        ];
+        let mut data = one_image(SIZE, spots);
+        let labels = &mut data.0[0].1;
+        for i in 0..SIZE * SIZE {
+            labels.validation[i] = i / SIZE >= 16;
+        }
+        let training = SpotNetTrainParams {
+            augment: AugmentParams::default(),
+            validation: Validation::Areas,
+            ..params(150)
+        };
+        let result =
+            with_control(7, false, |c| train(&data, &small_config(), &training, c)).unwrap();
+        let ValidationOutcome::Scored { epoch, score } = result.validation else {
+            panic!("not validated: {:?}", result.validation)
+        };
+        println!("best epoch {epoch}: {score:?}, f1 {}", score.f1());
+        assert_eq!(score.annotated, 2);
+        assert_eq!(score.f1(), 1.0, "{score:?}");
+        let crate::TrainStats::Epochs {
+            best_val_epoch,
+            best_val_loss,
+            ..
+        } = result.stats
+        else {
+            panic!()
+        };
+        assert_eq!(best_val_epoch, Some(epoch));
+        assert_eq!(best_val_loss, Some(score.loss));
     }
 
     /// A 1-channel test image like a microscope would take it: background

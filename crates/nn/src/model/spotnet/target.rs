@@ -9,7 +9,7 @@
 //!
 //! The perfect answer for training: Gaussian hills at the spots, and where the loss counts.
 
-use crate::model::spotnet::train::{Spot, SpotLabels};
+use crate::model::spotnet::train::Spot;
 
 /// The perfect answer: a Gaussian hill (height 1) at every spot,
 /// the max where hills overlap. `width * height` values, row-major.
@@ -21,10 +21,15 @@ pub(crate) fn gaussian_map(width: usize, height: usize, spots: &[Spot], sigma: f
     for spot in spots {
         let cx = spot.x.floor() as i64;
         let cy = spot.y.floor() as i64;
-        let x0 = (cx - radius).max(0) as usize;
-        let x1 = (cx + radius).min(width as i64 - 1) as usize;
-        let y0 = (cy - radius).max(0) as usize;
-        let y1 = (cy + radius).min(height as i64 - 1) as usize;
+        // The square around the spot, clipped to the map - empty for a spot
+        // whose hill doesn't reach it (checked in i64: a spot left of or
+        // above the map would turn negative ends into huge usize values).
+        let (x0, x1) = ((cx - radius).max(0), (cx + radius).min(width as i64 - 1));
+        let (y0, y1) = ((cy - radius).max(0), (cy + radius).min(height as i64 - 1));
+        if x0 > x1 || y0 > y1 {
+            continue;
+        }
+        let (x0, x1, y0, y1) = (x0 as usize, x1 as usize, y0 as usize, y1 as usize);
 
         for py in y0..=y1 {
             for px in x0..=x1 {
@@ -39,15 +44,11 @@ pub(crate) fn gaussian_map(width: usize, height: usize, spots: &[Spot], sigma: f
     out
 }
 
-/// 1.0 inside the training areas, 0.0 outside: where the loss counts.
-pub(crate) fn area_mask(labels: &SpotLabels) -> Vec<f32> {
-    let out: Vec<f32> = labels
-        .area
-        .iter()
+/// 1.0 on the pixels to train on, 0.0 elsewhere: where the loss counts.
+pub(crate) fn area_mask(area: &[bool]) -> Vec<f32> {
+    area.iter()
         .map(|&inside| if inside { 1.0 } else { 0.0 })
-        .collect();
-
-    out
+        .collect()
 }
 
 #[cfg(test)]
@@ -65,8 +66,9 @@ mod tests {
             height: 2,
             spots: vec![Spot { x: 3.5, y: 0.5 }],
             area: vec![true, true, false, false, true, true, false, false],
+            validation: vec![false; 8],
         };
-        let mask = area_mask(&labels);
+        let mask = area_mask(&labels.area);
         assert_eq!(mask, vec![1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0]);
     }
 
@@ -93,6 +95,23 @@ mod tests {
         assert_eq!(map.len(), width * height);
         assert_eq!(map[18 * width + 5], 1.0);
         assert_eq!(map[0], 1.0);
+    }
+
+    #[test]
+    fn spots_outside_the_map_only_add_the_part_of_their_hill_that_reaches_in() {
+        // Far away on every side: nothing. 2 px left of / above the map: the
+        // hill's edge in the first column / row.
+        let far = [
+            Spot { x: -20.5, y: 5.5 },
+            Spot { x: 5.5, y: -20.5 },
+            Spot { x: 40.5, y: 5.5 },
+            Spot { x: 5.5, y: 40.5 },
+        ];
+        assert!(gaussian_map(10, 10, &far, 1.5).iter().all(|&v| v == 0.0));
+        let left = gaussian_map(10, 10, &[Spot { x: -1.5, y: 5.5 }], 1.5);
+        assert!((left[5 * 10] - 0.41).abs() < 0.01, "{}", left[5 * 10]);
+        let above = gaussian_map(10, 10, &[Spot { x: 5.5, y: -1.5 }], 1.5);
+        assert!((above[5] - 0.41).abs() < 0.01, "{}", above[5]);
     }
 
     #[test]

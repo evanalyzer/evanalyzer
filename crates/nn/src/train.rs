@@ -81,6 +81,33 @@ pub enum TrainStats {
     },
 }
 
+/// Which annotations a network's training checks itself on - never trained
+/// on, they show whether the model learned spots (or cells) in general or
+/// only its training areas by heart, and pick the best epoch.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Validation {
+    /// The validation areas the user drew, if there are any. Without: this
+    /// share of the images with training areas is held back (from
+    /// [`MIN_IMAGES_FOR_AUTO_SPLIT`] images on; with fewer the training runs
+    /// unchecked and says so).
+    Auto { fraction: f32 },
+    /// Only the validation areas the user drew - refused without any.
+    Areas,
+    /// No check: every epoch runs, the last model is kept.
+    Off,
+}
+
+impl Default for Validation {
+    fn default() -> Self {
+        Self::Auto { fraction: 0.2 }
+    }
+}
+
+/// Below this many images with training areas `Validation::Auto` holds none
+/// back: a fifth of 4 images is a single image - too little to judge by, and
+/// a loss for the training.
+pub const MIN_IMAGES_FOR_AUTO_SPLIT: usize = 5;
+
 /// Uniform random start weights from a generator of their own (xorshift64),
 /// seeded per training - not burn's global one: whatever else draws random
 /// numbers meanwhile (other trainings, parallel tests), the same seed gives
