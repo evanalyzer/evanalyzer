@@ -10,3 +10,5 @@
 //! SpotNet: a small fully convolutional spot detector.
 
 mod network;
+mod target;
+mod train;
