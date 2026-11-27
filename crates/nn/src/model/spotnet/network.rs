@@ -87,13 +87,20 @@ impl SpotNet {
         Self { hidden, out }
     }
 
-    /// [B, in_channels, H, W] → [B, 1, H, W], values 0..1.
-    pub(crate) fn forward(&self, mut x: Tensor<4>) -> Tensor<4> {
+    /// [B, in_channels, H, W] → [B, 1, H, W], values 0..1: the probability
+    /// of a spot centre per pixel. For prediction.
+    pub(crate) fn forward(&self, x: Tensor<4>) -> Tensor<4> {
+        sigmoid(self.forward_logits(x))
+    }
+
+    /// The same before the sigmoid: any real number, 0 = 50 %, very negative
+    /// = surely no spot. For training - the loss takes these, as
+    /// `ln(sigmoid(z))` is only stable computed from `z` itself.
+    pub(crate) fn forward_logits(&self, mut x: Tensor<4>) -> Tensor<4> {
         for layer in &self.hidden {
             x = relu(layer.forward(x));
         }
-        x = self.out.forward(x);
-        sigmoid(x)
+        self.out.forward(x)
     }
 }
 

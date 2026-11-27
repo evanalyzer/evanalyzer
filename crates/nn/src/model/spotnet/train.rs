@@ -17,6 +17,7 @@ use crate::{
     },
 };
 use burn::Tensor;
+use burn::tensor::activation::log_sigmoid;
 
 /// One clicked spot: its centre in px (a pixel's centre is +0.5).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -72,13 +73,32 @@ pub fn train(
     todo!()
 }
 
+/// How much more a pixel on a spot centre counts than background in the
+/// loss (`weight = 1 + SPOT_WEIGHT * target`): almost every pixel is
+/// background, so without it "never a spot" is nearly right - and the
+/// network learns exactly that.
+const SPOT_WEIGHT: f32 = 10.0;
+
 /// How far the prediction is from the perfect answer, only where mask = 1:
-/// the mean squared error over the mask's pixels. A mask without any pixel
-/// (a patch outside every training area) gives 0, never NaN.
-fn masked_loss(prediction: Tensor<4>, target: Tensor<4>, mask: Tensor<4>) -> Tensor<1> {
-    let error = (prediction - target).square();
-    let pixels = mask.clone().sum().clamp_min(1.0);
-    (error * mask).sum() / pixels
+/// the binary cross-entropy of `logits` (the network before its sigmoid,
+/// [`SpotNet::forward_logits`]) against `target`, weighted towards the
+/// spots ([`SPOT_WEIGHT`]) and averaged over the weighted mask pixels.
+///
+/// Cross-entropy, not squared error: after a sigmoid the squared error's
+/// gradient vanishes once the output is near 0 - a network that says "no
+/// spot" everywhere stays stuck there. Here the gradient is `p - target`,
+/// so a wrong answer is corrected however sure the network was.
+///
+/// A mask without any pixel (a patch outside every training area) gives 0,
+/// never NaN.
+fn masked_loss(logits: Tensor<4>, target: Tensor<4>, mask: Tensor<4>) -> Tensor<1> {
+    // -[t ln(p) + (1 - t) ln(1 - p)], with ln(p) = log_sigmoid(z) and
+    // ln(1 - p) = log_sigmoid(-z): stable even for z = -50.
+    let per_pixel = -(target.clone() * log_sigmoid(logits.clone())
+        + (-target.clone() + 1.0) * log_sigmoid(-logits));
+    let weight = (target * SPOT_WEIGHT + 1.0) * mask;
+    let total = weight.clone().sum().clamp_min(1.0);
+    (per_pixel * weight).sum() / total
 }
 
 #[cfg(test)]
@@ -97,43 +117,58 @@ mod tests {
         Tensor::<1>::from_floats(values, &Device::flex()).reshape([1, 1, 2, 2])
     }
 
-    fn loss(prediction: [f32; 4], target: [f32; 4], mask: [f32; 4]) -> f32 {
-        masked_loss(patch(prediction), patch(target), patch(mask)).into_scalar()
+    fn loss(logits: [f32; 4], target: [f32; 4], mask: [f32; 4]) -> f32 {
+        masked_loss(patch(logits), patch(target), patch(mask)).into_scalar()
+    }
+
+    /// The logit of probability `p`: `sigmoid(logit(p)) == p`.
+    fn logit(p: f32) -> f32 {
+        (p / (1.0 - p)).ln()
     }
 
     #[test]
-    fn a_perfect_prediction_has_no_loss() {
-        let target = [0.0, 0.6, 1.0, 0.6];
-        assert_eq!(loss(target, target, [1.0; 4]), 0.0);
+    fn a_sure_right_answer_has_almost_no_loss() {
+        let target = [0.0, 1.0, 0.0, 1.0];
+        let l = loss([-20.0, 20.0, -20.0, 20.0], target, [1.0; 4]);
+        assert!(l < 1e-6, "{l}");
+    }
+
+    #[test]
+    fn on_a_hill_the_target_value_itself_has_the_smallest_loss() {
+        // A target of 0.6 (beside a spot centre): 0.6 beats 0.5 and 0.7.
+        let at = |p: f32| loss([logit(p); 4], [0.6; 4], [1.0; 4]);
+        assert!(at(0.6) < at(0.5), "{} vs {}", at(0.6), at(0.5));
+        assert!(at(0.6) < at(0.7), "{} vs {}", at(0.6), at(0.7));
     }
 
     #[test]
     fn errors_outside_the_training_areas_do_not_count() {
-        // Wrong only on the two pixels outside the mask.
-        let l = loss(
-            [1.0, 1.0, 0.2, 0.0],
-            [0.0, 0.0, 0.2, 0.0],
-            [0.0, 0.0, 1.0, 1.0],
-        );
-        assert_eq!(l, 0.0);
+        // Right inside the mask, completely wrong on the two pixels outside.
+        let inside_only = loss([-20.0, -20.0, 20.0, -20.0], [0.0, 0.0, 1.0, 0.0], [1.0, 1.0, 1.0, 1.0]);
+        let with_outside = loss([20.0, 20.0, 20.0, -20.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 1.0, 1.0]);
+        assert!(inside_only < 1e-6 && with_outside < 1e-6, "{inside_only}, {with_outside}");
     }
 
     #[test]
-    fn the_loss_is_the_mean_squared_error_over_the_mask() {
-        assert_eq!(loss([0.5; 4], [0.0; 4], [1.0; 4]), 0.25);
-        // Two mask pixels, 0.5 and 0.1 off: (0.25 + 0.01) / 2 = 0.13 - the
-        // mean over the mask, not over all four pixels.
-        let l = loss(
-            [0.5, 0.1, 0.9, 0.9],
-            [0.0, 0.0, 0.0, 0.0],
-            [1.0, 1.0, 0.0, 0.0],
-        );
-        assert!((l - 0.13).abs() < 1e-6, "{l}");
+    fn an_unsure_answer_on_background_costs_ln_2() {
+        // 50 % everywhere (logit 0) where there is no spot: -ln(0.5) = ln 2.
+        let l = loss([0.0; 4], [0.0; 4], [1.0; 4]);
+        assert!((l - std::f32::consts::LN_2).abs() < 1e-6, "{l}");
+    }
+
+    #[test]
+    fn a_missed_spot_costs_eleven_times_a_false_alarm() {
+        // The same mistake (3 logits the wrong way) once on the spot centre,
+        // once on background: the spot counts 1 + SPOT_WEIGHT = 11 times.
+        let target = [1.0, 0.0, 0.0, 0.0];
+        let missed = loss([-3.0, -20.0, -20.0, -20.0], target, [1.0; 4]);
+        let false_alarm = loss([20.0, 3.0, -20.0, -20.0], target, [1.0; 4]);
+        assert!((missed / false_alarm - 11.0).abs() < 0.01, "{missed} / {false_alarm}");
     }
 
     #[test]
     fn a_patch_without_training_area_has_no_loss_and_no_nan() {
-        assert_eq!(loss([0.5; 4], [0.0; 4], [0.0; 4]), 0.0);
+        assert_eq!(loss([0.0; 4], [1.0; 4], [0.0; 4]), 0.0);
     }
 
     #[test]
@@ -167,8 +202,8 @@ mod tests {
         let mut first = None;
         let mut last = f32::NAN;
         for step in 0..200 {
-            let prediction = model.forward(x.clone());
-            let loss = masked_loss(prediction, target.clone(), mask.clone());
+            let logits = model.forward_logits(x.clone());
+            let loss = masked_loss(logits, target.clone(), mask.clone());
             // Read the value before `backward()` consumes the loss.
             last = loss.clone().into_scalar();
             first.get_or_insert(last);
