@@ -11,6 +11,7 @@
 
 use crate::{
     NnError, TrainControl, TrainStats,
+    augment::{AugmentParams, Augmentation},
     model::{
         Dataset, OwnedImage,
         spotnet::{
@@ -55,6 +56,8 @@ pub struct SpotNetTrainParams {
     pub learning_rate: f64,
     /// Width of the Gaussian hills in px, e.g. 1.5.
     pub sigma: f32,
+    /// The random changes of every patch.
+    pub augment: AugmentParams,
 }
 
 /// Trains a new SpotNet on `data`, on the CPU (the GPU follows later).
@@ -63,8 +66,10 @@ pub struct SpotNetTrainParams {
 /// image with a training area gives its share of `patches_per_epoch`
 /// random patches (each centred on a training-area pixel), trained in
 /// batches of `batch_size`. Images smaller than `patch_size` give
-/// patches of the whole image. Start weights and patches come from
-/// `control.seed`: the same data and seed give the same model.
+/// patches of the whole image. Every patch gets its own random changes
+/// (`params.augment`); its target is computed from its moved spots. Start
+/// weights, patches and changes come from `control.seed`: the same data and
+/// seed give the same model.
 pub fn train(
     data: &dyn Dataset<SpotLabels>,
     config: &SpotNetConfig,
@@ -93,18 +98,23 @@ pub fn train(
             let (image, labels) = data.get(index)?;
             let sample = Sample::new(&image, &labels, params.sigma);
             let size = params.patch_size.min(image.width).min(image.height);
-            let origins: Vec<(usize, usize)> = (0..patches_per_image)
-                .map(|_| {
-                    patch_origin(
+            let patches: Vec<Patch> = (0..patches_per_image)
+                .map(|_| Patch {
+                    origin: patch_origin(
                         &sample.area_pixels,
                         image.width,
                         image.height,
                         size,
                         &mut random,
-                    )
+                    ),
+                    augmentation: Augmentation::random(
+                        &params.augment,
+                        image.channels,
+                        &mut random,
+                    ),
                 })
                 .collect();
-            for batch in origins.chunks(params.batch_size) {
+            for batch in patches.chunks(params.batch_size) {
                 let (x, target, mask) = sample.batch(batch, size, &device);
                 let loss = masked_loss(model.forward_logits(x), target, mask);
                 loss_sum += loss.clone().into_scalar::<f32>();
@@ -194,10 +204,18 @@ fn images_with_area(
     Ok(images)
 }
 
-/// One loaded training image with its perfect answer and mask.
+/// Where a patch is cut and how it is changed.
+struct Patch {
+    /// Top-left corner in the image.
+    origin: (usize, usize),
+    augmentation: Augmentation,
+}
+
+/// One loaded training image with its spots and mask.
 struct Sample<'a> {
     image: &'a OwnedImage,
-    target: Vec<f32>,
+    spots: &'a [Spot],
+    sigma: f32,
     mask: Vec<f32>,
     /// The pixels inside a training area (row-major indices) - where a
     /// patch may be centred.
@@ -205,10 +223,11 @@ struct Sample<'a> {
 }
 
 impl<'a> Sample<'a> {
-    fn new(image: &'a OwnedImage, labels: &SpotLabels, sigma: f32) -> Self {
+    fn new(image: &'a OwnedImage, labels: &'a SpotLabels, sigma: f32) -> Self {
         Self {
             image,
-            target: gaussian_map(image.width, image.height, &labels.spots, sigma),
+            spots: &labels.spots,
+            sigma,
             mask: area_mask(labels),
             area_pixels: (0..labels.area.len() as u32)
                 .filter(|&i| labels.area[i as usize])
@@ -216,50 +235,50 @@ impl<'a> Sample<'a> {
         }
     }
 
-    /// The patches at `origins` as tensors: input `[B, C, size, size]`,
-    /// target and mask `[B, 1, size, size]`.
+    /// The patches as tensors: input `[B, C, size, size]`, target and mask
+    /// `[B, 1, size, size]`. Each patch is cut, changed by its augmentation
+    /// (the image, the mask and its spots alike), and its target computed
+    /// from the moved spots.
     fn batch(
         &self,
-        origins: &[(usize, usize)],
+        patches: &[Patch],
         size: usize,
         device: &Device,
     ) -> (Tensor<4>, Tensor<4>, Tensor<4>) {
-        let (width, channels) = (self.image.width, self.image.channels);
+        let (width, height, channels) = (self.image.width, self.image.height, self.image.channels);
         let (mut x, mut target, mut mask) = (Vec::new(), Vec::new(), Vec::new());
-        for &(x0, y0) in origins {
-            x.extend(cut_patch(
-                &self.image.data,
-                width,
-                self.image.height,
-                channels,
-                x0,
-                y0,
-                size,
-            ));
-            target.extend(cut_patch(
-                &self.target,
-                width,
-                self.image.height,
-                1,
-                x0,
-                y0,
-                size,
-            ));
-            mask.extend(cut_patch(
-                &self.mask,
-                width,
-                self.image.height,
-                1,
-                x0,
-                y0,
-                size,
-            ));
+        for patch in patches {
+            let (x0, y0) = patch.origin;
+            let a = &patch.augmentation;
+            let image = cut_patch(&self.image.data, width, height, channels, x0, y0, size);
+            x.extend(a.image(&image, size, size, channels));
+            let area = cut_patch(&self.mask, width, height, 1, x0, y0, size);
+            mask.extend(a.label(&area, size, size));
+            let spots: Vec<Spot> = self
+                .spots_near(x0, y0, size)
+                .map(|s| {
+                    let (x, y) = a.point(s.x - x0 as f32, s.y - y0 as f32, size, size);
+                    Spot { x, y }
+                })
+                .collect();
+            target.extend(gaussian_map(size, size, &spots, self.sigma));
         }
-        let b = origins.len();
+        let b = patches.len();
         let tensor = |values: Vec<f32>, c: usize| {
             Tensor::<4>::from_data(TensorData::new(values, [b, c, size, size]), device)
         };
         (tensor(x, channels), tensor(target, 1), tensor(mask, 1))
+    }
+
+    /// The spots whose hill reaches into the patch at (`x0`, `y0`) - also
+    /// those just outside it.
+    fn spots_near(&self, x0: usize, y0: usize, size: usize) -> impl Iterator<Item = &Spot> {
+        let reach = (3.0 * self.sigma).ceil() + 1.0;
+        let (left, top) = (x0 as f32 - reach, y0 as f32 - reach);
+        let (right, bottom) = ((x0 + size) as f32 + reach, (y0 + size) as f32 + reach);
+        self.spots
+            .iter()
+            .filter(move |s| (left..right).contains(&s.x) && (top..bottom).contains(&s.y))
     }
 }
 
@@ -335,8 +354,11 @@ mod tests {
     use crate::model::spotnet::target::gaussian_map;
     use crate::model::spotnet::train::Spot;
 
-    use super::{SpotLabels, SpotNetTrainParams, cut_patch, masked_loss, patch_origin, train};
+    use super::{
+        Patch, Sample, SpotLabels, SpotNetTrainParams, cut_patch, masked_loss, patch_origin, train,
+    };
     use crate::NnError;
+    use crate::augment::{AugmentParams, Augmentation};
     use crate::model::{Dataset, OwnedImage};
     use crate::train::{SeededUniform, TrainControl, TrainDevice};
     use burn::Tensor;
@@ -453,6 +475,7 @@ mod tests {
             patch_size: 128,
             learning_rate: 1e-2,
             sigma: 1.5,
+            augment: AugmentParams::none(),
         }
     }
 
@@ -524,11 +547,70 @@ mod tests {
     }
 
     #[test]
+    fn an_augmented_patch_keeps_its_spots_on_its_blobs() {
+        // The whole 24 x 24 image as one patch, rotated and flipped at
+        // random: every hill top of the target (1.0) lies on a blob centre of
+        // the image (0.9 = background 0.1 + 0.8), one per spot.
+        let spots = vec![
+            Spot { x: 4.5, y: 6.5 },
+            Spot { x: 17.5, y: 3.5 },
+            Spot { x: 12.5, y: 19.5 },
+        ];
+        let data = one_image(24, spots.clone());
+        let (image, labels) = &data.0[0];
+        let sample = Sample::new(image, labels, 1.5);
+        let params = AugmentParams {
+            brightness: (1.0, 1.0),
+            ..AugmentParams::default()
+        };
+        let mut random = SeededUniform::new(2);
+        for _ in 0..30 {
+            let patch = Patch {
+                origin: (0, 0),
+                augmentation: Augmentation::random(&params, 1, &mut random),
+            };
+            let (x, target, _) = sample.batch(&[patch], 24, &Device::flex());
+            let x = x.into_data().try_to_vec::<f32>().unwrap();
+            let target = target.into_data().try_to_vec::<f32>().unwrap();
+            let tops: Vec<usize> = (0..target.len()).filter(|&i| target[i] == 1.0).collect();
+            assert_eq!(tops.len(), spots.len(), "{tops:?}");
+            for i in tops {
+                assert!(x[i] > 0.89, "hill top {i} on {}, not on a blob", x[i]);
+            }
+        }
+    }
+
+    #[test]
+    fn a_spot_just_outside_a_patch_still_reaches_into_it() {
+        // Spot 2 px left of the 8 x 8 patch at (8, 8): its hill reaches the
+        // patch's left column (exp(-4 / 4.5) = 0.41 at distance 2).
+        let data = one_image(24, vec![Spot { x: 6.5, y: 10.5 }]);
+        let (image, labels) = &data.0[0];
+        let sample = Sample::new(image, labels, 1.5);
+        let patch = Patch {
+            origin: (8, 8),
+            augmentation: Augmentation::random(
+                &AugmentParams::none(),
+                1,
+                &mut SeededUniform::new(1),
+            ),
+        };
+        let (_, target, _) = sample.batch(&[patch], 8, &Device::flex());
+        let target = target.into_data().try_to_vec::<f32>().unwrap();
+        assert!((target[2 * 8] - 0.41).abs() < 0.01, "{}", target[2 * 8]);
+    }
+
+    #[test]
     fn the_same_seed_trains_the_same_model() {
+        // With every augmentation on: the changes come from the seed too.
         let data = one_image(16, vec![Spot { x: 8.5, y: 8.5 }]);
+        let augmented = SpotNetTrainParams {
+            augment: AugmentParams::default(),
+            ..params(3)
+        };
         let run = |seed| {
             with_control(seed, false, |control| {
-                train(&data, &small_config(), &params(3), control)
+                train(&data, &small_config(), &augmented, control)
             })
             .unwrap()
             .1
