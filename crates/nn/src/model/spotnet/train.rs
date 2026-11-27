@@ -110,6 +110,7 @@ mod tests {
     use super::masked_loss;
     use burn::Tensor;
     use burn::optim::{AdamConfig, GradientsParams};
+    use burn::tensor::activation::sigmoid;
     use burn::tensor::{Device, TensorData};
 
     /// A `[1, 1, 2, 2]` tensor from four values (row-major).
@@ -174,57 +175,85 @@ mod tests {
     #[test]
     /// The "overfit one image" check: can SpotNet learn a single image by
     /// heart? If not, the network, the loss or the loop is broken.
+    ///
+    /// Kept small for the debug build (a few seconds): a 32 x 32 image, 8
+    /// channels instead of 16, a learning rate of 1e-2, and a stop as soon
+    /// as the answer is right - checked every 10 steps.
     fn spotnet_learns_one_image() {
+        const SIZE: usize = 32;
+        const MAX_STEPS: usize = 500;
         let spots = vec![
-            Spot { x: 12.5, y: 15.5 },
-            Spot { x: 40.5, y: 20.5 },
-            Spot { x: 25.5, y: 45.5 },
-            Spot { x: 50.5, y: 50.5 },
-            Spot { x: 2.5, y: 30.5 }, // near the left edge
+            Spot { x: 8.5, y: 8.5 },
+            Spot { x: 22.5, y: 12.5 },
+            Spot { x: 14.5, y: 24.5 },
+            Spot { x: 1.5, y: 18.5 }, // near the left edge
         ];
 
-        let target = gaussian_map(64, 64, &spots, 1.5);
-        let mask = vec![1.0f32; 64 * 64]; // the whole image is a training area
+        let target = gaussian_map(SIZE, SIZE, &spots, 1.5);
+        let mask = vec![1.0f32; SIZE * SIZE]; // the whole image is a training area
         let device = Device::flex().autodiff();
-        let image = test_image(64, 64, &spots);
+        // Fixed start weights when the test runs alone. burn's seed is global
+        // on burn-flex, so in a parallel `cargo test` other tests move it -
+        // hence the room up to MAX_STEPS (most runs need 50-150 steps).
+        // Seeding SpotNet's own initialisation (as the MLP does) makes it exact.
+        device.seed(7);
+        let image = test_image(SIZE, SIZE, &spots);
 
-        let x = Tensor::<4>::from_data(TensorData::new(image, [1, 1, 64, 64]), &device);
-        let target = Tensor::<4>::from_data(TensorData::new(target, [1, 1, 64, 64]), &device);
-        let mask = Tensor::<4>::from_data(TensorData::new(mask, [1, 1, 64, 64]), &device);
+        let shape = [1, 1, SIZE, SIZE];
+        let x = Tensor::<4>::from_data(TensorData::new(image, shape), &device);
+        let target_t = Tensor::<4>::from_data(TensorData::new(target.clone(), shape), &device);
+        let mask = Tensor::<4>::from_data(TensorData::new(mask, shape), &device);
 
         let config = SpotNetConfig {
             in_channels: 1,
+            channels: 8,
             ..SpotNetConfig::default()
         };
         let mut model = SpotNet::new(&config, &device);
         let mut optim = AdamConfig::new().init();
 
+        // Right = above 0.5 on every spot centre, below 0.1 wherever the
+        // target is 0 (beyond every hill).
+        let right = |prediction: &[f32]| {
+            let spots_found = spots
+                .iter()
+                .all(|s| prediction[s.y as usize * SIZE + s.x as usize] > 0.5);
+            let background_dark = target
+                .iter()
+                .zip(prediction)
+                .all(|(&t, &p)| t > 0.0 || p < 0.1);
+            spots_found && background_dark
+        };
+
         let mut first = None;
         let mut last = f32::NAN;
-        for step in 0..200 {
+        let mut steps = 0;
+        let mut learned = false;
+        while steps < MAX_STEPS {
             let logits = model.forward_logits(x.clone());
-            let loss = masked_loss(logits, target.clone(), mask.clone());
+            if steps % 10 == 0 {
+                let prediction = sigmoid(logits.clone()).into_data().try_to_vec::<f32>().expect("f32 output");
+                if right(&prediction) {
+                    learned = true;
+                    break;
+                }
+            }
+            let loss = masked_loss(logits, target_t.clone(), mask.clone());
             // Read the value before `backward()` consumes the loss.
             last = loss.clone().into_scalar();
             first.get_or_insert(last);
-            if step % 20 == 0 {
-                println!("step {step:3}: loss {last:.5}");
+            if steps % 20 == 0 {
+                println!("step {steps:3}: loss {last:.5}");
             }
             let grads = GradientsParams::from_grads(loss.backward(), &model);
-            model = optim.step(1e-3, model, grads);
+            model = optim.step(1e-2, model, grads);
+            steps += 1;
         }
         let first = first.expect("at least one step ran");
+        println!("{steps} steps: first loss {first:.5}, last {last:.5}");
 
-        // What the trained network says at a spot centre and far from every spot.
-        let prediction = model.forward(x).into_data().to_vec::<f32>().unwrap();
-        let at = |px: usize, py: usize| prediction[py * 64 + px];
-        println!("first {first:.5}, last {last:.5}");
-        println!("at a spot (12, 15): {:.3}, background (32, 32): {:.3}", at(12, 15), at(32, 32));
-
-        assert!(last < first * 0.2, "first {first}, last {last}");
-        // A falling loss alone is not enough: "always 0" is almost right too.
-        assert!(at(12, 15) > 0.5, "no hill at the spot: {}", at(12, 15));
-        assert!(at(32, 32) < 0.1, "background not dark: {}", at(32, 32));
+        assert!(learned, "not learned in {MAX_STEPS} steps (loss {first} → {last})");
+        assert!(last < first, "the loss did not fall: {first} → {last}");
     }
 
     /// A 1-channel test image like a microscope would take it: background
