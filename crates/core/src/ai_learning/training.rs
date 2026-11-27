@@ -7,5 +7,6 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
+pub mod deep_learning;
 pub mod object;
 pub mod pixel;

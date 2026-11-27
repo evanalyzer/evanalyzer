@@ -1631,6 +1631,34 @@ fn format_training_stats(stats: &evanalyzer_cfg::core_types::TrainingStats) -> S
             }
             line
         }
+        TrainingStats::Network {
+            epochs_run,
+            total_epochs,
+            final_train_loss,
+            check,
+            ..
+        } => {
+            use evanalyzer_cfg::core_types::NetworkCheck;
+            let line = format!(
+                "{epochs_run}/{total_epochs} epoch(s), final train loss {final_train_loss:.4}"
+            );
+            match check {
+                NetworkCheck::Scored {
+                    epoch,
+                    annotated,
+                    found,
+                    matched,
+                } => format!(
+                    "{line}; kept epoch {}: found {matched} of {annotated} held-back object(s), {} wrongly.",
+                    epoch + 1,
+                    found - matched
+                ),
+                NetworkCheck::Off => format!("{line}; not checked on held-back areas."),
+                NetworkCheck::TooFewImages { images } => format!(
+                    "{line}; not checked: {images} image(s) - draw a validation area to check it."
+                ),
+            }
+        }
     }
 }
 

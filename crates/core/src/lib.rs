@@ -152,6 +152,9 @@ pub use crate::ai_learning::model::SavedClassifier;
 pub use crate::ai_learning::model::{
     load_from_file as load_classifier_from_file, save_to_file as save_classifier_to_file,
 };
+pub use crate::ai_learning::training::deep_learning::{
+    DeepLearningClasses, DeepLearningModel, DeepLearningTrainingJob, TrainedModel, TrainedNetwork,
+};
 pub use crate::ai_learning::training::object::ObjectTrainingJob;
 pub use crate::ai_learning::training::pixel::PixelTrainingJob;
 pub use crate::ai_learning::training_job::TrainingImage;

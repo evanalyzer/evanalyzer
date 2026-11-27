@@ -103,4 +103,31 @@ pub enum TrainingStats {
         best_val_loss: Option<f32>,
         best_val_epoch: Option<usize>,
     },
+    /// A deep-learning network (SpotNet; U-Net, StarDist, Cellpose later):
+    /// trained in epochs, the kept model checked on held-back areas.
+    Network {
+        epochs_run: usize,
+        total_epochs: usize,
+        final_train_loss: f32,
+        /// `None` without held-back areas.
+        final_val_loss: Option<f32>,
+        check: NetworkCheck,
+    },
+}
+
+/// How a network's training was checked on held-back areas.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum NetworkCheck {
+    /// The kept model (of `epoch`) found `matched` of the `annotated`
+    /// objects there, and `found - matched` wrongly.
+    Scored {
+        epoch: usize,
+        annotated: usize,
+        found: usize,
+        matched: usize,
+    },
+    /// Switched off.
+    Off,
+    /// Too few images to hold one back and no validation area drawn.
+    TooFewImages { images: usize },
 }
