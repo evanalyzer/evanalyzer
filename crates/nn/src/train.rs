@@ -98,14 +98,19 @@ impl SeededUniform {
 
     /// `n` values uniform in `±bound`.
     pub(crate) fn values(&mut self, n: usize, bound: f32) -> Vec<f32> {
-        (0..n)
-            .map(|_| {
-                self.state ^= self.state << 13;
-                self.state ^= self.state >> 7;
-                self.state ^= self.state << 17;
-                let unit = (self.state >> 40) as f32 / (1u64 << 24) as f32;
-                (2.0 * unit - 1.0) * bound
-            })
-            .collect()
+        (0..n).map(|_| (2.0 * self.unit() - 1.0) * bound).collect()
+    }
+
+    /// A random index in `0..n` (`n > 0`).
+    pub(crate) fn index(&mut self, n: usize) -> usize {
+        ((self.unit() as f64 * n as f64) as usize).min(n - 1)
+    }
+
+    /// The next value uniform in `[0, 1)`.
+    fn unit(&mut self) -> f32 {
+        self.state ^= self.state << 13;
+        self.state ^= self.state >> 7;
+        self.state ^= self.state << 17;
+        (self.state >> 40) as f32 / (1u64 << 24) as f32
     }
 }

@@ -12,12 +12,19 @@
 use crate::{
     NnError, TrainControl, TrainStats,
     model::{
-        Dataset,
-        spotnet::network::{SpotNet, SpotNetConfig},
+        Dataset, OwnedImage,
+        spotnet::{
+            network::{SpotNet, SpotNetConfig},
+            target::{area_mask, gaussian_map},
+        },
     },
+    train::{SeededUniform, TrainProgress},
 };
 use burn::Tensor;
+use burn::module::Module;
+use burn::optim::{AdamConfig, GradientsParams};
 use burn::tensor::activation::log_sigmoid;
+use burn::tensor::{Device, TensorData};
 
 /// One clicked spot: its centre in px (a pixel's centre is +0.5).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -50,27 +57,248 @@ pub struct SpotNetTrainParams {
     pub sigma: f32,
 }
 
-/// Trains a new SpotNet on `data`.
+/// Trains a new SpotNet on `data`, on the CPU (the GPU follows later).
+///
+/// Image by image - only one image is in RAM at a time: per epoch every
+/// image with a training area gives its share of `patches_per_epoch`
+/// random patches (each centred on a training-area pixel), trained in
+/// batches of `batch_size`. Images smaller than `patch_size` give
+/// patches of the whole image. Start weights and patches come from
+/// `control.seed`: the same data and seed give the same model.
 pub fn train(
     data: &dyn Dataset<SpotLabels>,
     config: &SpotNetConfig,
     params: &SpotNetTrainParams,
     control: &TrainControl<'_>,
 ) -> Result<(SpotNet, TrainStats), NnError> {
-    // 1. Prepare:   device = autodiff CPU, model = SpotNet::new(config, control.seed, &device),
-    //               optimizer = Adam.
-    // 2. Per epoch:
-    //    a. pick `patches_per_epoch` random patches inside the training areas
-    //    b. per batch of `batch_size` patches:
-    //         image patch → input tensor  [B, in_channels, P, P]
-    //         gaussian_map patch → target [B, 1, P, P]
-    //         area_mask patch → mask      [B, 1, P, P]
-    //         prediction = model.forward(input)
-    //         loss = masked_loss(prediction, target, mask)
-    //         grads = loss.backward() → optimizer step
-    //    c. report the epoch's loss via control.progress, check control.is_cancelled()
-    // 3. Return model.valid() (the model without autodiff) and the stats.
-    todo!()
+    check_params(params)?;
+    let images = images_with_area(data, config)?;
+    let patches_per_image = params.patches_per_epoch.div_ceil(images.len());
+
+    let device = Device::flex().autodiff();
+    let mut model = SpotNet::new(config, control.seed, &device);
+    let mut optim = AdamConfig::new().init();
+    // Its own stream (seed + 1): the patches don't depend on how many
+    // random numbers the start weights took.
+    let mut random = SeededUniform::new(control.seed.wrapping_add(1));
+
+    let mut final_train_loss = f32::NAN;
+    let mut epochs_run = 0;
+    for epoch in 0..params.epochs {
+        let (mut loss_sum, mut batches) = (0.0f32, 0usize);
+        for &index in &images {
+            if control.is_cancelled() {
+                return Err(NnError::Cancelled);
+            }
+            let (image, labels) = data.get(index)?;
+            let sample = Sample::new(&image, &labels, params.sigma);
+            let size = params.patch_size.min(image.width).min(image.height);
+            let origins: Vec<(usize, usize)> = (0..patches_per_image)
+                .map(|_| {
+                    patch_origin(
+                        &sample.area_pixels,
+                        image.width,
+                        image.height,
+                        size,
+                        &mut random,
+                    )
+                })
+                .collect();
+            for batch in origins.chunks(params.batch_size) {
+                let (x, target, mask) = sample.batch(batch, size, &device);
+                let loss = masked_loss(model.forward_logits(x), target, mask);
+                loss_sum += loss.clone().into_scalar::<f32>();
+                batches += 1;
+                let grads = GradientsParams::from_grads(loss.backward(), &model);
+                model = optim.step(params.learning_rate, model, grads);
+            }
+        }
+        final_train_loss = loss_sum / batches.max(1) as f32;
+        epochs_run = epoch + 1;
+        (control.progress)(TrainProgress::Epoch {
+            epoch,
+            total_epochs: params.epochs,
+            train_loss: final_train_loss,
+            val_loss: None,
+        });
+    }
+
+    let stats = TrainStats::Epochs {
+        epochs_run,
+        total_epochs: params.epochs,
+        final_train_loss,
+        final_val_loss: None,
+        best_val_loss: None,
+        best_val_epoch: None,
+    };
+    Ok((model.valid(), stats))
+}
+
+/// Refuses settings no training can run with.
+fn check_params(params: &SpotNetTrainParams) -> Result<(), NnError> {
+    let bad = |what: &str| Err(NnError::InvalidInput(format!("SpotNet training: {what}")));
+    if params.epochs == 0 {
+        return bad("at least one epoch");
+    }
+    if params.patches_per_epoch == 0 || params.batch_size == 0 || params.patch_size == 0 {
+        return bad("patches per epoch, batch size and patch size must be at least 1");
+    }
+    if !(params.learning_rate > 0.0) {
+        return bad("the learning rate must be above 0");
+    }
+    if !(params.sigma > 0.0) {
+        return bad("sigma must be above 0");
+    }
+    Ok(())
+}
+
+/// The indices of the samples with at least one training-area pixel, after
+/// checking every sample once (sizes, channels). Loads each image once.
+fn images_with_area(
+    data: &dyn Dataset<SpotLabels>,
+    config: &SpotNetConfig,
+) -> Result<Vec<usize>, NnError> {
+    let mut images = Vec::new();
+    for index in 0..data.len() {
+        let (image, labels) = data.get(index)?;
+        let bad = |what: String| {
+            Err(NnError::InvalidInput(format!(
+                "training image {}: {what}",
+                index + 1
+            )))
+        };
+        if image.channels != config.in_channels {
+            return bad(format!(
+                "{} channels, the network takes {}",
+                image.channels, config.in_channels
+            ));
+        }
+        if image.data.len() != image.channels * image.width * image.height {
+            return bad("the pixels don't match its size".into());
+        }
+        if labels.width != image.width || labels.height != image.height {
+            return bad("the annotations don't match the image size".into());
+        }
+        if labels.area.len() != labels.width * labels.height {
+            return bad("the training area doesn't match the image size".into());
+        }
+        if labels.area.iter().any(|&inside| inside) {
+            images.push(index);
+        }
+    }
+    if images.is_empty() {
+        return Err(NnError::InvalidInput(
+            "no training area: draw at least one around annotated spots".into(),
+        ));
+    }
+    Ok(images)
+}
+
+/// One loaded training image with its perfect answer and mask.
+struct Sample<'a> {
+    image: &'a OwnedImage,
+    target: Vec<f32>,
+    mask: Vec<f32>,
+    /// The pixels inside a training area (row-major indices) - where a
+    /// patch may be centred.
+    area_pixels: Vec<u32>,
+}
+
+impl<'a> Sample<'a> {
+    fn new(image: &'a OwnedImage, labels: &SpotLabels, sigma: f32) -> Self {
+        Self {
+            image,
+            target: gaussian_map(image.width, image.height, &labels.spots, sigma),
+            mask: area_mask(labels),
+            area_pixels: (0..labels.area.len() as u32)
+                .filter(|&i| labels.area[i as usize])
+                .collect(),
+        }
+    }
+
+    /// The patches at `origins` as tensors: input `[B, C, size, size]`,
+    /// target and mask `[B, 1, size, size]`.
+    fn batch(
+        &self,
+        origins: &[(usize, usize)],
+        size: usize,
+        device: &Device,
+    ) -> (Tensor<4>, Tensor<4>, Tensor<4>) {
+        let (width, channels) = (self.image.width, self.image.channels);
+        let (mut x, mut target, mut mask) = (Vec::new(), Vec::new(), Vec::new());
+        for &(x0, y0) in origins {
+            x.extend(cut_patch(
+                &self.image.data,
+                width,
+                self.image.height,
+                channels,
+                x0,
+                y0,
+                size,
+            ));
+            target.extend(cut_patch(
+                &self.target,
+                width,
+                self.image.height,
+                1,
+                x0,
+                y0,
+                size,
+            ));
+            mask.extend(cut_patch(
+                &self.mask,
+                width,
+                self.image.height,
+                1,
+                x0,
+                y0,
+                size,
+            ));
+        }
+        let b = origins.len();
+        let tensor = |values: Vec<f32>, c: usize| {
+            Tensor::<4>::from_data(TensorData::new(values, [b, c, size, size]), device)
+        };
+        (tensor(x, channels), tensor(target, 1), tensor(mask, 1))
+    }
+}
+
+/// The `size x size` square at (`x0`, `y0`) of every channel of `data`
+/// (`channels` planes of `width x height`, one after the other):
+/// `channels * size * size` values. The square must lie inside the image.
+fn cut_patch(
+    data: &[f32],
+    width: usize,
+    height: usize,
+    channels: usize,
+    x0: usize,
+    y0: usize,
+    size: usize,
+) -> Vec<f32> {
+    let mut out = Vec::with_capacity(channels * size * size);
+    for c in 0..channels {
+        let plane = &data[c * width * height..(c + 1) * width * height];
+        for y in y0..y0 + size {
+            out.extend_from_slice(&plane[y * width + x0..y * width + x0 + size]);
+        }
+    }
+    out
+}
+
+/// The top-left corner of a `size x size` patch centred on a random pixel of
+/// `area_pixels`, moved inside the image where it would stick out.
+fn patch_origin(
+    area_pixels: &[u32],
+    width: usize,
+    height: usize,
+    size: usize,
+    random: &mut SeededUniform,
+) -> (usize, usize) {
+    let pixel = area_pixels[random.index(area_pixels.len())] as usize;
+    let (cx, cy) = (pixel % width, pixel / width);
+    let x0 = cx.saturating_sub(size / 2).min(width - size);
+    let y0 = cy.saturating_sub(size / 2).min(height - size);
+    (x0, y0)
 }
 
 /// How much more a pixel on a spot centre counts than background in the
@@ -103,15 +331,17 @@ fn masked_loss(logits: Tensor<4>, target: Tensor<4>, mask: Tensor<4>) -> Tensor<
 
 #[cfg(test)]
 mod tests {
-    use crate::model::spotnet::network::{SpotNet, SpotNetConfig};
+    use crate::model::spotnet::network::SpotNetConfig;
     use crate::model::spotnet::target::gaussian_map;
     use crate::model::spotnet::train::Spot;
 
-    use super::masked_loss;
+    use super::{SpotLabels, SpotNetTrainParams, cut_patch, masked_loss, patch_origin, train};
+    use crate::NnError;
+    use crate::model::{Dataset, OwnedImage};
+    use crate::train::{SeededUniform, TrainControl, TrainDevice};
     use burn::Tensor;
-    use burn::optim::{AdamConfig, GradientsParams};
-    use burn::tensor::activation::sigmoid;
     use burn::tensor::{Device, TensorData};
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     /// A `[1, 1, 2, 2]` tensor from four values (row-major).
     fn patch(values: [f32; 4]) -> Tensor<4> {
@@ -186,90 +416,205 @@ mod tests {
         assert_eq!(loss([0.0; 4], [1.0; 4], [0.0; 4]), 0.0);
     }
 
+    /// Training images held in memory.
+    struct Images(Vec<(OwnedImage, SpotLabels)>);
+
+    impl Dataset<SpotLabels> for Images {
+        fn len(&self) -> usize {
+            self.0.len()
+        }
+        fn get(&self, index: usize) -> Result<(OwnedImage, SpotLabels), NnError> {
+            Ok(self.0[index].clone())
+        }
+    }
+
+    /// One `size x size` test image with `spots`, all of it a training area.
+    fn one_image(size: usize, spots: Vec<Spot>) -> Images {
+        let image = OwnedImage {
+            width: size,
+            height: size,
+            channels: 1,
+            data: test_image(size, size, &spots),
+        };
+        let labels = SpotLabels {
+            width: size,
+            height: size,
+            spots,
+            area: vec![true; size * size],
+        };
+        Images(vec![(image, labels)])
+    }
+
+    fn params(epochs: usize) -> SpotNetTrainParams {
+        SpotNetTrainParams {
+            epochs,
+            patches_per_epoch: 1,
+            batch_size: 1,
+            patch_size: 128,
+            learning_rate: 1e-2,
+            sigma: 1.5,
+        }
+    }
+
+    fn small_config() -> SpotNetConfig {
+        SpotNetConfig {
+            in_channels: 1,
+            channels: 8,
+            ..SpotNetConfig::default()
+        }
+    }
+
+    /// `f` with a quiet control of `seed`; `cancel` set from the start.
+    fn with_control<R>(seed: u64, cancel: bool, f: impl FnOnce(&TrainControl<'_>) -> R) -> R {
+        let progress = |_| {};
+        let cancel = AtomicBool::new(cancel);
+        f(&TrainControl {
+            progress: &progress,
+            cancel: &cancel,
+            seed,
+            device: TrainDevice::Cpu,
+            cores: 1,
+        })
+    }
+
     #[test]
     /// The "overfit one image" check: can SpotNet learn a single image by
-    /// heart? If not, the network, the loss or the loop is broken.
-    ///
-    /// Kept small for the debug build (a few seconds): a 32 x 32 image, 8
-    /// channels instead of 16, a learning rate of 1e-2, and a stop as soon
-    /// as the answer is right - checked every 10 steps.
+    /// heart through `train()`? If not, the network, the loss or the loop is
+    /// broken. Kept small for the debug build (a few seconds): 32 x 32, 8
+    /// channels, a learning rate of 1e-2, one patch (the whole image) per
+    /// epoch - so an epoch is one step.
     fn spotnet_learns_one_image() {
         const SIZE: usize = 32;
-        const MAX_STEPS: usize = 300;
         let spots = vec![
             Spot { x: 8.5, y: 8.5 },
             Spot { x: 22.5, y: 12.5 },
             Spot { x: 14.5, y: 24.5 },
             Spot { x: 1.5, y: 18.5 }, // near the left edge
         ];
+        let data = one_image(SIZE, spots.clone());
+        let (model, stats) = with_control(7, false, |control| {
+            train(&data, &small_config(), &params(150), control)
+        })
+        .unwrap();
+        println!("{stats:?}");
 
-        let target = gaussian_map(SIZE, SIZE, &spots, 1.5);
-        let mask = vec![1.0f32; SIZE * SIZE]; // the whole image is a training area
-        let device = Device::flex().autodiff();
-        let image = test_image(SIZE, SIZE, &spots);
-
-        let shape = [1, 1, SIZE, SIZE];
-        let x = Tensor::<4>::from_data(TensorData::new(image, shape), &device);
-        let target_t = Tensor::<4>::from_data(TensorData::new(target.clone(), shape), &device);
-        let mask = Tensor::<4>::from_data(TensorData::new(mask, shape), &device);
-
-        let config = SpotNetConfig {
-            in_channels: 1,
-            channels: 8,
-            ..SpotNetConfig::default()
-        };
-        // Fixed start weights: the same run every time, also in parallel tests.
-        let mut model = SpotNet::new(&config, 7, &device);
-        let mut optim = AdamConfig::new().init();
-
+        let device = Device::flex();
+        let x = Tensor::<4>::from_data(
+            TensorData::new(data.0[0].0.data.clone(), [1, 1, SIZE, SIZE]),
+            &device,
+        );
+        let prediction = model.forward(x).into_data().try_to_vec::<f32>().unwrap();
         // Right = above 0.5 on every spot centre, below 0.1 wherever the
         // target is 0 (beyond every hill).
-        let right = |prediction: &[f32]| {
-            let spots_found = spots
-                .iter()
-                .all(|s| prediction[s.y as usize * SIZE + s.x as usize] > 0.5);
-            let background_dark = target
-                .iter()
-                .zip(prediction)
-                .all(|(&t, &p)| t > 0.0 || p < 0.1);
-            spots_found && background_dark
-        };
-
-        let mut first = None;
-        let mut last = f32::NAN;
-        let mut steps = 0;
-        let mut learned = false;
-        while steps < MAX_STEPS {
-            let logits = model.forward_logits(x.clone());
-            if steps % 10 == 0 {
-                let prediction = sigmoid(logits.clone())
-                    .into_data()
-                    .try_to_vec::<f32>()
-                    .expect("f32 output");
-                if right(&prediction) {
-                    learned = true;
-                    break;
-                }
-            }
-            let loss = masked_loss(logits, target_t.clone(), mask.clone());
-            // Read the value before `backward()` consumes the loss.
-            last = loss.clone().into_scalar();
-            first.get_or_insert(last);
-            if steps % 20 == 0 {
-                println!("step {steps:3}: loss {last:.5}");
-            }
-            let grads = GradientsParams::from_grads(loss.backward(), &model);
-            model = optim.step(1e-2, model, grads);
-            steps += 1;
+        for s in &spots {
+            let p = prediction[s.y as usize * SIZE + s.x as usize];
+            assert!(p > 0.5, "no hill at spot ({}, {}): {p}", s.x, s.y);
         }
-        let first = first.expect("at least one step ran");
-        println!("{steps} steps: first loss {first:.5}, last {last:.5}");
-
+        let target = gaussian_map(SIZE, SIZE, &spots, 1.5);
+        let brightest_background = target
+            .iter()
+            .zip(&prediction)
+            .filter(|&(&t, _)| t == 0.0)
+            .map(|(_, &p)| p)
+            .fold(0.0f32, f32::max);
         assert!(
-            learned,
-            "not learned in {MAX_STEPS} steps (loss {first} → {last})"
+            brightest_background < 0.1,
+            "background not dark: {brightest_background}"
         );
-        assert!(last < first, "the loss did not fall: {first} → {last}");
+    }
+
+    #[test]
+    fn the_same_seed_trains_the_same_model() {
+        let data = one_image(16, vec![Spot { x: 8.5, y: 8.5 }]);
+        let run = |seed| {
+            with_control(seed, false, |control| {
+                train(&data, &small_config(), &params(3), control)
+            })
+            .unwrap()
+            .1
+        };
+        assert_eq!(run(3), run(3));
+        assert_ne!(run(3), run(4));
+    }
+
+    #[test]
+    fn a_training_without_any_training_area_is_refused() {
+        let mut data = one_image(16, vec![Spot { x: 8.5, y: 8.5 }]);
+        data.0[0].1.area = vec![false; 16 * 16];
+        let result = with_control(1, false, |c| train(&data, &small_config(), &params(1), c));
+        assert!(matches!(result, Err(NnError::InvalidInput(m)) if m.contains("no training area")));
+    }
+
+    #[test]
+    fn an_image_with_other_channels_than_the_network_is_refused() {
+        let data = one_image(16, vec![]);
+        let config = SpotNetConfig::default(); // 2 channels, the image has 1
+        let result = with_control(1, false, |c| train(&data, &config, &params(1), c));
+        assert!(matches!(result, Err(NnError::InvalidInput(m)) if m.contains("1 channels")));
+    }
+
+    #[test]
+    fn a_training_area_of_the_wrong_size_is_refused() {
+        let mut data = one_image(16, vec![]);
+        data.0[0].1.area.pop();
+        let result = with_control(1, false, |c| train(&data, &small_config(), &params(1), c));
+        assert!(matches!(result, Err(NnError::InvalidInput(m)) if m.contains("training area")));
+    }
+
+    #[test]
+    fn a_cancelled_training_stops() {
+        let data = one_image(16, vec![Spot { x: 8.5, y: 8.5 }]);
+        let result = with_control(1, true, |c| train(&data, &small_config(), &params(5), c));
+        assert!(matches!(result, Err(NnError::Cancelled)));
+    }
+
+    #[test]
+    fn progress_is_reported_once_per_epoch() {
+        let data = one_image(16, vec![Spot { x: 8.5, y: 8.5 }]);
+        let epochs = std::sync::Mutex::new(Vec::new());
+        let progress = |p| {
+            if let crate::train::TrainProgress::Epoch { epoch, .. } = p {
+                epochs.lock().unwrap().push(epoch);
+            }
+        };
+        let cancel = AtomicBool::new(false);
+        let control = TrainControl {
+            progress: &progress,
+            cancel: &cancel,
+            seed: 1,
+            device: TrainDevice::Cpu,
+            cores: 1,
+        };
+        train(&data, &small_config(), &params(3), &control).unwrap();
+        assert_eq!(*epochs.lock().unwrap(), vec![0, 1, 2]);
+        assert!(!cancel.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn a_patch_is_the_square_of_every_channel() {
+        // 4 x 4, two channels, each value its own index: 0..16 and 16..32.
+        let data: Vec<f32> = (0..32).map(|v| v as f32).collect();
+        let patch = cut_patch(&data, 4, 4, 2, 1, 2, 2);
+        assert_eq!(patch, vec![9.0, 10.0, 13.0, 14.0, 25.0, 26.0, 29.0, 30.0]);
+    }
+
+    #[test]
+    fn a_patch_lies_inside_the_image_and_over_the_training_area() {
+        // 40 x 20, the training area only in the bottom-right corner.
+        let (width, height, size) = (40, 20, 8);
+        let area: Vec<u32> = (0..(width * height) as u32)
+            .filter(|&i| i as usize % width >= 36 && i as usize / width >= 17)
+            .collect();
+        let mut random = SeededUniform::new(5);
+        for _ in 0..200 {
+            let (x0, y0) = patch_origin(&area, width, height, size, &mut random);
+            assert!(x0 + size <= width && y0 + size <= height, "({x0}, {y0})");
+            let covers = area.iter().any(|&i| {
+                let (x, y) = (i as usize % width, i as usize / width);
+                (x0..x0 + size).contains(&x) && (y0..y0 + size).contains(&y)
+            });
+            assert!(covers, "({x0}, {y0}) misses the area");
+        }
     }
 
     /// A 1-channel test image like a microscope would take it: background
