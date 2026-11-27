@@ -107,7 +107,7 @@ impl SeededUniform {
     }
 
     /// The next value uniform in `[0, 1)`.
-    fn unit(&mut self) -> f32 {
+    pub(crate) fn unit(&mut self) -> f32 {
         self.state ^= self.state << 13;
         self.state ^= self.state >> 7;
         self.state ^= self.state << 17;

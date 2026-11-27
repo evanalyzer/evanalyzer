@@ -22,10 +22,12 @@
 //! - [`pieces`] - large tiles through a network in pieces.
 //! - [`weights`] - the model file format (safetensors + metadata).
 //! - `libs` - building blocks several models share (percentiles).
+//! - `augment` - random changes of training patches (rotations, ...).
 //!
 //! The only crate depending on burn and smartcore. Does not depend on
 //! `evanalyzer_cfg`: core maps its settings to the types here.
 
+mod augment;
 pub mod classifier;
 pub mod errors;
 mod libs;
