@@ -11,10 +11,33 @@ import { LayoutState } from "../api/layout.slint";
 import { ToolState, ViewportObjectState } from "../api/viewport.slint";
 import { ClassificationState } from "../api/classification.slint";
 
+// One tool of the bar: drawn by both layouts (a row on top, a column
+// when the space between the panels is too narrow).
+struct AnnotateTool {
+    tool: ToolState,
+    icon: image,
+    label: string,
+    keys: [string],
+    // Paints into a class: off until one is picked.
+    needs-class: bool,
+    // A group ends here: a separator after it.
+    group-end: bool,
+}
+
 export component AnnotateBar inherits Rectangle {
+    // The width free between the panels shown: the bar is full when it
+    // fits, compact (no "Paint as", "Size" labels, the buttons closer, a
+    // narrower class field - only its colour while the brush size shows)
+    // when that fits, else a column (board 3 of the canvas
+    // https://claude.ai/artifact/5ePMBbpXsHsGw3AFHDdyzv).
+    in property <length> room: 100000px;
+    out property <bool> vertical: root.room < root.compact-w;
+    property <bool> compact: !root.vertical && root.room < root.full-w;
+
     property <ToolState> tool: ViewportObjectState.act_tool_state;
     // Shapes need a class to paint into.
     property <bool> has-class: ClassificationState.selected_class_id >= 0;
+    property <bool> brushing: root.tool == ToolState.Brush || root.tool == ToolState.Wand || root.tool == ToolState.Eraser;
     // "+ New class…" was chosen here: the class it makes is picked.
     property <bool> waiting-for-class: false;
     property <int> created: ClassificationSettingsState.created-count;
@@ -25,19 +48,67 @@ export component AnnotateBar inherits Rectangle {
         }
     }
 
+    property <[AnnotateTool]> tools: [
+        { tool: ToolState.Move, icon: InkIcons.move, label: "Move", keys: ["M"] },
+        { tool: ToolState.Select, icon: InkIcons.select, label: "Select", keys: ["S"], group-end: true },
+        { tool: ToolState.PaintMarker, icon: InkIcons.marker, label: "Marker", keys: ["K"] },
+        { tool: ToolState.Ruler, icon: InkIcons.ruler, label: "Ruler - drag a line to see its length (Shift: straight)", keys: ["L"], group-end: true },
+        { tool: ToolState.PaintSpot, icon: InkIcons.spot, label: "Spot - click to mark a spot (right-click removes it)", keys: ["X"], needs-class: true },
+        { tool: ToolState.PaintRectangle, icon: InkIcons.rectangle, label: "Rectangle", keys: ["R"], needs-class: true },
+        { tool: ToolState.PaintOval, icon: InkIcons.ellipse, label: "Ellipse", keys: ["E"], needs-class: true },
+        { tool: ToolState.PaintPolygon, icon: InkIcons.polygon, label: "Polygon", keys: ["P"], needs-class: true },
+        { tool: ToolState.Brush, icon: InkIcons.brush, label: "Brush", needs-class: true },
+        { tool: ToolState.Wand, icon: InkIcons.wand, label: "Wand - a brush that keeps to edges", keys: ["W"], needs-class: true },
+        { tool: ToolState.Eraser, icon: InkIcons.eraser, label: "Eraser", group-end: true },
+    ];
+
+    // The widths the decision needs, from fixed sizes and the texts
+    // measured apart (not from the row itself: hiding a label changes
+    // the row - a binding loop). 11 buttons of 32 px, 3 separators of
+    // 13 px, 2 px between; compact: 9 px separators, nothing between.
+    property <length> tools-w: 11 * 32px + 3 * (13px + 2px) + 10 * 2px;
+    property <length> compact-tools-w: 11 * 32px + 3 * 9px;
+    property <length> full-field-w: min(name-probe.preferred-width + 63px, 180px);
+    property <length> compact-field-w: root.brushing ? 32px : min(root.full-field-w, 80px);
+    property <length> size-w: root.compact ? 56px : 92px;
+    property <length> full-w: 12px + root.tools-w + 2px + label-probe.preferred-width + 2px + 12px + root.full-field-w
+        + (root.brushing ? 2px + 6px + size-probe.preferred-width + 6px + 92px : 0px) + 2px + 28px + 12px;
+    property <length> compact-w: 12px + root.compact-tools-w + 2px + 12px + root.compact-field-w
+        + (root.brushing ? 2px + 6px + 56px : 0px) + 2px + 28px + 12px;
+    // Where the class square sits in the column (the class menu opens
+    // beside it).
+    property <length> square-y: 6px + 11 * 32px + 3 * (13px + 2px) + 10 * 2px + 2px;
+
     function pick(id: int, name: string) {
         ClassificationState.selected_class_name = name;
         ClassificationState.selected_class_id = id;
         ClassificationState.class_selected(id);
     }
 
-    width: row.preferred-width + 12px;
-    height: 44px;
+    width: root.vertical ? 44px : row.preferred-width + 12px;
+    height: root.vertical ? column.preferred-height + 12px : 44px;
     accessible-role: groupbox;
-    accessible-label: "Annotate";
+    accessible-label: "Annotate tools";
+
+    // Measured only, never shown.
+    name-probe := Text {
+        visible: false;
+        text: root.has-class ? ClassificationState.selected_class_name : "Pick a class";
+        font-size: Ink.fs-body;
+    }
+    label-probe := Text {
+        visible: false;
+        text: "Paint as";
+        font-size: Ink.fs-secondary;
+    }
+    size-probe := Text {
+        visible: false;
+        text: "Size";
+        font-size: Ink.fs-secondary;
+    }
 
     glass := Rectangle {
-        background: Ink.glass;
+        background: Ink.panel-blur ? Ink.glass : Ink.panel;
         backdrop-blur: Ink.backdrop;
         border-radius: Ink.radius-lg;
         border-width: 1px;
@@ -49,6 +120,7 @@ export component AnnotateBar inherits Rectangle {
         TouchArea { }
 
         row := HorizontalLayout {
+            visible: !root.vertical;
             padding-left: 6px;
             padding-right: 6px;
             spacing: 2px;
@@ -57,123 +129,35 @@ export component AnnotateBar inherits Rectangle {
             VerticalLayout {
                 alignment: center;
                 HorizontalLayout {
-                    spacing: 2px;
-                    InkToolButton {
-                        icon: InkIcons.move;
-                        label: "Move";
-                        keys: ["M"];
-                        active: root.tool == ToolState.Move;
-                        clicked => {
-                            ViewportObjectState.act_tool_state = ToolState.Move;
+                    spacing: root.compact ? 0px : 2px;
+                    for t in root.tools: HorizontalLayout {
+                        spacing: root.compact ? 0px : 2px;
+                        InkToolButton {
+                            icon: t.icon;
+                            label: t.label;
+                            keys: t.keys;
+                            enabled: !t.needs-class || root.has-class;
+                            disabled-reason: t.needs-class ? "Pick the class to paint as first" : "";
+                            active: root.tool == t.tool;
+                            clicked => {
+                                ViewportObjectState.act_tool_state = t.tool;
+                            }
+                        }
+                        if t.group-end && !root.compact: InkBarSeparator { }
+                        if t.group-end && root.compact: Rectangle {
+                            width: 9px;
+                            Rectangle {
+                                width: 1px;
+                                height: 18px;
+                                background: Ink.border;
+                            }
                         }
                     }
-                    InkToolButton {
-                        icon: InkIcons.select;
-                        label: "Select";
-                        keys: ["S"];
-                        active: root.tool == ToolState.Select;
-                        clicked => {
-                            ViewportObjectState.act_tool_state = ToolState.Select;
-                        }
-                    }
-                    InkBarSeparator { }
-                    InkToolButton {
-                        icon: InkIcons.marker;
-                        label: "Marker";
-                        keys: ["K"];
-                        active: root.tool == ToolState.PaintMarker;
-                        clicked => {
-                            ViewportObjectState.act_tool_state = ToolState.PaintMarker;
-                        }
-                    }
-                    InkToolButton {
-                        icon: InkIcons.ruler;
-                        label: "Ruler - drag a line to see its length (Shift: straight)";
-                        keys: ["L"];
-                        active: root.tool == ToolState.Ruler;
-                        clicked => {
-                            ViewportObjectState.act_tool_state = ToolState.Ruler;
-                        }
-                    }
-                    InkToolButton {
-                        icon: InkIcons.rectangle;
-                        label: "Rectangle";
-                        keys: ["R"];
-                        enabled: root.has-class;
-                        disabled-reason: "Pick the class to paint as first";
-                        active: root.tool == ToolState.PaintRectangle;
-                        clicked => {
-                            ViewportObjectState.act_tool_state = ToolState.PaintRectangle;
-                        }
-                    }
-                    InkToolButton {
-                        icon: InkIcons.ellipse;
-                        label: "Ellipse";
-                        keys: ["E"];
-                        enabled: root.has-class;
-                        disabled-reason: "Pick the class to paint as first";
-                        active: root.tool == ToolState.PaintOval;
-                        clicked => {
-                            ViewportObjectState.act_tool_state = ToolState.PaintOval;
-                        }
-                    }
-                    InkToolButton {
-                        icon: InkIcons.polygon;
-                        label: "Polygon";
-                        keys: ["P"];
-                        enabled: root.has-class;
-                        disabled-reason: "Pick the class to paint as first";
-                        active: root.tool == ToolState.PaintPolygon;
-                        clicked => {
-                            ViewportObjectState.act_tool_state = ToolState.PaintPolygon;
-                        }
-                    }
-                    InkToolButton {
-                        icon: InkIcons.spot;
-                        label: "Spot - click to mark a spot (right-click removes it)";
-                        keys: ["X"];
-                        enabled: root.has-class;
-                        disabled-reason: "Pick the class to paint as first";
-                        active: root.tool == ToolState.PaintSpot;
-                        clicked => {
-                            ViewportObjectState.act_tool_state = ToolState.PaintSpot;
-                        }
-                    }
-                    InkToolButton {
-                        icon: InkIcons.brush;
-                        label: "Brush";
-                        enabled: root.has-class;
-                        disabled-reason: "Pick the class to paint as first";
-                        active: root.tool == ToolState.Brush;
-                        clicked => {
-                            ViewportObjectState.act_tool_state = ToolState.Brush;
-                        }
-                    }
-                    InkToolButton {
-                        icon: InkIcons.wand;
-                        label: "Wand - a brush that keeps to edges";
-                        keys: ["W"];
-                        enabled: root.has-class;
-                        disabled-reason: "Pick the class to paint as first";
-                        active: root.tool == ToolState.Wand;
-                        clicked => {
-                            ViewportObjectState.act_tool_state = ToolState.Wand;
-                        }
-                    }
-                    InkToolButton {
-                        icon: InkIcons.eraser;
-                        label: "Eraser";
-                        active: root.tool == ToolState.Eraser;
-                        clicked => {
-                            ViewportObjectState.act_tool_state = ToolState.Eraser;
-                        }
-                    }
-                    InkBarSeparator { }
                 }
             }
 
             // The class painted into.
-            Text {
+            if !root.compact: Text {
                 text: "Paint as";
                 font-size: Ink.fs-secondary;
                 color: Ink.text-mute;
@@ -183,17 +167,20 @@ export component AnnotateBar inherits Rectangle {
                 alignment: center;
                 padding-left: 4px;
                 padding-right: 8px;
-                Rectangle {
+                field := Rectangle {
                     height: Ink.control-h;
-                    width: min(class-row.preferred-width + 16px, 180px);
+                    width: root.compact ? root.compact-field-w : root.full-field-w;
                     border-radius: Ink.radius-sm;
                     border-width: 1px;
                     border-color: Ink.border;
                     background: Ink.field;
-                    class-row := HorizontalLayout {
-                        padding-left: 8px;
-                        padding-right: 8px;
+                    // Compact while brushing: only the colour.
+                    property <bool> swatch-only: root.compact && root.brushing;
+                    HorizontalLayout {
+                        padding-left: field.swatch-only ? 0px : 8px;
+                        padding-right: field.swatch-only ? 0px : 8px;
                         spacing: 6px;
+                        alignment: field.swatch-only ? center : stretch;
                         // The class's color, as in the menu: the selected
                         // one's of the list, all in one 9px box.
                         if root.has-class: Rectangle {
@@ -207,15 +194,15 @@ export component AnnotateBar inherits Rectangle {
                                 background: data.color;
                             }
                         }
-                        Text {
+                        if !field.swatch-only: Text {
                             horizontal-stretch: 1;
-                            text: root.has-class ? ClassificationState.selected_class_name : "Pick a class";
+                            text: name-probe.text;
                             font-size: Ink.fs-body;
                             color: root.has-class ? Ink.text : Ink.text-faint;
                             vertical-alignment: center;
                             overflow: elide;
                         }
-                        Image {
+                        if !field.swatch-only: Image {
                             source: InkIcons.caret-down;
                             width: 10px;
                             colorize: Ink.text-mute;
@@ -230,10 +217,10 @@ export component AnnotateBar inherits Rectangle {
                 }
             }
 
-            if root.tool == ToolState.Brush || root.tool == ToolState.Wand || root.tool == ToolState.Eraser: HorizontalLayout {
+            if root.brushing: HorizontalLayout {
                 spacing: 6px;
                 padding-right: 6px;
-                Text {
+                if !root.compact: Text {
                     text: "Size";
                     font-size: Ink.fs-secondary;
                     color: Ink.text-mute;
@@ -242,12 +229,13 @@ export component AnnotateBar inherits Rectangle {
                 VerticalLayout {
                     alignment: center;
                     InkNumberField {
-                        width: 92px;
+                        width: root.size-w;
+                        compact: root.compact;
                         label: "Brush size";
                         value: LayoutState.brush-size;
                         min: 1;
                         max: 200;
-                        unit: "px";
+                        unit: root.compact ? "" : "px";
                         changed(text) => {
                             LayoutState.brush-size = text.to-float();
                         }
@@ -268,14 +256,99 @@ export component AnnotateBar inherits Rectangle {
                 }
             }
         }
+
+        // Too narrow for the row: the same tools in a column, the class
+        // as its colour square, the brush size as a small field.
+        column := VerticalLayout {
+            visible: root.vertical;
+            padding: 6px;
+            spacing: 2px;
+            alignment: start;
+            for t in root.tools: VerticalLayout {
+                spacing: 2px;
+                InkToolButton {
+                    icon: t.icon;
+                    label: t.label;
+                    keys: t.keys;
+                    enabled: !t.needs-class || root.has-class;
+                    disabled-reason: t.needs-class ? "Pick the class to paint as first" : "";
+                    active: root.tool == t.tool;
+                    clicked => {
+                        ViewportObjectState.act_tool_state = t.tool;
+                    }
+                }
+                if t.group-end: Rectangle {
+                    height: 13px;
+                    Rectangle {
+                        width: 18px;
+                        height: 1px;
+                        background: Ink.border;
+                    }
+                }
+            }
+            Rectangle {
+                width: 32px;
+                height: 32px;
+                border-radius: Ink.radius-sm;
+                border-width: 1px;
+                border-color: Ink.border;
+                background: Ink.field;
+                accessible-role: button;
+                accessible-label: "Paint as: " + name-probe.text;
+                accessible-action-default => {
+                    class-menu.show();
+                }
+                if root.has-class: Rectangle {
+                    for data in ClassificationState.classes_list: Rectangle {
+                        visible: data.id == ClassificationState.selected_class_id;
+                        width: 12px;
+                        height: 12px;
+                        border-radius: 3px;
+                        background: data.color;
+                    }
+                }
+                if !root.has-class: Image {
+                    source: InkIcons.caret-down;
+                    width: 10px;
+                    colorize: Ink.text-mute;
+                }
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        class-menu.show();
+                    }
+                }
+            }
+            if root.brushing: InkNumberField {
+                width: 32px;
+                compact: true;
+                label: "Brush size";
+                value: LayoutState.brush-size;
+                min: 1;
+                max: 200;
+                changed(text) => {
+                    LayoutState.brush-size = text.to-float();
+                }
+            }
+            InkIconButton {
+                size: 32px;
+                icon: InkIcons.close;
+                label: "Leave annotate mode";
+                clicked => {
+                    LayoutState.annotate = false;
+                    ViewportObjectState.act_tool_state = ToolState.Move;
+                }
+            }
+        }
     }
 
     // The classes to paint into; a new one is picked at once.
+    // Below the class field, or beside the column's class square.
     class-menu := PopupWindow {
-        x: class-field.x;
-        y: root.height + 4px;
+        x: root.vertical ? root.width + 4px : class-field.x;
+        y: root.vertical ? root.square-y : root.height + 4px;
         class-frame := InkMenuFrame {
-            open-y: root.absolute-position.y + root.height + 4px;
+            open-y: root.absolute-position.y + (root.vertical ? root.square-y : root.height + 4px);
             menu-width: 240px;
             for data in ClassificationState.classes_list: InkPickerRow {
                 label: data.id < 10 ? "0" + data.id : data.id;
