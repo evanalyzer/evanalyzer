@@ -1325,6 +1325,28 @@ impl Default for FiltersIlluminationCorrectionSmoothingMethodSettings {
     }
 }
 
+/// The second input of a [`Spotnet`] model.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AiSegmentationSpotnetSpotReferenceSettings {
+    /// The model takes the spot channel alone.
+    #[serde(alias = "none")]
+    None,
+    /// The model takes a reference channel as its second input.
+    #[serde(rename_all = "camelCase")]
+    #[serde(alias = "channel")]
+    Channel {
+        /// The channel showing only the structures (as it was read).
+        channel: ImageChannelIdx,
+    },
+}
+
+impl Default for AiSegmentationSpotnetSpotReferenceSettings {
+    fn default() -> Self {
+        Self::None {}
+    }
+}
+
 /// Which stain the step keeps.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -3026,6 +3048,63 @@ pub struct SegmentationMappingSettings {
     /// The project's own segmentation class pixels predicted as
     /// `model_class` are written as.
     pub segmentation_class: SegmentationClass,
+}
+
+fn _serde_default_spotnet_piece_size() -> AiSegmentationPieceSizePieceSizeSettings {
+    AiSegmentationPieceSizePieceSizeSettings::Auto
+}
+fn _serde_default_spotnet_normalization()
+-> AiSegmentationInputNormalizationInputNormalizationSettings {
+    AiSegmentationInputNormalizationInputNormalizationSettings::ModelDefault
+}
+/// Spot detection with a SpotNet model trained in EVAnalyzer (`.evanet`):
+/// a small network that gives every pixel the probability of being a spot's
+/// centre; the map's peaks above `threshold` become one-pixel objects, one
+/// per spot - also for touching spots, which a threshold would merge.
+///
+/// The spots are found in the pipeline's image. A model trained with a
+/// reference channel (a channel showing only the structures spots must not
+/// be found on, e.g. serum) gets that channel too and compares the two
+/// itself - tolerant to channels a few pixels apart. Runs on a GPU when
+/// there is one, else on the CPU.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[serde(default)]
+#[serde(rename_all = "camelCase")]
+pub struct SpotnetSettings {
+    /// The SpotNet model file (EVAnalyzer's `.evanet`), trained in the app.
+    pub model_path: PathBuf,
+    /// The class every found spot gets. All other pixels are assigned
+    /// `SegmentationClass::BACKGROUND`.
+    pub segmentation_class: SegmentationClass,
+    /// A peak of the spot probability counts as a spot from this on: lower
+    /// finds fainter spots and more wrong ones.
+    #[schemars(range(min = 0, max = 1))]
+    pub threshold: f32,
+    /// The second input of a model trained with a reference channel; none
+    /// for a model of the spot channel alone.
+    pub reference: AiSegmentationSpotnetSpotReferenceSettings,
+    /// How large the pieces are that a large tile runs through the network
+    /// in: smaller ones take less RAM, larger ones are faster.
+    #[serde(default = "_serde_default_spotnet_piece_size")]
+    pub piece_size: AiSegmentationPieceSizePieceSizeSettings,
+    /// How the image is scaled before the model sees it: by default each
+    /// channel's 1st and 99.8th percentile of the tile become 0 and 1, as
+    /// the model was trained.
+    #[serde(default = "_serde_default_spotnet_normalization")]
+    pub normalization: AiSegmentationInputNormalizationInputNormalizationSettings,
+}
+
+impl Default for SpotnetSettings {
+    fn default() -> Self {
+        Self {
+            model_path: PathBuf::default(),
+            segmentation_class: SegmentationClass(1),
+            threshold: 0.5f32,
+            reference: AiSegmentationSpotnetSpotReferenceSettings::None,
+            piece_size: AiSegmentationPieceSizePieceSizeSettings::Auto,
+            normalization: AiSegmentationInputNormalizationInputNormalizationSettings::ModelDefault,
+        }
+    }
 }
 
 fn _serde_default_stardist_piece_size() -> AiSegmentationPieceSizePieceSizeSettings {

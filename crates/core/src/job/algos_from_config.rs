@@ -684,6 +684,17 @@ impl From<FiltersIlluminationCorrectionSmoothingMethodSettings> for SmoothingMet
     }
 }
 
+impl From<AiSegmentationSpotnetSpotReferenceSettings> for SpotReference {
+    fn from(_s: AiSegmentationSpotnetSpotReferenceSettings) -> Self {
+        match _s {
+            AiSegmentationSpotnetSpotReferenceSettings::None => SpotReference::None,
+            AiSegmentationSpotnetSpotReferenceSettings::Channel { channel } => {
+                SpotReference::Channel { channel: channel }
+            }
+        }
+    }
+}
+
 impl From<FiltersColorDeconvolutionStainOutputSettings> for StainOutput {
     fn from(_s: FiltersColorDeconvolutionStainOutputSettings) -> Self {
         match _s {
@@ -1611,6 +1622,19 @@ impl From<SkeletonizeObjectsSettings> for SkeletonizeObjects {
     }
 }
 
+impl From<SpotnetSettings> for Spotnet {
+    fn from(_s: SpotnetSettings) -> Self {
+        Spotnet {
+            model_path: _s.model_path,
+            segmentation_class: _s.segmentation_class,
+            threshold: _s.threshold.clamp(0.0, 1.0),
+            reference: SpotReference::from(_s.reference),
+            piece_size: PieceSize::from(_s.piece_size),
+            normalization: InputNormalization::from(_s.normalization),
+        }
+    }
+}
+
 impl From<StardistSettings> for Stardist {
     fn from(_s: StardistSettings) -> Self {
         Stardist {
@@ -2042,6 +2066,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         ))),
         PipelineCommand::SkeletonizeObjects(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::SkeletonizeObjects::from(settings),
+        ))),
+        PipelineCommand::Spotnet(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::Spotnet::from(settings),
         ))),
         PipelineCommand::Stardist(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::Stardist::from(settings),

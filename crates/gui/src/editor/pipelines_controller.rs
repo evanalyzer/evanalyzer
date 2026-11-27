@@ -2450,7 +2450,8 @@ impl PipelinesController {
                                 // warning) is for the new file now.
                                 PipelineCommand::UNet(_)
                                 | PipelineCommand::Stardist(_)
-                                | PipelineCommand::Cellpose(_) => {
+                                | PipelineCommand::Cellpose(_)
+                                | PipelineCommand::Spotnet(_) => {
                                     needs_full_resync = true;
                                 }
                                 _ => {}
@@ -3770,6 +3771,7 @@ impl PipelinesController {
             C::UNet(s) => &s.model_path,
             C::Stardist(s) => &s.model_path,
             C::Cellpose(s) => &s.model_path,
+            C::Spotnet(s) => &s.model_path,
             _ => return None,
         };
         let kind = model_file::ModelKind::of_step(command.name())?;

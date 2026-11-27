@@ -192,6 +192,42 @@
         }
       ]
     },
+    "AiSegmentationSpotnetSpotReferenceSettings": {
+      "description": "The second input of a [`Spotnet`] model.",
+      "oneOf": [
+        {
+          "description": "The model takes the spot channel alone.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "NONE"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "The model takes a reference channel as its second input.",
+          "type": "object",
+          "properties": {
+            "channel": {
+              "description": "The channel showing only the structures (as it was read).",
+              "$ref": "#/$defs/ImageChannelIdx"
+            },
+            "type": {
+              "type": "string",
+              "const": "CHANNEL"
+            }
+          },
+          "required": [
+            "type",
+            "channel"
+          ]
+        }
+      ]
+    },
     "AiSegmentationUnetUNetOutputModeSettings": {
       "description": "How a multi-channel U-Net output should be turned into a single foreground\nprobability map. Ignored for single-channel outputs, which are always\ntreated as already-activated foreground probabilities.",
       "oneOf": [
@@ -4811,6 +4847,19 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "SPOTNET"
+            }
+          },
+          "$ref": "#/$defs/SpotnetSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "STARDIST"
             }
           },
@@ -5874,6 +5923,51 @@
           "const": "CONSTANT"
         }
       ]
+    },
+    "SpotnetSettings": {
+      "description": "Spot detection with a SpotNet model trained in EVAnalyzer (`.evanet`):\na small network that gives every pixel the probability of being a spot's\ncentre; the map's peaks above `threshold` become one-pixel objects, one\nper spot - also for touching spots, which a threshold would merge.\n\nThe spots are found in the pipeline's image. A model trained with a\nreference channel (a channel showing only the structures spots must not\nbe found on, e.g. serum) gets that channel too and compares the two\nitself - tolerant to channels a few pixels apart. Runs on a GPU when\nthere is one, else on the CPU.",
+      "type": "object",
+      "properties": {
+        "modelPath": {
+          "description": "The SpotNet model file (EVAnalyzer's `.evanet`), trained in the app.",
+          "type": "string",
+          "default": ""
+        },
+        "normalization": {
+          "description": "How the image is scaled before the model sees it: by default each\nchannel's 1st and 99.8th percentile of the tile become 0 and 1, as\nthe model was trained.",
+          "$ref": "#/$defs/AiSegmentationInputNormalizationInputNormalizationSettings",
+          "default": {
+            "type": "MODEL_DEFAULT"
+          }
+        },
+        "pieceSize": {
+          "description": "How large the pieces are that a large tile runs through the network\nin: smaller ones take less RAM, larger ones are faster.",
+          "$ref": "#/$defs/AiSegmentationPieceSizePieceSizeSettings",
+          "default": {
+            "type": "AUTO"
+          }
+        },
+        "reference": {
+          "description": "The second input of a model trained with a reference channel; none\nfor a model of the spot channel alone.",
+          "$ref": "#/$defs/AiSegmentationSpotnetSpotReferenceSettings",
+          "default": {
+            "type": "NONE"
+          }
+        },
+        "segmentationClass": {
+          "description": "The class every found spot gets. All other pixels are assigned\n`SegmentationClass::BACKGROUND`.",
+          "$ref": "#/$defs/SegmentationClass",
+          "default": 1
+        },
+        "threshold": {
+          "description": "A peak of the spot probability counts as a spot from this on: lower\nfinds fainter spots and more wrong ones.",
+          "type": "number",
+          "format": "float",
+          "default": 0.5,
+          "maximum": 1,
+          "minimum": 0
+        }
+      }
     },
     "StardistSettings": {
       "description": "Instance segmentation with a pretrained StarDist 2D model, from an\nEVAnalyzer model file (`.evanet`, converted once from StarDist's own,\ne.g. `2D_versatile_fluo` - `crates/nn`).\n\nFor each grid cell the model gives the probability of an object's centre\nand the distances to its boundary along `n_rays` equally spaced angles\n(StarDist's star-convex polygons). On a grid coarser than the pixels the\npolygons are scaled back to the image.\n\nPer grid cell candidates above `probability_threshold` are converted to\nstar-convex polygons, then greedily filtered with non-maximum suppression\n(polygons whose pixel-overlap ratio with a higher-scoring candidate exceeds\n`nms_threshold` are discarded) before being rasterized into the pipeline's\nsegmentation and instance maps. Runs on a GPU when there is one\n(convolutions in half precision there), else on the CPU.",

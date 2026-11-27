@@ -27,7 +27,7 @@
 //! The only crate depending on burn and smartcore. Does not depend on
 //! `evanalyzer_cfg`: core maps its settings to the types here.
 
-mod augment;
+pub mod augment;
 pub mod classifier;
 pub mod errors;
 mod libs;

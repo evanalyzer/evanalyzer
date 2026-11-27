@@ -82,6 +82,17 @@ pub struct SpotNetModel {
 }
 
 impl SpotNetModel {
+    /// A model of `settings` with fresh weights from `seed` (as a training
+    /// starts) - for tests and dev tools.
+    pub fn untrained(settings: SpotNetSettings, seed: u64, device: &Device) -> Self {
+        Self {
+            network: SpotNet::new(&settings.network, seed, device),
+            settings,
+            info: BTreeMap::new(),
+            device: device.clone(),
+        }
+    }
+
     /// The model file's bytes - the same model, the same bytes.
     pub fn to_bytes(&self) -> Result<Vec<u8>, NnError> {
         let metadata = ModelMetadata {
