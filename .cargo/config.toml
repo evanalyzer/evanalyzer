@@ -8,6 +8,11 @@ build-mac       = ["build", "--target", "aarch64-apple-darwin",              "--
 # libraries needed - for servers, compute clusters and the Docker image.
 build-linux-cli     = ["build", "--target", "x86_64-unknown-linux-gnu",  "--release", "-p", "evanalyzer_bin", "--no-default-features"]
 build-linux-arm-cli = ["build", "--target", "aarch64-unknown-linux-gnu", "--release", "-p", "evanalyzer_bin", "--no-default-features"]
+# After a dependency change: regenerates the About dialog's license list
+# (cargo-about, the command ci.yml's `licenses` job checks - install it as
+# about.toml says) and THIRD-PARTY-NOTICES.txt from it. An ignored test in
+# the gui crate, so it reuses the dev test build.
+update-licenses = ["test", "-p", "evanalyzer_gui", "--lib", "third_party_licenses::tests::regenerate", "--", "--ignored", "--exact"]
 
 # For Windows (MSVC) — statically linked CRT, lld linker
 [target.x86_64-pc-windows-msvc]

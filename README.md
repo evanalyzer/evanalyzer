@@ -381,13 +381,10 @@ After changing dependencies (adding or updating a crate, `cargo update`),
 regenerate the license list and commit both files:
 
 ```sh
-# 1. The About dialog's license list (all crates)
-cargo about generate --locked --workspace \
-  docs/about.hbs -o crates/gui/src/generated/third_party_licenses.json
-
-# 2. THIRD-PARTY-NOTICES.txt, built from that list and
-#    crates/gui/src/third_party_notices.json
-UPDATE_NOTICES=1 cargo test -p evanalyzer_gui notices_file
+# The About dialog's license list (all crates, via cargo-about) and
+# THIRD-PARTY-NOTICES.txt, built from that list and
+# crates/gui/src/third_party_notices.json
+cargo update-licenses
 ```
 
 cargo-about must be exactly 0.9.3 (`about.toml` works around a bug of that
@@ -462,6 +459,10 @@ git config --global user.signingkey "key::$(cat ~/.ssh/github.pub)"
 # release tags: the YubiKey key, as text
 git config --global alias.release-tag \
   "tag -s -u 'key::$(cat ~/.ssh/evanalyzer-release.pub)'"
+
+# tag + push in one: git release v1.2.0
+git config --global alias.release \
+  '!f() { [ -n "$1" ] || { echo "usage: git release v1.2.0" >&2; return 1; }; git release-tag "$1" -m "$1" && git push origin "$1"; }; f'
 ```
 
 `gpg.format ssh` and `commit.gpgsign true` stay set as for signed commits.
@@ -469,9 +470,11 @@ git config --global alias.release-tag \
 ### Every release
 
 ```sh
-git release-tag v1.2.0 -m "v1.2.0"   # the YubiKey blinks: touch it
-git push origin v1.2.0
+git release v1.2.0   # the YubiKey blinks: touch it
 ```
+
+It runs `git release-tag v1.2.0 -m "v1.2.0"` and then, only if signing
+worked, `git push origin v1.2.0`.
 
 Push the tag with git rather than creating the release on GitHub's web
 page: the workflow creates the release itself, with the release notes.

@@ -1011,7 +1011,7 @@
         { "name": "genawaiter-macro", "version": "0.99.1" },
         { "name": "gl_generator", "version": "0.14.0" },
         { "name": "half", "version": "2.7.1" },
-        { "name": "hayro-jpeg2000", "version": "0.4.1" },
+        { "name": "hayro-jpeg2000", "version": "0.5.0" },
         { "name": "ident_case", "version": "1.0.1" },
         { "name": "image-webp", "version": "0.2.4" },
         { "name": "image", "version": "0.25.10" },

@@ -3,7 +3,9 @@
 # ported code, fonts, native libraries - are in
 # crates/gui/src/third_party_notices.json, kept by hand).
 #
-# Regenerate (from the repo root; CI checks the result is up to date):
+# Regenerate with `cargo update-licenses` (also rewrites
+# THIRD-PARTY-NOTICES.txt) - it runs this command from the repo root, which
+# CI checks the result against:
 #
 #   cargo about generate --locked --workspace \
 #       docs/about.hbs -o crates/gui/src/generated/third_party_licenses.json
