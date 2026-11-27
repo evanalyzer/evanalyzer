@@ -158,6 +158,7 @@ fn print_training_progress(event: TrainingProgressEvent) {
             total_epochs,
             train_loss,
             val_loss,
+            ..
         } => {
             match val_loss {
                 Some(v) => print!(
@@ -370,6 +371,7 @@ mod tests {
             total_epochs: 5,
             train_loss: 0.1,
             val_loss: Some(0.2),
+            held_back: None,
         });
         print_training_progress(TrainingProgressEvent::Training);
         print_training_progress(TrainingProgressEvent::Finished {

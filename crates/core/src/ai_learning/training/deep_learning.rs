@@ -32,15 +32,20 @@ use crate::ai_learning::utils::mask_pixels_in_tile;
 use crate::image::{ImageReader, ImageTile, ReadMode};
 use crate::object::annotation_plane::ObjectMetricSettingsExt;
 use evanalyzer_cfg::core_types::{
-    InternalErrors, NetworkCheck, ObjectClass, TrainingProgressEvent, TrainingStats,
+    HeldBackCount, InternalErrors, NetworkCheck, ObjectClass, TrainingProgressEvent, TrainingStats,
+};
+use evanalyzer_cfg::settings::deep_learning_settings::{
+    DeepLearningModelKind, DeepLearningSettings, NetworkTrainingSettings, ValidationSettings,
 };
 use evanalyzer_cfg::settings::images_settings::ZStackHandling;
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 use evanalyzer_nn::NnError;
+use evanalyzer_nn::augment::AugmentParams;
 use evanalyzer_nn::model::spotnet::{Spot, SpotLabels, SpotNetModel, SpotNetTrainParams};
 use evanalyzer_nn::model::{Dataset, Model, OwnedImage, Trainable};
 use evanalyzer_nn::train::{
-    HeldBack, TrainControl, TrainDevice, TrainProgress, TrainStats, Trained,
+    HeldBack, NetworkTrainParams, TrainControl, TrainDevice, TrainProgress, TrainStats, Trained,
+    Validation,
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -126,6 +131,60 @@ struct Region {
 }
 
 impl DeepLearningTrainingJob {
+    /// The job of the Deep-Learning tab's `settings` on `images` - or why
+    /// they can't train: classes unset or the same twice, channels the
+    /// network can't take.
+    pub fn from_settings(
+        settings: &DeepLearningSettings,
+        images: Vec<TrainingImage>,
+        z_stack_handling: ZStackHandling,
+    ) -> Result<Self, InternalErrors> {
+        let bad = |what: String| Err(InternalErrors::InvalidArgument(what));
+        let classes = settings.classes;
+        if classes.objects == ObjectClass::Unset || classes.area == ObjectClass::Unset {
+            return bad("Choose the class to learn and the class of the training areas".into());
+        }
+        if classes.objects == classes.area
+            || classes
+                .validation
+                .is_some_and(|v| v == classes.objects || v == classes.area)
+        {
+            return bad(
+                "The class to learn, the training areas and the validation areas need \
+                 different classes"
+                    .into(),
+            );
+        }
+        let model = match settings.model {
+            DeepLearningModelKind::SpotNet => {
+                if !(1..=2).contains(&settings.channels.len()) {
+                    return bad(format!(
+                        "SpotNet takes the spot channel and at most one reference channel, not \
+                         {} channels",
+                        settings.channels.len()
+                    ));
+                }
+                DeepLearningModel::SpotNet(SpotNetTrainParams::new(
+                    network_params(&settings.training),
+                    settings.channels.len(),
+                ))
+            }
+        };
+        Ok(Self {
+            model,
+            start: settings.start_from.clone(),
+            images,
+            classes: DeepLearningClasses {
+                objects: classes.objects,
+                area: classes.area,
+                validation: classes.validation,
+            },
+            channels: settings.channels.clone(),
+            z_stack_handling,
+            seed: settings.seed,
+        })
+    }
+
     /// Runs synchronously on the calling thread - use [`Self::run_async`]
     /// to run in the background.
     pub fn run(
@@ -206,6 +265,7 @@ impl DeepLearningTrainingJob {
                 total_epochs,
                 train_loss,
                 val_loss,
+                held_back,
             } = p
             {
                 let _ = progress.send(TrainingProgressEvent::Epoch {
@@ -213,6 +273,11 @@ impl DeepLearningTrainingJob {
                     total_epochs,
                     train_loss,
                     val_loss,
+                    held_back: held_back.map(|s| HeldBackCount {
+                        annotated: s.annotated,
+                        found: s.found,
+                        matched: s.matched,
+                    }),
                 });
             }
         };
@@ -315,6 +380,30 @@ impl DeepLearningTrainingJob {
                 .classes
                 .validation
                 .is_some_and(|v| a.object_class.contains(&v))
+    }
+}
+
+/// The tab's training settings as nn's.
+fn network_params(training: &NetworkTrainingSettings) -> NetworkTrainParams {
+    let a = &training.augmentation;
+    NetworkTrainParams {
+        epochs: training.epochs,
+        patches_per_epoch: training.patches_per_epoch,
+        batch_size: training.batch_size,
+        patch_size: training.patch_size,
+        learning_rate: training.learning_rate,
+        augment: AugmentParams {
+            rotate: a.rotate,
+            flip: a.flip,
+            brightness: (a.brightness_low, a.brightness_high),
+            max_channel_shift: a.max_channel_shift,
+        },
+        validation: match training.validation {
+            ValidationSettings::Auto { fraction } => Validation::Auto { fraction },
+            ValidationSettings::Areas => Validation::Areas,
+            ValidationSettings::Off => Validation::Off,
+        },
+        patience: training.patience,
     }
 }
 

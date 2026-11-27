@@ -67,6 +67,10 @@ pub enum TrainingProgressEvent {
         /// core's `train_val_split`) - there's then no generalization
         /// signal, only the training-loss curve.
         val_loss: Option<f32>,
+        /// A network's check on its held-back areas this epoch - `None` for
+        /// the classifiers and a network without validation.
+        #[serde(default)]
+        held_back: Option<HeldBackCount>,
     },
     Finished {
         stats: TrainingStats,
@@ -113,6 +117,15 @@ pub enum TrainingStats {
         final_val_loss: Option<f32>,
         check: NetworkCheck,
     },
+}
+
+/// What a network found on its held-back areas: `matched` of the
+/// `annotated` objects, and `found - matched` wrongly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeldBackCount {
+    pub annotated: usize,
+    pub found: usize,
+    pub matched: usize,
 }
 
 /// How a network's training was checked on held-back areas.

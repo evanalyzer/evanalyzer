@@ -140,11 +140,19 @@ fn main() {
         if let TrainProgress::Epoch {
             epoch,
             train_loss,
-            val_loss,
+            held_back,
             ..
         } = p
         {
-            println!("epoch {epoch:4}: loss {train_loss:.4}, held back {val_loss:?}");
+            match held_back {
+                Some(s) => println!(
+                    "epoch {epoch:4}: loss {train_loss:.4}, held back: found {} of {}, {} wrongly",
+                    s.matched,
+                    s.annotated,
+                    s.wrongly_found()
+                ),
+                None => println!("epoch {epoch:4}: loss {train_loss:.4}"),
+            }
         }
     };
     let cancel = AtomicBool::new(false);

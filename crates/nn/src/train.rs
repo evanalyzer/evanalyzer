@@ -51,6 +51,10 @@ pub enum TrainProgress {
         train_loss: f32,
         /// `None` without a held-out split (too few samples).
         val_loss: Option<f32>,
+        /// A network's check on its held-back areas this epoch (found /
+        /// wrongly found) - `None` for the classifiers and without
+        /// validation.
+        held_back: Option<HeldBackScore>,
     },
     /// A batch of the current epoch finished - for trainings with long
     /// epochs (the networks).

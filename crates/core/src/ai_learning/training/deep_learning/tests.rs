@@ -260,3 +260,73 @@ fn a_cancelled_job_stops() {
     let result = job(vec![image], 5).run(tx, Arc::new(AtomicBool::new(true)));
     assert!(matches!(result, Err(InternalErrors::Cancelled)));
 }
+
+mod from_settings {
+    use super::*;
+    use evanalyzer_cfg::settings::deep_learning_settings::{
+        DeepLearningClassSettings, DeepLearningSettings,
+    };
+
+    fn settings() -> DeepLearningSettings {
+        let mut settings = DeepLearningSettings::default();
+        settings.classes = DeepLearningClassSettings {
+            objects: SPOT,
+            area: AREA,
+            validation: Some(VALIDATION),
+        };
+        settings.channels = vec![0, 4];
+        settings
+    }
+
+    fn job_of(settings: &DeepLearningSettings) -> Result<DeepLearningTrainingJob, InternalErrors> {
+        DeepLearningTrainingJob::from_settings(settings, Vec::new(), ZStackHandling::SingleStack)
+    }
+
+    #[test]
+    fn the_tabs_settings_become_the_job() {
+        let job = job_of(&settings()).unwrap();
+        let DeepLearningModel::SpotNet(params) = &job.model;
+        assert_eq!(params.network.in_channels, 2, "spot + reference channel");
+        assert_eq!(params.network.dilations, vec![1, 1, 2, 4, 8, 1]);
+        assert_eq!(params.common.epochs, 200);
+        assert_eq!(params.common.validation, Validation::Auto { fraction: 0.2 });
+        assert_eq!(params.common.augment.max_channel_shift, 3);
+        assert_eq!(job.channels, vec![0, 4]);
+        assert_eq!(job.classes.validation, Some(VALIDATION));
+    }
+
+    #[test]
+    fn unset_or_repeated_classes_are_refused() {
+        let mut unset = settings();
+        unset.classes.area = ObjectClass::Unset;
+        assert!(
+            job_of(&unset)
+                .unwrap_err()
+                .to_string()
+                .contains("Choose the class")
+        );
+        let mut same = settings();
+        same.classes.validation = Some(AREA);
+        assert!(
+            job_of(&same)
+                .unwrap_err()
+                .to_string()
+                .contains("different classes")
+        );
+    }
+
+    #[test]
+    fn spotnet_takes_one_or_two_channels() {
+        let mut three = settings();
+        three.channels = vec![0, 1, 2];
+        assert!(
+            job_of(&three)
+                .unwrap_err()
+                .to_string()
+                .contains("3 channels")
+        );
+        let mut none = settings();
+        none.channels.clear();
+        assert!(job_of(&none).is_err());
+    }
+}

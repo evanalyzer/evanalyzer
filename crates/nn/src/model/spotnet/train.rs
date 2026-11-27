@@ -71,6 +71,24 @@ pub struct SpotNetTrainParams {
     pub normalization: PercentileNormalization,
 }
 
+impl SpotNetTrainParams {
+    /// A new SpotNet of `in_channels` (1: the spot channel, 2: plus a
+    /// reference channel) trained with `common`, everything else SpotNet's
+    /// own defaults: the default network (a ~20 px view for spots of 4-10
+    /// px), hills of 1.5 px, each channel's 1st / 99.8th percentile as 0 / 1.
+    pub fn new(common: NetworkTrainParams, in_channels: usize) -> Self {
+        Self {
+            common,
+            network: SpotNetConfig {
+                in_channels,
+                ..SpotNetConfig::default()
+            },
+            sigma: 1.5,
+            normalization: PercentileNormalization::default(),
+        }
+    }
+}
+
 /// Trains a new SpotNet on `data`, on the CPU (the GPU follows later).
 ///
 /// Image by image - only one image is in RAM at a time: per epoch every
@@ -166,6 +184,7 @@ pub fn train(
         }
         final_train_loss = loss_sum / batches.max(1) as f32;
         epochs_run = epoch + 1;
+        let mut epoch_score = None;
 
         if !plan.validate.is_empty() {
             let checked = SpotNetModel {
@@ -190,6 +209,7 @@ pub fn train(
             }
             if let Some(score) = tally.score() {
                 final_val_loss = Some(score.loss);
+                epoch_score = Some(score);
                 if best.as_ref().is_none_or(|(_, b, _)| better(&score, b)) {
                     best = Some((epoch, score, checked));
                 }
@@ -200,6 +220,7 @@ pub fn train(
             total_epochs: common.epochs,
             train_loss: final_train_loss,
             val_loss: final_val_loss,
+            held_back: epoch_score,
         });
         let best_so_far = best.as_ref().map(|(e, score, _)| (*e, score.f1()));
         if stop_early(common.patience, epoch, best_so_far) {
@@ -1082,6 +1103,56 @@ mod tests {
         assert_eq!(epochs_run, 150);
         assert_eq!(best_val_epoch, Some(epoch));
         assert_eq!(best_val_loss, Some(score.loss));
+    }
+
+    #[test]
+    fn new_params_are_spotnets_defaults_for_the_channels() {
+        let common = params(1).common;
+        let p = SpotNetTrainParams::new(common.clone(), 2);
+        assert_eq!(
+            p.network,
+            SpotNetConfig {
+                in_channels: 2,
+                ..SpotNetConfig::default()
+            }
+        );
+        assert_eq!(
+            (p.sigma, p.normalization),
+            (1.5, PercentileNormalization::default())
+        );
+        assert_eq!(p.common, common);
+    }
+
+    #[test]
+    fn every_epoch_reports_its_held_back_score() {
+        let data = one_image(32, vec![Spot { x: 8.5, y: 6.5 }, Spot { x: 12.5, y: 24.5 }]);
+        let mut data = data;
+        for i in 0..32 * 32 {
+            data.0[0].1.validation[i] = i / 32 >= 16;
+        }
+        let mut training = params(3);
+        training.common.validation = Validation::Areas;
+        let scores = std::sync::Mutex::new(Vec::new());
+        let progress = |p| {
+            if let crate::train::TrainProgress::Epoch { held_back, .. } = p {
+                scores.lock().unwrap().push(held_back);
+            }
+        };
+        let cancel = AtomicBool::new(false);
+        let control = TrainControl {
+            progress: &progress,
+            cancel: &cancel,
+            seed: 1,
+            device: TrainDevice::Cpu,
+            cores: 1,
+        };
+        train(None, &data, &training, &control).unwrap();
+        let scores = scores.into_inner().unwrap();
+        assert_eq!(scores.len(), 3);
+        assert!(
+            scores.iter().all(|s| s.is_some_and(|s| s.annotated == 1)),
+            "{scores:?}"
+        );
     }
 
     #[test]

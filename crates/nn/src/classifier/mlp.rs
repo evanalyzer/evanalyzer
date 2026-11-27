@@ -385,6 +385,7 @@ impl Classifier for Mlp {
                     total_epochs: params.epochs,
                     train_loss,
                     val_loss,
+                    held_back: None,
                 });
             }
         }

@@ -80,6 +80,7 @@ pub fn fit_classifier(
             total_epochs,
             train_loss,
             val_loss,
+            ..
         } = p
         {
             let _ = progress.send(TrainingProgressEvent::Epoch {
@@ -87,6 +88,7 @@ pub fn fit_classifier(
                 total_epochs,
                 train_loss,
                 val_loss,
+                held_back: None,
             });
         }
     };
