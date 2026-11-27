@@ -8,12 +8,14 @@
 //! Licensed under the **PolyForm Noncommercial License 1.0.0**.
 
 use crate::image::image_meta::{
-    ChannelInfo, DeviceInfo, EnvironmentInfo, ExperimenterInfo, FilterInfo, ImageInfo, ImageMeta,
-    LightSourceInfo, Objective, PixelSizes, PyramidInfo,
+    ChannelInfo, DeviceInfo, ElectronMicroscopyInfo, EnvironmentInfo, ExperimenterInfo, FilterInfo,
+    ImageInfo, ImageMeta, LightSourceInfo, Objective, PixelSizes, PyramidInfo,
 };
 use crate::image::image_reader::ReadMode;
 use evanalyzer_cfg::core_types::InternalErrors;
-use scopeio::{ChannelSelect, PixelType, Plane, SeriesMeta};
+use scopeio::{
+    ChannelSelect, ElectronMicroscopyMeta, ElectronMicroscopyMode, PixelType, Plane, SeriesMeta,
+};
 use std::path::Path;
 
 pub(crate) fn scopeio_err(e: scopeio::Error) -> InternalErrors {
@@ -84,6 +86,30 @@ fn frame_interval(
 /// A text of the file, trimmed; "" when it has none.
 fn text(value: &Option<String>) -> String {
     value.as_deref().unwrap_or("").trim().to_string()
+}
+
+/// The electron microscope settings as the image info keeps them.
+fn electron_microscopy(em: &ElectronMicroscopyMeta) -> ElectronMicroscopyInfo {
+    let mode = match em.mode {
+        Some(ElectronMicroscopyMode::Tem) => "TEM",
+        Some(ElectronMicroscopyMode::Stem) => "STEM",
+        Some(ElectronMicroscopyMode::Diffraction) => "Diffraction",
+        Some(ElectronMicroscopyMode::Sem) => "SEM",
+        // A mode a newer scopeio knows: shown as unknown.
+        _ => "",
+    };
+    ElectronMicroscopyInfo {
+        mode: mode.to_string(),
+        accelerating_voltage_v: em.accelerating_voltage_v,
+        magnification: em.magnification,
+        camera_length_mm: em.camera_length_mm,
+        convergence_semi_angle_mrad: em.convergence_semi_angle_mrad,
+        spot_size: em.spot_size,
+        defocus_nm: em.defocus_nm,
+        electrons_per_count: em.electrons_per_count,
+        working_distance_mm: em.working_distance_mm,
+        probe_current_na: em.probe_current_na,
+    }
 }
 
 fn device(
@@ -241,6 +267,11 @@ pub(crate) fn build_image_meta(
                 institution: text(&x.institution),
                 user_name: text(&x.user_name),
             })
+            .unwrap_or_default();
+        info.electron_microscopy = series
+            .electron_microscopy
+            .as_ref()
+            .map(electron_microscopy)
             .unwrap_or_default();
         info.project = text(&series.project);
         info.dataset = text(&series.dataset);
@@ -428,6 +459,30 @@ mod tests {
         assert_eq!(c.dichroic.model, "MBS 488");
     }
 
+    /// The electron microscope settings (scopeio 0.0.0-alpha.7) keep their
+    /// values and units; the mode becomes its short name.
+    #[test]
+    fn the_electron_microscope_settings_reach_the_image_info() {
+        let mut em = ElectronMicroscopyMeta::default();
+        em.mode = Some(ElectronMicroscopyMode::Sem);
+        em.accelerating_voltage_v = Some(15_000.0);
+        em.spot_size = Some(3);
+        em.working_distance_mm = Some(10.2);
+        em.probe_current_na = Some(0.1);
+        let info = electron_microscopy(&em);
+        assert_eq!(info.mode, "SEM");
+        assert_eq!(info.accelerating_voltage_v, Some(15_000.0));
+        assert_eq!(info.spot_size, Some(3));
+        assert_eq!(info.working_distance_mm, Some(10.2));
+        assert_eq!(info.probe_current_na, Some(0.1));
+        assert_eq!(info.magnification, None);
+
+        em.mode = Some(ElectronMicroscopyMode::Stem);
+        assert_eq!(electron_microscopy(&em).mode, "STEM");
+        em.mode = None;
+        assert_eq!(electron_microscopy(&em).mode, "");
+    }
+
     /// A file without them (the 4D fixture): everything empty, no error.
     #[test]
     fn a_file_without_instrument_metadata_leaves_it_empty() {
@@ -437,6 +492,10 @@ mod tests {
         let series = &meta.series[&0];
         assert!(series.microscope.is_empty());
         assert_eq!(series.environment, EnvironmentInfo::default());
+        assert_eq!(
+            series.electron_microscopy,
+            ElectronMicroscopyInfo::default()
+        );
         assert_eq!(series.project, "");
         let c = &series.channels[&0];
         assert!(c.detector.is_empty() && c.excitation_filters.is_empty() && c.dichroic.is_empty());

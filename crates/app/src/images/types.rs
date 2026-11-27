@@ -19,9 +19,9 @@ use serde::{Deserialize, Serialize};
 use std::ops::RangeInclusive;
 
 pub use evanalyzer_core::{
-    ChannelInfo as FileChannel, DeviceInfo, EnvironmentInfo, ExperimenterInfo, FilterInfo,
-    ImageChannel, ImageContainer, ImageInfo, ImageMeta, LightSourceInfo, ManagedImage, Point2d,
-    PyramidInfo,
+    ChannelInfo as FileChannel, DeviceInfo, ElectronMicroscopyInfo, EnvironmentInfo,
+    ExperimenterInfo, FilterInfo, ImageChannel, ImageContainer, ImageInfo, ImageMeta,
+    LightSourceInfo, ManagedImage, Point2d, PyramidInfo,
 };
 
 /// Which tile to read, at which pyramid level and plane.

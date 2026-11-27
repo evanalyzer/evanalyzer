@@ -144,7 +144,7 @@ export component ImageMetaPanel inherits Rectangle {
     property <int> picked: -1;
     // Which parts are open (for the session).
     property <bool> part-image: true;
-    property <bool> part-review: true;
+    property <bool> part-review: false;
     property <bool> part-calib: false;
     property <bool> part-channels: true;
     property <bool> part-objective: false;
@@ -644,7 +644,8 @@ export component ImageMetaPanel inherits Rectangle {
                     }
                 }
 
-                // -- Microscope and Experiment: as far as the file says --
+                // -- Microscope (stand and electron microscope settings) and
+                // Experiment: as far as the file says --
                 if ImageMetaData.microscope_rows.length > 0: InfoPart {
                     title: "Microscope";
                     summary: ImageMetaData.microscope_summary;

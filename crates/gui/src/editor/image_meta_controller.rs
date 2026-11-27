@@ -1049,26 +1049,86 @@ fn length_text(nm: f32) -> String {
     }
 }
 
-/// Image info › Microscope: the stand's rows and the folded summary.
+/// An accelerating voltage: "200 kV", "500 V".
+fn voltage_text(v: f64) -> String {
+    if v.abs() >= 1000.0 {
+        format!("{} kV", trim_number(v / 1000.0, 2))
+    } else {
+        format!("{} V", trim_number(v, 1))
+    }
+}
+
+/// A beam current in nA, as pA below 1 nA: "1.6 nA", "100 pA".
+fn current_text(na: f64) -> String {
+    if na.abs() >= 1.0 {
+        format!("{} nA", trim_number(na, 2))
+    } else {
+        format!("{} pA", trim_number(na * 1000.0, 1))
+    }
+}
+
+/// A defocus in nm, as µm from 1 µm: "-50 nm", "-1.2 µm".
+fn defocus_text(nm: f64) -> String {
+    if nm.abs() >= 1000.0 {
+        format!("{} µm", trim_number(nm / 1000.0, 2))
+    } else {
+        format!("{} nm", trim_number(nm, 1))
+    }
+}
+
+/// Image info › Microscope: the stand's rows, then the electron
+/// microscope settings, and the folded summary.
 fn microscope_rows(
     info: &evanalyzer_app::images::ImageInfo,
 ) -> (Vec<(&'static str, String)>, String) {
     let m = &info.microscope;
+    let em = &info.electron_microscopy;
     let model = joined(&[&m.manufacturer, &m.model], " ");
+    let voltage = em
+        .accelerating_voltage_v
+        .map(voltage_text)
+        .unwrap_or_default();
+    let mode = em.mode.trim().to_string();
+    let num = |v: Option<f64>, digits: usize, unit: &str| {
+        v.map(|v| format!("{}{unit}", trim_number(v, digits)))
+            .unwrap_or_default()
+    };
     let rows: Vec<(&'static str, String)> = [
         ("Model", model.clone()),
         ("Type", m.kind.trim().to_string()),
         ("Serial no.", m.serial_number.trim().to_string()),
+        ("Mode", mode.clone()),
+        ("Voltage", voltage.clone()),
+        ("Magnification", num(em.magnification, 1, "×")),
+        ("Camera length", num(em.camera_length_mm, 1, " mm")),
+        (
+            "Convergence",
+            num(em.convergence_semi_angle_mrad, 2, " mrad"),
+        ),
+        (
+            "Spot size",
+            em.spot_size.map(|s| s.to_string()).unwrap_or_default(),
+        ),
+        (
+            "Defocus",
+            em.defocus_nm.map(defocus_text).unwrap_or_default(),
+        ),
+        ("Electrons/count", num(em.electrons_per_count, 3, "")),
+        ("Working dist.", num(em.working_distance_mm, 2, " mm")),
+        (
+            "Probe current",
+            em.probe_current_na.map(current_text).unwrap_or_default(),
+        ),
     ]
     .into_iter()
     .filter(|(_, v)| !v.is_empty())
     .collect();
-    let summary = if model.is_empty() {
+    let stand = if model.is_empty() {
         m.kind.trim().to_string()
     } else {
         model
     };
-    (rows, summary)
+    (rows, joined(&[&stand, &mode, &voltage], " · "))
 }
 
 /// Image info › Experiment: project, dataset, who, and the conditions.
@@ -1164,7 +1224,7 @@ mod tests {
     use crate::editor::test_support::test_ui_state;
     use std::sync::Arc;
 
-    // -- Instrument metadata as text (scopeio 0.0.0-alpha.5) --
+    // -- Instrument metadata as text (scopeio 0.0.0-alpha.7) --
 
     #[test]
     fn devices_light_sources_and_filters_read_as_one_line() {
@@ -1240,6 +1300,53 @@ mod tests {
         info.project = "Organoids".into();
         info.dataset = "Day 3".into();
         assert_eq!(experiment_rows(&info).1, "Organoids › Day 3");
+    }
+
+    #[test]
+    fn electron_microscope_settings_join_the_microscope_rows() {
+        let mut info = evanalyzer_app::images::ImageInfo::default();
+        info.microscope.manufacturer = "JEOL".into();
+        info.microscope.model = "ARM200F".into();
+        let em = &mut info.electron_microscopy;
+        em.mode = "STEM".into();
+        em.accelerating_voltage_v = Some(200_000.0);
+        em.magnification = Some(50_000.0);
+        em.camera_length_mm = Some(80.0);
+        em.convergence_semi_angle_mrad = Some(21.4);
+        em.spot_size = Some(3);
+        em.defocus_nm = Some(-1250.0);
+        em.electrons_per_count = Some(0.25);
+        em.working_distance_mm = Some(10.2);
+        em.probe_current_na = Some(0.1);
+        let (rows, summary) = microscope_rows(&info);
+        let text = |v: &str| v.to_string();
+        assert_eq!(
+            rows,
+            vec![
+                ("Model", text("JEOL ARM200F")),
+                ("Mode", text("STEM")),
+                ("Voltage", text("200 kV")),
+                ("Magnification", text("50000×")),
+                ("Camera length", text("80 mm")),
+                ("Convergence", text("21.4 mrad")),
+                ("Spot size", text("3")),
+                ("Defocus", text("-1.25 µm")),
+                ("Electrons/count", text("0.25")),
+                ("Working dist.", text("10.2 mm")),
+                ("Probe current", text("100 pA")),
+            ]
+        );
+        assert_eq!(summary, "JEOL ARM200F · STEM · 200 kV");
+
+        // An SEM file with no stand: the part still shows.
+        let mut info = evanalyzer_app::images::ImageInfo::default();
+        info.electron_microscopy.mode = "SEM".into();
+        info.electron_microscopy.accelerating_voltage_v = Some(500.0);
+        info.electron_microscopy.probe_current_na = Some(1.6);
+        let (rows, summary) = microscope_rows(&info);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[2], ("Probe current", text("1.6 nA")));
+        assert_eq!(summary, "SEM · 500 V");
     }
 
     fn make_controller() -> (Arc<UiState>, ImageMetaController) {

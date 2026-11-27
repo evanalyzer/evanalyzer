@@ -132,6 +132,32 @@ pub struct ExperimenterInfo {
     pub user_name: String,
 }
 
+/// Electron microscope settings (TEM / STEM / SEM) of a series; "" /
+/// `None` = unknown or not an electron microscope image.
+#[derive(Default, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ElectronMicroscopyInfo {
+    /// "TEM", "STEM", "Diffraction" or "SEM".
+    pub mode: String,
+    pub accelerating_voltage_v: Option<f64>,
+    /// Nominal (indicated) magnification of an imaging mode.
+    pub magnification: Option<f64>,
+    /// Camera length of a diffraction or STEM mode [mm].
+    pub camera_length_mm: Option<f64>,
+    /// Convergence semi-angle of the beam [mrad].
+    pub convergence_semi_angle_mrad: Option<f64>,
+    /// Condenser spot size setting (instrument-specific index).
+    pub spot_size: Option<u32>,
+    /// Defocus [nm]; negative is underfocus.
+    pub defocus_nm: Option<f64>,
+    /// Electrons per recorded count (dose calibration).
+    pub electrons_per_count: Option<f64>,
+    /// SEM working distance (final lens to specimen surface) [mm].
+    pub working_distance_mm: Option<f64>,
+    /// Beam current on the specimen [nA].
+    pub probe_current_na: Option<f64>,
+}
+
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct PyramidInfo {
     pub nr_bits: u16,
@@ -174,6 +200,8 @@ pub struct ImageInfo {
     pub microscope: DeviceInfo,
     pub environment: EnvironmentInfo,
     pub experimenter: ExperimenterInfo,
+    /// Electron microscope settings (TEM / STEM / SEM formats).
+    pub electron_microscopy: ElectronMicroscopyInfo,
     /// Names of the project and dataset the series belongs to ("" none).
     pub project: String,
     pub dataset: String,
