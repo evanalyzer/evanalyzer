@@ -95,29 +95,84 @@ impl TrainedClassifier {
     }
 }
 
+/// A trained deep-learning network: its model file (`.evanet`), ready for
+/// [`save_trained_network`](crate::ai::learning::save_trained_network).
+/// Opaque so front ends never depend on `evanalyzer_core`.
+pub struct TrainedNetworkModel(pub(crate) Vec<u8>);
+
+/// What a training yields, as it travels from a server and is saved.
+pub trait TrainedArtifact: Sized + Send + 'static {
+    /// To send it (e.g. from a server).
+    fn to_bytes(&self) -> Result<Vec<u8>, InternalErrors>;
+    fn from_bytes(bytes: &[u8]) -> Result<Self, InternalErrors>;
+    /// Writes it into `<project_dir>/models/` as `model_name` - the path.
+    fn save(
+        &self,
+        files: &dyn crate::files::FileSystem,
+        project_dir: &std::path::Path,
+        model_name: &str,
+    ) -> Result<PathBuf, InternalErrors>;
+}
+
+impl TrainedArtifact for TrainedClassifier {
+    fn to_bytes(&self) -> Result<Vec<u8>, InternalErrors> {
+        TrainedClassifier::to_bytes(self)
+    }
+    fn from_bytes(bytes: &[u8]) -> Result<Self, InternalErrors> {
+        TrainedClassifier::from_bytes(bytes)
+    }
+    fn save(
+        &self,
+        files: &dyn crate::files::FileSystem,
+        project_dir: &std::path::Path,
+        model_name: &str,
+    ) -> Result<PathBuf, InternalErrors> {
+        crate::ai::learning::save_trained_model(files, self, project_dir, model_name)
+    }
+}
+
+impl TrainedArtifact for TrainedNetworkModel {
+    fn to_bytes(&self) -> Result<Vec<u8>, InternalErrors> {
+        Ok(self.0.clone())
+    }
+    fn from_bytes(bytes: &[u8]) -> Result<Self, InternalErrors> {
+        Ok(Self(bytes.to_vec()))
+    }
+    fn save(
+        &self,
+        files: &dyn crate::files::FileSystem,
+        project_dir: &std::path::Path,
+        model_name: &str,
+    ) -> Result<PathBuf, InternalErrors> {
+        crate::ai::learning::save_trained_network(files, self, project_dir, model_name)
+    }
+}
+
 /// Blocks until a training run is over and yields the model - a local run
 /// joins its thread, a remote one waits for the server's final message.
-pub type TrainingCompletion = Box<dyn FnOnce() -> Result<TrainedClassifier, InternalErrors> + Send>;
+pub type TrainingCompletion<T = TrainedClassifier> =
+    Box<dyn FnOnce() -> Result<T, InternalErrors> + Send>;
 
-/// A classifier training run, wherever it runs. Drain
+/// A training run, wherever it runs - of a classifier ([`TrainedClassifier`])
+/// or a deep-learning network ([`TrainedNetworkModel`]). Drain
 /// [`events`](Self::events) until it closes, then call [`wait`](Self::wait)
 /// for the trained model - saving it is up to the caller
-/// ([`save_trained_model`]).
-pub struct RunningTraining {
+/// ([`TrainedArtifact::save`]).
+pub struct RunningTraining<T = TrainedClassifier> {
     events: Receiver<TrainingProgressEvent>,
     cancel: CancelHandle,
     items: TrainingItems,
-    completion: TrainingCompletion,
+    completion: TrainingCompletion<T>,
 }
 
-impl RunningTraining {
+impl<T> RunningTraining<T> {
     /// Assembles a training run executed by some other backend (e.g. on a
     /// server). The `events` channel must close once training is over.
     pub fn from_parts(
         events: Receiver<TrainingProgressEvent>,
         cancel: CancelHandle,
         items: TrainingItems,
-        completion: TrainingCompletion,
+        completion: TrainingCompletion<T>,
     ) -> Self {
         Self {
             events,
@@ -144,7 +199,7 @@ impl RunningTraining {
     /// Blocks until training finishes. A panic in a local training thread
     /// is returned as `InternalErrors::Internal`, a cancel as
     /// `InternalErrors::Cancelled`.
-    pub fn wait(self) -> Result<TrainedClassifier, InternalErrors> {
+    pub fn wait(self) -> Result<T, InternalErrors> {
         (self.completion)()
     }
 }
@@ -167,4 +222,15 @@ pub struct TrainingRequest {
 pub struct ModelDestination {
     pub project_dir: PathBuf,
     pub model_name: String,
+}
+
+/// Training a deep-learning network on the project's annotations: the
+/// Deep-Learning tab's settings, how the analyses handle z-stacks, and where
+/// the model goes (see [`TrainingRequest::save_to`]).
+#[derive(Clone, Serialize, Deserialize)]
+pub struct NetworkTrainingRequest {
+    pub project: ProjectSettings,
+    pub settings: evanalyzer_cfg::settings::deep_learning_settings::DeepLearningSettings,
+    pub z_stack_handling: ZStackHandling,
+    pub save_to: Option<ModelDestination>,
 }

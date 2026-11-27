@@ -96,11 +96,17 @@ pub struct DeepLearningTrainingJob {
 pub trait TrainedModel: Send {
     /// Writes its model file (`.evanet`).
     fn save(&self, path: &Path) -> Result<(), InternalErrors>;
+    /// Its model file's bytes.
+    fn to_bytes(&self) -> Result<Vec<u8>, InternalErrors>;
 }
 
 impl<M: Trainable> TrainedModel for M {
     fn save(&self, path: &Path) -> Result<(), InternalErrors> {
         Trainable::save(self, path).map_err(nn_error)
+    }
+
+    fn to_bytes(&self) -> Result<Vec<u8>, InternalErrors> {
+        Trainable::to_bytes(self).map_err(nn_error)
     }
 }
 

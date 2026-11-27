@@ -145,6 +145,10 @@ pub trait Trainable: Model {
     /// training params, seed - a training is reproducible from it).
     fn save(&self, file: &Path) -> Result<(), NnError>;
 
+    /// The model file's bytes (see [`Self::save`]) - to send a model trained
+    /// elsewhere (on a server).
+    fn to_bytes(&self) -> Result<Vec<u8>, NnError>;
+
     /// RAM one sample of a batch takes - core plans the batch size from it.
     fn ram_per_sample(params: &Self::TrainParams) -> u64;
 }

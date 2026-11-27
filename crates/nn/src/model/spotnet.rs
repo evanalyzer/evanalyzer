@@ -218,6 +218,10 @@ impl Trainable for SpotNetModel {
         SpotNetModel::save(self, file)
     }
 
+    fn to_bytes(&self) -> Result<Vec<u8>, NnError> {
+        SpotNetModel::to_bytes(self)
+    }
+
     /// Estimated: per patch pixel the network's activations
     /// ([`Model::NET_BYTES_PER_PIXEL`]) kept for the backward pass and their
     /// gradients (x 3), plus the patch's input, target and mask (4 bytes

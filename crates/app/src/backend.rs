@@ -19,7 +19,10 @@ use crate::files::FileSystem;
 use crate::images::{ImageMeta, ImageSource};
 use crate::jobs::{AnalysisRequest, JobInfo, PreviewRequest, RunningJob, StartPreviewError};
 use crate::results::ResultsSource;
-use crate::training::{RunningTraining, StartTrainingError, TrainingRequest};
+use crate::training::{
+    NetworkTrainingRequest, RunningTraining, StartTrainingError, TrainedNetworkModel,
+    TrainingRequest,
+};
 use crate::user::settings::AppSettings;
 use crate::user::trust::ScriptTrust;
 use evanalyzer_cfg::core_types::InternalErrors;
@@ -62,6 +65,17 @@ pub trait Backend: Send + Sync {
 
     /// Starts training a classifier on the project's labeled data.
     fn start_training(&self, req: TrainingRequest) -> Result<RunningTraining, StartTrainingError>;
+
+    /// Starts training a deep-learning network on the project's annotations
+    /// (the Deep-Learning tab). A backend that can't: an error.
+    fn start_network_training(
+        &self,
+        _req: NetworkTrainingRequest,
+    ) -> Result<RunningTraining<TrainedNetworkModel>, StartTrainingError> {
+        Err(StartTrainingError::Failed(InternalErrors::InvalidArgument(
+            "This backend can't train deep-learning networks".into(),
+        )))
+    }
 
     /// Opens an image for reading its metadata and tiles. Opening is
     /// expensive (a full format parse) - callers cache the result.
