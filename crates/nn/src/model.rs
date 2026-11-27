@@ -35,6 +35,7 @@ use burn::tensor::Device;
 use std::path::Path;
 
 pub mod cellpose_sam;
+pub mod spotnet;
 pub mod stardist;
 pub mod unet;
 
