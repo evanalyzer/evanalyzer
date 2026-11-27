@@ -96,7 +96,7 @@ export global ViewportState {
     in-out property <[RetainedTile]> retained_tiles: [];
 
     // Layers whose screen rectangle reaches past this are hidden. Unlimited
-    // except with the software renderer (Windows), which stores scene
+    // except with the software renderer, which stores scene
     // coordinates as i16 and misplaces anything beyond.
     in-out property <length> max_layer_extent: 1000000px;
 

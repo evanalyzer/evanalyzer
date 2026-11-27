@@ -981,8 +981,8 @@ impl ViewportController {
         self.dispatch_worker_task(task, TaskDispatch::Objects);
     }
 
-    /// Re-renders only the overview - while panning/zooming with the
-    /// software renderer (Windows), whose overview covers just the viewport.
+    /// Re-renders only the overview.
+    #[cfg(test)]
     pub fn trigger_redraw_low_res(&self) {
         let task = DrawingTask::default();
         self.dispatch_worker_task(task, TaskDispatch::LowRes);
@@ -999,16 +999,10 @@ impl ViewportController {
 
     /// Re-renders once a pan/zoom/resize settled: the sharp tile and the
     /// objects for the new view. The content is unchanged, so the render
-    /// being replaced may join the tile history. Elsewhere the overview
-    /// covers the whole image and needs no re-render; the software renderer
-    /// (Windows) gets a viewport-sized one, which does.
+    /// being replaced may join the tile history. The overview covers the
+    /// whole image and needs no re-render.
     pub fn trigger_viewport_redraw(&self) {
-        let scope = if cfg!(target_os = "windows") {
-            TaskDispatch::HighResAndLowRes
-        } else {
-            TaskDispatch::HighRes
-        };
-        self.dispatch_worker_task(DrawingTask::default(), scope);
+        self.dispatch_worker_task(DrawingTask::default(), TaskDispatch::HighRes);
         self.trigger_image_redraw_objects();
     }
 

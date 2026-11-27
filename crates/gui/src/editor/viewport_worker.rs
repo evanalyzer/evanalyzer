@@ -415,34 +415,42 @@ impl ViewportWorker {
             let step4_7_duration = step4_7_start.elapsed();
 
             // ------------------------------------------------------------
-            // STEP 7b: Composite into a viewport-sized, screen-space buffer
+            // STEP 7b: Composite the visible part into a screen-space buffer
             // ------------------------------------------------------------
-            // Windows-only workaround. The native tile buffer (image_w x
-            // image_h) would otherwise be handed to Slint as a single
-            // Image element positioned at draw_x and stretched to
-            // zoomed_w/zoomed_h.  When zoomed/panned that element's
-            // origin sits far off-screen (draw_x can be thousands of px
-            // negative) and it is several thousand px wide.  The Slint
-            // SOFTWARE renderer (Windows build) stores scene coordinates
-            // as i16 and samples scaled images with an 8-bit fixed-point
-            // step; the per-step rounding error gets multiplied by the
-            // large off-screen offset, shifting the image by several
-            // pixels - and by a different amount at every zoom level.
-            // The GPU/Skia renderer (Linux/macOS) does not have this bug,
-            // so it skips the workaround entirely below: composing a
-            // *viewport-sized* buffer here means its cost tracks window
-            // size, not the size of the image actually being displayed
-            // (a small zoomed-out image in a huge window still pays for
-            // the whole window) - both the CPU resample and the GPU
-            // texture upload that follows scale with `vp_w * vp_h`.
-            // Skia can scale/position the much smaller native tile
-            // directly on the GPU, which is what `viewport.slint`'s
-            // Image layers (image-fit: fill + explicit width/height)
-            // were already designed to do - so on that path there is no
-            // reason to pre-composite at all.
-            if cfg!(target_os = "windows") {
-                let vp_w = prepared.viewport_width.max(1.0) as usize;
-                let vp_h = prepared.viewport_height.max(1.0) as usize;
+            // Software renderer only (`renderer::is_software`, the default
+            // since 2026-11-19 on every OS), and only while the image is
+            // magnified. Slint's software renderer steps through a scaled
+            // image in 8.8 fixed point, rounded down: the native tile
+            // stretched 8.07x is drawn ~2 % too wide, which adds up to tens
+            // of pixels across the viewport - the image no longer lies
+            // under the (screen-space) object overlay. Shrinking is
+            // harmless (at most one screen pixel over the viewport), so
+            // zoomed-out and fit views keep the native tile, as do the GPU
+            // renderers (no such bug): a screen-space buffer costs a
+            // resample per render, a full blit per repaint and its RAM -
+            // measured +13 % CPU on 512 px images when done for every
+            // render, hence only where it changes the picture. The buffer
+            // covers the image's visible part only, never the whole
+            // viewport. The overview (low-res) stays native: re-rendering it
+            // while moving cost +3 s CPU per gesture; a layer scaled past
+            // i16 mid-gesture is hidden instead (`max_layer_extent`).
+            let magnified = prepared.zoomed_w > prepared.image_w as f32
+                || prepared.zoomed_h > prepared.image_h as f32;
+            if crate::renderer::is_software() && !is_low_res && magnified {
+                // The visible part of the tile, in whole screen pixels.
+                let x0 = prepared.draw_x.max(0.0).floor();
+                let y0 = prepared.draw_y.max(0.0).floor();
+                let x1 = (prepared.draw_x + prepared.zoomed_w)
+                    .min(prepared.viewport_width)
+                    .ceil();
+                let y1 = (prepared.draw_y + prepared.zoomed_h)
+                    .min(prepared.viewport_height)
+                    .ceil();
+                let vp_w = (x1 - x0).max(1.0) as usize;
+                let vp_h = (y1 - y0).max(1.0) as usize;
+                let mut local = prepared.clone();
+                local.draw_x -= x0;
+                local.draw_y -= y0;
                 b.screen_pool_idx = (b.screen_pool_idx + 1) % b.screen_buffer_pool.len();
                 if tile_history_on
                     || b.screen_buffer_pool[b.screen_pool_idx].width() as usize != vp_w
@@ -456,7 +464,7 @@ impl ViewportWorker {
                 let native = b.buffer_pool[b.pool_idx].as_slice();
                 let screen = b.screen_buffer_pool[b.screen_pool_idx].make_mut_slice();
                 let slice_duration = slice_start.elapsed();
-                composite_to_screen(native, &prepared, screen, vp_w, vp_h);
+                composite_to_screen(native, &local, screen, vp_w, vp_h);
                 let composite_duration = composite_start.elapsed();
                 debug!(
                     "Viewport frame ({}): read {:?}, render(4-7) {:?} [{} channels], composite {:?} [make_mut_slice {:?}, resample {:?}] ({}x{} native -> {}x{} viewport, {} threads), total so far {:?}",
@@ -475,14 +483,14 @@ impl ViewportWorker {
                     task_start.elapsed()
                 );
 
-                // Display geometry is now screen-space: full viewport at
-                // (0,0). The logical transform (zoom/offset/full_image)
+                // Display geometry is now screen-space: the visible part at
+                // (x0, y0), unscaled. The logical transform (zoom/offset/full_image)
                 // in `prepared` is left untouched so sync_zoom, the
                 // navigator and the pixel-value HUD (which maps via
                 // active_high_res_data) keep working.
                 let mut display = prepared.clone();
-                display.draw_x = 0.0;
-                display.draw_y = 0.0;
+                display.draw_x = x0;
+                display.draw_y = y0;
                 display.zoomed_w = vp_w as f32;
                 display.zoomed_h = vp_h as f32;
 
@@ -624,8 +632,8 @@ impl ViewportWorker {
     /// maps in their colours) and sent as the second image, each where its
     /// tile lies. Rendered only when the picture changes (see
     /// `ViewportController::compare_epoch`) - after a pan or zoom Slint just
-    /// moves them; on Windows, which shows screen-sized frames, the kept
-    /// renders are only composited again.
+    /// moves them; with the software renderer, which shows screen-sized
+    /// frames, the kept renders are only composited again.
     /// "Fit data": the selected channel's histogram axis from its lowest to
     /// its highest value shown - a linked colour image's red, green and
     /// blue together. Black and white stay (the image looks the same).
@@ -663,7 +671,7 @@ impl ViewportWorker {
         let Some(render) = slot.as_ref() else {
             return;
         };
-        if cfg!(target_os = "windows") {
+        if crate::renderer::is_software() {
             let vp_w = viewport_state.viewport_width.max(1.0) as usize;
             let vp_h = viewport_state.viewport_height.max(1.0) as usize;
             let mut screen = SharedPixelBuffer::<Rgb8Pixel>::new(vp_w as u32, vp_h as u32);
@@ -925,8 +933,8 @@ pub(crate) fn channel_ctx<'a>(
     }
 }
 
-/// Windows: the native tile resampled into a viewport-sized buffer, in
-/// screen space (see STEP 7b in `render_task`).
+/// Software renderer: the native tile resampled into a `vp_w` x `vp_h`
+/// buffer, in screen space (see STEP 7b in `render_task`).
 fn composite_to_screen(
     native: &[Rgb8Pixel],
     prepared: &ReadContext,
@@ -1098,7 +1106,7 @@ impl RenderBuffers {
         ];
         let pool_idx = 0;
 
-        // Viewport-sized buffer the native tile is composited into before being
+        // Screen-space buffer the native tile is composited into before being
         // handed to Slint.  See STEP 7b for why this screen-space step is needed.
         // Double-buffered for the same reason `buffer_pool` above is: a
         // `SharedPixelBuffer` is a ref-counted, copy-on-write `SharedVector`

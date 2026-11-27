@@ -43,11 +43,6 @@ pub(crate) struct ViewportImageController {
     /// The pointer was over the image at the last pixel-info update - so
     /// leaving it dims the values once, not on every move off the image.
     pub(crate) pointer_on_image: AtomicBool,
-    /// Trailing timer for the immediate low-res redraw throttle (see
-    /// `trigger_redraw_low_res_throttled`) - separate from the other timers
-    /// here so none of them cancel each other.
-    pub(crate) low_res_throttle_timer: Timer,
-    pub(crate) last_low_res_redraw: Mutex<Instant>,
     pub(crate) viewport_controller: Arc<ViewportController>,
     pub(crate) viewport_cache: Arc<ViewportCache>,
     pub(crate) histogram_controller: Arc<HistogramController>,
@@ -71,8 +66,6 @@ impl ViewportImageController {
             pixel_info_throttle_timer: Timer::default(),
             last_pixel_info_sync: Mutex::new(Instant::now()),
             pointer_on_image: AtomicBool::new(false),
-            low_res_throttle_timer: Timer::default(),
-            last_low_res_redraw: Mutex::new(Instant::now()),
             viewport_controller,
             viewport_cache,
             histogram_controller,
@@ -246,10 +239,10 @@ impl ViewportImageController {
     pub fn attach_callbacks(self: &Arc<Self>) {
         let ui_handle = self.ui.clone();
         if let Some(ui) = ui_handle.upgrade() {
-            // The software renderer (Windows) stores scene coordinates as
+            // The software renderer stores scene coordinates as
             // i16 - layers scaled past that mid-gesture are hidden instead
             // of drawn misplaced (see `ViewportState.max_layer_extent`).
-            if cfg!(target_os = "windows") {
+            if crate::renderer::is_software() {
                 ui.global::<ViewportSlintState>()
                     .set_max_layer_extent(Self::SOFTWARE_RENDERER_MAX_LAYER_EXTENT);
             }
@@ -453,16 +446,10 @@ impl ViewportImageController {
 
     /// Common follow-up of a pan, zoom or resize: the layers already follow
     /// the new transform in Slint, so only the navigator is updated now and
-    /// the re-render waits until the gesture settles. The software renderer
-    /// (Windows) is the exception: its overview covers just the viewport,
-    /// so it is still re-rendered while moving (throttled).
+    /// the re-render waits until the gesture settles.
     fn on_viewport_transform_changed(self: &Arc<Self>) {
         self.viewport_controller
             .sync_navigator_from_viewport_state();
-
-        if cfg!(target_os = "windows") {
-            self.trigger_redraw_low_res_throttled();
-        }
 
         self.redraw_debounce_timer.stop(); // Cancel any existing pending re-render
         let self_in = self.clone();
@@ -473,50 +460,6 @@ impl ViewportImageController {
                 self_in.viewport_controller.trigger_viewport_redraw();
             },
         );
-    }
-
-    /// Rate limit for [`Self::trigger_redraw_low_res_throttled`] (software
-    /// renderer only - see `on_viewport_transform_changed`). A per-move cap
-    /// is needed since raw mouse-move events fire at the input device's full
-    /// poll rate (125-1000 Hz); 60/sec matches a typical display refresh
-    /// rate.
-    const LOW_RES_REDRAW_THROTTLE: Duration = Duration::from_millis(16);
-
-    /// Throttled entry point for the "immediate" low-res redraw fired on
-    /// every pan/zoom event - see [`Self::LOW_RES_REDRAW_THROTTLE`] for why
-    /// this exists. Same leading+trailing-edge shape as
-    /// `sync_pixel_info_throttled`: runs immediately if nothing has run in
-    /// the last throttle window (so the first move still feels instant),
-    /// otherwise coalesces further events into a single trailing redraw once
-    /// the window elapses, so a fast drag doesn't leave a stale frame once
-    /// it stops.
-    fn trigger_redraw_low_res_throttled(self: &Arc<Self>) {
-        let now = Instant::now();
-        let should_run_now = {
-            let mut last = self.last_low_res_redraw.lock().expect("Poisoned");
-            if now.duration_since(*last) >= Self::LOW_RES_REDRAW_THROTTLE {
-                *last = now;
-                true
-            } else {
-                false
-            }
-        };
-
-        if should_run_now {
-            self.low_res_throttle_timer.stop();
-            self.viewport_controller.trigger_redraw_low_res();
-        } else {
-            let self_in = self.clone();
-            self.low_res_throttle_timer.stop();
-            self.low_res_throttle_timer.start(
-                TimerMode::SingleShot,
-                Self::LOW_RES_REDRAW_THROTTLE,
-                move || {
-                    *self_in.last_low_res_redraw.lock().expect("Poisoned") = Instant::now();
-                    self_in.viewport_controller.trigger_redraw_low_res();
-                },
-            );
-        }
     }
 
     pub fn update_viewport_zoom_in_viewport_state(
@@ -2285,27 +2228,26 @@ mod tests {
         assert!(!controller.redraw_debounce_timer.running());
     }
 
+    /// The overview covers the whole image with every renderer: a gesture
+    /// never re-renders it (with the software renderer that once cost +3 s
+    /// CPU per pan/zoom gesture - a full repaint per throttled frame).
     #[test]
-    fn the_low_res_redraw_runs_at_once_then_coalesces_until_the_throttle_window_ends() {
+    fn a_gesture_never_re_renders_the_overview() {
         crate::editor::test_support::ensure_slint_test_platform();
         let (_, controller) = make_controller();
-        *controller.last_low_res_redraw.lock().unwrap() = Instant::now() - Duration::from_secs(1);
+        controller
+            .update_viewport_size_in_viewport_state(400.0, 300.0)
+            .unwrap();
+        take_low_res_task(&controller);
 
-        controller.trigger_redraw_low_res_throttled();
-        assert!(take_low_res_task(&controller), "the first one at once");
-        assert!(!controller.low_res_throttle_timer.running());
-
-        // Within the throttle window, however slowly this test runs.
-        *controller.last_low_res_redraw.lock().unwrap() =
-            Instant::now() + Duration::from_secs(3600);
-        controller.trigger_redraw_low_res_throttled();
-        controller.trigger_redraw_low_res_throttled();
-        assert!(!take_low_res_task(&controller), "coalesced");
-        assert!(controller.low_res_throttle_timer.running());
-
-        advance(20);
-        assert!(take_low_res_task(&controller), "the trailing one");
-        assert!(!take_low_res_task(&controller), "just one");
+        for width in [500.0, 600.0] {
+            controller
+                .update_viewport_size_in_viewport_state(width, 300.0)
+                .unwrap();
+        }
+        advance(200);
+        assert!(take_high_res_task(&controller));
+        assert!(!take_low_res_task(&controller));
     }
 
     #[test]

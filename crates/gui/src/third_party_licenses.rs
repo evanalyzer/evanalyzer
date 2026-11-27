@@ -127,7 +127,8 @@ fn notices_text(groups: Vec<ThirdPartyGroup>) -> String {
 mod tests {
     use super::*;
 
-    const NOTICES_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../THIRD-PARTY-NOTICES.txt");
+    const NOTICES_FILE: &str =
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../THIRD-PARTY-NOTICES.txt");
 
     /// `THIRD-PARTY-NOTICES.txt` matches the license data. Rewrite both
     /// files with `cargo update-licenses` (runs [`regenerate`]).
@@ -153,7 +154,14 @@ mod tests {
         let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
         let status = std::process::Command::new(cargo)
             .current_dir(root)
-            .args(["about", "generate", "--locked", "--workspace", "docs/about.hbs", "-o"])
+            .args([
+                "about",
+                "generate",
+                "--locked",
+                "--workspace",
+                "docs/about.hbs",
+                "-o",
+            ])
             .arg(generated)
             .status()
             .expect("cargo-about could not be started - install it as about.toml says");

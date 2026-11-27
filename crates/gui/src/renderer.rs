@@ -20,6 +20,7 @@ use evanalyzer_app::backend::Backend;
 use slint::{ComponentHandle, GraphicsAPI, RenderingState, SetRenderingNotifierError};
 use std::cell::Cell;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// Why a renderer was asked for - part of the log line.
@@ -95,6 +96,19 @@ fn direct3d_only() {
     }
 }
 
+/// Whether Slint's software renderer draws the window - set once by
+/// [`log_active`] before the first frame, read by the viewport. That
+/// renderer stores scene coordinates as i16 and steps through scaled images
+/// in 8.8 fixed point (rounded down: an image stretched 8x ends up ~2 %
+/// too wide), so the viewport hands it screen-sized frames instead of
+/// letting it scale. `false` until known (and without a window, in tests).
+static SOFTWARE: AtomicBool = AtomicBool::new(false);
+
+/// See [`SOFTWARE`].
+pub(crate) fn is_software() -> bool {
+    SOFTWARE.load(Ordering::Relaxed)
+}
+
 /// How long after the start a GPU renderer that never reported its
 /// graphics API is logged as such.
 const UNREPORTED_AFTER: Duration = Duration::from_secs(5);
@@ -107,7 +121,7 @@ const UNREPORTED_AFTER: Duration = Duration::from_secs(5);
 /// Only the software renderer refuses a rendering notifier; the GPU
 /// renderers report their graphics API once, before the first frame. One
 /// that accepts the notifier but reports nothing is logged after
-/// [`UNREPORTED_AFTER`].
+/// [`UNREPORTED_AFTER`]. The refusal also sets [`is_software`].
 ///
 /// A GPU renderer on a CPU adapter: a warning too, and `RendererState.slow`
 /// for the status bar.
@@ -145,6 +159,7 @@ pub(crate) fn log_active(ui: &AppWindow, request: Request) {
             });
         }
         Err(SetRenderingNotifierError::Unsupported) => {
+            SOFTWARE.store(true, Ordering::Relaxed);
             let why = match request {
                 Request::Default => "fallback, no GPU renderer could start",
                 Request::SoftwareSetting | Request::SlintBackend => "as requested",
