@@ -2446,6 +2446,13 @@ impl PipelinesController {
                                     );
                                     needs_full_resync = true;
                                 }
+                                // The card below the file field (or its
+                                // warning) is for the new file now.
+                                PipelineCommand::UNet(_)
+                                | PipelineCommand::Stardist(_)
+                                | PipelineCommand::Cellpose(_) => {
+                                    needs_full_resync = true;
+                                }
                                 _ => {}
                             }
                         }
@@ -3751,13 +3758,13 @@ impl PipelinesController {
     /// step's `model_path` and shows its metadata via the shared warning/info
     /// dialog - see `pipelines_controller`'s module doc comment on why this
     /// reuses that dialog instead of a bespoke one.
-    /// The card of an AI segmentation step's model file - or, for a file
-    /// that doesn't fit the step, its problem at the file field in `notes`.
-    fn step_model_card(
+    /// What an AI segmentation step's model file is: its card, or why it
+    /// doesn't fit the step (the box at the file field); `None` for other
+    /// steps and no file.
+    fn step_model_note(
         &self,
         command: &evanalyzer_cfg::settings::pipeline_command::PipelineCommand,
-        notes: &mut std::collections::HashMap<String, ParamNote>,
-    ) -> Option<model_file::ModelCard> {
+    ) -> Option<model_file::ModelFileNote> {
         use evanalyzer_cfg::settings::pipeline_command::PipelineCommand as C;
         let path = match command {
             C::UNet(s) => &s.model_path,
@@ -3769,17 +3776,7 @@ impl PipelinesController {
         if path.as_os_str().is_empty() {
             return None;
         }
-        let (problem, error) = match self.model_file_note(kind, path) {
-            model_file::ModelFileNote::Fits(card) => return Some(card),
-            model_file::ModelFileNote::WrongKind(problem) => (problem, false),
-            model_file::ModelFileNote::Unusable(problem) => (problem, true),
-        };
-        let note = notes.entry("model_path".to_string()).or_default();
-        if note.problem.is_empty() {
-            note.problem = problem;
-            note.error = error;
-        }
-        None
+        Some(self.model_file_note(kind, path))
     }
 
     /// What model file `path` of a step running `kind` models is - from its
@@ -5428,8 +5425,8 @@ impl PipelinesController {
             problems: Vec<ProblemData>,
             /// Per setting (its name): what it's wired to, what a check found.
             notes: std::collections::HashMap<String, ParamNote>,
-            /// An AI segmentation step: its model file's card.
-            model_card: Option<model_file::ModelCard>,
+            /// An AI segmentation step: what its model file is.
+            model_card: Option<model_file::ModelFileNote>,
         }
         // The opened module's name, or empty. A module that's gone (e.g. undone)
         // is closed - and the ones opened inside it.
@@ -5619,7 +5616,7 @@ impl PipelinesController {
                     .iter()
                     .enumerate()
                     .map(|(idx, step)| {
-                        let (step_problems, mut notes) = step_marks(
+                        let (step_problems, notes) = step_marks(
                             &Marks {
                                 project: &project,
                                 problems: &problems,
@@ -5634,7 +5631,7 @@ impl PipelinesController {
                         );
                         match &step.content {
                             StepContent::Command(command) => {
-                                let model_card = self.step_model_card(command, &mut notes);
+                                let model_card = self.step_model_note(command);
                                 StepData {
                                     idx: idx as i32,
                                     id: step.id,
@@ -6057,12 +6054,7 @@ impl PipelinesController {
                                 group_items: ModelRc::new(VecModel::from(group_items)),
                                 has_model_info,
                                 model_card: match &model_card {
-                                    Some(card) if p_name == "model_path" => ModelFileCard {
-                                        kind: card.kind.into(),
-                                        name: card.name.clone().into(),
-                                        description: card.description.clone().into(),
-                                        details: card.details.clone().into(),
-                                    },
+                                    Some(note) if p_name == "model_path" => model_file_card(note),
                                     _ => ModelFileCard::default(),
                                 },
                                 section_header: SharedString::new(),
@@ -6168,6 +6160,7 @@ impl PipelinesController {
                             problems: ModelRc::new(VecModel::from(
                                 d.problems.into_iter().map(problem_item).collect::<Vec<_>>(),
                             )),
+                            model_problem: model_file_card_problem(model_card.as_ref()),
                         }
                     })
                     .collect();
@@ -6603,6 +6596,36 @@ fn shown_in_pipelines(problem: &evanalyzer_app::modules::ModuleProblem, debug_mo
     debug_mode
         || problem.step.is_some()
         || problem.severity == evanalyzer_app::modules::Severity::Error
+}
+
+/// A model file's card or box, as the file field shows it.
+fn model_file_card(note: &model_file::ModelFileNote) -> ModelFileCard {
+    match note {
+        model_file::ModelFileNote::Fits(card) => ModelFileCard {
+            kind: card.kind.into(),
+            name: card.name.as_str().into(),
+            description: card.description.as_str().into(),
+            details: card.details.as_str().into(),
+            ..Default::default()
+        },
+        model_file::ModelFileNote::WrongKind(problem)
+        | model_file::ModelFileNote::Unusable(problem) => ModelFileCard {
+            problem: model_file_card_problem(Some(note)),
+            heading: problem.heading.as_str().into(),
+            aside: problem.aside.as_str().into(),
+            text: problem.text.as_str().into(),
+            ..Default::default()
+        },
+    }
+}
+
+/// 1 a model file of another kind, 2 one that can't be used, else 0.
+fn model_file_card_problem(note: Option<&model_file::ModelFileNote>) -> i32 {
+    match note {
+        Some(model_file::ModelFileNote::WrongKind(_)) => 1,
+        Some(model_file::ModelFileNote::Unusable(_)) => 2,
+        _ => 0,
+    }
 }
 
 fn problem_item(p: ProblemData) -> ProblemItem {
@@ -9351,8 +9374,9 @@ mod tests {
     }
 
     /// A U-Net step with a U-Net model: its card below the file field. A
-    /// StarDist step with the same file: no card, a warning naming the
-    /// step that runs it. A file that's no model: an error.
+    /// StarDist step with the same file: an amber box naming the step that
+    /// runs it, and a warning in the step's badge. A file that's no model:
+    /// a red box and an error.
     #[test]
     fn an_ai_steps_model_file_gets_a_card_or_a_warning() {
         let dir = tempfile::tempdir().unwrap();
@@ -9383,17 +9407,76 @@ mod tests {
 
         let wrong = ui_param(&ui, 1, "model_path");
         assert_eq!(wrong.model_card.kind, "");
-        assert!(
-            wrong.problem.contains("is a U-Net model")
-                && wrong.problem.contains("AI UNet Segmentation"),
-            "{}",
-            wrong.problem
+        assert_eq!(wrong.model_card.problem, 1, "a warning");
+        assert_eq!(wrong.model_card.heading, "U-Net");
+        assert_eq!(wrong.model_card.aside, "· not for this step");
+        assert_eq!(
+            wrong.model_card.text,
+            "This step runs StarDist 2D models. shark is a U-Net - it runs in AI UNet Segmentation."
         );
-        assert!(!wrong.problem_error, "a warning");
+        // The box says it - not a line below the field as well.
+        assert_eq!(wrong.problem, "");
 
         let not_a_model = ui_param(&ui, 2, "model_path");
-        assert!(not_a_model.problem.contains("no EVAnalyzer model"));
-        assert!(not_a_model.problem_error);
+        assert_eq!(not_a_model.model_card.problem, 2, "an error");
+        assert_eq!(not_a_model.model_card.heading, "Not an EVAnalyzer model");
+
+        // The step's badge counts it: none, a warning, an error.
+        let steps = ui.global::<PipelinesPanelState>().get_active_commands();
+        let badge = |i: usize| steps.row_data(i).unwrap().model_problem;
+        assert_eq!((badge(0), badge(1), badge(2)), (0, 1, 2));
+    }
+
+    /// Choosing another file for the step: the card and the warning follow
+    /// it at once - a U-Net file in the StarDist step warns, its own file
+    /// gets the card back.
+    #[test]
+    fn a_new_model_file_gets_its_card_or_warning_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let stardist = model_file(dir.path(), "stardist2d", "versatile");
+        let shark = model_file(dir.path(), "unet2d", "shark");
+        let mut s = step("AI Stardist Segmentation");
+        let PipelineCommand::Stardist(c) = s.command_mut().unwrap() else {
+            unreachable!()
+        };
+        c.model_path = stardist.clone();
+        let (ui, _ui_state, _controller) = selected(vec![s]);
+        assert_eq!(
+            ui_param(&ui, 0, "model_path").model_card.kind,
+            "StarDist 2D"
+        );
+
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_param_changed(
+            0,
+            "model_path".into(),
+            shark.to_string_lossy().as_ref().into(),
+        );
+        drain_ui_queue();
+        let wrong = ui_param(&ui, 0, "model_path");
+        assert_eq!(wrong.model_card.kind, "");
+        assert_eq!(wrong.model_card.problem, 1);
+        assert_eq!(wrong.model_card.heading, "U-Net");
+        let step = panel.get_active_commands().row_data(0).unwrap();
+        assert_eq!(step.model_problem, 1);
+
+        panel.invoke_param_changed(
+            0,
+            "model_path".into(),
+            stardist.to_string_lossy().as_ref().into(),
+        );
+        drain_ui_queue();
+        let fits = ui_param(&ui, 0, "model_path");
+        assert_eq!(fits.model_card.kind, "StarDist 2D");
+        assert_eq!(fits.model_card.problem, 0);
+        assert_eq!(
+            panel
+                .get_active_commands()
+                .row_data(0)
+                .unwrap()
+                .model_problem,
+            0
+        );
     }
 
     #[test]

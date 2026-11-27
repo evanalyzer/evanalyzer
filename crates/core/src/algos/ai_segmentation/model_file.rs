@@ -85,16 +85,40 @@ pub struct ModelCard {
     pub details: String,
 }
 
+/// Why a step's model file doesn't fit: the box below the file field, and
+/// the run error.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelProblem {
+    /// The box's heading, in bold: "U-Net", "Not an EVAnalyzer model".
+    pub heading: String,
+    /// After the heading, dimmed: "· not for this step"; may be empty.
+    pub aside: String,
+    /// The box's text below the heading.
+    pub text: String,
+    /// All of it in one sentence, for a run error.
+    pub message: String,
+}
+
 /// What a step's model file is, for the step.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ModelFileNote {
     /// A model this step runs.
     Fits(ModelCard),
-    /// A model of another kind: what to tell the user (a warning).
-    WrongKind(String),
-    /// No model, or none this version runs, or the file can't be read: what
-    /// to tell the user (an error).
-    Unusable(String),
+    /// A model of another kind (a warning).
+    WrongKind(ModelProblem),
+    /// No model, or none this version runs, or the file can't be read (an
+    /// error).
+    Unusable(ModelProblem),
+}
+
+impl ModelFileNote {
+    /// Why the file doesn't fit; `None` when it does.
+    pub fn problem(&self) -> Option<&ModelProblem> {
+        match self {
+            Self::Fits(_) => None,
+            Self::WrongKind(problem) | Self::Unusable(problem) => Some(problem),
+        }
+    }
 }
 
 /// The start of the local file `path`: [`FIRST_READ`] bytes, or the whole
@@ -129,29 +153,59 @@ pub fn model_file_note(
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     let start = match start {
         Ok(start) => start,
-        Err(why) => return ModelFileNote::Unusable(format!("The model file can't be read: {why}")),
+        Err(why) => {
+            return ModelFileNote::Unusable(ModelProblem {
+                heading: "The model file can't be read".into(),
+                aside: String::new(),
+                message: format!("The model file can't be read: {why}"),
+                text: why,
+            });
+        }
     };
     let Ok(metadata) = parse_header(start) else {
-        return ModelFileNote::Unusable(format!(
-            "{file} is no EVAnalyzer model. EVAnalyzer runs its own .evanet files - a model \
-             from elsewhere (e.g. a Cellpose .pt) has to be converted once."
-        ));
+        const CONVERT: &str = "EVAnalyzer runs its own .evanet files - a model from elsewhere \
+                               (e.g. a Cellpose .pt) has to be converted once.";
+        return ModelFileNote::Unusable(ModelProblem {
+            heading: "Not an EVAnalyzer model".into(),
+            aside: String::new(),
+            text: CONVERT.into(),
+            message: format!("{file} is no EVAnalyzer model. {CONVERT}"),
+        });
     };
     let Some(found) = ModelKind::of_arch(&metadata.arch) else {
-        return ModelFileNote::Unusable(format!(
-            "{file} is a model this version of EVAnalyzer doesn't run (“{}”).",
-            metadata.arch
-        ));
+        return ModelFileNote::Unusable(ModelProblem {
+            heading: "A model this version doesn't run".into(),
+            aside: String::new(),
+            text: format!(
+                "{file} is a “{}” model - this version of EVAnalyzer doesn't run it.",
+                metadata.arch
+            ),
+            message: format!(
+                "{file} is a model this version of EVAnalyzer doesn't run (“{}”).",
+                metadata.arch
+            ),
+        });
     };
     let card = card(found, &file, &metadata);
     if found != kind {
-        return ModelFileNote::WrongKind(format!(
-            "{} is a {} model - this step runs {} models. Use the step {} for it.",
-            card.name,
-            found.label(),
-            kind.label(),
-            found.step()
-        ));
+        return ModelFileNote::WrongKind(ModelProblem {
+            heading: found.label().into(),
+            aside: "· not for this step".into(),
+            text: format!(
+                "This step runs {} models. {} is a {} - it runs in {}.",
+                kind.label(),
+                card.name,
+                found.label(),
+                found.step()
+            ),
+            message: format!(
+                "{} is a {} model - this step runs {} models. Use the step {} for it.",
+                card.name,
+                found.label(),
+                kind.label(),
+                found.step()
+            ),
+        });
     }
     ModelFileNote::Fits(card)
 }
@@ -255,15 +309,23 @@ mod tests {
     #[test]
     fn a_model_of_another_kind_names_its_step() {
         let file = unet_file(tiny_unet_config(), Preprocessing::None);
-        let ModelFileNote::WrongKind(message) =
+        let ModelFileNote::WrongKind(problem) =
             model_file_note(ModelKind::StarDist, path("shark.evanet"), Ok(&file))
         else {
             panic!("a problem")
         };
         assert_eq!(
-            message,
-            "shark.evanet is a U-Net model - this step runs StarDist 2D models. \
-             Use the step AI UNet Segmentation for it."
+            problem,
+            ModelProblem {
+                heading: "U-Net".into(),
+                aside: "· not for this step".into(),
+                text: "This step runs StarDist 2D models. shark.evanet is a U-Net - \
+                       it runs in AI UNet Segmentation."
+                    .into(),
+                message: "shark.evanet is a U-Net model - this step runs StarDist 2D models. \
+                          Use the step AI UNet Segmentation for it."
+                    .into(),
+            }
         );
     }
 
@@ -274,15 +336,23 @@ mod tests {
             path("cpsam.pt"),
             start,
         ) {
-            ModelFileNote::Unusable(message) => message,
+            ModelFileNote::Unusable(problem) => problem,
             fits => panic!("{fits:?}"),
         };
+        let zip = problem(Ok(b"PK\x03\x04 a zip, not a model"));
+        assert_eq!(zip.heading, "Not an EVAnalyzer model");
         assert!(
-            problem(Ok(b"PK\x03\x04 a zip, not a model"))
-                .starts_with("cpsam.pt is no EVAnalyzer model")
+            zip.text
+                .starts_with("EVAnalyzer runs its own .evanet files")
         );
-        assert!(problem(Ok(&file_with("yolo", &[]))).contains("doesn't run (“yolo”)"));
-        assert!(problem(Err("not found".into())).contains("can't be read: not found"));
+        assert!(zip.message.starts_with("cpsam.pt is no EVAnalyzer model"));
+        let yolo = problem(Ok(&file_with("yolo", &[])));
+        assert!(yolo.text.contains("“yolo” model"), "{}", yolo.text);
+        assert!(yolo.message.contains("doesn't run (“yolo”)"));
+        let missing = problem(Err("not found".into()));
+        assert_eq!(missing.heading, "The model file can't be read");
+        assert_eq!(missing.text, "not found");
+        assert!(missing.message.contains("can't be read: not found"));
     }
 
     /// A header larger than the first read is told by its first bytes.

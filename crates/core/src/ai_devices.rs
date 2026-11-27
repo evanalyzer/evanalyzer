@@ -109,8 +109,8 @@ fn run_error<M: Model>(file: &std::path::Path, error: evanalyzer_nn::NnError) ->
     if about_the_file && let Some(kind) = ModelKind::of_arch(M::ARCH) {
         let start = read_start(file);
         match model_file_note(kind, file, start.as_deref().map_err(Clone::clone)) {
-            ModelFileNote::WrongKind(message) | ModelFileNote::Unusable(message) => {
-                return InternalErrors::Generic(format!("{}: {message}", kind.step()));
+            ModelFileNote::WrongKind(problem) | ModelFileNote::Unusable(problem) => {
+                return InternalErrors::Generic(format!("{}: {}", kind.step(), problem.message));
             }
             // The right kind, its contents don't fit: nn's message says what.
             ModelFileNote::Fits(_) => {}

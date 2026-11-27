@@ -880,6 +880,8 @@ component ScalarControls inherits Rectangle {
                 enabled: !PipelinesPanelState.steps-read-only;
                 label: p.display-name;
                 mono: true;
+                problem: p.model-card.problem > 0 ? p.model-card.problem
+                    : p.problem == "" ? 0 : p.problem-error ? 2 : 1;
                 value: p.value;
                 edited(t) => {
                     root.changed(t);
@@ -1462,6 +1464,56 @@ component ParamNotes inherits VerticalLayout {
         color: p.problem-error ? Ink.err : Ink.warn;
         wrap: word-wrap;
         height: self.preferred-height;
+    }
+    // An AI model that doesn't fit the step: what it is and why not.
+    if p.model-card.problem > 0: model-box := Rectangle {
+        property <color> tone: p.model-card.problem == 2 ? Ink.err : Ink.warn;
+        background: p.model-card.problem == 2 ? Ink.err-tint : Ink.warn-tint;
+        border-width: 1px;
+        border-color: model-box.tone.with-alpha(0.35);
+        border-radius: Ink.radius-md;
+        accessible-role: text;
+        accessible-label: "\{p.model-card.heading} \{p.model-card.aside}: \{p.model-card.text}";
+        VerticalLayout {
+            padding-left: 10px;
+            padding-right: 10px;
+            padding-top: 7px;
+            padding-bottom: 7px;
+            spacing: 4px;
+            HorizontalLayout {
+                spacing: 5px;
+                Image {
+                    source: p.model-card.problem == 2 ? InkIcons.error : InkIcons.warning;
+                    width: 12px;
+                    colorize: model-box.tone;
+                    accessible-role: none;
+                }
+                Text {
+                    text: p.model-card.heading;
+                    font-size: Ink.fs-caption;
+                    font-weight: 600;
+                    color: Ink.text;
+                    vertical-alignment: center;
+                    accessible-role: none;
+                }
+                Text {
+                    text: p.model-card.aside;
+                    font-size: Ink.fs-caption;
+                    color: Ink.text-dim;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    accessible-role: none;
+                }
+            }
+            Text {
+                text: p.model-card.text;
+                font-size: Ink.fs-secondary;
+                color: Ink.text;
+                wrap: word-wrap;
+                height: self.preferred-height;
+                accessible-role: none;
+            }
+        }
     }
     // An AI model that fits the step: what it is (its file's header).
     if p.model-card.kind != "": Rectangle {
@@ -2218,19 +2270,23 @@ component StepRow inherits Rectangle {
                                 accessible-label: "Settings pinned to Tuning";
                             }
 
-                            if step.problems.length > 0: Rectangle {
+                            // The checks' problems and a model file that
+                            // doesn't fit.
+                            if step.problems.length > 0 || step.model-problem > 0: Rectangle {
+                                property <int> count: step.problems.length + (step.model-problem > 0 ? 1 : 0);
+                                property <bool> error: step.problem-errors > 0 || step.model-problem == 2;
                                 y: (parent.height - self.height) / 2;
                                 height: 16px;
                                 width: badge-text.preferred-width + 10px;
                                 border-radius: 8px;
-                                background: step.problem-errors > 0 ? Ink.err-tint : Ink.warn-tint;
+                                background: self.error ? Ink.err-tint : Ink.warn-tint;
                                 accessible-role: text;
-                                accessible-label: "\{step.problems.length} problems";
+                                accessible-label: "\{self.count} problems";
                                 badge-text := Text {
-                                    text: "⚠ \{step.problems.length}";
+                                    text: "⚠ \{parent.count}";
                                     font-size: Ink.fs-caption;
                                     font-weight: 600;
-                                    color: step.problem-errors > 0 ? Ink.err : Ink.warn;
+                                    color: parent.error ? Ink.err : Ink.warn;
                                 }
                             }
 

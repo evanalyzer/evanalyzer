@@ -52,11 +52,19 @@ export struct GroupItem {
     }
 
 // What an AI step's model file is, shown below its file field - read from
-// the file's header. `kind` empty: no card (another setting, no file, or
-// a file that doesn't fit - then `problem` says so).
+// the file's header: a card when it fits the step (`kind` set), a box
+// when it doesn't (`problem` > 0). Both empty: another setting or no file.
 export struct ModelFileCard {
         // "U-Net", "StarDist 2D", "Cellpose-SAM".
         kind: string,
+        // The file doesn't fit: 1 another kind of model (a warning), 2 no
+        // model this version runs, or unreadable (an error); 0 it fits.
+        problem: int,
+        // The box's heading in bold ("U-Net", "Not an EVAnalyzer model"),
+        // what follows it dimmed ("· not for this step"), and its text.
+        heading: string,
+        aside: string,
+        text: string,
         // The model's name, else the file's.
         name: string,
         // What it is for; may be empty.
@@ -212,6 +220,10 @@ export struct PipelineCommand {
         problems: [ProblemItem],
         // How many of `problems` are errors.
         problem-errors: int,
+        // An AI step whose model file doesn't fit (the box at the file
+        // field): 1 a warning, 2 an error, else 0. Counted in the header's
+        // problem badge, not listed in `problems` (the box says it).
+        model-problem: int,
         // A Color Filter step: its range (min/max hue, saturation,
         // brightness) for the colour range editor; empty for other steps.
         hsv: [float],
